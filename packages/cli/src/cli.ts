@@ -373,7 +373,9 @@ export function createProgram(runtime: CliRuntime): Command {
       await runCommand("docker", ["compose", "up", "-d", "--wait"], { cwd: context.root, env: composeEnvironment });
       runtime.stdout("Applying migrations…\n");
       await runCommand("pnpm", ["db:migrate"], { cwd: context.root, env: { ...childEnvironment, DATABASE_URL: childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL } });
-      runtime.stdout("Web    http://localhost:42069\nAPI    http://localhost:8787\n");
+      runtime.stdout(
+        `${context.manifest.apps.site ? "Site   http://localhost:42068\n" : ""}App    http://localhost:42069\nAPI    http://localhost:8787\n`,
+      );
       const exitCode = await runDevelopment(context.root, childEnvironment);
       if (exitCode !== 0) throw new CliFailure(`development processes exited with status ${exitCode}`, exitCode);
     });

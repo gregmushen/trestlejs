@@ -1342,7 +1342,7 @@ Generated local-development files remain conventional and readable:
 ``` text
 compose.yaml
 apps/worker/wrangler.jsonc
-apps/web/vite.config.ts
+apps/app/vite.config.ts
 config/credentials.yml.enc
 config/master.key                 # generated locally and gitignored
 ```
@@ -1709,7 +1709,7 @@ schemaVersion: 1
 project:
   name: paper-route
 apps:
-  web: apps/web
+  app: apps/app
   worker: apps/worker
 packages:
   contracts: packages/contracts

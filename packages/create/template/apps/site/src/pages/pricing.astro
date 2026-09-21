@@ -1,0 +1,12 @@
+---
+import PricingCard from "../components/PricingCard.astro";
+import SiteLayout from "../layouts/SiteLayout.astro";
+import { appLink } from "../config/site";
+const appUrl = import.meta.env.APP_URL ?? "http://localhost:42069";
+---
+
+<SiteLayout title="Pricing" description="Straightforward starter pricing for Southwind collaborative operations software.">
+  <section class="page-shell py-20 text-center sm:py-28"><p class="text-sm font-bold uppercase tracking-[0.2em] text-primary">Pricing</p><h1 class="display-title mx-auto mt-5 max-w-4xl text-5xl font-semibold sm:text-6xl">Start free. Add power when the work demands it.</h1><p class="mx-auto mt-6 max-w-2xl text-lg leading-8 text-muted">These prices and features are fictional starter content. Replace them with your product’s public plan projection before launch.</p></section>
+  <section class="page-shell grid gap-5 pb-20 lg:grid-cols-3"><PricingCard name="Starter" price="$0" description="For individuals and small teams getting started." features={["1 workspace", "Up to 3 members", "Core features"]} href={appLink("/sign-up?plan=starter", appUrl)} cta="Start free" /><PricingCard name="Pro" price="$29" cadence="/ month" description="For growing teams." features={["Unlimited members", "Advanced workflows", "Additional controls"]} href={appLink("/sign-up?plan=pro", appUrl)} cta="Start free" featured /><PricingCard name="Business" price="Let's talk" description="For larger organizations." features={["Advanced administration", "Enterprise controls", "Dedicated support"]} href="mailto:hello@southwind.example?subject=Southwind%20Business" cta="Contact us" /></section>
+  <section class="page-shell pb-16"><div class="rounded-2xl border border-border bg-surface p-6 text-sm leading-7 text-muted"><strong class="text-foreground">Pricing is not billing state.</strong> A plan in the signup URL records non-authoritative intent only. Paid capabilities become active after verified provider state is committed to the application’s PostgreSQL subscription projection.</div></section>
+</SiteLayout>

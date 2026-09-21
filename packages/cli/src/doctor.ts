@@ -103,6 +103,67 @@ export async function runDoctor(
     )),
   );
 
+  if (manifest.site) {
+    const sitePath = manifest.apps.site;
+    const appPath = manifest.apps.app;
+    if (!sitePath) {
+      checks.push({
+        id: "site.app.declared",
+        group: "architecture",
+        status: "fail",
+        message: "site support is enabled but apps.site is not declared",
+        remediation: "Declare apps.site in .trestle/project.yaml",
+      });
+    } else {
+      checks.push(
+        await pathCheck(root, "app", "site Astro configuration", path.join(sitePath, "astro.config.mjs")),
+        await pathCheck(root, "app", "site package manifest", path.join(sitePath, "package.json")),
+        await pathCheck(root, "app", "site Cloudflare configuration", path.join(sitePath, "wrangler.jsonc")),
+      );
+      try {
+        const [astroConfig, sitePackage, siteConfig, header, cloudflareConfig] = await Promise.all([
+          readFile(path.join(root, sitePath, "astro.config.mjs"), "utf8"),
+          readFile(path.join(root, sitePath, "package.json"), "utf8"),
+          readFile(path.join(root, sitePath, "src", "config", "site.ts"), "utf8"),
+          readFile(path.join(root, sitePath, "src", "components", "Header.astro"), "utf8"),
+          readFile(path.join(root, sitePath, "wrangler.jsonc"), "utf8"),
+        ]);
+        const configured =
+          astroConfig.includes('output: "static"') &&
+          sitePackage.includes('"astro"') &&
+          siteConfig.includes("appLink") &&
+          header.includes("APP_URL") &&
+          cloudflareConfig.includes('"directory": "./dist"');
+        checks.push({
+          id: "site.configuration.valid",
+          group: "architecture",
+          status: configured ? "pass" : "fail",
+          message: configured
+            ? "Astro site, APP_URL handoff, and Cloudflare static deployment are configured"
+            : "site configuration is incomplete",
+          ...(!configured
+            ? { remediation: "Restore the Astro static config, APP_URL handoff, and Cloudflare dist asset configuration" }
+            : {}),
+        });
+      } catch (error) {
+        checks.push({
+          id: "site.configuration.valid",
+          group: "architecture",
+          status: "fail",
+          message: "site configuration cannot be read",
+          evidence: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    checks.push({
+      id: "site.application.declared",
+      group: "architecture",
+      status: appPath ? "pass" : "fail",
+      message: appPath ? "authenticated application is declared separately from the public site" : "apps.app is not declared",
+      ...(!appPath ? { remediation: "Declare the authenticated TanStack application as apps.app" } : {}),
+    });
+  }
+
   if (manifest.secrets && Object.keys(manifest.secrets).length > 0) {
     try {
       const values = await readSecrets(root, environment, masterKey);

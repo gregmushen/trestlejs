@@ -1,0 +1,32 @@
+---
+import { appLink, navigation, site } from "../config/site";
+
+interface Props { currentPath: string }
+const { currentPath } = Astro.props;
+const normalizedPath = currentPath.length > 1 ? currentPath.replace(/\/$/u, "") : currentPath;
+const appUrl = import.meta.env.APP_URL ?? "http://localhost:42069";
+const signIn = appLink("/sign-in", appUrl);
+const signUp = appLink("/sign-up", appUrl);
+---
+
+<header class="border-b border-border/80 bg-surface/80 backdrop-blur">
+  <nav class="page-shell flex min-h-20 items-center justify-between gap-6" aria-label="Primary navigation">
+    <a class="font-display text-2xl font-semibold tracking-tight" href="/">{site.name}</a>
+    <div class="hidden items-center gap-7 md:flex">
+      {navigation.map((item) => <a class:list={["text-sm font-semibold transition hover:text-primary", { "text-primary": normalizedPath === item.href }]} aria-current={normalizedPath === item.href ? "page" : undefined} href={item.href}>{item.label}</a>)}
+    </div>
+    <div class="hidden items-center gap-3 md:flex">
+      <a class="rounded-xl px-4 py-2 text-sm font-semibold hover:bg-background" href={signIn}>Sign in</a>
+      <a class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-strong" href={signUp}>Get started</a>
+    </div>
+    <details class="relative md:hidden">
+      <summary class="cursor-pointer list-none rounded-xl border border-border bg-surface px-4 py-2 font-semibold">Menu</summary>
+      <div class="absolute right-0 top-12 z-20 grid w-56 gap-1 rounded-2xl border border-border bg-surface p-3 shadow-xl">
+        {navigation.map((item) => <a aria-current={normalizedPath === item.href ? "page" : undefined} class="rounded-lg px-3 py-2 font-medium hover:bg-background" href={item.href}>{item.label}</a>)}
+        <hr class="my-1 border-border" />
+        <a class="rounded-lg px-3 py-2 font-medium hover:bg-background" href={signIn}>Sign in</a>
+        <a class="rounded-lg bg-primary px-3 py-2 font-semibold text-white" href={signUp}>Get started</a>
+      </div>
+    </details>
+  </nav>
+</header>

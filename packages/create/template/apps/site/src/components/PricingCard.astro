@@ -1,0 +1,24 @@
+---
+interface Props {
+  name: string;
+  price: string;
+  cadence?: string;
+  description: string;
+  features: string[];
+  href: string;
+  cta: string;
+  featured?: boolean;
+}
+const { name, price, cadence, description, features, href, cta, featured = false } = Astro.props;
+---
+
+<article class:list={["surface-card flex h-full flex-col p-7", { "ring-2 ring-primary": featured }]}>
+  {featured && <p class="mb-4 w-fit rounded-full bg-primary/10 px-3 py-1 text-xs font-bold uppercase tracking-wider text-primary">Most popular</p>}
+  <h2 class="text-xl font-semibold">{name}</h2>
+  <p class="mt-4"><span class="font-display text-4xl font-semibold">{price}</span>{cadence && <span class="text-muted"> {cadence}</span>}</p>
+  <p class="mt-4 leading-7 text-muted">{description}</p>
+  <ul class="mt-6 flex-1 space-y-3" aria-label={`${name} features`}>
+    {features.map((feature) => <li class="flex gap-3"><span aria-hidden="true" class="text-primary">✓</span><span>{feature}</span></li>)}
+  </ul>
+  <a class:list={["mt-8 rounded-xl px-5 py-3 text-center font-semibold transition", featured ? "bg-primary text-white hover:bg-primary-strong" : "border border-border bg-surface hover:border-primary"]} href={href}>{cta}</a>
+</article>

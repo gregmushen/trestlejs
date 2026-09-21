@@ -1,0 +1,15 @@
+:root {
+  color-scheme: light;
+  --trestle-background: oklch(0.985 0.006 255);
+  --trestle-surface: oklch(1 0 0);
+  --trestle-foreground: oklch(0.23 0.035 257);
+  --trestle-muted: oklch(0.52 0.03 257);
+  --trestle-primary: oklch(0.56 0.16 245);
+  --trestle-primary-strong: oklch(0.44 0.17 247);
+  --trestle-destructive: oklch(0.56 0.2 25);
+  --trestle-border: oklch(0.9 0.018 255);
+  --trestle-focus: oklch(0.68 0.15 230);
+  --trestle-radius-sm: 0.75rem;
+  --trestle-radius-lg: 1.5rem;
+  --trestle-shadow: 0 24px 70px rgb(29 52 84 / 0.1);
+}

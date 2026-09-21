@@ -1,0 +1,68 @@
+@import "tailwindcss";
+@import "@__TRESTLE_PROJECT_NAME__/theme";
+
+@theme inline {
+  --color-background: var(--trestle-background);
+  --color-surface: var(--trestle-surface);
+  --color-foreground: var(--trestle-foreground);
+  --color-muted: var(--trestle-muted);
+  --color-primary: var(--trestle-primary);
+  --color-primary-strong: var(--trestle-primary-strong);
+  --color-destructive: var(--trestle-destructive);
+  --color-border: var(--trestle-border);
+  --color-focus: var(--trestle-focus);
+  --font-sans: var(--trestle-font-sans);
+  --font-display: var(--trestle-font-display);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 20rem;
+  color: var(--trestle-foreground);
+  background:
+    radial-gradient(circle at 12% 0%, color-mix(in oklch, var(--trestle-primary) 13%, transparent), transparent 32rem),
+    var(--trestle-background);
+}
+
+a,
+button,
+summary {
+  outline-color: var(--trestle-focus);
+  outline-offset: 0.25rem;
+}
+
+:focus-visible {
+  outline-width: 3px;
+  outline-style: solid;
+}
+
+.page-shell {
+  width: min(100% - 2rem, 74rem);
+  margin-inline: auto;
+}
+
+.display-title {
+  font-family: var(--trestle-font-display);
+  text-wrap: balance;
+}
+
+.surface-card {
+  border: 1px solid var(--trestle-border);
+  border-radius: var(--trestle-radius-lg);
+  background: color-mix(in oklch, var(--trestle-surface) 94%, transparent);
+  box-shadow: var(--trestle-shadow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "name": "@__TRESTLE_PROJECT_NAME__/web",
+  "name": "@__TRESTLE_PROJECT_NAME__/app",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@__TRESTLE_PROJECT_NAME__/contracts": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/theme": "workspace:*",
     "@tanstack/react-form": "1.33.5",
     "@tanstack/react-query": "5.103.2",
     "@tanstack/react-router": "1.170.38",

@@ -24,6 +24,10 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck && pnpm test && pnpm build
+        env:
+          APP_URL: "${{ vars.APP_URL }}"
+          SITE_URL: "${{ vars.SITE_URL }}"
       - name: Validate encrypted credentials
         run: pnpm dlx trestlejs@latest secrets check --env preview
         env: { TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}" }
@@ -43,13 +47,20 @@ jobs:
           packageManager: pnpm
           workingDirectory: apps/worker
           command: deploy --env preview --var WEB_ORIGIN:${{ vars.APP_URL }}
-      - run: VITE_API_ORIGIN="${{ vars.API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/web build
+      - run: VITE_API_ORIGIN="${{ vars.API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           packageManager: pnpm
-          workingDirectory: apps/web
+          workingDirectory: apps/app
           command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-preview --branch pr-${{ github.event.pull_request.number }}
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+          packageManager: pnpm
+          workingDirectory: apps/site
+          command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-site-preview --branch pr-${{ github.event.pull_request.number }}
       - run: node scripts/smoke.mjs
-        env: { APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
+        env: { SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }

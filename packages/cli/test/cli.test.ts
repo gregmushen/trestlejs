@@ -12,7 +12,7 @@ async function fixture(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "trestle-cli-"));
   temporaryDirectories.push(root);
   await mkdir(path.join(root, ".trestle"));
-  await mkdir(path.join(root, "apps", "web"), { recursive: true });
+  await mkdir(path.join(root, "apps", "app"), { recursive: true });
   await mkdir(path.join(root, "apps", "worker"), { recursive: true });
   await mkdir(path.join(root, "packages", "contracts"), { recursive: true });
   await writeFile(
@@ -21,7 +21,7 @@ async function fixture(): Promise<string> {
 project:
   name: fixture
 apps:
-  web: apps/web
+  app: apps/app
   worker: apps/worker
 packages:
   contracts: packages/contracts

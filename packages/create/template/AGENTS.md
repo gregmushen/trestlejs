@@ -5,7 +5,7 @@ This repository uses TrestleJS.
 
 ## Architecture
 
-React and TanStack → Hono → Application/Domain → Drizzle → PostgreSQL + RLS
+Astro public site → React and TanStack app → Hono → Application/Domain → Drizzle → PostgreSQL + RLS
 
 ## Rules
 
@@ -18,6 +18,8 @@ React and TanStack → Hono → Application/Domain → Drizzle → PostgreSQL + 
 - Use `ctx.clock` for domain time.
 - Queue payloads contain resource IDs, not tenant authority.
 - Blobs belong in R2; Workflows own process progression; Durable Objects own coordination.
+- `apps/site` is static-first public content; authentication stays in `apps/app`.
+- Southwind source is application-owned. Replace its centralized identity rather than introducing a marketing runtime dependency.
 
 ## Discover and verify
 

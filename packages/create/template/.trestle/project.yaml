@@ -2,7 +2,8 @@ schemaVersion: 1
 project:
   name: __TRESTLE_PROJECT_NAME__
 apps:
-  web: apps/web
+  site: apps/site
+  app: apps/app
   worker: apps/worker
 packages:
   contracts: packages/contracts
@@ -15,6 +16,11 @@ packages:
   db: packages/db
   events: packages/events
   integrations: packages/integrations
+  theme: packages/theme
+site:
+  framework: astro
+  rendering: static
+  starter: southwind
 tenancy:
   model: organization
   enforcement: postgres-rls

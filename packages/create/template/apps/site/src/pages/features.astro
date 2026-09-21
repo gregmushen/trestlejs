@@ -1,0 +1,12 @@
+---
+import FeatureCard from "../components/FeatureCard.astro";
+import SiteLayout from "../layouts/SiteLayout.astro";
+import { appLink } from "../config/site";
+const appUrl = import.meta.env.APP_URL ?? "http://localhost:42069";
+---
+
+<SiteLayout title="Features" description="Organize work, automate routine processes, and keep your team aligned with Southwind.">
+  <section class="page-shell py-20 sm:py-28"><p class="text-sm font-bold uppercase tracking-[0.2em] text-primary">Features</p><h1 class="display-title mt-5 max-w-4xl text-5xl font-semibold sm:text-6xl">The operating system your team can actually understand.</h1><p class="mt-6 max-w-2xl text-lg leading-8 text-muted">Southwind connects the work, workflows, people, and signals that keep a growing business moving.</p></section>
+  <section class="page-shell grid gap-5 pb-20 md:grid-cols-2"><FeatureCard eyebrow="Workspaces" title="Organize your work" description="Create durable homes for projects and operations with clear owners, states, and shared context." /><FeatureCard eyebrow="Workflows" title="Automate repetitive processes" description="Move routine handoffs and reminders forward without hiding important decisions in automation." /><FeatureCard eyebrow="Collaboration" title="Keep your team aligned" description="Give everyone a common view of decisions, progress, responsibilities, and the work ahead." /><FeatureCard eyebrow="Operations" title="Understand what is happening" description="See patterns and bottlenecks from canonical operational data rather than disconnected status reports." /></section>
+  <section class="page-shell pb-16"><div class="surface-card flex flex-col items-start justify-between gap-6 p-8 sm:flex-row sm:items-center"><div><h2 class="display-title text-3xl font-semibold">Ready to make the work clearer?</h2><p class="mt-2 text-muted">Start with the essentials and shape Southwind around your team.</p></div><a class="shrink-0 rounded-xl bg-primary px-6 py-3 font-semibold text-white hover:bg-primary-strong" href={appLink("/sign-up", appUrl)}>Get started</a></div></section>
+</SiteLayout>

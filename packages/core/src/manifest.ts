@@ -50,6 +50,14 @@ export const projectManifestSchema = z
         defaultProvider: z.string().min(1),
       })
       .strict(),
+    site: z
+      .object({
+        framework: z.literal("astro"),
+        rendering: z.literal("static"),
+        starter: z.enum(["southwind", "minimal"]),
+      })
+      .strict()
+      .optional(),
     capabilities: z
       .object({
         r2: z.boolean(),

@@ -1,0 +1,19 @@
+{
+  "name": "@__TRESTLE_PROJECT_NAME__/theme",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.css",
+    "./tokens.css": "./src/tokens.css",
+    "./typography.css": "./src/typography.css"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}

@@ -7,7 +7,8 @@ schemaVersion: 1
 project:
   name: hello
 apps:
-  web: apps/web
+  site: apps/site
+  app: apps/app
   worker: apps/worker
 packages:
   contracts: packages/contracts
@@ -17,6 +18,10 @@ tenancy:
 database:
   engine: postgresql
   defaultProvider: neon
+site:
+  framework: astro
+  rendering: static
+  starter: southwind
 capabilities:
   r2: true
   queues: true
@@ -43,7 +48,7 @@ describe("project manifest", () => {
   });
 
   it("rejects paths that escape the project", () => {
-    expect(() => parseProjectManifest(validManifest.replace("apps/web", "../web"))).toThrow(
+    expect(() => parseProjectManifest(validManifest.replace("apps/app", "../app"))).toThrow(
       ManifestError,
     );
   });

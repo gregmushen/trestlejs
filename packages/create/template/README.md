@@ -11,8 +11,10 @@ Auth secret and development database defaults. Use `pnpm exec trestle secrets
 edit` to inspect or change them in your editor; use `pnpm exec trestle secrets
 show` when you intentionally want to print their plaintext values.
 
-The web application runs on `http://localhost:42069`; the Worker runs on
-`http://localhost:8787`.
+The Southwind Astro site runs on `http://localhost:42068`, the authenticated
+application runs on `http://localhost:42069`, and the Worker runs on
+`http://localhost:8787`. Southwind's authentication and pricing links use
+`APP_URL` and default locally to `http://localhost:42069`.
 
 The starter includes email/password sign-up and sign-in, database-backed
 sessions, a protected dashboard, and organization creation. Replace the

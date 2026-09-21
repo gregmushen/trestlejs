@@ -74,8 +74,14 @@ describe("createProject", () => {
       await readFile(path.join(result.directory, "apps", "worker", "src", "index.ts"), "utf8"),
     ).toContain('app.on(["GET", "POST"], "/api/auth/*"');
     expect(
-      await readFile(path.join(result.directory, "apps", "web", "src", "main.tsx"), "utf8"),
+      await readFile(path.join(result.directory, "apps", "app", "src", "main.tsx"), "utf8"),
     ).toContain('path: "/sign-up"');
+    expect(
+      await readFile(path.join(result.directory, "apps", "site", "src", "config", "site.ts"), "utf8"),
+    ).toContain('name: "Southwind"');
+    expect(
+      await readFile(path.join(result.directory, "apps", "site", "src", "config", "site.ts"), "utf8"),
+    ).toContain('"http://localhost:42069"');
 
     const manifest = await loadProjectManifest(result.directory);
     for (const relativePath of [...Object.values(manifest.apps), ...Object.values(manifest.packages)]) {
