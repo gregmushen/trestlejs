@@ -58,11 +58,25 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish @trestlejs/core
-        run: npm publish ./release/trestlejs-core.tgz --access public --tag "${{ steps.distribution.outputs.tag }}"
+      - name: Publish packages in dependency order
+        shell: bash
+        env:
+          DISTRIBUTION_TAG: ${{ steps.distribution.outputs.tag }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_VERSION#v}"
 
-      - name: Publish trestlejs
-        run: npm publish ./release/trestlejs.tgz --access public --tag "${{ steps.distribution.outputs.tag }}"
+          publish_if_missing() {
+            local package="$1"
+            local archive="$2"
+            if npm view "${package}@${version}" version >/dev/null 2>&1; then
+              echo "${package}@${version} is already published; skipping."
+              return
+            fi
+            npm publish "$archive" --access public --tag "$DISTRIBUTION_TAG"
+          }
 
-      - name: Publish create-trestlejs
-        run: npm publish ./release/create-trestlejs.tgz --access public --tag "${{ steps.distribution.outputs.tag }}"
+          publish_if_missing "@trestlejs/core" ./release/trestlejs-core.tgz
+          publish_if_missing trestlejs ./release/trestlejs.tgz
+          publish_if_missing create-trestlejs ./release/create-trestlejs.tgz
