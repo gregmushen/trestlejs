@@ -82,6 +82,25 @@ describe("createProject", () => {
     expect(
       await readFile(path.join(result.directory, "apps", "site", "src", "config", "site.ts"), "utf8"),
     ).toContain('"http://localhost:42069"');
+    const setupSkill = await readFile(
+      path.join(result.directory, ".agents", "skills", "trestle-setup", "SKILL.md"),
+      "utf8",
+    );
+    expect(setupSkill).toContain("name: trestle-setup");
+    expect(setupSkill).toContain("## Non-negotiable boundary");
+    expect(
+      await readFile(
+        path.join(
+          result.directory,
+          ".agents",
+          "skills",
+          "trestle-setup",
+          "references",
+          "architecture.md",
+        ),
+        "utf8",
+      ),
+    ).toContain("# Trestle Architecture Conventions");
 
     const manifest = await loadProjectManifest(result.directory);
     for (const relativePath of [...Object.values(manifest.apps), ...Object.values(manifest.packages)]) {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trestle Setup"
+  short_description: "Design and apply reviewed Trestle applications"
+  default_prompt: "Use $trestle-setup to turn my product idea or existing project into a reviewed Trestle setup plan."

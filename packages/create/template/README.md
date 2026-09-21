@@ -16,6 +16,10 @@ application runs on `http://localhost:42069`, and the Worker runs on
 `http://localhost:8787`. Southwind's authentication and pricing links use
 `APP_URL` and default locally to `http://localhost:42069`.
 
+The project-local `trestle-setup` agent skill lives at
+`.agents/skills/trestle-setup`. It guides an agent from product discovery
+through architecture review, explicit mutation approval, and verification.
+
 The starter includes email/password sign-up and sign-in, database-backed
 sessions, a protected dashboard, and organization creation. Replace the
 local credentials before using the app outside local development. The generated
