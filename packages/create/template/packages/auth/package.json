@@ -1,0 +1,19 @@
+{
+  "name": "@__TRESTLE_PROJECT_NAME__/auth",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*",
+    "better-auth": "1.7.5"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2"
+  }
+}

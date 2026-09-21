@@ -1,0 +1,21 @@
+{
+  "name": "@__TRESTLE_PROJECT_NAME__/integrations",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-email/render": "2.1.0",
+    "react": "19.3.0",
+    "resend": "6.28.1",
+    "stripe": "22.6.2",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14"
+  }
+}

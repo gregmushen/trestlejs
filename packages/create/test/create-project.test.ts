@@ -1,0 +1,92 @@
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { loadProjectManifest } from "@trestlejs/core";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { createProject } from "../src/index.js";
+
+const temporaryDirectories: string[] = [];
+
+async function filesBelow(directory: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await filesBelow(entryPath)));
+    } else if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })));
+});
+
+describe("createProject", () => {
+  it("renders a valid project without executing optional setup", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "create-trestlejs-"));
+    temporaryDirectories.push(parent);
+    const commands: string[] = [];
+    const result = await createProject({
+      cwd: parent,
+      directory: "hello",
+      install: false,
+      git: false,
+      run: async (command) => {
+        commands.push(command);
+      },
+    });
+
+    expect(result.name).toBe("hello");
+    expect(commands).toEqual([]);
+    expect(await readFile(path.join(result.directory, ".trestle", "project.yaml"), "utf8")).toContain(
+      "name: hello",
+    );
+    expect(await readFile(path.join(result.directory, "package.json"), "utf8")).toContain(
+      '"name": "hello"',
+    );
+    expect(await readFile(path.join(result.directory, "compose.yaml"), "utf8")).toContain(
+      "postgres:17-alpine",
+    );
+    expect((await stat(path.join(result.directory, "config", "master.key"))).mode & 0o777).toBe(0o600);
+    expect(await readFile(path.join(result.directory, "config", "credentials.yml.enc"), "utf8")).toContain('"algorithm":"aes-256-gcm"');
+    expect(
+      await readFile(path.join(result.directory, "packages", "db", "src", "auth-schema.ts"), "utf8"),
+    ).toContain("export const organization = pgTable(");
+    expect(
+      await readFile(path.join(result.directory, "apps", "worker", "src", "index.ts"), "utf8"),
+    ).toContain('app.on(["GET", "POST"], "/api/auth/*"');
+    expect(
+      await readFile(path.join(result.directory, "apps", "web", "src", "main.tsx"), "utf8"),
+    ).toContain('path: "/sign-up"');
+
+    const manifest = await loadProjectManifest(result.directory);
+    for (const relativePath of [...Object.values(manifest.apps), ...Object.values(manifest.packages)]) {
+      expect((await stat(path.join(result.directory, relativePath))).isDirectory()).toBe(true);
+    }
+    for (const filePath of await filesBelow(result.directory)) {
+      const content = await readFile(filePath, "utf8");
+      expect(content).not.toContain("__TRESTLE_PROJECT_NAME__");
+      if (path.basename(filePath) === "package.json") {
+        expect(() => JSON.parse(content)).not.toThrow();
+      }
+    }
+  }, 15_000);
+
+  it("refuses a non-empty target", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "create-trestlejs-"));
+    temporaryDirectories.push(parent);
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(path.join(parent, "hello"));
+    await writeFile(path.join(parent, "hello", "keep.txt"), "mine");
+
+    await expect(
+      createProject({ cwd: parent, directory: "hello", install: false, git: false }),
+    ).rejects.toThrow("not empty");
+    expect(await readFile(path.join(parent, "hello", "keep.txt"), "utf8")).toBe("mine");
+  });
+});

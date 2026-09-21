@@ -1,0 +1,21 @@
+{
+  "name": "@__TRESTLE_PROJECT_NAME__/db",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "1.1.0",
+    "drizzle-orm": "0.45.3",
+    "postgres": "3.4.9"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.11"
+  }
+}

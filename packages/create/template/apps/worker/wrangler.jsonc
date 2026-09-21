@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "__TRESTLE_PROJECT_NAME__-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "WEB_ORIGIN": "http://localhost:42069",
+    "APP_ENV": "local",
+    "EMAIL_DELIVERY_MODE": "local",
+    "EMAIL_FROM": "__TRESTLE_PROJECT_NAME__ <noreply@example.test>"
+    ,"STRIPE_MODE": "local"
+  },
+  "secrets": { "required": ["DATABASE_URL", "DATABASE_DRIVER", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"] },
+  "env": {
+    "preview": {
+      "name": "__TRESTLE_PROJECT_NAME__-worker-preview",
+      "vars": { "APP_ENV": "preview", "EMAIL_DELIVERY_MODE": "local", "EMAIL_FROM": "CHANGE_ME", "WEB_ORIGIN": "CHANGE_ME" }
+    },
+    "staging": {
+      "name": "__TRESTLE_PROJECT_NAME__-worker-staging",
+      "vars": { "APP_ENV": "staging", "EMAIL_DELIVERY_MODE": "resend", "EMAIL_FROM": "CHANGE_ME", "EMAIL_STAGING_REDIRECT": "CHANGE_ME", "WEB_ORIGIN": "CHANGE_ME", "STRIPE_MODE": "test", "STRIPE_PUBLISHABLE_KEY": "CHANGE_ME", "STRIPE_PRICES": "{}", "BILLING_RETURN_URL": "CHANGE_ME" }
+    },
+    "production": {
+      "name": "__TRESTLE_PROJECT_NAME__-worker",
+      "vars": { "APP_ENV": "production", "EMAIL_DELIVERY_MODE": "resend", "EMAIL_FROM": "CHANGE_ME", "WEB_ORIGIN": "CHANGE_ME", "STRIPE_MODE": "live", "STRIPE_PUBLISHABLE_KEY": "CHANGE_ME", "STRIPE_PRICES": "{}", "BILLING_RETURN_URL": "CHANGE_ME" }
+    }
+  }
+}

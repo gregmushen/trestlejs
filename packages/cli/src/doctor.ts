@@ -1,0 +1,219 @@
+import { access, readFile } from "node:fs/promises";
+import path from "node:path";
+
+import { structuredOutput, type EnvironmentName, type ProjectManifest } from "@trestlejs/core";
+
+import { readSecrets, validateSecrets } from "./secrets.js";
+
+export type DoctorCheck = {
+  id: string;
+  group: "project" | "architecture";
+  status: "pass" | "fail";
+  message: string;
+  evidence?: string;
+  remediation?: string;
+};
+
+export type DoctorReport = {
+  environment: EnvironmentName;
+  checks: DoctorCheck[];
+  summary: {
+    passed: number;
+    warnings: number;
+    failed: number;
+  };
+};
+
+async function pathCheck(
+  root: string,
+  kind: "app" | "package",
+  name: string,
+  relativePath: string,
+): Promise<DoctorCheck> {
+  const absolutePath = path.join(root, relativePath);
+  try {
+    await access(absolutePath);
+    return {
+      id: `project.${kind}.${name}.exists`,
+      group: "project",
+      status: "pass",
+      message: `${kind} ${name} exists`,
+      evidence: relativePath,
+    };
+  } catch {
+    return {
+      id: `project.${kind}.${name}.exists`,
+      group: "project",
+      status: "fail",
+      message: `${kind} ${name} is missing`,
+      evidence: relativePath,
+      remediation: `Create ${relativePath} or update .trestle/project.yaml`,
+    };
+  }
+}
+
+export async function runDoctor(
+  root: string,
+  manifest: ProjectManifest,
+  environment: EnvironmentName,
+  masterKey?: string,
+): Promise<DoctorReport> {
+  const checks: DoctorCheck[] = [
+    {
+      id: "project.manifest.valid",
+      group: "project",
+      status: "pass",
+      message: "project manifest is valid",
+      evidence: ".trestle/project.yaml (schemaVersion 1)",
+    },
+  ];
+
+  if (!manifest.environments.includes(environment)) {
+    checks.push({
+      id: "project.environment.declared",
+      group: "project",
+      status: "fail",
+      message: `environment ${environment} is not declared`,
+      remediation: `Add ${environment} to environments in .trestle/project.yaml`,
+    });
+  } else {
+    checks.push({
+      id: "project.environment.declared",
+      group: "project",
+      status: "pass",
+      message: `environment ${environment} is declared`,
+    });
+  }
+
+  const entries = [
+    ...Object.entries(manifest.apps).map(([name, relativePath]) => ({
+      kind: "app" as const,
+      name,
+      relativePath,
+    })),
+    ...Object.entries(manifest.packages).map(([name, relativePath]) => ({
+      kind: "package" as const,
+      name,
+      relativePath,
+    })),
+  ];
+  checks.push(
+    ...(await Promise.all(
+      entries.map(({ kind, name, relativePath }) => pathCheck(root, kind, name, relativePath)),
+    )),
+  );
+
+  if (manifest.secrets && Object.keys(manifest.secrets).length > 0) {
+    try {
+      const values = await readSecrets(root, environment, masterKey);
+      const problems = validateSecrets(values, manifest, environment);
+      checks.push({
+        id: "configuration.secrets.valid",
+        group: "architecture",
+        status: problems.length === 0 ? "pass" : "fail",
+        message: problems.length === 0 ? `${environment} encrypted credentials are valid` : `${environment} encrypted credentials are invalid`,
+        ...(problems.length > 0 ? { evidence: problems.join("; "), remediation: `Run trestle secrets edit --env ${environment}` } : {}),
+      });
+    } catch (error) {
+      checks.push({
+        id: "configuration.secrets.valid",
+        group: "architecture",
+        status: "fail",
+        message: `${environment} encrypted credentials cannot be read`,
+        evidence: error instanceof Error ? error.message : String(error),
+        remediation: `Run trestle secrets init --env ${environment}`,
+      });
+    }
+  }
+
+  if (manifest.packages.integrations) {
+    checks.push(await pathCheck(root, "package", "transactional email", path.join(manifest.packages.integrations, "src", "email", "index.ts")));
+    if (environment === "staging" || environment === "production") {
+      for (const name of ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET"] as const) {
+        const declaration = manifest.secrets?.[name];
+        checks.push({
+          id: `email.secret.${name.toLowerCase()}.declared`,
+          group: "architecture",
+          status: declaration?.target === "worker" && declaration.required.includes(environment) ? "pass" : "fail",
+          message: declaration?.target === "worker" && declaration.required.includes(environment) ? `${name} is required for ${environment}` : `${name} is not declared as a required ${environment} Worker secret`,
+          ...(!declaration || declaration.target !== "worker" || !declaration.required.includes(environment) ? { remediation: `Declare ${name} as a Worker secret required in ${environment}` } : {}),
+        });
+      }
+      try {
+        const workerPath = manifest.apps.worker;
+        if (!workerPath) throw new Error("worker app is not declared");
+        const workerConfig = await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8");
+        const environmentBlock = workerConfig.slice(workerConfig.indexOf(`"${environment}"`));
+        const configured = environmentBlock.includes('"EMAIL_DELIVERY_MODE": "resend"') && environmentBlock.includes('"EMAIL_FROM"') && !environmentBlock.match(/"EMAIL_FROM"\s*:\s*"CHANGE_ME"/u);
+        checks.push({
+          id: "email.provider.configuration",
+          group: "architecture",
+          status: configured ? "pass" : "fail",
+          message: configured ? `Resend and a sender are configured for ${environment}` : `${environment} email provider configuration is incomplete`,
+          ...(!configured ? { remediation: `Set EMAIL_FROM and the ${environment} Resend adapter variables in ${workerPath}/wrangler.jsonc` } : {}),
+        });
+      } catch (error) {
+        checks.push({ id: "email.provider.configuration", group: "architecture", status: "fail", message: "email deployment configuration cannot be read", evidence: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+
+  if (manifest.packages.billing) {
+    checks.push(await pathCheck(root, "package", "billing", path.join(manifest.packages.billing, "src", "index.ts")));
+    if (environment === "staging" || environment === "production") {
+      for (const name of ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"] as const) {
+        const declaration = manifest.secrets?.[name];
+        const valid = declaration?.target === "worker" && declaration.required.includes(environment);
+        checks.push({ id: `billing.secret.${name.toLowerCase()}.declared`, group: "architecture", status: valid ? "pass" : "fail", message: valid ? `${name} is required for ${environment}` : `${name} is not declared as a required ${environment} Worker secret`, ...(!valid ? { remediation: `Declare ${name} as a Worker secret required in ${environment}` } : {}) });
+      }
+      try {
+        const workerPath = manifest.apps.worker;
+        if (!workerPath) throw new Error("worker app is not declared");
+        const workerConfig = await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8");
+        const block = workerConfig.slice(workerConfig.indexOf(`"${environment}"`));
+        const expectedMode = environment === "production" ? "live" : "test";
+        const valid = block.includes(`"STRIPE_MODE": "${expectedMode}"`) && block.includes('"STRIPE_PRICES"') && !block.match(/"STRIPE_PUBLISHABLE_KEY"\s*:\s*"CHANGE_ME"/u);
+        checks.push({ id: "billing.stripe.configuration", group: "architecture", status: valid ? "pass" : "fail", message: valid ? `Stripe ${expectedMode} configuration is declared` : `${environment} Stripe configuration is incomplete`, ...(!valid ? { remediation: `Configure Stripe ${expectedMode} publishable key, prices, and return URL in ${workerPath}/wrangler.jsonc` } : {}) });
+      } catch (error) {
+        checks.push({ id: "billing.stripe.configuration", group: "architecture", status: "fail", message: "Stripe deployment configuration cannot be read", evidence: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+
+  const passed = checks.filter((check) => check.status === "pass").length;
+  const failed = checks.filter((check) => check.status === "fail").length;
+  return {
+    environment,
+    checks,
+    summary: { passed, warnings: 0, failed },
+  };
+}
+
+export function formatDoctorHuman(report: DoctorReport): string {
+  const groups = new Map<string, DoctorCheck[]>();
+  for (const check of report.checks) {
+    const existing = groups.get(check.group) ?? [];
+    existing.push(check);
+    groups.set(check.group, existing);
+  }
+
+  const lines = [`trestle doctor (${report.environment})`];
+  for (const [group, checks] of groups) {
+    lines.push("", group[0]?.toUpperCase() + group.slice(1));
+    for (const check of checks) {
+      lines.push(`${check.status === "pass" ? "✓" : "✗"} ${check.message}`);
+      if (check.status === "fail" && check.remediation) {
+        lines.push(`  Fix: ${check.remediation}`);
+      }
+    }
+  }
+  lines.push(
+    "",
+    `${report.summary.passed} passed, ${report.summary.warnings} warnings, ${report.summary.failed} failed`,
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+export function formatDoctorJson(report: DoctorReport): string {
+  return `${JSON.stringify(structuredOutput(report), null, 2)}\n`;
+}

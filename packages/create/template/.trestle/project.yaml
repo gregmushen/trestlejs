@@ -1,0 +1,63 @@
+schemaVersion: 1
+project:
+  name: __TRESTLE_PROJECT_NAME__
+apps:
+  web: apps/web
+  worker: apps/worker
+packages:
+  contracts: packages/contracts
+  auth: packages/auth
+  authz: packages/authz
+  billing: packages/billing
+  context: packages/context
+  domain: packages/domain
+  data: packages/data
+  db: packages/db
+  events: packages/events
+  integrations: packages/integrations
+tenancy:
+  model: organization
+  enforcement: postgres-rls
+database:
+  engine: postgresql
+  defaultProvider: neon
+capabilities:
+  r2: true
+  queues: true
+  workflows: true
+  durableObjects: true
+  admin: false
+environments:
+  - local
+  - preview
+  - staging
+  - production
+secrets:
+  DATABASE_URL:
+    target: worker
+    required: [local, preview, staging, production]
+  DATABASE_DRIVER:
+    target: worker
+    required: [local, preview, staging, production]
+  BETTER_AUTH_SECRET:
+    target: worker
+    required: [local, preview, staging, production]
+    rotation: dual-value
+  BETTER_AUTH_URL:
+    target: worker
+    required: [local, preview, staging, production]
+  RESEND_API_KEY:
+    target: worker
+    required: [staging, production]
+  RESEND_WEBHOOK_SECRET:
+    target: worker
+    required: [staging, production]
+  STRIPE_SECRET_KEY:
+    target: worker
+    required: [staging, production]
+  STRIPE_WEBHOOK_SECRET:
+    target: worker
+    required: [staging, production]
+  DATABASE_MIGRATION_URL:
+    target: ci
+    required: [staging, production]
