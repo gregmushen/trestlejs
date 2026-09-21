@@ -1,0 +1,68 @@
+name: Publish npm packages
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, verify, and publish
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - name: Check out the release
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check release version
+        shell: bash
+        run: pnpm release:check -- "${GITHUB_REF_NAME#v}"
+
+      - name: Build and test
+        run: pnpm check
+
+      - name: Build publishable tarballs
+        run: pnpm release:pack
+
+      - name: Select npm distribution tag
+        id: distribution
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME#v}" == *-* ]]; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish @trestlejs/core
+        run: npm publish ./release/trestlejs-core.tgz --access public --tag "${{ steps.distribution.outputs.tag }}"
+
+      - name: Publish trestlejs
+        run: npm publish ./release/trestlejs.tgz --access public --tag "${{ steps.distribution.outputs.tag }}"
+
+      - name: Publish create-trestlejs
+        run: npm publish ./release/create-trestlejs.tgz --access public --tag "${{ steps.distribution.outputs.tag }}"

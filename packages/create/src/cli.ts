@@ -1,3 +1,4 @@
+import { TRESTLEJS_VERSION } from "@trestlejs/core";
 import { Command, CommanderError } from "commander";
 
 import { createProject } from "./create-project.js";
@@ -21,7 +22,7 @@ export async function executeCreateCli(
   const program = new Command()
     .name("create-trestlejs")
     .description("Create a conventional TrestleJS application")
-    .version("0.0.0")
+    .version(TRESTLEJS_VERSION)
     .argument("<directory>", "project directory")
     .option("--no-install", "skip pnpm install")
     .option("--no-git", "skip git initialization")

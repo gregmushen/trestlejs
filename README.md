@@ -23,3 +23,11 @@ pnpm build
 The target public packages are `trestlejs` and `create-trestlejs`. The CLI
 binary is the shorter `trestle`; internal shared packages use the `@trestlejs`
 scope.
+
+## Try the prerelease
+
+```bash
+npx create-trestlejs@next my-app
+```
+
+Release maintainers should follow [the publishing guide](docs/PUBLISHING.md).

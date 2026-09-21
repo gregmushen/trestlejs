@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { structuredOutput, environmentNameSchema } from "@trestlejs/core";
+import {
+  environmentNameSchema,
+  structuredOutput,
+  TRESTLEJS_VERSION,
+} from "@trestlejs/core";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 
 import { projectContext } from "./context.js";
@@ -22,8 +26,6 @@ import {
   validateSecrets,
   writeSecrets,
 } from "./secrets.js";
-
-const version = "0.0.0";
 
 function environment(value: string) {
   const result = environmentNameSchema.safeParse(value);
@@ -51,7 +53,7 @@ export function createProgram(runtime: CliRuntime): Command {
   const program = new Command()
     .name("trestle")
     .description("Build and operate conventional TrestleJS applications")
-    .version(version)
+    .version(TRESTLEJS_VERSION)
     .option("--cwd <path>", "start project discovery from this directory")
     .option("--no-color", "disable color output")
     .showSuggestionAfterError()

@@ -1,7 +1,22 @@
 {
   "name": "trestlejs",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0-alpha.0",
+  "description": "The command-line interface for building and operating TrestleJS applications.",
+  "license": "MIT",
+  "author": {
+    "name": "Greg Mushen",
+    "email": "greg.mushen@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gregmushen/trestlejs.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/gregmushen/trestlejs#readme",
+  "bugs": {
+    "url": "https://github.com/gregmushen/trestlejs/issues"
+  },
+  "keywords": ["trestlejs", "cloudflare", "cli", "typescript", "application-framework"],
   "type": "module",
   "bin": {
     "trestle": "./dist/bin.js"
@@ -12,7 +27,13 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "LICENSE", "README.md"],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
