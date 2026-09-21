@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const expectedVersion = process.argv[2];
+const expectedVersion = process.argv.slice(2).find((argument) => argument !== "--");
 const repositoryUrl = "git+https://github.com/gregmushen/trestlejs.git";
 const packages = [
   ["packages/core", "@trestlejs/core"],
