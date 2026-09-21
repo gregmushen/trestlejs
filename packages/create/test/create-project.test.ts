@@ -2,7 +2,8 @@ import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { loadProjectManifest } from "@trestlejs/core";
+import { loadProjectManifest, TRESTLEJS_VERSION } from "@trestlejs/core";
+import { readSecrets } from "trestlejs";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createProject } from "../src/index.js";
@@ -49,11 +50,23 @@ describe("createProject", () => {
     expect(await readFile(path.join(result.directory, "package.json"), "utf8")).toContain(
       '"name": "hello"',
     );
+    const packageDocument = JSON.parse(
+      await readFile(path.join(result.directory, "package.json"), "utf8"),
+    ) as { scripts: Record<string, string>; devDependencies: Record<string, string> };
+    expect(packageDocument.scripts.dev).toBe("trestle dev");
+    expect(packageDocument.devDependencies.trestlejs).toBe(TRESTLEJS_VERSION);
     expect(await readFile(path.join(result.directory, "compose.yaml"), "utf8")).toContain(
       "postgres:17-alpine",
     );
     expect((await stat(path.join(result.directory, "config", "master.key"))).mode & 0o777).toBe(0o600);
     expect(await readFile(path.join(result.directory, "config", "credentials.yml.enc"), "utf8")).toContain('"algorithm":"aes-256-gcm"');
+    const secrets = await readSecrets(result.directory, "local");
+    expect(secrets).toMatchObject({
+      BETTER_AUTH_URL: "http://localhost:42069",
+      DATABASE_DRIVER: "postgres-js",
+      DATABASE_URL: "postgres://trestle:trestle@localhost:55432/hello",
+    });
+    expect(secrets.BETTER_AUTH_SECRET).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(
       await readFile(path.join(result.directory, "packages", "db", "src", "auth-schema.ts"), "utf8"),
     ).toContain("export const organization = pgTable(");
@@ -71,6 +84,7 @@ describe("createProject", () => {
     for (const filePath of await filesBelow(result.directory)) {
       const content = await readFile(filePath, "utf8");
       expect(content).not.toContain("__TRESTLE_PROJECT_NAME__");
+      expect(content).not.toContain("__TRESTLEJS_VERSION__");
       if (path.basename(filePath) === "package.json") {
         expect(() => JSON.parse(content)).not.toThrow();
       }

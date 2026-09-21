@@ -3,29 +3,32 @@
 A TrestleJS application.
 
 ```bash
-pnpm install
-trestle secrets init
-trestle secrets edit
-trestle dev
+pnpm dev
 ```
+
+The generator creates encrypted, local-only credentials with a random Better
+Auth secret and development database defaults. Use `pnpm exec trestle secrets
+edit` to inspect or change them in your editor; use `pnpm exec trestle secrets
+show` when you intentionally want to print their plaintext values.
 
 The web application runs on `http://localhost:42069`; the Worker runs on
 `http://localhost:8787`.
 
 The starter includes email/password sign-up and sign-in, database-backed
 sessions, a protected dashboard, and organization creation. Replace the
-local credentials before using the app outside local development. A useful
-local document is:
+local credentials before using the app outside local development. The generated
+local document has this shape:
 
 ```yaml
-BETTER_AUTH_SECRET: replace-with-at-least-32-random-characters
+BETTER_AUTH_SECRET: <randomly generated>
 BETTER_AUTH_URL: http://localhost:42069
 DATABASE_DRIVER: postgres-js
 DATABASE_URL: postgres://trestle:trestle@localhost:55432/__TRESTLE_PROJECT_NAME__
 ```
 
-Email is captured locally by default. Use `trestle email list`, `trestle email
-show <id>`, `trestle email open <id>`, and `trestle email clear` while the
+Email is captured locally by default. Use `pnpm exec trestle email list`,
+`pnpm exec trestle email show <id>`, `pnpm exec trestle email open <id>`, and
+`pnpm exec trestle email clear` while the
 Worker is running. Staging and production use the Resend adapter with
 `RESEND_API_KEY` and `RESEND_WEBHOOK_SECRET` stored through `trestle secrets`;
 `EMAIL_FROM`, `EMAIL_REPLY_TO`, and the staging redirect recipient are typed

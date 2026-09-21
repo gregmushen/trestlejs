@@ -147,7 +147,11 @@ export async function resolveMasterKey(root: string, environment: EnvironmentNam
   }
 }
 
-export async function initializeSecrets(root: string, environment: EnvironmentName): Promise<{ keyPath: string; encryptedPath: string }> {
+export async function initializeSecrets(
+  root: string,
+  environment: EnvironmentName,
+  initialValues: SecretValues = {},
+): Promise<{ keyPath: string; encryptedPath: string }> {
   const paths = credentialsPaths(root, environment);
   for (const filePath of [paths.key, paths.encrypted]) {
     try {
@@ -160,7 +164,7 @@ export async function initializeSecrets(root: string, environment: EnvironmentNa
   }
   const key = randomBytes(32).toString("hex");
   await atomicWrite(paths.key, `${key}\n`);
-  await atomicWrite(paths.encrypted, encryptSecrets({}, environment, key));
+  await atomicWrite(paths.encrypted, encryptSecrets(initialValues, environment, key));
   return { keyPath: paths.key, encryptedPath: paths.encrypted };
 }
 

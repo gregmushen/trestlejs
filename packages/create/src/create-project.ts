@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadProjectManifest } from "@trestlejs/core";
+import { loadProjectManifest, TRESTLEJS_VERSION } from "@trestlejs/core";
 import { initializeSecrets } from "trestlejs";
 
 export type CreateProjectOptions = {
@@ -32,7 +33,9 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 function render(input: string, projectName: string): string {
-  return input.replaceAll("__TRESTLE_PROJECT_NAME__", projectName);
+  return input
+    .replaceAll("__TRESTLE_PROJECT_NAME__", projectName)
+    .replaceAll("__TRESTLEJS_VERSION__", TRESTLEJS_VERSION);
 }
 
 async function copyTemplate(source: string, destination: string, projectName: string): Promise<void> {
@@ -90,7 +93,12 @@ export async function createProject(options: CreateProjectOptions): Promise<Crea
     if (manifest.project.name !== name) {
       throw new Error("Rendered project manifest name does not match target directory");
     }
-    await initializeSecrets(destination, "local");
+    await initializeSecrets(destination, "local", {
+      BETTER_AUTH_SECRET: randomBytes(32).toString("base64url"),
+      BETTER_AUTH_URL: "http://localhost:42069",
+      DATABASE_DRIVER: "postgres-js",
+      DATABASE_URL: `postgres://trestle:trestle@localhost:55432/${name}`,
+    });
 
     const run = options.run ?? defaultRun;
     if (options.install) {
