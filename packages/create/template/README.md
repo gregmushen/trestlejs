@@ -164,9 +164,16 @@ pnpm exec trestle resource add-field Article archived:boolean? --yes
 
 Generated screens use application-owned typed API clients rather than local
 unvalidated fetch helpers. List endpoints use bounded cursor pagination, and
-every generated operation declares its organization permission before reaching
+every generated operation declares its application permission before reaching
 the repository. `resource add-field` refuses required additions: add, backfill,
 verify, and only then tighten a database constraint deliberately.
+
+Organization membership and product-resource access are separate authority
+planes. A new member receives the application's starter `contributor` role
+(resource read/write); changing the organization role does not change that
+application role. Clearing `member.application_role` revokes resource access
+without removing membership. Applications should replace this starter policy
+with domain-specific roles before granting sensitive product actions.
 
 Project upgrades are dry-run first and preserve application-owned source and
 custom skill guidance:

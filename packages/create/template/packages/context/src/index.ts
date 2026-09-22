@@ -1,10 +1,10 @@
 export type Principal = Readonly<{ id: string; kind: "user" | "system"; email?: string }>;
+export const AUTHORITY_MODEL_VERSION = 2;
 export type TenantIdentity = Readonly<{ organizationId: string; role?: string }>;
 export type Permissions = ReadonlySet<string>;
 export type AuthorityPlane = "organization" | "application" | "platform";
 export type AuthorityContext = Readonly<{
-  plane: AuthorityPlane;
-  permissions: Permissions;
+  planes: Readonly<Partial<Record<AuthorityPlane, Permissions>>>;
 }>;
 export type EntitlementDecision = Readonly<{
   code: string;
@@ -44,8 +44,9 @@ export interface AccessController {
 export function createAccessController(authority: AuthorityContext, entitlements: Entitlements): AccessController {
   const check = (requirement: AccessRequirement): AccessDecision => {
     const missing: ("permission" | "entitlement" | "authority_plane")[] = [];
-    if (authority.plane !== requirement.plane) missing.push("authority_plane");
-    if (requirement.permission && !authority.permissions.has(requirement.permission)) missing.push("permission");
+    const permissions = authority.planes[requirement.plane];
+    if (!permissions) missing.push("authority_plane");
+    else if (requirement.permission && !permissions.has(requirement.permission)) missing.push("permission");
     const entitlement = requirement.entitlement ? entitlements.resolve(requirement.entitlement) : undefined;
     if (entitlement && !entitlement.enabled) missing.push("entitlement");
     return { allowed: missing.length === 0, missing, ...(entitlement ? { entitlement } : {}) };
