@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,18 @@ async function run(command, arguments_, cwd) {
 }
 
 try {
-  await run(process.execPath, [path.join(root, "packages/create/dist/bin.js"), project, "--no-git"], root);
+  const coreArchive = path.join(temporaryRoot, "trestlejs-core.tgz");
+  const cliArchive = path.join(temporaryRoot, "trestlejs.tgz");
+  await run("pnpm", ["build"], root);
+  await run("pnpm", ["--dir", "packages/core", "pack", "--out", coreArchive], root);
+  await run("pnpm", ["--dir", "packages/cli", "pack", "--out", cliArchive], root);
+  await run(process.execPath, [path.join(root, "packages/create/dist/bin.js"), project, "--no-git", "--no-install"], root);
+  const manifestPath = path.join(project, "package.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.devDependencies.trestlejs = `file:${cliArchive}`;
+  manifest.pnpm = { ...(manifest.pnpm ?? {}), overrides: { ...(manifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await run("pnpm", ["install"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], project);
   await run("pnpm", ["check"], project);
