@@ -1,7 +1,7 @@
 import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { MANAGED_GUIDANCE_VERSION } from "./upgrade.js";
+import { MANAGED_GUIDANCE_VERSION, planUpgrade } from "./upgrade.js";
 
 export type ArchitectureCheck = Readonly<{ id: string; status: "pass" | "fail"; message: string; evidence?: string }>;
 export type ArchitectureReport = Readonly<{ valid: boolean; checks: readonly ArchitectureCheck[] }>;
@@ -40,6 +40,10 @@ export async function checkArchitecture(root: string): Promise<ArchitectureRepor
   }
   const skill = await readFile(path.join(root, ".agents", "skills", "trestle-setup", "SKILL.md"), "utf8").catch(() => "");
   checks.push(result("architecture.guidance.managed", skill.includes(`<!-- trestle-managed-guidance:${MANAGED_GUIDANCE_VERSION} -->`), "managed setup guidance carries the current version marker"));
+  const upgrade = await planUpgrade(root);
+  for (const operation of upgrade.operations.filter(({ id }) => id === "authority-model" || id === "database-runtime")) {
+    checks.push(result(`architecture.${operation.id}`, operation.classification === "already-correct", operation.description));
+  }
   return { valid: checks.every(({ status }) => status === "pass"), checks };
 }
 
