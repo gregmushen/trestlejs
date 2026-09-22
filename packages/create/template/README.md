@@ -78,15 +78,20 @@ passes the masked URL only between deployment steps. Configure `APP_URL`, `API_U
 
 Trusted pull requests receive isolated, deterministically named Workers and
 Pages projects. Closing the pull request deletes those Cloudflare resources.
-Use a long-lived, account-scoped `CLOUDFLARE_API_TOKEN` with Workers Scripts
-and Pages edit access in each GitHub deployment environment; an interactive
+Use a long-lived token scoped to the same Cloudflare account as
+`CLOUDFLARE_ACCOUNT_ID`, with `Workers Scripts Write` and `Pages Write`
+permissions in each GitHub deployment environment; an interactive
 Wrangler OAuth access token is not a durable CI credential.
 `CLOUDFLARE_WORKERS_SUBDOMAIN` is the account label before `.workers.dev`; it
 is used to derive the Worker URL exercised by the preview smoke gate. Preview
 database branching is a separate provider lifecycle and must be configured
 with `NEON_PROJECT_ID`, `NEON_DATABASE`, `NEON_MIGRATION_ROLE`, and the
 encrypted CI credential `NEON_API_KEY`. Each trusted pull request then receives
-an isolated Neon branch and pooled runtime URL; closure deletes that branch.
+an isolated Neon branch and unpooled runtime URL (required for PostgreSQL
+startup role options); closure deletes that branch. The preview workflow checks
+Cloudflare and Neon access independently before Doctor or resource creation.
+Doctor then requires real Resend and Stripe test-mode configuration before the
+preview can deploy; provider access alone does not mark a preview as ready.
 
 Validate the checked-in delivery contract locally with:
 
