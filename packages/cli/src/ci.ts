@@ -65,7 +65,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   const workerConfig = await readFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "utf8").catch(() => "");
   for (const environment of ["preview", "staging", "production"] as const) {
     const block = wranglerEnvironmentBlock(workerConfig, environment);
-    const required = ["DATABASE_URL", "DATABASE_DRIVER", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"];
+    const required = ["DATABASE_URL", "DATABASE_DRIVER", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"];
     const declared = block.match(/"secrets"\s*:\s*\{\s*"required"\s*:\s*\[([^\]]*)\]/u)?.[1] ?? "";
     checks.push(check(`ci.worker.${environment}.secrets`, required.every((name) => declared.includes(`"${name}"`)), `${environment} Worker declares required runtime secrets in its own Wrangler environment`));
   }
