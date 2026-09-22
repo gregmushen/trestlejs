@@ -13,6 +13,7 @@ describe("static architecture checks", () => {
     await mkdir(path.join(root, "apps", "app", "src"), { recursive: true });
     await mkdir(path.join(root, ".trestle", "resources"), { recursive: true });
     await mkdir(path.join(root, ".agents", "skills", "trestle-setup"), { recursive: true });
+    await writeFile(path.join(root, "package.json"), '{"devDependencies":{"trestlejs":"0.1.0-alpha.13"}}\n');
     await writeFile(path.join(root, "apps", "app", "src", "billing.ts"), 'import Stripe from "stripe";\n');
     await writeFile(path.join(root, ".trestle", "resources", "article.json"), JSON.stringify({ name: "Article", tenant: true, persistence: { table: "article" }, files: ["missing.ts"] }));
     await writeFile(path.join(root, ".agents", "skills", "trestle-setup", "SKILL.md"), "# stale\n\n<!-- trestle-managed-guidance:0 -->\n");
@@ -22,6 +23,8 @@ describe("static architecture checks", () => {
       expect.objectContaining({ id: "architecture.provider-boundary", status: "fail" }),
       expect.objectContaining({ id: "architecture.resource.Article.rls", status: "fail" }),
       expect.objectContaining({ id: "architecture.guidance.managed", status: "fail" }),
+      expect.objectContaining({ id: "architecture.authority-model", status: "fail" }),
+      expect.objectContaining({ id: "architecture.database-runtime", status: "fail" }),
     ]));
   });
 });
