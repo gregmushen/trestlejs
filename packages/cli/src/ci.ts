@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { wranglerEnvironmentBlock } from "./wrangler-config.js";
 
 export type CiValidationCheck = {
   id: string;
@@ -60,6 +61,13 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.database.rls", ci.includes("TRESTLE_RLS_TEST_DATABASE_URL"), "CI runs the PostgreSQL RLS test suite"));
   checks.push(check("ci.lockfile.frozen", ci.includes("pnpm install --frozen-lockfile"), "CI installs from the frozen lockfile"));
   checks.push(check("ci.architecture.static", ci.includes("trestle architecture check"), "CI enforces provider boundaries, resource integrity, forced RLS, and managed-guidance freshness"));
+  const workerConfig = await readFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "utf8").catch(() => "");
+  for (const environment of ["preview", "staging", "production"] as const) {
+    const block = wranglerEnvironmentBlock(workerConfig, environment);
+    const required = ["DATABASE_URL", "DATABASE_DRIVER", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"];
+    const declared = block.match(/"secrets"\s*:\s*\{\s*"required"\s*:\s*\[([^\]]*)\]/u)?.[1] ?? "";
+    checks.push(check(`ci.worker.${environment}.secrets`, required.every((name) => declared.includes(`"${name}"`)), `${environment} Worker declares required runtime secrets in its own Wrangler environment`));
+  }
 
   const providers = sources.get("providers.yml") ?? "";
   checks.push(check("ci.providers.protected", providers.includes("environment: staging") && providers.includes("workflow_dispatch"), "provider verification is manual and protected by the staging environment"));
