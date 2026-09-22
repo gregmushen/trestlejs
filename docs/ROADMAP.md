@@ -14,7 +14,7 @@ release.
 | Alpha 1–5 | Reproducible starter, local runtime, auth, Southwind site, setup skill, encrypted credentials, email and billing boundaries, SetupPlan, and initial resource generation | Shipped |
 | Alpha 6 | A trustworthy tenant-owned CRUD slice from browser to forced PostgreSQL RLS, plus safe plan/apply repair | Shipped |
 | Alpha 7 | Production deployment evidence through GitHub, Cloudflare, and Neon | Next |
-| Alpha 8 | Asynchronous execution spine: outbox, Queues, Workflows, DLQ, schedules, and R2 | Planned |
+| Alpha 8 | Asynchronous execution spine: outbox, Queues, Workflows, DLQ, schedules, and R2 | Core shipped; provider wiring remaining |
 | Alpha 9 | Production integrations and end-to-end observability | Planned |
 | Alpha 10 | Recovery, operational tooling, deterministic data, and safe remote access | Planned |
 | Alpha 11 | Resource evolution and framework upgrade lifecycle | Planned |
@@ -174,6 +174,23 @@ After production deployment is proven, the remaining alphas should proceed in
 dependency order.
 
 ### Alpha 8: asynchronous execution spine
+
+The Alpha 8 core checkpoint is now implemented and committed. Generated
+projects have versioned event envelopes, a persistent transactional-outbox
+store, leasing/retry/dead-letter recovery, Queue adapters, deterministic
+Workflow retry, tenant-owned artifact metadata, local/R2 storage adapters,
+signed artifact access, and DLQ inspection/redrive commands. The generated
+release canary covers these paths without external provider accounts.
+
+Remaining Alpha 8 release work is provider wiring and operational hardening:
+
+- configure generated Cloudflare Queue, Workflow, and R2 bindings only when
+  the corresponding capability is enabled;
+- connect the Worker HTTP/domain mutation path to a database transaction plus
+  outbox append, and connect the Worker Queue consumer to the event registry;
+- persist artifact metadata through the PostgreSQL repository in the R2 path;
+- align Drizzle snapshots with the checked-in asynchronous migrations; and
+- add protected provider integration tests and retention/cleanup jobs.
 
 - Versioned domain-event and message-envelope registries.
 - Transactional outbox with leasing, retry, recovery, and retention.
