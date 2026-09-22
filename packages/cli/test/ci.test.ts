@@ -67,7 +67,19 @@ describe("generated CI deployment contract", () => {
     await cp(path.join(templateRoot, "apps", "worker", "wrangler.jsonc"), path.join(root, "apps", "worker", "wrangler.jsonc"), { recursive: true });
     const configPath = path.join(root, "apps", "worker", "wrangler.jsonc");
     const source = await readFile(configPath, "utf8");
-    await writeFile(configPath, source.replace('"name": "__TRESTLE_PROJECT_NAME__-worker-preview",\n      "secrets": { "required": ["DATABASE_URL", "DATABASE_DRIVER", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"] },', '"name": "__TRESTLE_PROJECT_NAME__-worker-preview",'));
+    await writeFile(configPath, source.replace(/("name": "__TRESTLE_PROJECT_NAME__-worker-preview",\n)\s*"secrets": \{ "required": \[[^\]]+\] \},/u, "$1"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.worker.preview.secrets", status: "fail" }));
+  });
+
+  it("rejects missing preview provider secrets before deployment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await mkdir(path.join(root, "apps", "worker"), { recursive: true });
+    const configPath = path.join(root, "apps", "worker", "wrangler.jsonc");
+    const source = await readFile(path.join(templateRoot, "apps", "worker", "wrangler.jsonc"), "utf8");
+    await writeFile(configPath, source.replace('"RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"', '"RESEND_API_KEY", "RESEND_WEBHOOK_SECRET"'));
     const report = await validateCi(root);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.worker.preview.secrets", status: "fail" }));
   });

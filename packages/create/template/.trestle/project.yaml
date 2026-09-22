@@ -62,10 +62,10 @@ secrets:
     required: [preview, staging, production]
   STRIPE_SECRET_KEY:
     target: worker
-    required: [staging, production]
+    required: [preview, staging, production]
   STRIPE_WEBHOOK_SECRET:
     target: worker
-    required: [staging, production]
+    required: [preview, staging, production]
   DATABASE_MIGRATION_URL:
     target: ci
     required: [staging, production]

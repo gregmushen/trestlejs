@@ -263,7 +263,7 @@ export async function runDoctor(
 
   if (manifest.packages.integrations) {
     checks.push(await pathCheck(root, "package", "transactional email", path.join(manifest.packages.integrations, "src", "email", "index.ts")));
-    if (environment === "staging" || environment === "production") {
+    if (environment === "preview" || environment === "staging" || environment === "production") {
       for (const name of ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET"] as const) {
         const declaration = manifest.secrets?.[name];
         checks.push({
@@ -279,13 +279,13 @@ export async function runDoctor(
         if (!workerPath) throw new Error("worker app is not declared");
         const workerConfig = await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8");
         const environmentBlock = wranglerEnvironmentBlock(workerConfig, environment);
-        const configured = wranglerStringVariable(environmentBlock, "EMAIL_DELIVERY_MODE") === "resend" && Boolean(wranglerStringVariable(environmentBlock, "EMAIL_FROM") && wranglerStringVariable(environmentBlock, "EMAIL_FROM") !== "CHANGE_ME") && (environment !== "staging" || Boolean(wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") && wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") !== "CHANGE_ME"));
+        const configured = wranglerStringVariable(environmentBlock, "EMAIL_DELIVERY_MODE") === "resend" && Boolean(wranglerStringVariable(environmentBlock, "EMAIL_FROM") && wranglerStringVariable(environmentBlock, "EMAIL_FROM") !== "CHANGE_ME") && (environment === "production" || Boolean(wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") && wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") !== "CHANGE_ME"));
         checks.push({
           id: "email.provider.configuration",
           group: "architecture",
           status: configured ? "pass" : "fail",
           message: configured ? `Resend and a sender are configured for ${environment}` : `${environment} email provider configuration is incomplete`,
-          ...(!configured ? { remediation: `Set EMAIL_FROM${environment === "staging" ? ", EMAIL_STAGING_REDIRECT," : " and"} the ${environment} Resend adapter variables in ${workerPath}/wrangler.jsonc` } : {}),
+          ...(!configured ? { remediation: `Set EMAIL_FROM${environment !== "production" ? ", EMAIL_STAGING_REDIRECT," : " and"} the ${environment} Resend adapter variables in ${workerPath}/wrangler.jsonc` } : {}),
         });
       } catch (error) {
         checks.push({ id: "email.provider.configuration", group: "architecture", status: "fail", message: "email deployment configuration cannot be read", evidence: error instanceof Error ? error.message : String(error) });
@@ -295,7 +295,7 @@ export async function runDoctor(
 
   if (manifest.packages.billing) {
     checks.push(await pathCheck(root, "package", "billing", path.join(manifest.packages.billing, "src", "index.ts")));
-    if (environment === "staging" || environment === "production") {
+    if (environment === "preview" || environment === "staging" || environment === "production") {
       for (const name of ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"] as const) {
         const declaration = manifest.secrets?.[name];
         const valid = declaration?.target === "worker" && declaration.required.includes(environment);
