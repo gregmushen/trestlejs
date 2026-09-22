@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -519,6 +520,41 @@ export function createProgram(runtime: CliRuntime): Command {
       else await runCommand("docker", ["compose", ...(operation === "start" ? ["up", "-d", "--wait"] : operation === "stop" ? ["stop"] : ["ps"])], { cwd: context.root, env: composeEnvironment });
     });
   }
+
+  const databaseRoles = database.command("roles").description("manage restricted remote PostgreSQL runtime roles");
+  databaseRoles.command("bootstrap")
+    .requiredOption("--env <environment>", "staging or production environment", environment)
+    .requiredOption("--role <name>", "restricted PostgreSQL login role")
+    .option("--yes", "confirm the remote database mutation")
+    .action(async (options: { env: ReturnType<typeof environment>; role: string; yes?: boolean }, command: Command) => {
+      if (options.env !== "staging" && options.env !== "production") throw new CliFailure("runtime role bootstrap requires staging or production");
+      if (!options.yes) throw new CliFailure("runtime role bootstrap mutates the remote database; rerun with --yes");
+      const context = await projectContext(command, runtime);
+      const masterKey = selectedMasterKey(runtime);
+      const values = await readSecrets(context.root, options.env, masterKey);
+      if (!values.DATABASE_MIGRATION_URL) throw new CliFailure(`DATABASE_MIGRATION_URL is missing for ${options.env}`);
+      const directory = await mkdtemp(path.join(os.tmpdir(), "trestle-runtime-role-"));
+      const output = path.join(directory, "runtime-url");
+      try {
+        const databasePath = context.manifest.packages.db ?? "packages/db";
+        await runCommand("pnpm", ["--filter", `./${databasePath}`, "exec", "tsx", "scripts/runtime-role.ts", "bootstrap-managed"], {
+          cwd: context.root,
+          env: {
+            ...process.env,
+            DATABASE_MIGRATION_URL: values.DATABASE_MIGRATION_URL,
+            DATABASE_RUNTIME_ROLE: options.role,
+            TRESTLE_RUNTIME_OUTPUT: output,
+          },
+        });
+        const result = await readFile(output, "utf8");
+        const runtimeUrl = result.match(/^runtime_url=(.+)$/mu)?.[1];
+        if (!runtimeUrl) throw new CliFailure("runtime role bootstrap did not produce a connection URL");
+        await writeSecrets(context.root, options.env, { ...values, DATABASE_URL: runtimeUrl }, masterKey);
+        runtime.stdout(`Bootstrapped restricted PostgreSQL runtime role ${options.role} for ${options.env}\nUpdated encrypted DATABASE_URL without printing it\n`);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
 
   database.command("console").action(async (_options: object, command: Command) => {
     const context = await projectContext(command, runtime);

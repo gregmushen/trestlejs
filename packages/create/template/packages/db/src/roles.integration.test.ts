@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { assertRuntimeRole, configureRuntimeRole, inspectRuntimeRole } from "./roles.js";
+import { assertRuntimeRole, bootstrapRuntimeRole, configureRuntimeRole, inspectRuntimeRole } from "./roles.js";
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -15,11 +15,6 @@ suite("production PostgreSQL runtime role", () => {
     const [record] = await admin!<{ current_user: string }[]>`select current_user`;
     if (!record) throw new Error("Unable to inspect test database role");
     adminRole = record.current_user;
-    const [roleStatement] = await admin!<{ statement: string }[]>`
-      select format('create role %I login password %L nosuperuser nocreatedb nocreaterole noinherit nobypassrls', ${runtimeRole}::text, ${runtimePassword}::text) as statement
-    `;
-    if (!roleStatement) throw new Error("Unable to construct test database role");
-    await admin!.unsafe(roleStatement.statement);
   });
 
   afterAll(async () => {
@@ -28,6 +23,8 @@ suite("production PostgreSQL runtime role", () => {
   });
 
   it("grants only the restricted application role", async () => {
+    await expect(bootstrapRuntimeRole(connectionString!, runtimeRole, runtimePassword)).resolves.toEqual({ role: runtimeRole, created: true });
+    await expect(bootstrapRuntimeRole(connectionString!, runtimeRole, runtimePassword)).resolves.toEqual({ role: runtimeRole, created: false });
     const configured = await configureRuntimeRole(connectionString!, runtimeRole);
     expect(configured).toEqual({ role: runtimeRole, canLogin: true, superuser: false, bypassRls: false, memberOfApplicationRole: true });
     const url = new URL(connectionString!);

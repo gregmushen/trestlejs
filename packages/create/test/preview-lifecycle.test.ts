@@ -40,6 +40,38 @@ async function api(handler: (request: IncomingMessage, response: ServerResponse)
 }
 
 describe("preview lifecycle", () => {
+  it("follows only same-origin redirects in deployed smoke checks", async () => {
+    const base = await api((request, response) => {
+      if (request.url === "/features") {
+        response.statusCode = 308;
+        response.setHeader("location", "/features/");
+        response.end();
+        return;
+      }
+      response.statusCode = 200;
+      response.setHeader("content-type", "text/html");
+      response.end("<h1>Features</h1>");
+    });
+    const { fetchSameOrigin } = await import("../template/scripts/smoke-http.mjs") as {
+      fetchSameOrigin: (url: string) => Promise<Response>;
+    };
+    const response = await fetchSameOrigin(`${base}/features`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Features");
+  });
+
+  it("rejects cross-origin redirects in deployed smoke checks", async () => {
+    const base = await api((_request, response) => {
+      response.statusCode = 302;
+      response.setHeader("location", "https://attacker.example/phish");
+      response.end();
+    });
+    const { fetchSameOrigin } = await import("../template/scripts/smoke-http.mjs") as {
+      fetchSameOrigin: (url: string) => Promise<Response>;
+    };
+    await expect(fetchSameOrigin(`${base}/sign-in`)).rejects.toThrow("Cross-origin redirect rejected");
+  });
+
   it("derives isolated, deterministic URLs and provider-safe names", async () => {
     const result = await run("preview-context.mjs", ["--project", "clearclose", "--pr", "42", "--workers-subdomain", "greg", "--format", "github"]);
     expect(result.code).toBe(0);
@@ -127,6 +159,56 @@ describe("preview lifecycle", () => {
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("HTTP 500");
+    expect(result.stderr).not.toContain("top-secret");
+  });
+
+  it("retries transient Pages reads", async () => {
+    let attempts = 0;
+    const base = await api((_request, response) => {
+      attempts += 1;
+      response.statusCode = attempts < 3 ? 500 : 200;
+      response.end('{"success":true}');
+    });
+    const result = await run("cloudflare-pages.mjs", ["ensure", "clearclose-app-pr-42"], {
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "top-secret",
+      CLOUDFLARE_API_BASE: base,
+    });
+    expect(result).toMatchObject({ code: 0, stdout: "Reusing clearclose-app-pr-42\n", stderr: "" });
+    expect(attempts).toBe(3);
+  });
+
+  it("reconciles an ambiguous Pages create response", async () => {
+    let exists = false;
+    const methods: string[] = [];
+    const base = await api((request, response) => {
+      methods.push(request.method ?? "");
+      if (request.method === "POST") {
+        exists = true;
+        response.statusCode = 500;
+      } else {
+        response.statusCode = exists ? 200 : 404;
+      }
+      response.end('{"success":false}');
+    });
+    const result = await run("cloudflare-pages.mjs", ["ensure", "clearclose-app-pr-42"], {
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "top-secret",
+      CLOUDFLARE_API_BASE: base,
+    });
+    expect(result).toMatchObject({ code: 0, stdout: "Reusing clearclose-app-pr-42\n", stderr: "" });
+    expect(methods).toEqual(["GET", "POST", "GET"]);
+  });
+
+  it("reports actionable Pages credential failures without exposing the token", async () => {
+    const base = await api((_request, response) => { response.statusCode = 403; response.end('{"errors":[{"message":"denied"}]}'); });
+    const result = await run("cloudflare-pages.mjs", ["ensure", "clearclose-app-pr-42"], {
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "top-secret",
+      CLOUDFLARE_API_BASE: base,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("non-expired token with Cloudflare Pages write permission");
     expect(result.stderr).not.toContain("top-secret");
   });
 

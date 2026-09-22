@@ -106,6 +106,20 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toContain("only allowed for isolated previews");
   });
 
+  it("requires explicit confirmation before bootstrapping a remote runtime role", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["db", "roles", "bootstrap", "--env", "staging", "--role", "trestle_runtime"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("mutates the remote database; rerun with --yes");
+  });
+
+  it("rejects runtime-role bootstrap for local and preview environments", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["db", "roles", "bootstrap", "--env", "preview", "--role", "trestle_runtime", "--yes"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("requires staging or production");
+  });
+
   it("runs a read-only passing doctor", async () => {
     const root = await fixture();
     const output = capture(root);

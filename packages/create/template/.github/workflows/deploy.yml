@@ -29,11 +29,11 @@ jobs:
           SITE_URL: "${{ vars.SITE_URL }}"
       - run: pnpm exec trestle secrets check --env staging
         env: { TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}" }
-      - name: Configure staging database roles
+      - name: Bootstrap staging runtime role
         run: |
-          database_migration_url="$(pnpm exec trestle secrets get DATABASE_MIGRATION_URL --env staging --raw)"
-          export DATABASE_MIGRATION_URL="$database_migration_url"
-          pnpm --filter ./packages/db db:roles:configure
+          export DATABASE_MIGRATION_URL="$(pnpm exec trestle secrets get DATABASE_MIGRATION_URL --env staging --raw)"
+          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"
+          pnpm --filter ./packages/db db:roles:bootstrap
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
@@ -43,6 +43,14 @@ jobs:
           export DATABASE_URL="$database_url"
           pnpm db:migrate
         env: { TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}" }
+      - name: Configure staging database roles
+        run: |
+          database_migration_url="$(pnpm exec trestle secrets get DATABASE_MIGRATION_URL --env staging --raw)"
+          export DATABASE_MIGRATION_URL="$database_migration_url"
+          pnpm --filter ./packages/db db:roles:configure
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
       - name: Verify staging runtime role
         run: |
           database_url="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"
@@ -108,11 +116,11 @@ jobs:
           SITE_URL: "${{ vars.SITE_URL }}"
       - run: pnpm exec trestle secrets check --env production
         env: { TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}" }
-      - name: Configure production database roles
+      - name: Bootstrap production runtime role
         run: |
-          database_migration_url="$(pnpm exec trestle secrets get DATABASE_MIGRATION_URL --env production --raw)"
-          export DATABASE_MIGRATION_URL="$database_migration_url"
-          pnpm --filter ./packages/db db:roles:configure
+          export DATABASE_MIGRATION_URL="$(pnpm exec trestle secrets get DATABASE_MIGRATION_URL --env production --raw)"
+          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env production --raw)"
+          pnpm --filter ./packages/db db:roles:bootstrap
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
@@ -122,6 +130,14 @@ jobs:
           export DATABASE_URL="$database_url"
           pnpm db:migrate
         env: { TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}" }
+      - name: Configure production database roles
+        run: |
+          database_migration_url="$(pnpm exec trestle secrets get DATABASE_MIGRATION_URL --env production --raw)"
+          export DATABASE_MIGRATION_URL="$database_migration_url"
+          pnpm --filter ./packages/db db:roles:configure
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
       - name: Verify production runtime role
         run: |
           database_url="$(pnpm exec trestle secrets get DATABASE_URL --env production --raw)"

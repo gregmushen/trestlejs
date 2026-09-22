@@ -14,6 +14,34 @@ function validateRoleName(role: string): string {
   return role;
 }
 
+export async function bootstrapRuntimeRole(connectionString: string, runtimeRole: string, password: string): Promise<{ role: string; created: boolean }> {
+  const role = validateRoleName(runtimeRole);
+  if (!password || /[\r\n]/u.test(password)) throw new Error("PostgreSQL runtime role password is invalid");
+  const sql = postgres(connectionString, { max: 1, prepare: false });
+  try {
+    const [record] = await sql<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }[]>`
+      select rolcanlogin, rolsuper, rolbypassrls from pg_roles where rolname = ${role}
+    `;
+    if (record && (!record.rolcanlogin || record.rolsuper || record.rolbypassrls)) {
+      throw new Error(`PostgreSQL runtime role ${role} is not a restricted login role`);
+    }
+    const [statement] = await sql<{ statement: string }[]>`
+      select format(
+        ${record
+          ? "alter role %I login password %L noinherit"
+          : "create role %I login password %L nosuperuser nocreatedb nocreaterole noinherit nobypassrls"},
+        ${role}::text,
+        ${password}::text
+      ) as statement
+    `;
+    if (!statement) throw new Error("Unable to construct the PostgreSQL runtime role statement");
+    await sql.unsafe(statement.statement);
+    return { role, created: !record };
+  } finally {
+    await sql.end();
+  }
+}
+
 export async function configureRuntimeRole(connectionString: string, runtimeRole: string): Promise<RuntimeRoleStatus> {
   const role = validateRoleName(runtimeRole);
   const sql = postgres(connectionString, { max: 1, prepare: false });
