@@ -23,12 +23,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Prepare staging Queue bindings
+        run: node scripts/queue-config.mjs render staging __TRESTLE_PROJECT_NAME__-worker-staging
       - name: Verify staging configuration and Cloudflare access
         run: |
           pnpm exec trestle doctor --env staging
           node scripts/cloudflare-preflight.mjs
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+          TRESTLE_WRANGLER_CONFIG: apps/worker/.trestle-queues.wrangler.jsonc
+      - name: Provision staging Queues
+        run: node scripts/cloudflare-queues.mjs ensure __TRESTLE_PROJECT_NAME__-worker-staging
+        env:
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - run: pnpm typecheck && pnpm test && pnpm build
@@ -85,7 +93,7 @@ jobs:
           accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           packageManager: pnpm
           workingDirectory: apps/worker
-          command: deploy --env staging --var WEB_ORIGIN:${{ vars.APP_URL }}
+          command: deploy --config .trestle-queues.wrangler.jsonc --env staging --var WEB_ORIGIN:${{ vars.APP_URL }}
       - run: VITE_API_ORIGIN="${{ vars.API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
@@ -118,12 +126,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Prepare production Queue bindings
+        run: node scripts/queue-config.mjs render production __TRESTLE_PROJECT_NAME__-worker
       - name: Verify production configuration and Cloudflare access
         run: |
           pnpm exec trestle doctor --env production
           node scripts/cloudflare-preflight.mjs
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+          TRESTLE_WRANGLER_CONFIG: apps/worker/.trestle-queues.wrangler.jsonc
+      - name: Provision production Queues
+        run: node scripts/cloudflare-queues.mjs ensure __TRESTLE_PROJECT_NAME__-worker
+        env:
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - run: pnpm typecheck && pnpm test && pnpm build
@@ -180,7 +196,7 @@ jobs:
           accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           packageManager: pnpm
           workingDirectory: apps/worker
-          command: deploy --env production --var WEB_ORIGIN:${{ vars.APP_URL }}
+          command: deploy --config .trestle-queues.wrangler.jsonc --env production --var WEB_ORIGIN:${{ vars.APP_URL }}
       - run: VITE_API_ORIGIN="${{ vars.API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:

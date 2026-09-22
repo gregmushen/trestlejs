@@ -82,6 +82,12 @@ Use a long-lived token scoped to the same Cloudflare account as
 `CLOUDFLARE_ACCOUNT_ID`, with `Workers Scripts Write` and `Pages Write`
 permissions in each GitHub deployment environment; an interactive
 Wrangler OAuth access token is not a durable CI credential.
+If `capabilities.queues` is enabled, grant `Queues Write` on that same account.
+The deployment workflows then provision per-environment Queues, render a
+producer/consumer binding with a dead-letter queue and cron dispatcher, and
+isolate preview Queue names by pull request. Preview cleanup deletes only its
+own Queues after deleting its Worker. Queues remain opt-in until this hosted
+path has been verified against a real account.
 `CLOUDFLARE_WORKERS_SUBDOMAIN` is the account label before `.workers.dev`; it
 is used to derive the Worker URL exercised by the preview smoke gate. Preview
 preflight verifies that it matches the configured Cloudflare account. Preview

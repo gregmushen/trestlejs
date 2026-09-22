@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -44,6 +44,19 @@ try {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "src/system.integration.test.ts"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1" });
   }
+  const generatedProjectManifest = path.join(project, ".trestle", "project.yaml");
+  const manifestSource = await readFile(generatedProjectManifest, "utf8");
+  if (!manifestSource.includes("  queues: false")) throw new Error("generated project did not declare opt-in Queues");
+  await writeFile(generatedProjectManifest, manifestSource.replace("  queues: false", "  queues: true"));
+  await run(process.execPath, ["scripts/queue-config.mjs", "render", "preview", "release-canary-worker-pr-1"], project);
+  const queueDoctor = spawnSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "doctor", "--env", "preview", "--json"], {
+    cwd: project, encoding: "utf8", env: { ...process.env, TRESTLE_WRANGLER_CONFIG: "apps/worker/.trestle-queues.wrangler.jsonc" },
+  });
+  const queueDoctorReport = JSON.parse(queueDoctor.stdout);
+  if (queueDoctorReport.data.checks.find((item) => item.id === "cloudflare.queues.binding")?.status !== "pass") {
+    throw new Error("Doctor did not recognize the opt-in preview Queue binding");
+  }
+  await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);
   console.log(`Generated release canary passed at ${project}`);
 } finally {
   if (process.env.TRESTLE_KEEP_GENERATED === "1") {
