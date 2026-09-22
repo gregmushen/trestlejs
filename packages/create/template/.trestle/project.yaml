@@ -28,10 +28,12 @@ database:
   engine: postgresql
   defaultProvider: neon
 capabilities:
-  r2: true
-  queues: true
-  workflows: true
-  durableObjects: true
+  # Alpha 7 reports only implemented application capabilities. Enable these
+  # as their generated bindings, local adapters, and verification ship.
+  r2: false
+  queues: false
+  workflows: false
+  durableObjects: false
   admin: false
 environments:
   - local
@@ -54,10 +56,10 @@ secrets:
     required: [local, preview, staging, production]
   RESEND_API_KEY:
     target: worker
-    required: [staging, production]
+    required: [preview, staging, production]
   RESEND_WEBHOOK_SECRET:
     target: worker
-    required: [staging, production]
+    required: [preview, staging, production]
   STRIPE_SECRET_KEY:
     target: worker
     required: [staging, production]
@@ -66,4 +68,4 @@ secrets:
     required: [staging, production]
   DATABASE_MIGRATION_URL:
     target: ci
-    required: [staging, production]
+    required: [preview, staging, production]

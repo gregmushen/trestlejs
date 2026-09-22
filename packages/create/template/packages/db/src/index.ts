@@ -11,6 +11,7 @@ import * as tenantSchema from "./tenant-schema.js";
 export * from "./auth-schema.js";
 export * from "./billing-schema.js";
 export * from "./email-schema.js";
+export * from "./roles.js";
 export * from "./tenant-schema.js";
 export * from "./tenancy.js";
 

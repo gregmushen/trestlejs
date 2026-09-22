@@ -23,7 +23,8 @@ app.use("/api/*", async (context, next) =>
 );
 
 function localEmailEnabled(environment: AuthEnvironment): boolean {
-  return !environment.EMAIL_DELIVERY_MODE || environment.EMAIL_DELIVERY_MODE === "capture" || environment.EMAIL_DELIVERY_MODE === "local";
+  return environment.APP_ENV === "local"
+    && (!environment.EMAIL_DELIVERY_MODE || environment.EMAIL_DELIVERY_MODE === "capture" || environment.EMAIL_DELIVERY_MODE === "local");
 }
 
 app.get("/api/dev/emails", (context) => {

@@ -24,6 +24,7 @@ const environment = {
   DATABASE_URL: "postgres://unused",
   BETTER_AUTH_SECRET: "test-secret-at-least-32-characters",
   BETTER_AUTH_URL: "http://localhost:42069",
+  APP_ENV: "local" as const,
 };
 
 describe("worker routes", () => {
@@ -55,6 +56,8 @@ describe("worker routes", () => {
     const response = await app.request("/api/dev/emails", undefined, { ...environment, EMAIL_DELIVERY_MODE: "local" as const });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toHaveProperty("emails");
+    const preview = await app.request("/api/dev/emails", undefined, { ...environment, APP_ENV: "preview" as const, EMAIL_DELIVERY_MODE: "local" as const });
+    expect(preview.status).toBe(404);
   });
 
   it("rejects an unsigned provider webhook before reading provider data", async () => {

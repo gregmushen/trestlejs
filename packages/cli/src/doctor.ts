@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "@trestlejs/core";
 
+import { validateCi } from "./ci.js";
 import { inspectResources } from "./inspect.js";
 import { diffSetupPlan } from "./plan.js";
 import { readSecrets, validateSecrets } from "./secrets.js";
@@ -106,6 +107,21 @@ export async function runDoctor(
   );
 
   checks.push(await pathCheck(root, "package", "trestle-setup skill", path.join(".agents", "skills", "trestle-setup", "SKILL.md")));
+
+  try {
+    await access(path.join(root, ".github", "workflows"));
+    const ci = await validateCi(root);
+    checks.push(...ci.checks.map((item) => ({
+      id: item.id,
+      group: "architecture" as const,
+      status: item.status,
+      message: item.message,
+      ...(item.evidence ? { evidence: item.evidence } : {}),
+      ...(item.status === "fail" ? { remediation: "Run trestle ci validate and repair the generated deployment contract" } : {}),
+    })));
+  } catch {
+    checks.push({ id: "ci.workflows.optional", group: "architecture", status: "pass", message: "no GitHub Actions deployment contract is present" });
+  }
 
   const setupPlanPath = path.join(root, ".trestle", "setup.json");
   try {

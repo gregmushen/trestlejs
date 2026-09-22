@@ -8,6 +8,7 @@ import {
 } from "@trestlejs/core";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 
+import { formatCiValidation, validateCi } from "./ci.js";
 import { projectContext } from "./context.js";
 import { formatDoctorHuman, formatDoctorJson, runDoctor } from "./doctor.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
@@ -15,6 +16,7 @@ import { localEnvironment } from "./local.js";
 import { clearLocalEmail, formatEmail, formatEmailList, getLocalEmail, listLocalEmail, openLocalEmail } from "./email.js";
 import { generateEmail } from "./generate-email.js";
 import { generateResource, generateResourceMigration } from "./generate-resource.js";
+import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
 import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readApplyState, readSetupPlan } from "./plan.js";
 import { runCommand, runDevelopment } from "./processes.js";
@@ -109,6 +111,28 @@ export function createProgram(runtime: CliRuntime): Command {
         return;
       }
       runtime.stdout(`${context.manifest.environments.join("\n")}\n`);
+    });
+  env
+    .command("status")
+    .description("inspect one declared environment without contacting providers")
+    .option("--env <environment>", "environment to inspect", environment, "local")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const status = await inspectEnvironmentStatus(context.root, context.manifest, options.env);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(status), null, 2)}\n` : formatEnvironmentStatus(status));
+      if (!status.declared || status.applications.some(({ present }) => !present)) throw new CliFailure(`${options.env} environment is incomplete`);
+    });
+
+  const ci = program.command("ci").description("validate generated continuous-delivery configuration");
+  ci.command("validate")
+    .description("validate the static GitHub Actions deployment contract")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = await validateCi(context.root);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatCiValidation(report));
+      if (!report.valid) throw new CliFailure("CI deployment contract has failures");
     });
 
   program

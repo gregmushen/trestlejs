@@ -44,3 +44,24 @@ Cloud deployments default to Neon's Worker-native HTTP driver. Local development
 sets `DATABASE_DRIVER=postgres-js` in encrypted credentials so the same app can
 use the Compose PostgreSQL instance directly. No persistent `.dev.vars` file is
 created by `trestle dev`.
+
+Preview, staging, and production use separate database credentials:
+
+- `DATABASE_MIGRATION_URL` is available only to the protected deployment job;
+- `DATABASE_URL` is the restricted Worker runtime credential; and
+- the GitHub environment variable `DATABASE_RUNTIME_ROLE` names that runtime
+  PostgreSQL login role.
+
+The generated deployment workflow grants that login permission to assume the
+non-login `trestle_app` role, rejects superuser or `BYPASSRLS` runtime roles,
+runs migrations with the migration credential, and verifies the runtime
+credential before deploying. Configure `APP_URL`, `API_URL`, `SITE_URL`, and
+`DATABASE_RUNTIME_ROLE` independently in the `preview`, `staging`, and
+`production` GitHub environments.
+
+Validate the checked-in delivery contract locally with:
+
+```bash
+pnpm exec trestle ci validate
+pnpm exec trestle env status --env staging
+```

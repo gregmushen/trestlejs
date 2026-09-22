@@ -9,6 +9,16 @@ const healthBody = await health.json();
 if (healthBody.status !== "ok") throw new Error("API health payload is invalid");
 if (health.headers.get("access-control-allow-origin") !== appURL) throw new Error("API CORS origin is incorrect");
 
+for (const route of ["/api/me", "/api/billing/subscription"]) {
+  const response = await fetch(`${apiURL}${route}`, { headers: { origin: appURL } });
+  if (response.status !== 401) throw new Error(`Anonymous request to ${route} was not rejected: ${response.status}`);
+}
+
+const resendWebhook = await fetch(`${apiURL}/api/webhooks/resend`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+if (resendWebhook.status !== 400) throw new Error(`Unsigned Resend webhook was not rejected as configured: ${resendWebhook.status}`);
+const stripeWebhook = await fetch(`${apiURL}/webhooks/stripe`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+if (stripeWebhook.status !== 400) throw new Error(`Unsigned Stripe webhook was not rejected as configured: ${stripeWebhook.status}`);
+
 for (const route of ["/", "/sign-in"]) {
   const response = await fetch(`${appURL}${route}`, { redirect: "manual" });
   if (!response.ok) throw new Error(`Web smoke failed for ${route}: ${response.status}`);
