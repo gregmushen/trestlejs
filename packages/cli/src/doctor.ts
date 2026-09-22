@@ -1,8 +1,10 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
-import { structuredOutput, type EnvironmentName, type ProjectManifest } from "@trestlejs/core";
+import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "@trestlejs/core";
 
+import { inspectResources } from "./inspect.js";
+import { diffSetupPlan } from "./plan.js";
 import { readSecrets, validateSecrets } from "./secrets.js";
 
 export type DoctorCheck = {
@@ -102,6 +104,61 @@ export async function runDoctor(
       entries.map(({ kind, name, relativePath }) => pathCheck(root, kind, name, relativePath)),
     )),
   );
+
+  checks.push(await pathCheck(root, "package", "trestle-setup skill", path.join(".agents", "skills", "trestle-setup", "SKILL.md")));
+
+  const setupPlanPath = path.join(root, ".trestle", "setup.json");
+  try {
+    const input = await readFile(setupPlanPath, "utf8");
+    const plan = parseSetupPlan(input);
+    const diff = await diffSetupPlan(root, manifest, plan, input);
+    checks.push({
+      id: "setup.plan.converged",
+      group: "architecture",
+      status: diff.converged ? "pass" : "fail",
+      message: diff.converged ? "SetupPlan is valid and converged" : "SetupPlan has pending, blocked, or unknown changes",
+      evidence: diff.converged ? setupPlanPath : diff.items.filter(({ classification }) => classification !== "already correct").map(({ classification, id }) => `${classification}:${id}`).join(", "),
+      ...(!diff.converged ? { remediation: "Review trestle plan diff .trestle/setup.json, then explicitly approve trestle apply .trestle/setup.json --yes" } : {}),
+    });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      checks.push({ id: "setup.plan.optional", group: "architecture", status: "pass", message: "no SetupPlan is currently declared" });
+    } else {
+      checks.push({ id: "setup.plan.valid", group: "architecture", status: "fail", message: "SetupPlan cannot be validated", evidence: error instanceof Error ? error.message : String(error), remediation: "Run trestle plan validate .trestle/setup.json" });
+    }
+  }
+
+  try {
+    const resources = await inspectResources(root);
+    const migrationDirectory = path.join(root, manifest.packages.db ?? "packages/db", "migrations");
+    const migrationSql = resources.length
+      ? (await Promise.all((await readdir(migrationDirectory)).filter((file) => file.endsWith(".sql")).map((file) => readFile(path.join(migrationDirectory, file), "utf8")))).join("\n")
+      : "";
+    for (const resource of resources) {
+      const required = [resource.contracts, resource.persistence?.schema].filter((value): value is string => Boolean(value));
+      const missing = (await Promise.all(required.map(async (relativePath) => access(path.join(root, relativePath)).then(() => undefined, () => relativePath)))).filter(Boolean);
+      checks.push({
+        id: `resources.${resource.name.toLowerCase()}.sources`,
+        group: "architecture",
+        status: missing.length ? "fail" : "pass",
+        message: missing.length ? `${resource.name} resource sources are incomplete` : `${resource.name} resource declaration and sources agree`,
+        ...(missing.length ? { evidence: missing.join(", "), remediation: `Regenerate or restore the declared ${resource.name} source files` } : {}),
+      });
+      if (resource.persistence?.table) {
+        const table = resource.persistence.table;
+        const migrated = migrationSql.includes(`CREATE TABLE "${table}"`) && migrationSql.includes(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY`);
+        checks.push({
+          id: `resources.${resource.name.toLowerCase()}.migration`,
+          group: "architecture",
+          status: migrated ? "pass" : "fail",
+          message: migrated ? `${resource.name} has a journaled forced-RLS migration` : `${resource.name} migration is missing or does not force RLS`,
+          ...(!migrated ? { remediation: "Run pnpm db:generate and ensure the migration forces row-level security before applying it" } : {}),
+        });
+      }
+    }
+  } catch (error) {
+    checks.push({ id: "resources.declarations.valid", group: "architecture", status: "fail", message: "resource declarations cannot be read", evidence: error instanceof Error ? error.message : String(error) });
+  }
 
   if (manifest.site) {
     const sitePath = manifest.apps.site;

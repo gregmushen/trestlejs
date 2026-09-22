@@ -3,3 +3,6 @@ export * from "./doctor.js";
 export * from "./runtime.js";
 export * from "./secrets.js";
 export * from "./local.js";
+export * from "./plan.js";
+export * from "./inspect.js";
+export * from "./generate-resource.js";

@@ -25,6 +25,8 @@ Astro public site → React and TanStack app → Hono → Application/Domain →
 
 ```bash
 trestle project --json
+trestle plan validate .trestle/setup.json
+trestle plan diff .trestle/setup.json
 trestle resources --json
 trestle routes --json
 trestle doctor

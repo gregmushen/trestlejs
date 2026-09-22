@@ -14,6 +14,9 @@ import { CliFailure, type CliRuntime } from "./runtime.js";
 import { localEnvironment } from "./local.js";
 import { clearLocalEmail, formatEmail, formatEmailList, getLocalEmail, listLocalEmail, openLocalEmail } from "./email.js";
 import { generateEmail } from "./generate-email.js";
+import { generateResource, generateResourceMigration } from "./generate-resource.js";
+import { inspectResources, inspectRoutes } from "./inspect.js";
+import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readApplyState, readSetupPlan } from "./plan.js";
 import { runCommand, runDevelopment } from "./processes.js";
 import {
   credentialsPaths,
@@ -120,6 +123,64 @@ export function createProgram(runtime: CliRuntime): Command {
       if (report.summary.failed > 0) {
         throw new CliFailure("doctor found failures");
       }
+    });
+
+  const plan = program.command("plan").description("validate and inspect a versioned SetupPlan");
+  plan.command("validate")
+    .argument("<file>", "SetupPlan JSON path or - for standard input")
+    .option("--json", "emit versioned structured output")
+    .action(async (file: string, options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const loaded = await readSetupPlan(context.root, file, runtime);
+      runtime.stdout(options.json ? formatPlanJson({ valid: true, source: loaded.source, plan: loaded.plan }) : `✓ SetupPlan schema version ${loaded.plan.schemaVersion} is valid\n✓ requires TrestleJS ${loaded.plan.minimumTrestleVersion} or newer\n✓ contains no plaintext secret values\n`);
+    });
+  plan.command("diff")
+    .argument("<file>", "SetupPlan JSON path or - for standard input")
+    .option("--json", "emit versioned structured output")
+    .action(async (file: string, options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const loaded = await readSetupPlan(context.root, file, runtime);
+      const diff = await diffSetupPlan(context.root, context.manifest, loaded.plan, loaded.input);
+      runtime.stdout(options.json ? formatPlanJson(diff) : formatPlanDiff(diff));
+    });
+  plan.command("status")
+    .argument("[file]", "optional SetupPlan JSON path")
+    .option("--json", "emit versioned structured output")
+    .action(async (file: string | undefined, options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const state = await readApplyState(context.root);
+      const current = file ? await readSetupPlan(context.root, file, runtime) : undefined;
+      const matches = current && state ? (await diffSetupPlan(context.root, context.manifest, current.plan, current.input)).planHash === state.planHash : undefined;
+      const data = { state: state ?? null, ...(matches === undefined ? {} : { matchesPlan: matches }) };
+      runtime.stdout(options.json ? formatPlanJson(data) : state ? `SetupPlan ${state.planHash.slice(0, 12)}\nUpdated ${state.updatedAt}\n${state.operations.map((operation) => `${operation.status === "completed" ? "✓" : "✗"} ${operation.id}${operation.reason ? ` — ${operation.reason}` : ""}`).join("\n")}\n${matches === false ? "Warning: state belongs to a different plan.\n" : ""}` : "No SetupPlan apply state exists.\n");
+    });
+
+  program.command("apply")
+    .argument("<file>", "approved SetupPlan JSON path")
+    .option("--yes", "confirm the reviewed mutation plan")
+    .action(async (file: string, options: { yes?: boolean }, command: Command) => {
+      if (!options.yes) throw new CliFailure("apply requires --yes after explicit review of the mutation plan");
+      const context = await projectContext(command, runtime);
+      const loaded = await readSetupPlan(context.root, file, runtime);
+      const state = await applySetupPlan(context.root, context.manifest, loaded.plan, loaded.input);
+      runtime.stdout(`Applied SetupPlan ${state.planHash.slice(0, 12)}\n${state.operations.map((operation) => `✓ ${operation.id}${operation.files?.length ? ` (${operation.files.length} files)` : ""}`).join("\n")}\n`);
+    });
+
+  program.command("resources")
+    .description("inspect declared resources")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const values = await inspectResources(context.root);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ resources: values }), null, 2)}\n` : values.length ? `${values.map((resource) => `${resource.name}  tenant=${resource.tenant} crud=${resource.crud} table=${resource.persistence?.table ?? "none"}`).join("\n")}\n` : "No resources declared.\n");
+    });
+  program.command("routes")
+    .description("inspect declared and statically discoverable routes")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const values = await inspectRoutes(context.root, context.manifest);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ routes: values }), null, 2)}\n` : values.length ? `${values.map((route) => `${route.method.padEnd(7)} ${route.path}  ${route.auth ? "auth" : "public"}${route.resource ? `  ${route.resource}` : ""}`).join("\n")}\n` : "No routes discovered.\n");
     });
 
   const secrets = program.command("secrets").description("manage encrypted application credentials");
@@ -299,6 +360,19 @@ export function createProgram(runtime: CliRuntime): Command {
       const files = await generateEmail(context.root, name);
       runtime.stdout(`Generated ${files.join(", ")}\n`);
     });
+  generate.command("resource")
+    .argument("<name>")
+    .option("--tenant", "generate organization ownership and forced RLS", true)
+    .option("--no-tenant", "generate without organization ownership")
+    .option("--crud", "generate CRUD contracts, routes, and UI", true)
+    .option("--no-crud", "generate persistence without CRUD surfaces")
+    .action(async (name: string, options: { tenant: boolean; crud: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const resource = { name, tenant: options.tenant, crud: options.crud };
+      const files = await generateResource(context.root, context.manifest, resource);
+      files.push(...await generateResourceMigration(context.root, context.manifest, [resource]));
+      runtime.stdout(`Generated ${name}\n${files.map((file) => `  ${file}`).join("\n")}\n`);
+    });
 
   const payments = program.command("payments").description("manage application payments integrations");
   const stripe = payments.command("stripe").description("operate the Stripe golden-path adapter");
@@ -433,6 +507,7 @@ export async function executeCli(arguments_: string[], runtime: CliRuntime): Pro
     return 0;
   } catch (error) {
     if (error instanceof CliFailure) {
+      runtime.stderr(`${error.message}\n`);
       return error.exitCode;
     }
     if (error instanceof CommanderError) {
