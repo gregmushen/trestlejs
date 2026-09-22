@@ -18,7 +18,7 @@ vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
   }),
 }));
 
-import { app } from "./index.js";
+import worker, { app } from "./index.js";
 
 const environment = {
   DATABASE_URL: "postgres://unused",
@@ -30,6 +30,11 @@ const environment = {
 describe("worker routes", () => {
   beforeEach(() => {
     state.authenticated = false;
+  });
+
+  it("fails remote scheduled dispatch without its Queue binding", async () => {
+    await expect(worker.scheduled(undefined, { ...environment, APP_ENV: "preview" })).rejects.toThrow("TRESTLE_EVENTS Queue binding");
+    await expect(worker.scheduled(undefined, environment)).resolves.toBeUndefined();
   });
 
   it("reports health", async () => {

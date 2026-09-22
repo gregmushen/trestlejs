@@ -200,7 +200,10 @@ export default {
   fetch: app.fetch.bind(app),
   queue: async (batch: QueueBatch, environment: AuthEnvironment) => await consumeQueue(batch, environment),
   scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
-    if (!environment.TRESTLE_EVENTS) return;
+    if (!environment.TRESTLE_EVENTS) {
+      if (!environment.APP_ENV || environment.APP_ENV === "local") return;
+      throw new Error("Remote outbox dispatch requires the TRESTLE_EVENTS Queue binding");
+    }
     const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
     try {
       const result = await dispatchQueuedOutbox(store, environment.TRESTLE_EVENTS);
