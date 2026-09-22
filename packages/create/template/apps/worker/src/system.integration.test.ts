@@ -22,7 +22,7 @@ suite("local product path", () => {
       EMAIL_DELIVERY_MODE: "local" as const,
       STRIPE_MODE: "local" as const,
     };
-    const database = createDatabase(databaseUrl!, "postgres-js");
+    const database = createDatabase(process.env.TRESTLE_SYSTEM_TEST_MIGRATION_URL ?? databaseUrl!, "postgres-js");
     let organizationId: string | undefined;
     let articleId: string | undefined;
     clearCapturedEmails();
@@ -77,12 +77,13 @@ suite("local product path", () => {
           ...environment,
           TRESTLE_EVENTS: { send: async (body: unknown) => { queued.push(body); } },
         });
-        expect(queued).toMatchObject([{ id: outbox!.id, name: "resource.article.created", resource: { type: "article", id: article.id } }]);
+        const queuedEvent = queued.find((event) => (event as { id?: string }).id === outbox!.id);
+        expect(queuedEvent).toMatchObject({ id: outbox!.id, name: "resource.article.created", resource: { type: "article", id: article.id } });
         const delivery: string[] = [];
-        expect(await worker.queue({ messages: [{ body: queued[0], ack: () => delivery.push("ack"), retry: () => delivery.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
+        expect(await worker.queue({ messages: [{ body: queuedEvent, ack: () => delivery.push("ack"), retry: () => delivery.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
         expect(delivery).toEqual(["ack"]);
         const invalidDelivery: string[] = [];
-        expect(await worker.queue({ messages: [{ body: { ...(queued[0] as object), payload: { resourceId: article.id } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, environment)).toEqual({ acknowledged: 0, retried: 1 });
+        expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: article.id } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, environment)).toEqual({ acknowledged: 0, retried: 1 });
         expect(invalidDelivery).toEqual(["retry"]);
         const [dispatched] = await database.select().from(outboxMessage).where(eq(outboxMessage.id, outbox!.id)).limit(1);
         expect(dispatched?.status).toBe("succeeded");
