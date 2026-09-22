@@ -67,6 +67,23 @@ export interface Clock {
   now(): Date;
 }
 
+export type ClockAdvance = Readonly<{ milliseconds?: number; seconds?: number; minutes?: number; hours?: number; days?: number }>;
+
+export class FixedTestClock implements Clock {
+  private current: Date;
+  constructor(now: Date | string = "2026-01-01T00:00:00.000Z") { this.current = new Date(now); }
+  now(): Date { return new Date(this.current); }
+  set(value: Date | string): Date { this.current = new Date(value); return this.now(); }
+  advance(duration: ClockAdvance): Date {
+    const milliseconds = (duration.milliseconds ?? 0) + (duration.seconds ?? 0) * 1_000 + (duration.minutes ?? 0) * 60_000 + (duration.hours ?? 0) * 3_600_000 + (duration.days ?? 0) * 86_400_000;
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) throw new Error("clock advance must be a finite non-negative duration");
+    this.current = new Date(this.current.getTime() + milliseconds);
+    return this.now();
+  }
+}
+
+export function createTestClock(now?: Date | string): FixedTestClock { return new FixedTestClock(now); }
+
 export interface Logger {
   info(event: string, context?: Readonly<Record<string, unknown>>): void;
   warn(event: string, context?: Readonly<Record<string, unknown>>): void;

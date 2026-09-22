@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -10,6 +10,7 @@ import {
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 
 import { formatCiValidation, validateCi } from "./ci.js";
+import { parseRecoveryConnectionOutput, readRecoveryPolicy, validateRecoveryPoint, validateRecoveryTarget } from "./backup.js";
 import { projectContext } from "./context.js";
 import { formatDoctorHuman, formatDoctorJson, runDoctor } from "./doctor.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
@@ -18,6 +19,7 @@ import { buildLogTailArguments } from "./logs.js";
 import { clearLocalEmail, formatEmail, formatEmailList, getLocalEmail, listLocalEmail, openLocalEmail } from "./email.js";
 import { generateEmail } from "./generate-email.js";
 import { generateResource, generateResourceMigration } from "./generate-resource.js";
+import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
 import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readApplyState, readSetupPlan } from "./plan.js";
@@ -25,6 +27,7 @@ import { runCommand, runDevelopment } from "./processes.js";
 import { inspectResendSender } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
+import { workflowArguments } from "./workflows.js";
 import {
   credentialsPaths,
   editSecrets,
@@ -47,6 +50,23 @@ function environment(value: string) {
 
 function selectedMasterKey(runtime: CliRuntime): string | undefined {
   return runtime.environment?.("TRESTLE_MASTER_KEY") ?? process.env.TRESTLE_MASTER_KEY;
+}
+
+function runtimeValue(runtime: CliRuntime, name: string): string | undefined { return runtime.environment?.(name) ?? process.env[name]; }
+
+async function recoveryEnvironment(root: string, targetEnvironment: ReturnType<typeof environment>, runtime: CliRuntime): Promise<NodeJS.ProcessEnv> {
+  if (!(["staging", "production"] as const).includes(targetEnvironment as "staging" | "production")) throw new CliFailure("Neon recovery operations require staging or production");
+  const values = await readSecrets(root, targetEnvironment, selectedMasterKey(runtime));
+  const required = {
+    NEON_API_KEY: values.NEON_API_KEY,
+    NEON_PROJECT_ID: runtimeValue(runtime, "NEON_PROJECT_ID"),
+    NEON_DATABASE: runtimeValue(runtime, "NEON_DATABASE"),
+    NEON_MIGRATION_ROLE: runtimeValue(runtime, "NEON_MIGRATION_ROLE"),
+    DATABASE_RUNTIME_ROLE: runtimeValue(runtime, "DATABASE_RUNTIME_ROLE"),
+  };
+  const missing = Object.entries(required).filter(([, value]) => !value).map(([name]) => name);
+  if (missing.length) throw new CliFailure(`Neon recovery configuration is missing: ${missing.join(", ")}`);
+  return { ...process.env, ...required };
 }
 
 function dotenv(values: Record<string, string>): string {
@@ -442,6 +462,142 @@ export function createProgram(runtime: CliRuntime): Command {
       if (result.stderr) runtime.stderr(result.stderr);
     });
 
+  const workflow = program.command("workflow").description("inspect and retry Cloudflare Workflow instances");
+  workflow.command("list")
+    .argument("<name>", "workflow name")
+    .option("--env <environment>", "target environment", environment, "local")
+    .option("--json", "emit provider JSON")
+    .action(async (name: string, options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", ...workflowArguments("list", name, undefined, options.env, Boolean(options.json))], { cwd: context.root, env: process.env });
+    });
+  workflow.command("status")
+    .argument("<name>", "workflow name")
+    .argument("[id]", "instance ID or latest", "latest")
+    .option("--env <environment>", "target environment", environment, "local")
+    .option("--json", "emit provider JSON")
+    .action(async (name: string, id: string, options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", ...workflowArguments("status", name, id, options.env, Boolean(options.json))], { cwd: context.root, env: process.env });
+    });
+  workflow.command("retry")
+    .argument("<name>", "workflow name")
+    .argument("<id>", "instance ID")
+    .option("--env <environment>", "target environment", environment, "local")
+    .option("--yes", "confirm the selected retry")
+    .action(async (name: string, id: string, options: { env: ReturnType<typeof environment>; yes?: boolean }, command: Command) => {
+      if (options.env !== "local" && !options.yes) throw new CliFailure("remote Workflow retry requires --yes after reviewing the instance");
+      const context = await projectContext(command, runtime);
+      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", ...workflowArguments("retry", name, id, options.env)], { cwd: context.root, env: process.env });
+    });
+
+  const backup = program.command("backup").description("inspect and verify declared provider recovery capability");
+  backup.command("status")
+    .requiredOption("--env <environment>", "protected environment", environment)
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const policy = await readRecoveryPolicy(context.root);
+      const childEnvironment = await recoveryEnvironment(context.root, options.env, runtime);
+      const result = await runCommand("node", ["scripts/neon-recovery.mjs", "status", policy.sourceBranch], { cwd: context.root, env: childEnvironment, stdio: "pipe" });
+      const provider = JSON.parse(result.stdout) as { source: { name: string }; historyRetentionSeconds: number | null; status: string; restoreVerified: false };
+      const latestPath = path.join(context.root, ".trestle", "recovery-evidence", `${options.env}-latest.json`);
+      const latest = await readFile(latestPath, "utf8").then((source) => JSON.parse(source) as unknown).catch(() => null);
+      const data = { environment: options.env, policy, provider, latestVerification: latest };
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(data), null, 2)}\n` : [
+        `Neon recovery (${options.env})`,
+        `Source branch:       ${provider.source.name}`,
+        `Provider history:    ${provider.status}`,
+        `Retention:           ${provider.historyRetentionSeconds === null ? "provider default/unknown" : `${provider.historyRetentionSeconds} seconds`}`,
+        `Restore verified:    ${latest ? "evidence available" : "not yet — run trestle backup verify"}`,
+        `RPO objective:       ${policy.recoveryPointObjectiveHours} hours`,
+        `RTO objective:       ${policy.recoveryTimeObjectiveMinutes} minutes`,
+        "Provider history is not proof of a usable restore.",
+        "",
+      ].join("\n"));
+    });
+
+  backup.command("verify")
+    .requiredOption("--env <environment>", "protected environment", environment)
+    .requiredOption("--to <target>", "declared isolated restore target")
+    .option("--at <timestamp>", "past ISO recovery point; defaults to latest")
+    .option("--yes", "confirm isolated restore creation and cleanup")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { env: ReturnType<typeof environment>; to: string; at?: string; yes?: boolean; json?: boolean }, command: Command) => {
+      if (!options.yes) throw new CliFailure("backup verification creates a temporary Neon branch; rerun with --yes after reviewing the target");
+      const context = await projectContext(command, runtime);
+      const policy = await readRecoveryPolicy(context.root);
+      const target = validateRecoveryTarget(policy, options.to);
+      const point = validateRecoveryPoint(options.at);
+      const childEnvironment = await recoveryEnvironment(context.root, options.env, runtime);
+      const temporary = await mkdtemp(path.join(os.tmpdir(), "trestle-recovery-"));
+      const protectedOutput = path.join(temporary, "connections.env");
+      const startedAt = new Date().toISOString();
+      let report: { status: "passed" | "failed"; startedAt: string | null; completedAt: string; checks: Array<{ id: string; status: string; evidence: string }> } | undefined;
+      let cleanup = "not-attempted";
+      let created = false;
+      try {
+        if (!options.json) runtime.stdout(`Creating isolated Neon restore ${target} from ${policy.sourceBranch} at ${point ?? "latest"}…\n`);
+        await runCommand("node", ["scripts/neon-recovery.mjs", "restore", policy.sourceBranch, target, point ?? "latest"], { cwd: context.root, env: { ...childEnvironment, TRESTLE_RECOVERY_OUTPUT: protectedOutput }, stdio: "pipe" });
+        created = true;
+        const connections = parseRecoveryConnectionOutput(await readFile(protectedOutput, "utf8"));
+        const result = await runCommand("pnpm", ["exec", "tsx", "scripts/verify-recovery.ts"], { cwd: context.root, env: { ...childEnvironment, DATABASE_MIGRATION_URL: connections.migrationUrl, DATABASE_URL: connections.runtimeUrl, TRESTLE_VERIFY_STARTED_AT: startedAt }, stdio: "pipe" });
+        report = JSON.parse(result.stdout) as typeof report;
+      } finally {
+        try {
+          if (created) {
+            const result = await runCommand("node", ["scripts/neon-recovery.mjs", "delete", policy.sourceBranch, target], { cwd: context.root, env: childEnvironment, stdio: "pipe" });
+            cleanup = (JSON.parse(result.stdout) as { cleanup: string }).cleanup;
+          }
+        } finally { await rm(temporary, { recursive: true, force: true }); }
+      }
+      if (!report) throw new CliFailure("recovery verification did not produce evidence");
+      const durationMs = new Date(report.completedAt).getTime() - new Date(startedAt).getTime();
+      const rtoMet = durationMs <= policy.recoveryTimeObjectiveMinutes * 60_000;
+      const evidence = { schemaVersion: 1, environment: options.env, provider: "neon", sourceBranch: policy.sourceBranch, target, recoveryPoint: point ?? "latest", cleanup, durationMs, rtoMet, policy: { recoveryPointObjectiveHours: policy.recoveryPointObjectiveHours, recoveryTimeObjectiveMinutes: policy.recoveryTimeObjectiveMinutes, artifactPolicy: policy.artifactPolicy }, ...report };
+      const evidenceDirectory = path.join(context.root, ".trestle", "recovery-evidence");
+      await mkdir(evidenceDirectory, { recursive: true });
+      await writeFile(path.join(evidenceDirectory, `${options.env}-latest.json`), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(evidence), null, 2)}\n` : [`Recovery verification: ${report.status}`, `Isolated target:       ${target}`, `Cleanup:               ${cleanup}`, `Duration:              ${Math.ceil(durationMs / 1000)}s (${rtoMet ? "within" : "exceeds"} ${policy.recoveryTimeObjectiveMinutes}m RTO)`, ...report.checks.map((check) => `${check.status === "pass" ? "✓" : check.status === "fail" ? "✗" : "?"} ${check.id} — ${check.evidence}`), ""].join("\n"));
+      if (report.status !== "passed" || cleanup !== "deleted" || !rtoMet) throw new CliFailure("recovery verification failed, exceeded RTO, or isolated cleanup was incomplete");
+    });
+
+  const restore = program.command("restore").description("create an isolated Neon point-in-time recovery branch");
+  restore.command("create")
+    .requiredOption("--env <environment>", "source environment", environment)
+    .requiredOption("--to <target>", "declared isolated restore target")
+    .option("--at <timestamp>", "past ISO recovery point; defaults to latest")
+    .option("--yes", "confirm isolated branch creation")
+    .action(async (options: { env: ReturnType<typeof environment>; to: string; at?: string; yes?: boolean }, command: Command) => {
+      if (!options.yes) throw new CliFailure("restore creation requires --yes after reviewing the isolated target");
+      const context = await projectContext(command, runtime);
+      const policy = await readRecoveryPolicy(context.root);
+      const target = validateRecoveryTarget(policy, options.to);
+      const point = validateRecoveryPoint(options.at);
+      const childEnvironment = await recoveryEnvironment(context.root, options.env, runtime);
+      const temporary = await mkdtemp(path.join(os.tmpdir(), "trestle-restore-"));
+      try {
+        const protectedOutput = path.join(temporary, "connections.env");
+        const result = await runCommand("node", ["scripts/neon-recovery.mjs", "restore", policy.sourceBranch, target, point ?? "latest"], { cwd: context.root, env: { ...childEnvironment, TRESTLE_RECOVERY_OUTPUT: protectedOutput }, stdio: "pipe" });
+        const provider = JSON.parse(result.stdout) as { branchId: string; source: string; target: string; recoveryPoint: string };
+        runtime.stdout(`Created isolated Neon recovery branch ${provider.target}\nSource: ${provider.source}\nRecovery point: ${provider.recoveryPoint}\nBranch ID: ${provider.branchId}\nNo application or production binding was changed.\n`);
+      } finally { await rm(temporary, { recursive: true, force: true }); }
+    });
+  restore.command("delete")
+    .requiredOption("--env <environment>", "source environment", environment)
+    .requiredOption("--target <target>", "declared isolated restore target")
+    .option("--yes", "confirm isolated branch deletion")
+    .action(async (options: { env: ReturnType<typeof environment>; target: string; yes?: boolean }, command: Command) => {
+      if (!options.yes) throw new CliFailure("restore deletion requires --yes");
+      const context = await projectContext(command, runtime);
+      const policy = await readRecoveryPolicy(context.root);
+      const target = validateRecoveryTarget(policy, options.target);
+      const childEnvironment = await recoveryEnvironment(context.root, options.env, runtime);
+      const result = await runCommand("node", ["scripts/neon-recovery.mjs", "delete", policy.sourceBranch, target], { cwd: context.root, env: childEnvironment, stdio: "pipe" });
+      const provider = JSON.parse(result.stdout) as { cleanup: string };
+      runtime.stdout(`Isolated recovery target ${target}: ${provider.cleanup}\n`);
+    });
+
   const generate = program.command("generate").description("generate application-owned source");
   generate.command("email")
     .argument("<name>")
@@ -552,10 +708,12 @@ export function createProgram(runtime: CliRuntime): Command {
   program
     .command("dev")
     .description("start PostgreSQL, apply migrations, and run the local applications")
-    .action(async (_options: object, command: Command) => {
+    .option("--fresh", "remove only declared project-local state before startup")
+    .option("--yes", "confirm the reviewed fresh-state plan")
+    .action(async (options: { fresh?: boolean; yes?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
       const childEnvironment = await localEnvironment(context.root, context.manifest, "local", runtime);
-      const database = new URL(childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL ?? "");
+      const database = assertLocalDatabaseUrl(childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL ?? "");
       const composeEnvironment = {
         ...childEnvironment,
         POSTGRES_DB: database.pathname.slice(1),
@@ -563,10 +721,19 @@ export function createProgram(runtime: CliRuntime): Command {
         POSTGRES_PASSWORD: decodeURIComponent(database.password),
         TRESTLE_POSTGRES_PORT: database.port || "55432",
       };
+      if (options.fresh) {
+        if (!options.yes) throw new CliFailure("dev --fresh is destructive; rerun with --yes after reviewing the project-scoped state plan");
+        const plan = freshDevelopmentPlan(context.root, context.manifest.apps.worker ?? "apps/worker");
+        runtime.stdout(`Fresh development will remove Compose volumes declared by ${plan.composeFile}\n${plan.stateDirectories.map((target) => `Local state ${target}`).join("\n")}\n`);
+        await runCommand("docker", ["compose", "down", "--volumes"], { cwd: context.root, env: composeEnvironment });
+        for (const target of plan.stateDirectories) await rm(target, { recursive: true, force: true });
+      }
       runtime.stdout("Starting PostgreSQL…\n");
       await runCommand("docker", ["compose", "up", "-d", "--wait"], { cwd: context.root, env: composeEnvironment });
       runtime.stdout("Applying migrations…\n");
       await runCommand("pnpm", ["db:migrate"], { cwd: context.root, env: { ...childEnvironment, DATABASE_URL: childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL } });
+      runtime.stdout("Applying deterministic development seed…\n");
+      await runCommand("pnpm", ["db:seed"], { cwd: context.root, env: { ...childEnvironment, DATABASE_URL: childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL } });
       runtime.stdout(
         `${context.manifest.apps.site ? "Site   http://localhost:42068\n" : ""}App    http://localhost:42069\nAPI    http://localhost:8787\n`,
       );
@@ -585,6 +752,16 @@ export function createProgram(runtime: CliRuntime): Command {
       else await runCommand("docker", ["compose", ...(operation === "start" ? ["up", "-d", "--wait"] : operation === "stop" ? ["stop"] : ["ps"])], { cwd: context.root, env: composeEnvironment });
     });
   }
+
+  database.command("seed")
+    .option("--scenario <name>", "default, demo, or tenant-isolation", "default")
+    .action(async (options: { scenario: string }, command: Command) => {
+      if (!["default", "demo", "tenant-isolation"].includes(options.scenario)) throw new CliFailure("unknown seed scenario; expected default, demo, or tenant-isolation");
+      const context = await projectContext(command, runtime);
+      const childEnvironment = await localEnvironment(context.root, context.manifest, "local", runtime);
+      assertLocalDatabaseUrl(childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL ?? "");
+      await runCommand("pnpm", ["exec", "tsx", "seed/index.ts", options.scenario], { cwd: context.root, env: { ...childEnvironment, APP_ENV: "local", DATABASE_URL: childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL } });
+    });
 
   const databaseRoles = database.command("roles").description("manage restricted remote PostgreSQL runtime roles");
   databaseRoles.command("bootstrap")
@@ -647,10 +824,15 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--yes", "confirm a non-local console")
     .action(async (options: { env: ReturnType<typeof environment>; tenant?: string; write?: boolean; platformAdmin?: boolean; yes?: boolean }, command: Command) => {
       if (options.env !== "local" && !options.yes) throw new CliFailure(`opening a ${options.env} console requires --yes`);
+      if (options.tenant && options.platformAdmin) throw new CliFailure("--tenant and --platform-admin select different authority planes and cannot be combined");
       if (options.write && !options.tenant) throw new CliFailure("--write requires --tenant");
+      if (!options.tenant && !options.platformAdmin) throw new CliFailure("console requires --tenant or --platform-admin");
+      if (options.write && options.platformAdmin) throw new CliFailure("--write does not grant platform administration");
       const context = await projectContext(command, runtime);
       const childEnvironment = await localEnvironment(context.root, context.manifest, options.env, runtime);
-      await runCommand("pnpm", ["exec", "tsx", "scripts/console.ts"], { cwd: context.root, env: { ...childEnvironment, TRESTLE_CONSOLE_TENANT: options.tenant ?? "", TRESTLE_CONSOLE_MODE: options.platformAdmin ? "PLATFORM ADMIN" : options.write ? "WRITE" : "READ ONLY" } });
+      if (options.platformAdmin && !childEnvironment.DATABASE_PLATFORM_URL) throw new CliFailure("--platform-admin requires separately authorized DATABASE_PLATFORM_URL credentials");
+      const operatorId = runtime.environment?.("TRESTLE_OPERATOR") ?? runtime.environment?.("USER") ?? process.env.TRESTLE_OPERATOR ?? process.env.USER ?? "unknown";
+      await runCommand("pnpm", ["exec", "tsx", "scripts/console.ts"], { cwd: context.root, env: { ...childEnvironment, TRESTLE_ENV: options.env, TRESTLE_CONSOLE_OPERATOR: operatorId, TRESTLE_CONSOLE_TENANT: options.tenant ?? "", TRESTLE_CONSOLE_MODE: options.platformAdmin ? "PLATFORM ADMIN" : options.write ? "WRITE" : "READ ONLY" } });
     });
 
   return program;

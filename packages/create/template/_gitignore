@@ -10,4 +10,5 @@ config/master.key
 config/*.key
 config/credentials/*.key
 *.log
+.trestle/recovery-evidence/
 .DS_Store

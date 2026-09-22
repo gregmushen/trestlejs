@@ -11,12 +11,15 @@
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "db:generate": "pnpm --filter ./packages/db db:generate",
     "db:migrate": "pnpm --filter ./packages/db db:migrate",
+    "db:seed": "tsx seed/index.ts",
     "dev": "trestle dev",
     "test": "pnpm -r test",
     "typecheck": "tsc --noEmit -p tsconfig.tools.json && pnpm -r typecheck"
   },
   "devDependencies": {
     "@types/node": "26.6.2",
+    "drizzle-orm": "0.45.3",
+    "postgres": "3.4.9",
     "trestlejs": "__TRESTLEJS_VERSION__",
     "tsx": "4.20.6",
     "typescript": "7.0.2",

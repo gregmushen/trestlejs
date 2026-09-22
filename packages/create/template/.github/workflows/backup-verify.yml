@@ -1,0 +1,44 @@
+name: Backup Restore Verification
+
+on:
+  schedule:
+    - cron: "17 10 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-restore-verification
+  cancel-in-progress: false
+
+jobs:
+  verify-production-restore:
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Verify isolated production restore
+        run: pnpm exec trestle backup verify --env production --to restore-test --yes --json | tee recovery-evidence.json
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          NEON_PROJECT_ID: "${{ vars.NEON_PROJECT_ID }}"
+          NEON_DATABASE: "${{ vars.NEON_DATABASE }}"
+          NEON_MIGRATION_ROLE: "${{ vars.NEON_MIGRATION_ROLE }}"
+          DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
+      - name: Record non-secret recovery evidence
+        if: always()
+        run: |
+          echo "## Backup restore verification" >> "$GITHUB_STEP_SUMMARY"
+          if test -f recovery-evidence.json; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat recovery-evidence.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The verification command failed before producing evidence." >> "$GITHUB_STEP_SUMMARY"
+          fi

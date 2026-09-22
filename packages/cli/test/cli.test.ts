@@ -127,6 +127,29 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toContain("requires --cookie-stdin");
   });
 
+  it("requires an explicit console authority plane", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["console"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("requires --tenant or --platform-admin");
+    const mixed = capture(root);
+    expect(await executeCli(["console", "--tenant", "acme", "--platform-admin"], mixed.runtime)).toBe(1);
+    expect(mixed.stderr()).toContain("different authority planes");
+  });
+
+  it("requires confirmation before creating recovery resources or retrying remote workflows", async () => {
+    const root = await fixture();
+    const backup = capture(root);
+    expect(await executeCli(["backup", "verify", "--env", "production", "--to", "restore-test"], backup.runtime)).toBe(1);
+    expect(backup.stderr()).toContain("temporary Neon branch");
+    const restore = capture(root);
+    expect(await executeCli(["restore", "create", "--env", "production", "--to", "restore-test"], restore.runtime)).toBe(1);
+    expect(restore.stderr()).toContain("requires --yes");
+    const workflow = capture(root);
+    expect(await executeCli(["workflow", "retry", "publish", "instance-1", "--env", "production"], workflow.runtime)).toBe(1);
+    expect(workflow.stderr()).toContain("requires --yes");
+  });
+
   it("rejects runtime-role bootstrap for local and preview environments", async () => {
     const root = await fixture();
     const output = capture(root);

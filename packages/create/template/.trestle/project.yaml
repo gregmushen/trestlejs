@@ -71,4 +71,4 @@ secrets:
     required: [staging, production]
   NEON_API_KEY:
     target: ci
-    required: [preview]
+    required: [preview, staging, production]
