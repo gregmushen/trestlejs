@@ -93,6 +93,8 @@ describe("createProject", () => {
     expect(previewWorkflow).toContain("--worker-name");
     expect(previewWorkflow).toContain("cloudflare-worker.mjs delete");
     expect(previewWorkflow).toContain("cloudflare-pages.mjs delete");
+    expect(previewWorkflow).toContain("neon-preview.mjs ensure");
+    expect(previewWorkflow).toContain("neon-preview.mjs delete");
     const setupSkill = await readFile(
       path.join(result.directory, ".agents", "skills", "trestle-setup", "SKILL.md"),
       "utf8",

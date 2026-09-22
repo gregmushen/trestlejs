@@ -43,7 +43,7 @@ environments:
 secrets:
   DATABASE_URL:
     target: worker
-    required: [local, preview, staging, production]
+    required: [local, staging, production]
   DATABASE_DRIVER:
     target: worker
     required: [local, preview, staging, production]
@@ -68,4 +68,7 @@ secrets:
     required: [staging, production]
   DATABASE_MIGRATION_URL:
     target: ci
-    required: [preview, staging, production]
+    required: [staging, production]
+  NEON_API_KEY:
+    target: ci
+    required: [preview]

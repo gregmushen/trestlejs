@@ -1,14 +1,18 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 const servers: Array<ReturnType<typeof createServer>> = [];
+const temporaryDirectories: string[] = [];
 const template = path.resolve("packages/create/template");
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })));
 });
 
 async function run(script: string, arguments_: string[], environment: NodeJS.ProcessEnv = {}) {
@@ -174,5 +178,55 @@ describe("preview lifecycle", () => {
     });
     expect(result).toMatchObject({ code: 0, stdout: "Deactivated 2 preview-pr-42 deployment(s)\n", stderr: "" });
     expect(states).toEqual([expect.objectContaining({ state: "inactive" }), expect.objectContaining({ state: "inactive" })]);
+  });
+
+  it("creates an isolated Neon branch and writes masked connection outputs", async () => {
+    const requests: Array<{ method: string; url: string; body: string }> = [];
+    const base = await api((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => { body += String(chunk); });
+      request.on("end", () => {
+        requests.push({ method: request.method ?? "", url: request.url ?? "", body });
+        response.setHeader("content-type", "application/json");
+        if (request.method === "GET" && request.url?.includes("/branches?")) response.end('{"branches":[]}');
+        else if (request.method === "POST") { response.statusCode = 201; response.end('{"branch":{"id":"br-preview-42"}}'); }
+        else if (request.url?.includes("role_name=owner")) response.end('{"uri":"postgresql://owner:migration-secret@host/db"}');
+        else response.end('{"uri":"postgresql://runtime:runtime-secret@host-pooler/db"}');
+      });
+    });
+    const directory = await mkdtemp(path.join(os.tmpdir(), "trestle-neon-"));
+    temporaryDirectories.push(directory);
+    const output = path.join(directory, "github-output");
+    const result = await run("neon-preview.mjs", ["ensure", "pr-42"], {
+      NEON_API_BASE: base,
+      NEON_API_KEY: "neon-secret",
+      NEON_PROJECT_ID: "project-1",
+      NEON_DATABASE: "app",
+      NEON_MIGRATION_ROLE: "owner",
+      NEON_RUNTIME_ROLE: "trestle_runtime",
+      GITHUB_OUTPUT: output,
+    });
+    expect(result).toMatchObject({ code: 0, stdout: "Ready pr-42\n", stderr: "" });
+    expect(requests.map(({ method }) => method)).toEqual(["GET", "POST", "GET", "GET"]);
+    expect(JSON.parse(requests[1]!.body)).toEqual({ branch: { name: "pr-42" }, endpoints: [{ type: "read_write" }] });
+    const outputs = await readFile(output, "utf8");
+    expect(outputs).toContain("branch_id=br-preview-42");
+    expect(outputs).toContain("migration-secret");
+    expect(outputs).toContain("runtime-secret");
+    expect(`${result.stdout}${result.stderr}`).not.toMatch(/neon-secret|migration-secret|runtime-secret/u);
+  });
+
+  it("deletes an exact Neon preview branch and treats absence as idempotent", async () => {
+    let present = true;
+    const base = await api((request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.method === "GET") response.end(present ? '{"branches":[{"id":"br-preview-42","name":"pr-42"}]}' : '{"branches":[]}');
+      else { present = false; response.end('{"branch":{"id":"br-preview-42"}}'); }
+    });
+    const environment = { NEON_API_BASE: base, NEON_API_KEY: "neon-secret", NEON_PROJECT_ID: "project-1" };
+    const deleted = await run("neon-preview.mjs", ["delete", "pr-42"], environment);
+    expect(deleted).toMatchObject({ code: 0, stdout: "Deleted pr-42\n", stderr: "" });
+    const absent = await run("neon-preview.mjs", ["delete", "pr-42"], environment);
+    expect(absent).toMatchObject({ code: 0, stdout: "pr-42 already absent\n", stderr: "" });
   });
 });

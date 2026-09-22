@@ -34,7 +34,7 @@ export async function inspectEnvironmentStatus(root: string, manifest: ProjectMa
     requiredSecrets,
     requiredVariables: environment === "local"
       ? []
-      : ["API_URL", "APP_URL", ...(environment === "preview" ? ["CLOUDFLARE_WORKERS_SUBDOMAIN"] : []), "DATABASE_RUNTIME_ROLE", "SITE_URL"],
+      : ["API_URL", "APP_URL", ...(environment === "preview" ? ["CLOUDFLARE_WORKERS_SUBDOMAIN", "NEON_DATABASE", "NEON_MIGRATION_ROLE", "NEON_PROJECT_ID"] : []), "DATABASE_RUNTIME_ROLE", "SITE_URL"],
   };
 }
 
