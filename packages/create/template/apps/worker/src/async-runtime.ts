@@ -1,4 +1,4 @@
-import { EventRegistry, processQueueBatch, type EventDefinition, type EventEnvelope, type QueueBatchMessage } from "@__TRESTLE_PROJECT_NAME__/events";
+import { CloudflareQueuePublisher, dispatchOutbox, EventRegistry, processQueueBatch, type CloudflareQueueBinding, type EventDefinition, type EventEnvelope, type OutboxStore, type QueueBatchMessage } from "@__TRESTLE_PROJECT_NAME__/events";
 
 export type QueueBatch = { messages: QueueBatchMessage[] };
 export type EventHandler<T = unknown, Environment = unknown> = (payload: T, envelope: EventEnvelope, environment: Environment) => Promise<void>;
@@ -25,4 +25,8 @@ export class EventConsumerRegistry<Environment = unknown> {
 export function createQueueConsumer<Environment>(registry: EventConsumerRegistry<Environment>) {
   return async (batch: QueueBatch, environment: Environment): Promise<{ acknowledged: number; retried: number }> =>
     await processQueueBatch(batch.messages, async (envelope) => await registry.handle(envelope, environment));
+}
+
+export async function dispatchQueuedOutbox(store: OutboxStore, binding: CloudflareQueueBinding): Promise<{ sent: number; failed: number }> {
+  return await dispatchOutbox(store, new CloudflareQueuePublisher(binding));
 }

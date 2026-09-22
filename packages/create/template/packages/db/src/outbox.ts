@@ -7,9 +7,16 @@ function entry(row: Row): OutboxEntry {
   return { id: row.id, message: eventEnvelopeSchema.parse({ id: row.id, name: row.event_name, schemaVersion: row.schema_version, occurredAt: row.occurred_at.toISOString(), resource: { type: row.resource_type, id: row.resource_id }, correlationId: row.correlation_id, ...(row.causation_id ? { causationId: row.causation_id } : {}), idempotencyKey: row.idempotency_key, payload: row.payload }), status: row.status, attempts: row.attempts, availableAt: row.available_at, ...(row.leased_until ? { leasedUntil: row.leased_until } : {}), ...(row.last_error ? { lastError: row.last_error } : {}) };
 }
 
+export function outboxApplicationConnectionString(connectionString: string): string {
+  const url = new URL(connectionString);
+  const options = url.searchParams.get("options");
+  url.searchParams.set("options", [options, "-c role=trestle_app"].filter(Boolean).join(" "));
+  return url.toString();
+}
+
 export class PostgresOutboxStore implements OutboxStore {
   private readonly sql;
-  constructor(connectionString: string) { this.sql = postgres(connectionString, { max: 2, prepare: false }); }
+  constructor(connectionString: string, options: { assumeApplicationRole?: boolean } = {}) { this.sql = postgres(options.assumeApplicationRole ? outboxApplicationConnectionString(connectionString) : connectionString, { max: 2, prepare: false }); }
   async close(): Promise<void> { await this.sql.end(); }
   async append(message: EventEnvelope): Promise<OutboxEntry> {
     const parsed = eventEnvelopeSchema.parse(message);
