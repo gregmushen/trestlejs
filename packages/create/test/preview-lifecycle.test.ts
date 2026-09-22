@@ -205,6 +205,7 @@ describe("preview lifecycle", () => {
       NEON_MIGRATION_ROLE: "owner",
       NEON_RUNTIME_ROLE: "trestle_runtime",
       GITHUB_OUTPUT: output,
+      GITHUB_ACTIONS: "false",
     });
     expect(result).toMatchObject({ code: 0, stdout: "Ready pr-42\n", stderr: "" });
     expect(requests.map(({ method }) => method)).toEqual(["GET", "POST", "GET", "GET"]);
