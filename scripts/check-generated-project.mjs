@@ -8,9 +8,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "trestle-release-canary-"));
 const project = path.join(temporaryRoot, "release-canary");
 
-async function run(command, arguments_, cwd) {
+async function run(command, arguments_, cwd, extraEnvironment = {}) {
   await new Promise((resolve, reject) => {
-    const child = spawn(command, arguments_, { cwd, stdio: "inherit", env: process.env });
+    const child = spawn(command, arguments_, { cwd, stdio: "inherit", env: { ...process.env, ...extraEnvironment } });
     child.once("error", reject);
     child.once("exit", (code, signal) => code === 0 ? resolve() : reject(new Error(`${command} ${arguments_.join(" ")} failed (${signal ?? `exit ${code}`})`)));
   });
@@ -40,6 +40,10 @@ try {
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "resource", "add-field", "Article", "archived:boolean?", "--yes"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], project);
   await run("pnpm", ["check"], project);
+  if (process.env.TRESTLE_GENERATED_DATABASE_URL) {
+    await run("pnpm", ["db:migrate"], project, { DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "src/system.integration.test.ts"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1" });
+  }
   console.log(`Generated release canary passed at ${project}`);
 } finally {
   if (process.env.TRESTLE_KEEP_GENERATED === "1") {

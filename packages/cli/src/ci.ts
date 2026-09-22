@@ -59,6 +59,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
 
   const ci = sources.get("ci.yml") ?? "";
   checks.push(check("ci.database.rls", ci.includes("TRESTLE_RLS_TEST_DATABASE_URL"), "CI runs the PostgreSQL RLS test suite"));
+  checks.push(check("ci.system.local", ci.includes("TRESTLE_SYSTEM_TEST_DATABASE_URL"), "CI runs the local authentication and tenancy system test"));
   checks.push(check("ci.lockfile.frozen", ci.includes("pnpm install --frozen-lockfile"), "CI installs from the frozen lockfile"));
   checks.push(check("ci.architecture.static", ci.includes("trestle architecture check"), "CI enforces provider boundaries, resource integrity, forced RLS, and managed-guidance freshness"));
   const workerConfig = await readFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "utf8").catch(() => "");
