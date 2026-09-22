@@ -44,7 +44,9 @@ Verify provider lifecycle and staging safety with `pnpm exec trestle email
 doctor --env staging`. The generated protected provider workflow performs a
 read-only Resend-domain and Stripe-test-account check when manually dispatched.
 
-Cloud deployments default to Neon's Worker-native HTTP driver. Local development
+Cloud deployments use Neon's Worker-native WebSocket driver so interactive
+PostgreSQL transactions work. The legacy `neon-http` driver setting is treated
+as a compatibility alias for the transactional serverless driver. Local development
 sets `DATABASE_DRIVER=postgres-js` in encrypted credentials so the same app can
 use the Compose PostgreSQL instance directly. No persistent `.dev.vars` file is
 created by `trestle dev`.

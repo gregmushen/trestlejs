@@ -1,5 +1,5 @@
-import { neon } from "@neondatabase/serverless";
-import { drizzle as drizzleNeon } from "drizzle-orm/neon-http";
+import { Pool, neonConfig } from "@neondatabase/serverless";
+import { drizzle as drizzleNeon } from "drizzle-orm/neon-serverless";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -23,11 +23,14 @@ export * from "./tenancy.js";
 
 const schema = { ...authSchema, ...artifactSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema };
 
-export type DatabaseDriver = "neon-http" | "postgres-js";
+export type DatabaseDriver = "neon-http" | "neon-serverless" | "postgres-js";
 
-export function createDatabase(connectionString: string, driver: DatabaseDriver = "neon-http") {
-  if (driver === "neon-http") {
-    return drizzleNeon(neon(connectionString), { schema });
+export function createDatabase(connectionString: string, driver: DatabaseDriver = "neon-serverless") {
+  if (driver !== "postgres-js") {
+    if (typeof WebSocket === "undefined") throw new Error("Neon serverless transactions require a WebSocket implementation");
+    neonConfig.webSocketConstructor = WebSocket;
+    const pool = new Pool({ connectionString, max: 1, idleTimeoutMillis: 1_000 });
+    return drizzleNeon({ client: pool, schema });
   }
 
   const client = postgres(connectionString, {

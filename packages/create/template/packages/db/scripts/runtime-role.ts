@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 
-import { assertRuntimeRole, bootstrapRuntimeRole, configureRuntimeRole, inspectRuntimeRole } from "../src/roles.js";
+import { assertRuntimeRole, bootstrapRuntimeRole, configureRuntimeRole, inspectRuntimeRole, verifyRuntimeRoleDataAccess } from "../src/roles.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -36,7 +36,8 @@ if (operation === "bootstrap" || operation === "bootstrap-managed") {
 } else if (operation === "verify") {
   const status = await inspectRuntimeRole(required("DATABASE_URL"));
   assertRuntimeRole(status, expectedRole);
-  console.log(`Verified restricted PostgreSQL runtime role ${status.role}`);
+  await verifyRuntimeRoleDataAccess(required("DATABASE_URL"));
+  console.log(`Verified restricted PostgreSQL runtime role and data access ${status.role}`);
 } else {
   throw new Error("Expected bootstrap, bootstrap-managed, configure, or verify");
 }

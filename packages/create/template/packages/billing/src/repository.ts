@@ -1,4 +1,4 @@
-import { createDatabase, organizationEntitlement, organizationEntitlementOverride, organizationSubscription, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createTenantDatabase, organizationEntitlement, organizationEntitlementOverride, organizationSubscription, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { BillingProjectionRepository, SubscriptionSummary } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { Entitlements } from "./entitlements.js";
@@ -6,7 +6,7 @@ import { Entitlements } from "./entitlements.js";
 export class PostgresBillingProjectionRepository implements BillingProjectionRepository {
   constructor(private readonly databaseUrl: string, private readonly driver?: DatabaseDriver) {}
   async get(organizationId: string): Promise<SubscriptionSummary | null> {
-    const database = createDatabase(this.databaseUrl, this.driver);
+    const database = createTenantDatabase(this.databaseUrl, this.driver, organizationId);
     return database.transaction(async (transaction) => {
       await transaction.execute(sql`select set_config('app.organization_id', ${organizationId}, true)`);
       const [subscription] = await transaction.select().from(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId)).limit(1);
@@ -19,7 +19,7 @@ export class PostgresBillingProjectionRepository implements BillingProjectionRep
     });
   }
   async put(value: SubscriptionSummary): Promise<void> {
-    const database = createDatabase(this.databaseUrl, this.driver);
+    const database = createTenantDatabase(this.databaseUrl, this.driver, value.organizationId);
     await database.transaction(async (transaction) => {
       await transaction.execute(sql`select set_config('app.organization_id', ${value.organizationId}, true)`);
       await transaction.insert(organizationSubscription).values({ organizationId: value.organizationId, provider: value.provider, providerCustomerId: value.providerCustomerId, providerSubscriptionId: value.providerSubscriptionId, plan: value.plan, planVersion: value.planVersion, status: value.status, currentPeriodStart: value.currentPeriodStart, currentPeriodEnd: value.currentPeriodEnd, cancelAtPeriodEnd: value.cancelAtPeriodEnd, updatedAt: new Date() }).onConflictDoUpdate({ target: organizationSubscription.organizationId, set: { provider: value.provider, providerCustomerId: value.providerCustomerId, providerSubscriptionId: value.providerSubscriptionId, plan: value.plan, planVersion: value.planVersion, status: value.status, currentPeriodStart: value.currentPeriodStart, currentPeriodEnd: value.currentPeriodEnd, cancelAtPeriodEnd: value.cancelAtPeriodEnd, updatedAt: new Date() } });

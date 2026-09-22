@@ -53,6 +53,13 @@ export async function configureRuntimeRole(connectionString: string, runtimeRole
     if (!record.rolcanlogin) throw new Error(`PostgreSQL runtime role ${role} cannot log in`);
     if (record.rolsuper || record.rolbypassrls) throw new Error(`PostgreSQL runtime role ${role} can bypass row-level security`);
     await sql`grant trestle_app to ${sql(role)}`;
+    await sql`grant usage on schema public to ${sql(role)}`;
+    // The login role serves Better Auth and verified provider-event receipts
+    // without assuming the tenant role. Never grant it tenant-owned tables;
+    // those remain accessible only after SET ROLE trestle_app and RLS context.
+    for (const table of ["user", "session", "account", "verification", "organization", "member", "invitation", "billing_provider_event", "email_delivery_event"]) {
+      await sql`grant select, insert, update, delete on ${sql(table)} to ${sql(role)}`;
+    }
     return {
       role,
       canLogin: record.rolcanlogin,
@@ -95,4 +102,36 @@ export function assertRuntimeRole(status: RuntimeRoleStatus, expectedRole?: stri
   if (!status.canLogin) throw new Error(`PostgreSQL runtime role ${status.role} cannot log in`);
   if (status.superuser || status.bypassRls) throw new Error(`PostgreSQL runtime role ${status.role} can bypass row-level security`);
   if (!status.memberOfApplicationRole) throw new Error(`PostgreSQL runtime role ${status.role} cannot assume trestle_app`);
+}
+
+export async function verifyRuntimeRoleDataAccess(connectionString: string): Promise<void> {
+  const sql = postgres(connectionString, { max: 1, prepare: false });
+  try {
+    const [access] = await sql<{ auth_read: boolean; receipt_write: boolean; tenant_read: boolean }[]>`
+      select has_table_privilege(current_user, 'member', 'SELECT') as auth_read,
+             has_table_privilege(current_user, 'billing_provider_event', 'INSERT') as receipt_write,
+             has_table_privilege(current_user, 'tenant_record', 'SELECT') as tenant_read
+    `;
+    if (!access?.auth_read || !access.receipt_write) throw new Error("Runtime login lacks required non-tenant table access");
+    if (access.tenant_read) throw new Error("Runtime login can read tenant records without assuming the RLS role");
+    await sql`select id, application_role from member limit 0`;
+    const url = new URL(connectionString);
+    const existingOptions = url.searchParams.get("options");
+    url.searchParams.set("options", [existingOptions, "-c role=trestle_app", "-c app.organization_id=trestle_role_probe"].filter(Boolean).join(" "));
+    const tenantSql = postgres(url.toString(), { max: 1, prepare: false });
+    try {
+      const [scoped] = await tenantSql<{ role: string; organization_id: string }[]>`
+        select current_user as role, current_setting('app.organization_id', true) as organization_id
+          from tenant_record limit 1
+      `;
+      // An empty table must still prove the connection assumed the role.
+      if (scoped && (scoped.role !== "trestle_app" || scoped.organization_id !== "trestle_role_probe")) throw new Error("Tenant role or context did not match the scoped connection");
+      const [settings] = await tenantSql<{ role: string; organization_id: string }[]>`select current_user as role, current_setting('app.organization_id', true) as organization_id`;
+      if (settings?.role !== "trestle_app" || settings.organization_id !== "trestle_role_probe") throw new Error("Tenant role or context did not match the scoped connection");
+    } finally {
+      await tenantSql.end();
+    }
+  } finally {
+    await sql.end();
+  }
 }

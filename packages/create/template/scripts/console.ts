@@ -15,7 +15,7 @@ const mode = process.env.TRESTLE_CONSOLE_MODE ?? "READ ONLY";
 const requestedTenant = process.env.TRESTLE_CONSOLE_TENANT || undefined;
 const operatorId = process.env.TRESTLE_CONSOLE_OPERATOR || "unknown";
 const sessionId = crypto.randomUUID();
-const driver = (process.env.DATABASE_DRIVER ?? "neon-http") as DatabaseDriver;
+const driver = (process.env.DATABASE_DRIVER ?? "neon-serverless") as DatabaseDriver;
 const databaseURL = required(mode === "PLATFORM ADMIN" ? "DATABASE_PLATFORM_URL" : "DATABASE_URL");
 const resolver = createDatabase(databaseURL, driver);
 const resolvedBySlug = requestedTenant ? await resolver.select({ id: organization.id, slug: organization.slug, name: organization.name }).from(organization).where(eq(organization.slug, requestedTenant)).limit(1) : [];

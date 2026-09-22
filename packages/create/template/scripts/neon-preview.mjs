@@ -71,7 +71,8 @@ if (operation === "delete") {
   } else {
     const runtimeRole = process.env.NEON_RUNTIME_ROLE ?? "";
     if (!runtimeRole) throw new Error("NEON_RUNTIME_ROLE is required");
-    const runtimeUrl = await connectionUri(runtimeRole, true);
+    // PgBouncer rejects startup role options used for tenant-scoped RLS.
+    const runtimeUrl = await connectionUri(runtimeRole, false);
     if (process.env.GITHUB_ACTIONS === "true") process.stdout.write(`::add-mask::${runtimeUrl}\n`);
     await appendFile(outputPath, `runtime_url=${runtimeUrl}\n`, { encoding: "utf8", mode: 0o600 });
     process.stdout.write(`Resolved runtime connection for ${branchName}\n`);
