@@ -12,6 +12,7 @@ import * as outboxSchema from "./outbox-schema.js";
 
 export * from "./auth-schema.js";
 export * from "./artifact-schema.js";
+export * from "./artifacts.js";
 export * from "./billing-schema.js";
 export * from "./email-schema.js";
 export * from "./roles.js";

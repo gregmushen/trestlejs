@@ -335,7 +335,7 @@ suite("${n.className} forced tenant isolation", () => {
   const workerImport = `import { ${n.camel}Routes } from "./resources/${n.kebab}-routes.js";`;
   if (!workerSource.includes(workerImport)) workerSource = `${workerImport}\n${workerSource}`;
   const workerRegistration = `app.route("/", ${n.camel}Routes);`;
-  if (!workerSource.includes(workerRegistration)) workerSource = workerSource.replace("\nexport default app;", `\n${workerRegistration}\n\nexport default app;`);
+  if (!workerSource.includes(workerRegistration)) workerSource = workerSource.replace("\nconst consumeQueue =", `\n${workerRegistration}\n\nconst consumeQueue =`);
   await writeFile(workerIndex, workerSource, "utf8");
 
   const appIndex = path.join(root, appPath, "src", "main.tsx");

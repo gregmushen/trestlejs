@@ -7,8 +7,10 @@ import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { billingProviderEvent, createDatabase, emailDeliveryEvent } from "@__TRESTLE_PROJECT_NAME__/db";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, StripeBillingAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
+import { createQueueConsumer, EventConsumerRegistry, type QueueBatch } from "./async-runtime.js";
 
-const app = new Hono<{ Bindings: AuthEnvironment }>();
+export const app = new Hono<{ Bindings: AuthEnvironment }>();
+export const eventConsumers = new EventConsumerRegistry<AuthEnvironment>();
 
 function billing(environment: AuthEnvironment) {
   const repository = new PostgresBillingProjectionRepository(environment.DATABASE_URL, environment.DATABASE_DRIVER);
@@ -140,4 +142,8 @@ app.get("/api/health", (context) =>
   ),
 );
 
-export default app;
+const consumeQueue = createQueueConsumer(eventConsumers);
+export default {
+  fetch: app.fetch.bind(app),
+  queue: async (batch: QueueBatch, environment: AuthEnvironment) => await consumeQueue(batch, environment),
+};
