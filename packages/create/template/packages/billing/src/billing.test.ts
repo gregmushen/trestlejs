@@ -16,4 +16,12 @@ describe("local billing and entitlements", () => {
     await billing.cancelSubscription({ organizationId: "org-1", commandId: "cancel-1" });
     expect(await billing.getSubscription("org-1")).toMatchObject({ status: "cancelled", entitlements: [] });
   });
+
+  it("explains plan inheritance and time-bounded overrides", () => {
+    const now = new Date("2026-09-22T12:00:00.000Z");
+    const entitlements = new Entitlements(new Set(["article.basic", "workflows.advanced"]), { plan: "pro", planVersion: 1, now, overrides: [{ code: "workflows.advanced", enabled: false, reason: "account review", authorId: "operator-1", effectiveAt: new Date("2026-09-22T11:00:00.000Z") }, { code: "support.priority", enabled: true, reason: "contract", authorId: "operator-1", effectiveAt: new Date("2026-09-22T11:00:00.000Z"), expiresAt: new Date("2026-10-22T11:00:00.000Z") }] });
+    expect(entitlements.has("workflows.advanced")).toBe(false);
+    expect(entitlements.resolve("support.priority")).toMatchObject({ enabled: true, source: "override", inheritedFrom: "contract" });
+    expect(entitlements.resolve("article.basic")).toMatchObject({ enabled: true, source: "plan", inheritedFrom: "pro@1" });
+  });
 });

@@ -113,6 +113,20 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toContain("mutates the remote database; rerun with --yes");
   });
 
+  it("requires explicit confirmation before production log access", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["logs", "--env", "production"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("production log access requires --yes");
+  });
+
+  it("requires an authenticated local session before seeding billing", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["payments", "stripe", "seed", "--organization", "org-1"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("requires --cookie-stdin");
+  });
+
   it("rejects runtime-role bootstrap for local and preview environments", async () => {
     const root = await fixture();
     const output = capture(root);

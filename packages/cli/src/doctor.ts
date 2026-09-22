@@ -1,5 +1,6 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 
 import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "@trestlejs/core";
 
@@ -277,14 +278,14 @@ export async function runDoctor(
         const workerPath = manifest.apps.worker;
         if (!workerPath) throw new Error("worker app is not declared");
         const workerConfig = await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8");
-        const environmentBlock = workerConfig.slice(workerConfig.indexOf(`"${environment}"`));
-        const configured = environmentBlock.includes('"EMAIL_DELIVERY_MODE": "resend"') && environmentBlock.includes('"EMAIL_FROM"') && !environmentBlock.match(/"EMAIL_FROM"\s*:\s*"CHANGE_ME"/u);
+        const environmentBlock = wranglerEnvironmentBlock(workerConfig, environment);
+        const configured = wranglerStringVariable(environmentBlock, "EMAIL_DELIVERY_MODE") === "resend" && Boolean(wranglerStringVariable(environmentBlock, "EMAIL_FROM") && wranglerStringVariable(environmentBlock, "EMAIL_FROM") !== "CHANGE_ME") && (environment !== "staging" || Boolean(wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") && wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") !== "CHANGE_ME"));
         checks.push({
           id: "email.provider.configuration",
           group: "architecture",
           status: configured ? "pass" : "fail",
           message: configured ? `Resend and a sender are configured for ${environment}` : `${environment} email provider configuration is incomplete`,
-          ...(!configured ? { remediation: `Set EMAIL_FROM and the ${environment} Resend adapter variables in ${workerPath}/wrangler.jsonc` } : {}),
+          ...(!configured ? { remediation: `Set EMAIL_FROM${environment === "staging" ? ", EMAIL_STAGING_REDIRECT," : " and"} the ${environment} Resend adapter variables in ${workerPath}/wrangler.jsonc` } : {}),
         });
       } catch (error) {
         checks.push({ id: "email.provider.configuration", group: "architecture", status: "fail", message: "email deployment configuration cannot be read", evidence: error instanceof Error ? error.message : String(error) });
@@ -304,9 +305,9 @@ export async function runDoctor(
         const workerPath = manifest.apps.worker;
         if (!workerPath) throw new Error("worker app is not declared");
         const workerConfig = await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8");
-        const block = workerConfig.slice(workerConfig.indexOf(`"${environment}"`));
+        const block = wranglerEnvironmentBlock(workerConfig, environment);
         const expectedMode = environment === "production" ? "live" : "test";
-        const valid = block.includes(`"STRIPE_MODE": "${expectedMode}"`) && block.includes('"STRIPE_PRICES"') && !block.match(/"STRIPE_PUBLISHABLE_KEY"\s*:\s*"CHANGE_ME"/u);
+        const valid = wranglerStringVariable(block, "STRIPE_MODE") === expectedMode && Boolean(wranglerStringVariable(block, "STRIPE_PRICES")) && Boolean(wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY") && wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY") !== "CHANGE_ME");
         checks.push({ id: "billing.stripe.configuration", group: "architecture", status: valid ? "pass" : "fail", message: valid ? `Stripe ${expectedMode} configuration is declared` : `${environment} Stripe configuration is incomplete`, ...(!valid ? { remediation: `Configure Stripe ${expectedMode} publishable key, prices, and return URL in ${workerPath}/wrangler.jsonc` } : {}) });
       } catch (error) {
         checks.push({ id: "billing.stripe.configuration", group: "architecture", status: "fail", message: "Stripe deployment configuration cannot be read", evidence: error instanceof Error ? error.message : String(error) });

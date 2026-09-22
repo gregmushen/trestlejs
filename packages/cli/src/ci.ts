@@ -13,7 +13,7 @@ export type CiValidationReport = {
   valid: boolean;
 };
 
-const requiredWorkflows = ["ci.yml", "preview.yml", "deploy.yml", "secrets.yml", "diagnose.yml"] as const;
+const requiredWorkflows = ["ci.yml", "preview.yml", "deploy.yml", "secrets.yml", "diagnose.yml", "providers.yml"] as const;
 
 function check(id: string, condition: boolean, message: string, evidence?: string): CiValidationCheck {
   return { id, status: condition ? "pass" : "fail", message, ...(evidence ? { evidence } : {}) };
@@ -59,6 +59,10 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   const ci = sources.get("ci.yml") ?? "";
   checks.push(check("ci.database.rls", ci.includes("TRESTLE_RLS_TEST_DATABASE_URL"), "CI runs the PostgreSQL RLS test suite"));
   checks.push(check("ci.lockfile.frozen", ci.includes("pnpm install --frozen-lockfile"), "CI installs from the frozen lockfile"));
+
+  const providers = sources.get("providers.yml") ?? "";
+  checks.push(check("ci.providers.protected", providers.includes("environment: staging") && providers.includes("workflow_dispatch"), "provider verification is manual and protected by the staging environment"));
+  checks.push(check("ci.providers.safety", providers.includes("TRESTLE_PROVIDER_INTEGRATION_TESTS") && providers.includes("EMAIL_STAGING_REDIRECT") && providers.includes("STRIPE_SECRET_KEY"), "provider verification checks Resend staging safety and Stripe test mode"));
 
   const preview = sources.get("preview.yml") ?? "";
   checks.push(check(
