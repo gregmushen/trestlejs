@@ -280,6 +280,10 @@ trestle logs --env <env>            tail redacted structured Worker logs
 trestle queue dlq list --env <env>  inspect dead-lettered outbox delivery
 trestle workflow status <name> <id> inspect a Cloudflare Workflow instance
 trestle backup verify ... --yes     prove an isolated Neon restore and RLS
+trestle architecture check          enforce static application boundaries
+trestle upgrade plan                preview an application-preserving upgrade
+trestle upgrade apply --yes         apply versioned metadata/codemod migrations
+trestle resource add-field ...      add an optional field and tracked migration
 ```
 
 Run `pnpm exec trestle --help` and the relevant subcommand help for the exact

@@ -10,10 +10,25 @@ const namedIntent = z.object({
   approved: z.boolean().default(false),
 }).strict();
 
+export const setupResourceFieldSchema = z.object({
+  name: z.string().regex(/^[a-z][A-Za-z0-9]*$/u, "must be camelCase"),
+  type: z.enum(["string", "text", "integer", "boolean", "datetime", "relation"]),
+  required: z.boolean().default(true),
+  references: z.object({ resource: z.string().regex(/^[A-Z][A-Za-z0-9]*$/u), onDelete: z.enum(["restrict", "cascade", "set-null"]).default("restrict") }).strict().optional(),
+}).strict().superRefine((field, context) => {
+  if (field.type === "relation" && !field.references) context.addIssue({ code: "custom", path: ["references"], message: "relation fields require a resource reference" });
+  if (field.type === "relation" && field.required) context.addIssue({ code: "custom", path: ["required"], message: "generated relationships must initially be optional for migration safety" });
+  if (field.type !== "relation" && field.references) context.addIssue({ code: "custom", path: ["references"], message: "only relation fields accept references" });
+  if (field.references?.onDelete === "set-null" && field.required) context.addIssue({ code: "custom", path: ["required"], message: "set-null relationships must be optional" });
+});
+
 export const setupResourceSchema = z.object({
   name: z.string().regex(/^[A-Z][A-Za-z0-9]*$/u, "must be PascalCase"),
   tenant: z.boolean().default(true),
   crud: z.boolean().default(true),
+  fields: z.array(setupResourceFieldSchema).min(1).default([{ name: "name", type: "string", required: true }]),
+  authorization: z.object({ read: z.string().min(1), write: z.string().min(1) }).strict().optional(),
+  pagination: z.object({ defaultLimit: z.number().int().min(1).max(100), maxLimit: z.number().int().min(1).max(250) }).strict().default({ defaultLimit: 25, maxLimit: 100 }),
 }).strict();
 
 export const setupPlanSchema = z.object({
@@ -77,6 +92,11 @@ export const setupPlanSchema = z.object({
     if (!resource.tenant || !resource.crud) {
       context.addIssue({ code: "custom", path: ["resources", index], message: "the v1 resource generator currently requires tenant=true and crud=true" });
     }
+    const fields = resource.fields.map(({ name }) => name);
+    if (new Set(fields).size !== fields.length) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "resource fields must not contain duplicates" });
+    if (!resource.fields.some((field) => field.name === "name" && field.type === "string" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "generated CRUD screens require a required name:string field" });
+    if (resource.fields.some((field) => field.name !== "name" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "additional generated fields must initially be optional for additive migration safety" });
+    if (resource.pagination.defaultLimit > resource.pagination.maxLimit) context.addIssue({ code: "custom", path: ["resources", index, "pagination"], message: "default pagination limit cannot exceed max limit" });
   });
   plan.destructiveOperations.forEach((operation, index) => {
     if (!operation.approved) {

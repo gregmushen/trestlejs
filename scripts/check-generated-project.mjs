@@ -29,10 +29,18 @@ try {
   manifest.pnpm = { ...(manifest.pnpm ?? {}), overrides: { ...(manifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await run("pnpm", ["install"], project);
-  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article"], project);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Author"], project);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article", "--field", "summary:text?", "published:boolean?", "authorId:relation?:Author:set-null"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], project);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], project);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "resource", "add-field", "Article", "archived:boolean?", "--yes"], project);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], project);
   await run("pnpm", ["check"], project);
   console.log(`Generated release canary passed at ${project}`);
 } finally {
-  await rm(temporaryRoot, { recursive: true });
+  if (process.env.TRESTLE_KEEP_GENERATED === "1") {
+    console.log(`Retained generated project at ${project}`);
+  } else {
+    await rm(temporaryRoot, { recursive: true });
+  }
 }

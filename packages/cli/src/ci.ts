@@ -59,6 +59,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   const ci = sources.get("ci.yml") ?? "";
   checks.push(check("ci.database.rls", ci.includes("TRESTLE_RLS_TEST_DATABASE_URL"), "CI runs the PostgreSQL RLS test suite"));
   checks.push(check("ci.lockfile.frozen", ci.includes("pnpm install --frozen-lockfile"), "CI installs from the frozen lockfile"));
+  checks.push(check("ci.architecture.static", ci.includes("trestle architecture check"), "CI enforces provider boundaries, resource integrity, forced RLS, and managed-guidance freshness"));
 
   const providers = sources.get("providers.yml") ?? "";
   checks.push(check("ci.providers.protected", providers.includes("environment: staging") && providers.includes("workflow_dispatch"), "provider verification is manual and protected by the staging environment"));
@@ -79,6 +80,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.preview.deployment-evidence", (preview.match(/github-deployment\.mjs/gu) ?? []).length >= 2, "preview publishes and deactivates URL-bearing GitHub Deployments"));
   checks.push(check("ci.preview.isolated-database", preview.includes("neon-preview.mjs ensure") && preview.includes("neon-preview.mjs delete") && preview.includes("steps.runtime-role.outputs.runtime_url"), "preview provisions, configures, uses, and deletes an isolated Neon branch"));
   checks.push(check("ci.preview.encrypted-neon-credential", (preview.match(/trestle secrets get NEON_API_KEY --env preview --raw/gu) ?? []).length >= 2 && !preview.includes("secrets.NEON_API_KEY"), "preview creation and teardown use the declared encrypted Neon CI credential"));
+  checks.push(check("ci.preview.dynamic-auth-url", preview.includes("Bind Better Auth to the isolated preview application") && preview.includes("steps.preview.outputs.app_url") && preview.includes("secret put BETTER_AUTH_URL"), "preview binds Better Auth to its isolated application URL"));
 
   const deploy = sources.get("deploy.yml") ?? "";
   checks.push(check("ci.deploy.serialized", deploy.includes("cancel-in-progress: false"), "staging and production deployment is serialized"));
