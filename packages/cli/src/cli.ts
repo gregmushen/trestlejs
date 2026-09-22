@@ -294,14 +294,17 @@ export function createProgram(runtime: CliRuntime): Command {
   secrets
     .command("push")
     .requiredOption("--env <environment>", "remote environment", environment)
-    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
+    .option("--worker-name <name>", "override the generated Worker target for an isolated preview")
+    .action(async (options: { env: ReturnType<typeof environment>; workerName?: string }, command: Command) => {
       if (options.env === "local") throw new CliFailure("local credentials are injected by trestle dev and cannot be pushed remotely");
+      if (options.workerName && !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(options.workerName)) throw new CliFailure("worker name must be a lowercase DNS-safe name of at most 63 characters");
+      if (options.workerName && options.env !== "preview") throw new CliFailure("worker name overrides are only allowed for isolated previews");
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
       const problems = validateSecrets(values, context.manifest, options.env);
       if (problems.length > 0) throw new CliFailure(`credentials check failed:\n${problems.join("\n")}`);
       const workerValues = Object.fromEntries(Object.entries(values).filter(([name]) => context.manifest.secrets?.[name]?.target === "worker"));
-      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", "secret", "bulk", "--env", options.env], { cwd: context.root, env: process.env, input: JSON.stringify(workerValues) });
+      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", "secret", "bulk", "--env", options.env, ...(options.workerName ? ["--name", options.workerName] : [])], { cwd: context.root, env: process.env, input: JSON.stringify(workerValues) });
       runtime.stdout(`Pushed ${Object.keys(workerValues).length} Worker secrets to ${options.env}; local encrypted credentials remain authoritative\n`);
     });
 

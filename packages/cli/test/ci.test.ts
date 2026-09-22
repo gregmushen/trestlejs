@@ -44,4 +44,15 @@ describe("generated CI deployment contract", () => {
     const report = await validateCi(root);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.workflow.deploy.yml.project-cli", status: "fail" }));
   });
+
+  it("rejects removal of preview teardown", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replaceAll("cloudflare-pages.mjs delete", "cloudflare-pages.mjs retain"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.cleanup", status: "fail" }));
+  });
 });

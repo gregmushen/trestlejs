@@ -92,6 +92,20 @@ describe("TrestleJS CLI", () => {
     expect(document.data.requiredVariables).toEqual(["API_URL", "APP_URL", "DATABASE_RUNTIME_ROLE", "SITE_URL"]);
   });
 
+  it("rejects unsafe isolated Worker names before reading or pushing credentials", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["secrets", "push", "--env", "preview", "--worker-name", "fixture;destroy"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("lowercase DNS-safe name");
+  });
+
+  it("does not allow a Worker-name override to retarget staging or production secrets", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["secrets", "push", "--env", "production", "--worker-name", "fixture-worker-pr-42"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("only allowed for isolated previews");
+  });
+
   it("runs a read-only passing doctor", async () => {
     const root = await fixture();
     const output = capture(root);

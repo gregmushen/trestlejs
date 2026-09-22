@@ -2,7 +2,7 @@ name: Preview
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, closed]
 
 permissions:
   contents: read
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     environment: preview
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -24,10 +24,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck && pnpm test && pnpm build
-        env:
-          APP_URL: "${{ vars.APP_URL }}"
-          SITE_URL: "${{ vars.SITE_URL }}"
+      - id: preview
+        name: Derive isolated preview resources
+        run: node scripts/preview-context.mjs --project __TRESTLE_PROJECT_NAME__ --pr "${{ github.event.pull_request.number }}" --workers-subdomain "${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}" --format github >> "$GITHUB_OUTPUT"
+      - run: pnpm typecheck && pnpm test
       - name: Validate encrypted credentials
         run: pnpm exec trestle secrets check --env preview
         env: { TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}" }
@@ -53,8 +53,15 @@ jobs:
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
+      - name: Provision isolated Pages projects
+        run: |
+          node scripts/cloudflare-pages.mjs ensure "${{ steps.preview.outputs.app_project }}"
+          node scripts/cloudflare-pages.mjs ensure "${{ steps.preview.outputs.site_project }}"
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Push preview Worker secrets
-        run: pnpm exec trestle secrets push --env preview
+        run: pnpm exec trestle secrets push --env preview --worker-name "${{ steps.preview.outputs.worker_name }}"
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
@@ -65,21 +72,62 @@ jobs:
           accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           packageManager: pnpm
           workingDirectory: apps/worker
-          command: deploy --env preview --var WEB_ORIGIN:${{ vars.APP_URL }}
-      - run: VITE_API_ORIGIN="${{ vars.API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
+          command: deploy --env preview --name ${{ steps.preview.outputs.worker_name }} --var WEB_ORIGIN:${{ steps.preview.outputs.app_url }}
+      - run: VITE_API_ORIGIN="${{ steps.preview.outputs.api_url }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           packageManager: pnpm
           workingDirectory: apps/app
-          command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-preview --branch pr-${{ github.event.pull_request.number }}
+          command: pages deploy dist --project-name ${{ steps.preview.outputs.app_project }} --branch main
+      - run: APP_URL="${{ steps.preview.outputs.app_url }}" SITE_URL="${{ steps.preview.outputs.site_url }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/site build
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           packageManager: pnpm
           workingDirectory: apps/site
-          command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-site-preview --branch pr-${{ github.event.pull_request.number }}
+          command: pages deploy dist --project-name ${{ steps.preview.outputs.site_project }} --branch main
       - run: node scripts/smoke.mjs
-        env: { SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
+        env:
+          SITE_URL: "${{ steps.preview.outputs.site_url }}"
+          APP_URL: "${{ steps.preview.outputs.app_url }}"
+          API_URL: "${{ steps.preview.outputs.api_url }}"
+      - name: Publish GitHub Deployment
+        run: node scripts/github-deployment.mjs create "${{ steps.preview.outputs.environment }}" "${{ github.event.pull_request.head.sha }}" "${{ steps.preview.outputs.app_url }}"
+        env:
+          GITHUB_TOKEN: "${{ github.token }}"
+      - name: Record non-secret preview evidence
+        run: |
+          {
+            echo "### Preview ${{ github.event.pull_request.number }}"
+            echo "- Commit: \`${{ github.event.pull_request.head.sha }}\`"
+            echo "- App: ${{ steps.preview.outputs.app_url }}"
+            echo "- Site: ${{ steps.preview.outputs.site_url }}"
+            echo "- API: ${{ steps.preview.outputs.api_url }}"
+            echo "- Smoke gate: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    environment: preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - id: preview
+        name: Derive isolated preview resources
+        run: node scripts/preview-context.mjs --project __TRESTLE_PROJECT_NAME__ --pr "${{ github.event.pull_request.number }}" --workers-subdomain "${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}" --format github >> "$GITHUB_OUTPUT"
+      - name: Delete isolated Cloudflare resources
+        run: |
+          node scripts/cloudflare-worker.mjs delete "${{ steps.preview.outputs.worker_name }}"
+          node scripts/cloudflare-pages.mjs delete "${{ steps.preview.outputs.app_project }}"
+          node scripts/cloudflare-pages.mjs delete "${{ steps.preview.outputs.site_project }}"
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+      - name: Deactivate GitHub Deployment
+        run: node scripts/github-deployment.mjs deactivate "${{ steps.preview.outputs.environment }}"
+        env:
+          GITHUB_TOKEN: "${{ github.token }}"

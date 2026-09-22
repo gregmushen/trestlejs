@@ -89,6 +89,10 @@ describe("createProject", () => {
     expect(deployWorkflow).toContain("actions/checkout@11d5960a326750d5838078e36cf38b85af677262");
     expect(deployWorkflow).toContain("pnpm exec trestle secrets check --env staging");
     expect(deployWorkflow).not.toContain("trestlejs@latest");
+    const previewWorkflow = await readFile(path.join(result.directory, ".github", "workflows", "preview.yml"), "utf8");
+    expect(previewWorkflow).toContain("--worker-name");
+    expect(previewWorkflow).toContain("cloudflare-worker.mjs delete");
+    expect(previewWorkflow).toContain("cloudflare-pages.mjs delete");
     const setupSkill = await readFile(
       path.join(result.directory, ".agents", "skills", "trestle-setup", "SKILL.md"),
       "utf8",

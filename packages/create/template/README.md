@@ -57,7 +57,15 @@ non-login `trestle_app` role, rejects superuser or `BYPASSRLS` runtime roles,
 runs migrations with the migration credential, and verifies the runtime
 credential before deploying. Configure `APP_URL`, `API_URL`, `SITE_URL`, and
 `DATABASE_RUNTIME_ROLE` independently in the `preview`, `staging`, and
-`production` GitHub environments.
+`production` GitHub environments. Preview also requires
+`CLOUDFLARE_WORKERS_SUBDOMAIN`.
+
+Trusted pull requests receive isolated, deterministically named Workers and
+Pages projects. Closing the pull request deletes those Cloudflare resources.
+`CLOUDFLARE_WORKERS_SUBDOMAIN` is the account label before `.workers.dev`; it
+is used to derive the Worker URL exercised by the preview smoke gate. Preview
+database branching is a separate provider lifecycle and must be configured
+before treating preview data as isolated.
 
 Validate the checked-in delivery contract locally with:
 

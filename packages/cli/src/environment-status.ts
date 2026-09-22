@@ -32,7 +32,9 @@ export async function inspectEnvironmentStatus(root: string, manifest: ProjectMa
     applications,
     capabilities,
     requiredSecrets,
-    requiredVariables: environment === "local" ? [] : ["API_URL", "APP_URL", "DATABASE_RUNTIME_ROLE", "SITE_URL"],
+    requiredVariables: environment === "local"
+      ? []
+      : ["API_URL", "APP_URL", ...(environment === "preview" ? ["CLOUDFLARE_WORKERS_SUBDOMAIN"] : []), "DATABASE_RUNTIME_ROLE", "SITE_URL"],
   };
 }
 

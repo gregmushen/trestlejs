@@ -62,6 +62,10 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   ));
   checks.push(check("ci.preview.environment", preview.includes("environment: preview"), "preview uses the protected preview environment"));
   checks.push(check("ci.preview.runtime-role", preview.includes("db:roles:configure") && preview.includes("db:roles:verify"), "preview configures and verifies a restricted database runtime role"));
+  checks.push(check("ci.preview.isolated-cloudflare", preview.includes("--worker-name") && preview.includes("cloudflare-pages.mjs ensure"), "preview uses isolated Worker and Pages resources"));
+  checks.push(check("ci.preview.cleanup", preview.includes("types: [opened, synchronize, reopened, closed]") && preview.includes("cloudflare-worker.mjs delete") && preview.includes("cloudflare-pages.mjs delete"), "closed pull requests clean up isolated Cloudflare resources"));
+  checks.push(check("ci.preview.dynamic-smoke", preview.includes("steps.preview.outputs.api_url") && preview.includes("steps.preview.outputs.app_url") && preview.includes("steps.preview.outputs.site_url"), "preview smoke tests use derived per-PR URLs"));
+  checks.push(check("ci.preview.deployment-evidence", (preview.match(/github-deployment\.mjs/gu) ?? []).length >= 2, "preview publishes and deactivates URL-bearing GitHub Deployments"));
 
   const deploy = sources.get("deploy.yml") ?? "";
   checks.push(check("ci.deploy.serialized", deploy.includes("cancel-in-progress: false"), "staging and production deployment is serialized"));
