@@ -307,6 +307,11 @@ describe("TrestleJS CLI", () => {
     expect(routeSource).toContain('plane: "application", permission: "resource:write"');
     expect(routeSource).not.toContain('plane: "organization", permission: "resource:write"');
     expect(routeSource).toContain("new ArticleService(new PostgresArticleRepository");
+    const eventSource = await readFile(path.join(root, "apps/worker/src/resources/article-events.ts"), "utf8");
+    expect(eventSource).toContain('name: "resource.article.created"');
+    expect(eventSource).toContain("Invalid Article created event payload");
+    const workerSource = await readFile(path.join(root, "apps/worker/src/index.ts"), "utf8");
+    expect(workerSource).toContain("eventConsumers.register(articleCreatedEvent, handleArticleCreated);");
     const repositorySource = await readFile(path.join(root, "packages/data/src/resources/article-repository.ts"), "utf8");
     expect(repositorySource).toContain("eq(article.organizationId, this.organizationId)");
     const screenSource = await readFile(path.join(root, "apps/app/src/resources/article.tsx"), "utf8");

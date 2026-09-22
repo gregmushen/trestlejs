@@ -98,6 +98,7 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     path.join(root, contractsPath, "src", "resources", `${n.kebab}.test.ts`),
     path.join(root, dbPath, "src", `${n.kebab}-rls.integration.test.ts`),
     path.join(root, appPath, "src", "api", `${n.kebab}.ts`),
+    path.join(root, workerPath, "src", "resources", `${n.kebab}-events.ts`),
   ];
   const declarationExists = await exists(declarationPath);
   const collisions = (await Promise.all(targets.map(async (target) => (await exists(target) ? target : undefined)))).filter((target): target is string => Boolean(target));
@@ -378,6 +379,34 @@ export function create${n.className}Api(organizationId: string) {
 }
 `);
 
+  await writeGenerated(targets[10]!, `import { createLogger } from "@${project}/context";
+import type { EventDefinition, EventEnvelope } from "@${project}/events";
+
+export type ${n.className}CreatedPayload = { organizationId: string; resourceId: string };
+
+export const ${n.camel}CreatedEvent: EventDefinition<${n.className}CreatedPayload> = {
+  name: "resource.${n.kebab}.created",
+  schemaVersion: 1,
+  parse(payload: unknown): ${n.className}CreatedPayload {
+    if (!payload || typeof payload !== "object") throw new Error("Invalid ${n.className} created event payload");
+    const value = payload as Record<string, unknown>;
+    if (typeof value.organizationId !== "string" || !value.organizationId || typeof value.resourceId !== "string" || !value.resourceId) {
+      throw new Error("Invalid ${n.className} created event payload");
+    }
+    return { organizationId: value.organizationId, resourceId: value.resourceId };
+  },
+};
+
+// This application-owned handler records receipt. Add idempotent domain side effects here.
+export async function handle${n.className}Created(payload: ${n.className}CreatedPayload, envelope: EventEnvelope): Promise<void> {
+  createLogger({ correlationId: envelope.correlationId }).info("resource.${n.kebab}.created.consumed", {
+    organizationId: payload.organizationId,
+    resourceId: payload.resourceId,
+    eventId: envelope.id,
+  });
+}
+`);
+
   await writeGenerated(targets[7]!, `import { describe, expect, it } from "vitest";
 import { ${n.camel}CreateSchema, ${n.camel}UpdateSchema } from "./${n.kebab}.js";
 
@@ -423,10 +452,17 @@ suite("${n.className} forced tenant isolation", () => {
   let workerSource = await readFile(workerIndex, "utf8");
   const workerImport = `import { ${n.camel}Routes } from "./resources/${n.kebab}-routes.js";`;
   if (!workerSource.includes(workerImport)) workerSource = `${workerImport}\n${workerSource}`;
+  const workerEventImport = `import { ${n.camel}CreatedEvent, handle${n.className}Created } from "./resources/${n.kebab}-events.js";`;
+  if (!workerSource.includes(workerEventImport)) workerSource = `${workerEventImport}\n${workerSource}`;
   const workerRegistration = `app.route("/", ${n.camel}Routes);`;
+  const workerEventRegistration = `eventConsumers.register(${n.camel}CreatedEvent, handle${n.className}Created);`;
   if (!workerSource.includes(workerRegistration)) {
     const anchor = workerSource.includes("\nconst consumeQueue =") ? "\nconst consumeQueue =" : "\nexport default app;";
     workerSource = workerSource.replace(anchor, `\n${workerRegistration}\n${anchor}`);
+  }
+  if (!workerSource.includes(workerEventRegistration)) {
+    const anchor = workerSource.includes("\nconst consumeQueue =") ? "\nconst consumeQueue =" : "\nexport default app;";
+    workerSource = workerSource.replace(anchor, `\n${workerEventRegistration}\n${anchor}`);
   }
   await writeFile(workerIndex, workerSource, "utf8");
 
