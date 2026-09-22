@@ -78,6 +78,12 @@ suite("local product path", () => {
           TRESTLE_EVENTS: { send: async (body: unknown) => { queued.push(body); } },
         });
         expect(queued).toMatchObject([{ id: outbox!.id, name: "resource.article.created", resource: { type: "article", id: article.id } }]);
+        const delivery: string[] = [];
+        expect(await worker.queue({ messages: [{ body: queued[0], ack: () => delivery.push("ack"), retry: () => delivery.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
+        expect(delivery).toEqual(["ack"]);
+        const invalidDelivery: string[] = [];
+        expect(await worker.queue({ messages: [{ body: { ...(queued[0] as object), payload: { resourceId: article.id } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, environment)).toEqual({ acknowledged: 0, retried: 1 });
+        expect(invalidDelivery).toEqual(["retry"]);
         const [dispatched] = await database.select().from(outboxMessage).where(eq(outboxMessage.id, outbox!.id)).limit(1);
         expect(dispatched?.status).toBe("succeeded");
         const listed = await app.request("http://localhost:8787/api/articles", { headers }, environment);
