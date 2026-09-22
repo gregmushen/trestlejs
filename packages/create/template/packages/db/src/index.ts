@@ -31,4 +31,16 @@ export function createDatabase(connectionString: string, driver: DatabaseDriver 
   return drizzle(client, { schema });
 }
 
+export function tenantConnectionString(connectionString: string, organizationId: string): string {
+  if (!/^[A-Za-z0-9_-]+$/u.test(organizationId)) throw new Error("Invalid organization identifier");
+  const url = new URL(connectionString);
+  const existing = url.searchParams.get("options");
+  url.searchParams.set("options", [existing, "-c role=trestle_app", `-c app.organization_id=${organizationId}`].filter(Boolean).join(" "));
+  return url.toString();
+}
+
+export function createTenantDatabase(connectionString: string, driver: DatabaseDriver | undefined, organizationId: string) {
+  return createDatabase(tenantConnectionString(connectionString, organizationId), driver);
+}
+
 export type Database = ReturnType<typeof createDatabase>;

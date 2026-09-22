@@ -65,7 +65,13 @@ function planHash(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
-type ResourceState = { tenant?: boolean; crud?: boolean; persistence?: { table?: string } };
+type ResourceState = {
+  tenant?: boolean;
+  crud?: boolean;
+  persistence?: { table?: string };
+  files?: string[];
+  registrations?: string[];
+};
 
 async function declaration(root: string, name: string): Promise<ResourceState | undefined> {
   const kebab = name.replace(/([a-z0-9])([A-Z])/gu, "$1-$2").toLowerCase();
@@ -84,6 +90,57 @@ async function hasMigration(root: string, manifest: ProjectManifest, state: Reso
     return sql.includes(`CREATE TABLE "${table}"`) && sql.includes(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY`);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT" && !manifest.packages.db) return true;
+    return false;
+  }
+}
+
+function resourceNames(name: string): { camel: string; kebab: string; pluralKebab: string } {
+  const words = name.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").split(" ").map((word) => word.toLowerCase());
+  const kebab = words.join("-");
+  return {
+    camel: `${words[0]}${words.slice(1).map((word) => `${word[0]?.toUpperCase()}${word.slice(1)}`).join("")}`,
+    kebab,
+    pluralKebab: kebab.endsWith("s") ? `${kebab}es` : `${kebab}s`,
+  };
+}
+
+async function resourceArtifactsComplete(root: string, manifest: ProjectManifest, name: string, state: ResourceState): Promise<boolean> {
+  const resource = resourceNames(name);
+  const contractsPath = manifest.packages.contracts ?? "packages/contracts";
+  const domainPath = manifest.packages.domain ?? "packages/domain";
+  const dataPath = manifest.packages.data ?? "packages/data";
+  const dbPath = manifest.packages.db ?? "packages/db";
+  const workerPath = manifest.apps.worker ?? "apps/worker";
+  const appPath = manifest.apps.app ?? "apps/app";
+  const expectedFiles = state.files ?? [
+    path.join(contractsPath, "src", "resources", `${resource.kebab}.ts`),
+    path.join(domainPath, "src", "resources", `${resource.kebab}.ts`),
+    path.join(dataPath, "src", "resources", `${resource.kebab}-repository.ts`),
+    path.join(dbPath, "src", `${resource.kebab}-schema.ts`),
+    path.join(workerPath, "src", "resources", `${resource.kebab}-routes.ts`),
+    path.join(appPath, "src", "resources", `${resource.kebab}.tsx`),
+    path.join(contractsPath, "src", "resources", `${resource.kebab}.test.ts`),
+    path.join(dbPath, "src", `${resource.kebab}-rls.integration.test.ts`),
+  ];
+  if ((await Promise.all(expectedFiles.map((file) => access(path.join(root, file)).then(() => true, () => false)))).some((present) => !present)) return false;
+  try {
+    const [contracts, domain, data, database, worker, app] = await Promise.all([
+      readFile(path.join(root, contractsPath, "src", "index.ts"), "utf8"),
+      readFile(path.join(root, domainPath, "src", "index.ts"), "utf8"),
+      readFile(path.join(root, dataPath, "src", "index.ts"), "utf8"),
+      readFile(path.join(root, dbPath, "src", "index.ts"), "utf8"),
+      readFile(path.join(root, workerPath, "src", "index.ts"), "utf8"),
+      readFile(path.join(root, appPath, "src", "main.tsx"), "utf8"),
+    ]);
+    return contracts.includes(`./resources/${resource.kebab}.js`)
+      && domain.includes(`./resources/${resource.kebab}.js`)
+      && data.includes(`./resources/${resource.kebab}-repository.js`)
+      && database.includes(`./${resource.kebab}-schema.js`)
+      && worker.includes(`./resources/${resource.kebab}-routes.js`)
+      && worker.includes(`app.route("/", ${resource.camel}Routes);`)
+      && app.includes(`./resources/${resource.kebab}.js`)
+      && app.includes(`path: "/${resource.pluralKebab}"`);
+  } catch {
     return false;
   }
 }
@@ -112,6 +169,9 @@ export async function diffSetupPlan(root: string, manifest: ProjectManifest, pla
       classification: !current ? "create" : current.tenant === resource.tenant && current.crud === resource.crud ? "already correct" : "update",
       summary: `${resource.name} tenant=${resource.tenant} crud=${resource.crud}`,
     });
+    if (current && current.tenant === resource.tenant && current.crud === resource.crud && !(await resourceArtifactsComplete(root, manifest, resource.name, current))) {
+      items.push({ id: `resources.${resource.name}.sources`, classification: "create", summary: `${resource.name} missing generated sources or registrations` });
+    }
     if (current && current.tenant === resource.tenant && current.crud === resource.crud && !(await hasMigration(root, manifest, current))) {
       items.push({ id: `resources.${resource.name}.migration`, classification: "create", summary: `${resource.name} journaled forced-RLS migration` });
     }
@@ -144,9 +204,11 @@ export async function applySetupPlan(root: string, manifest: ProjectManifest, pl
   const migrations = new Map<string, SetupPlan["resources"][number]>();
   for (const resource of plan.resources) {
     const item = diff.items.find(({ id }) => id === `resources.${resource.name}`);
-    if (item?.classification === "create") {
-      migrations.set(resource.name, resource);
-      operations.push({ id: item.id, status: "completed", files: await generateResource(root, manifest, resource) });
+    const sources = diff.items.find(({ id }) => id === `resources.${resource.name}.sources`);
+    if (item?.classification === "create" || sources?.classification === "create") {
+      if (item?.classification === "create") migrations.set(resource.name, resource);
+      const files = await generateResource(root, manifest, resource);
+      operations.push({ id: item?.classification === "create" ? item.id : sources!.id, status: "completed", ...(files.length ? { files } : {}) });
     }
     else operations.push({ id: `resources.${resource.name}`, status: "completed" });
     if (diff.items.some(({ id, classification }) => id === `resources.${resource.name}.migration` && classification === "create")) migrations.set(resource.name, resource);

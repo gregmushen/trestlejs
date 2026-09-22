@@ -18,6 +18,7 @@ function Shell() {
         <Link to="/sign-in" activeProps={{ className: "text-brand-500" }}>Sign in</Link>
         <Link to="/sign-up" activeProps={{ className: "text-brand-500" }}>Create account</Link>
         <Link to="/dashboard" activeProps={{ className: "text-brand-500" }}>Dashboard</Link>
+        {/* trestle:resource-links */}
       </div>
     </nav>
     <Outlet />

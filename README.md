@@ -37,6 +37,7 @@ truth and tenant isolation.
 [Resource generation](#generate-a-tenant-safe-resource) ·
 [Setup plans](#plans-humans-and-agents-can-review) ·
 [CLI](#cli-at-a-glance) · [Architecture specification](docs/TRESTLEJS_SPEC.md)
+· [Roadmap](docs/ROADMAP.md)
 
 ## Quick start
 
@@ -306,7 +307,8 @@ runs the test suite. Release maintainers should follow the
 The conceptual architecture is frozen for the first vertical slice, and the
 core local path is operational. Before v1, expect continued work on the
 remaining generators, remote lifecycle commands, upgrade tooling, broader
-system tests, and documentation.
+system tests, and documentation. The [roadmap](docs/ROADMAP.md) distinguishes
+the current release from the aspirational v1 surface in the specification.
 
 The installed CLI is always authoritative. If an operation described in the
 specification is absent from `trestle --help`, it has not shipped yet.

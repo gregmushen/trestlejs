@@ -7,5 +7,11 @@
     "build": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/contracts": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/domain": "workspace:*",
+    "drizzle-orm": "0.45.3"
   }
 }

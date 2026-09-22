@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -191,7 +191,17 @@ describe("TrestleJS CLI", () => {
     expect(await executeCli(["apply", ".trestle/setup.json", "--yes"], apply.runtime)).toBe(0);
     expect(apply.stdout()).toContain("resources.Article");
     expect(await readFile(path.join(root, "packages/db/src/article-schema.ts"), "utf8")).toContain(".enableRLS()");
-    expect(await readFile(path.join(root, "apps/app/src/main.tsx"), "utf8")).toContain('path: "/articles"');
+    const appSource = await readFile(path.join(root, "apps/app/src/main.tsx"), "utf8");
+    expect(appSource).toContain('path: "/articles"');
+    const routeSource = await readFile(path.join(root, "apps/worker/src/resources/article-routes.ts"), "utf8");
+    expect(routeSource).toContain("requireExecutionContext");
+    expect(routeSource).toContain("new ArticleService(new PostgresArticleRepository");
+    const repositorySource = await readFile(path.join(root, "packages/data/src/resources/article-repository.ts"), "utf8");
+    expect(repositorySource).toContain("eq(article.organizationId, this.organizationId)");
+    const screenSource = await readFile(path.join(root, "apps/app/src/resources/article.tsx"), "utf8");
+    expect(screenSource).toContain('const key = ["articles", organizationId] as const');
+    expect(screenSource).toContain('method: "PATCH"');
+    expect(screenSource).toContain('method: "DELETE"');
 
     const resources = capture(root);
     expect(await executeCli(["resources", "--json"], resources.runtime)).toBe(0);
@@ -205,5 +215,18 @@ describe("TrestleJS CLI", () => {
     expect(JSON.parse(after.stdout()).data.converged).toBe(true);
     const resume = capture(root);
     expect(await executeCli(["apply", ".trestle/setup.json", "--yes"], resume.runtime)).toBe(0);
+
+    const domainPath = path.join(root, "packages/domain/src/resources/article.ts");
+    await writeFile(domainPath, `${await readFile(domainPath, "utf8")}\n// application-owned customization\n`);
+    await rm(path.join(root, "packages/data/src/resources/article-repository.ts"));
+    const drift = capture(root);
+    expect(await executeCli(["plan", "diff", ".trestle/setup.json", "--json"], drift.runtime)).toBe(0);
+    expect(JSON.parse(drift.stdout()).data.items).toContainEqual(expect.objectContaining({ id: "resources.Article.sources", classification: "create" }));
+    expect(await executeCli(["apply", ".trestle/setup.json", "--yes"], capture(root).runtime)).toBe(0);
+    expect(await readFile(path.join(root, "packages/data/src/resources/article-repository.ts"), "utf8")).toContain("PostgresArticleRepository");
+    expect(await readFile(domainPath, "utf8")).toContain("application-owned customization");
+    const repaired = capture(root);
+    expect(await executeCli(["plan", "diff", ".trestle/setup.json", "--json"], repaired.runtime)).toBe(0);
+    expect(JSON.parse(repaired.stdout()).data.converged).toBe(true);
   });
 });

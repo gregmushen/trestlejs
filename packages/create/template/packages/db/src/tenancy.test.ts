@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { tenantConnectionString } from "./index.js";
 import { withTenant, type TenantTransaction } from "./tenancy.js";
 
 describe("withTenant", () => {
+  it("creates a connection-scoped tenant setting for stateless drivers", () => {
+    const url = new URL(tenantConnectionString("postgres://user:password@localhost/database", "org-a"));
+    expect(url.searchParams.get("options")).toBe("-c role=trestle_app -c app.organization_id=org-a");
+    expect(() => tenantConnectionString("postgres://localhost/database", "bad tenant")).toThrow("Invalid organization identifier");
+  });
   it("sets tenant context inside the same transaction before application work", async () => {
     const events: string[] = [];
     const transaction: TenantTransaction = {

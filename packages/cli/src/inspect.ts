@@ -10,6 +10,8 @@ export type ResourceDeclaration = {
   crud: boolean;
   persistence?: { table: string; schema: string };
   contracts?: string;
+  files?: string[];
+  registrations?: string[];
   routes?: Array<{ method: string; path: string; auth: boolean }>;
 };
 

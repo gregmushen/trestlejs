@@ -1,6 +1,8 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { tenantConnectionString } from "./index.js";
+
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
 const prefix = `rls-${Date.now()}-`;
@@ -52,5 +54,16 @@ suite("forced PostgreSQL tenant isolation", () => {
       await transaction`select set_config('app.organization_id', 'org-a', true)`;
       await transaction`insert into tenant_record (organization_id, name) values ('org-b', 'forbidden')`;
     })).rejects.toThrow();
+  });
+
+  it("enforces the restricted role on tenant-scoped runtime connections", async () => {
+    const tenantSql = postgres(tenantConnectionString(connectionString!, "org-a"), { max: 1, prepare: false });
+    try {
+      expect((await tenantSql`select organization_id from tenant_record where name like ${`${prefix}%`}`).map((row) => row.organization_id)).toEqual(["org-a"]);
+      expect((await tenantSql`update tenant_record set name = 'forbidden' where organization_id = 'org-b'`).count).toBe(0);
+      await expect(tenantSql`insert into tenant_record (organization_id, name) values ('org-b', 'forbidden')`).rejects.toThrow();
+    } finally {
+      await tenantSql.end();
+    }
   });
 });

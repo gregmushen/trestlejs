@@ -135,7 +135,7 @@ export async function runDoctor(
       ? (await Promise.all((await readdir(migrationDirectory)).filter((file) => file.endsWith(".sql")).map((file) => readFile(path.join(migrationDirectory, file), "utf8")))).join("\n")
       : "";
     for (const resource of resources) {
-      const required = [resource.contracts, resource.persistence?.schema].filter((value): value is string => Boolean(value));
+      const required = resource.files ?? [resource.contracts, resource.persistence?.schema].filter((value): value is string => Boolean(value));
       const missing = (await Promise.all(required.map(async (relativePath) => access(path.join(root, relativePath)).then(() => undefined, () => relativePath)))).filter(Boolean);
       checks.push({
         id: `resources.${resource.name.toLowerCase()}.sources`,

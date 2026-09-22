@@ -59,10 +59,23 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     path.join(root, contractsPath, "src", "resources", `${n.kebab}.test.ts`),
     path.join(root, dbPath, "src", `${n.kebab}-rls.integration.test.ts`),
   ];
-  const collisions = (await Promise.all(targets.map(async (target) => (await exists(target) ? target : undefined)))).filter(Boolean);
-  if (collisions.length) throw new CliFailure(`resource ${resource.name} already exists: ${collisions.join(", ")}`);
+  const declarationExists = await exists(declarationPath);
+  const collisions = (await Promise.all(targets.map(async (target) => (await exists(target) ? target : undefined)))).filter((target): target is string => Boolean(target));
+  if (collisions.length && !declarationExists) throw new CliFailure(`resource ${resource.name} collides with existing files: ${collisions.join(", ")}`);
+  if (declarationExists) {
+    const current = JSON.parse(await readFile(declarationPath, "utf8")) as { name?: string; tenant?: boolean; crud?: boolean };
+    if (current.name !== resource.name || current.tenant !== resource.tenant || current.crud !== resource.crud) {
+      throw new CliFailure(`resource ${resource.name} already exists with a different declaration`);
+    }
+  }
 
   for (const target of targets) await mkdir(path.dirname(target), { recursive: true });
+  const created: string[] = [];
+  const writeGenerated = async (target: string, source: string) => {
+    if (await exists(target)) return;
+    await writeFile(target, source, "utf8");
+    created.push(path.relative(root, target));
+  };
   const routePath = `/api/${n.pluralKebab}`;
 
   const declaration = {
@@ -72,6 +85,8 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     crud: resource.crud,
     persistence: { table: n.snake, schema: path.relative(root, targets[4]!) },
     contracts: path.relative(root, targets[1]!),
+    files: targets.slice(1).map((target) => path.relative(root, target)),
+    registrations: [path.join(workerPath, "src", "index.ts"), path.join(appPath, "src", "main.tsx")],
     routes: resource.crud ? [
       { method: "GET", path: routePath, auth: true },
       { method: "POST", path: routePath, auth: true },
@@ -81,8 +96,9 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     ] : [],
   };
   await writeFile(declarationPath, `${JSON.stringify(declaration, null, 2)}\n`, "utf8");
+  if (!declarationExists) created.push(path.relative(root, declarationPath));
 
-  await writeFile(targets[1]!, `import { z } from "zod";
+  await writeGenerated(targets[1]!, `import { z } from "zod";
 
 export const ${n.camel}CreateSchema = z.object({ name: z.string().trim().min(1).max(200) });
 export const ${n.camel}UpdateSchema = ${n.camel}CreateSchema.partial().refine((value) => Object.keys(value).length > 0, "at least one field is required");
@@ -95,40 +111,58 @@ export const ${n.camel}Schema = ${n.camel}CreateSchema.extend({
 export type ${n.className} = z.infer<typeof ${n.camel}Schema>;
 export type Create${n.className} = z.infer<typeof ${n.camel}CreateSchema>;
 export type Update${n.className} = z.infer<typeof ${n.camel}UpdateSchema>;
-`, "utf8");
+`);
 
-  await writeFile(targets[2]!, `export interface ${n.className}Repository<Record, Create, Update> {
-  list(organizationId: string): Promise<Record[]>;
-  get(organizationId: string, id: string): Promise<Record | null>;
-  create(organizationId: string, input: Create): Promise<Record>;
-  update(organizationId: string, id: string, input: Update): Promise<Record | null>;
-  remove(organizationId: string, id: string): Promise<boolean>;
-}
-
-export class ${n.className}Service<Record, Create, Update> {
-  constructor(private readonly repository: ${n.className}Repository<Record, Create, Update>) {}
-  list(organizationId: string) { return this.repository.list(organizationId); }
-  get(organizationId: string, id: string) { return this.repository.get(organizationId, id); }
-  create(organizationId: string, input: Create) { return this.repository.create(organizationId, input); }
-  update(organizationId: string, id: string, input: Update) { return this.repository.update(organizationId, id, input); }
-  remove(organizationId: string, id: string) { return this.repository.remove(organizationId, id); }
-}
-`, "utf8");
-
-  await writeFile(targets[3]!, `export type ${n.className}Record = { id: string; organizationId: string; name: string; createdAt: Date; updatedAt: Date };
-export type ${n.className}Create = { name: string };
-export type ${n.className}Update = Partial<${n.className}Create>;
+  await writeGenerated(targets[2]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
 
 export interface ${n.className}Repository {
-  list(organizationId: string): Promise<${n.className}Record[]>;
-  get(organizationId: string, id: string): Promise<${n.className}Record | null>;
-  create(organizationId: string, input: ${n.className}Create): Promise<${n.className}Record>;
-  update(organizationId: string, id: string, input: ${n.className}Update): Promise<${n.className}Record | null>;
-  remove(organizationId: string, id: string): Promise<boolean>;
+  list(): Promise<${n.className}[]>;
+  get(id: string): Promise<${n.className} | null>;
+  create(input: Create${n.className}): Promise<${n.className}>;
+  update(id: string, input: Update${n.className}): Promise<${n.className} | null>;
+  remove(id: string): Promise<boolean>;
 }
-`, "utf8");
 
-  await writeFile(targets[4]!, `import { sql } from "drizzle-orm";
+export class ${n.className}Service {
+  constructor(private readonly repository: ${n.className}Repository) {}
+  list() { return this.repository.list(); }
+  get(id: string) { return this.repository.get(id); }
+  create(input: Create${n.className}) { return this.repository.create(input); }
+  update(id: string, input: Update${n.className}) { return this.repository.update(id, input); }
+  remove(id: string) { return this.repository.remove(id); }
+}
+`);
+
+  await writeGenerated(targets[3]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
+import { ${n.camel}, type Database } from "@${project}/db";
+import type { ${n.className}Repository } from "@${project}/domain";
+import { and, eq } from "drizzle-orm";
+
+export class Postgres${n.className}Repository implements ${n.className}Repository {
+  constructor(private readonly database: Database, private readonly organizationId: string) {}
+  async list(): Promise<${n.className}[]> {
+    return await this.database.select().from(${n.camel}).where(eq(${n.camel}.organizationId, this.organizationId));
+  }
+  async get(id: string): Promise<${n.className} | null> {
+    const [record] = await this.database.select().from(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).limit(1);
+    return record ?? null;
+  }
+  async create(input: Create${n.className}): Promise<${n.className}> {
+    const [record] = await this.database.insert(${n.camel}).values({ ...input, organizationId: this.organizationId }).returning();
+    if (!record) throw new Error("Failed to create ${n.className}");
+    return record;
+  }
+  async update(id: string, input: Update${n.className}): Promise<${n.className} | null> {
+    const [record] = await this.database.update(${n.camel}).set({ ...input, updatedAt: new Date() }).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).returning();
+    return record ?? null;
+  }
+  async remove(id: string): Promise<boolean> {
+    return (await this.database.delete(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).returning()).length > 0;
+  }
+}
+`);
+
+  await writeGenerated(targets[4]!, `import { sql } from "drizzle-orm";
 import { index, pgPolicy, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 export const ${n.camel} = pgTable("${n.snake}", {
@@ -146,72 +180,117 @@ export const ${n.camel} = pgTable("${n.snake}", {
     withCheck: sql\`\${table.organizationId} = current_setting('app.organization_id', true)\`,
   }),
 ]).enableRLS();
-`, "utf8");
+`);
 
-  await writeFile(targets[5]!, `import { ${n.camel}CreateSchema, ${n.camel}UpdateSchema } from "@${project}/contracts";
-import { createAuth, type AuthEnvironment } from "@${project}/auth";
-import { ${n.camel}, createDatabase } from "@${project}/db";
-import { and, eq } from "drizzle-orm";
+  await writeGenerated(targets[5]!, `import { type AuthEnvironment } from "@${project}/auth";
+import { ${n.camel}CreateSchema, ${n.camel}UpdateSchema } from "@${project}/contracts";
+import { Postgres${n.className}Repository } from "@${project}/data";
+import { ${n.className}Service } from "@${project}/domain";
 import { Hono } from "hono";
 
-export const ${n.camel}Routes = new Hono<{ Bindings: AuthEnvironment }>();
-async function organizationId(headers: Headers, environment: AuthEnvironment) {
-  const session = await createAuth(environment).api.getSession({ headers });
-  return session?.session.activeOrganizationId;
+import { requireExecutionContext, type AppVariables } from "../execution-context.js";
+
+export const ${n.camel}Routes = new Hono<{ Bindings: AuthEnvironment; Variables: AppVariables }>();
+${n.camel}Routes.use("${routePath}", requireExecutionContext);
+${n.camel}Routes.use("${routePath}/*", requireExecutionContext);
+function service(execution: AppVariables["execution"]) {
+  return new ${n.className}Service(new Postgres${n.className}Repository(execution.data, execution.tenant.organizationId));
 }
-function tenantDatabase(environment: AuthEnvironment, tenant: string) {
-  if (!/^[A-Za-z0-9_-]+$/u.test(tenant)) throw new Error("Invalid organization identifier");
-  const url = new URL(environment.DATABASE_URL);
-  const existing = url.searchParams.get("options");
-  url.searchParams.set("options", [existing, "-c app.organization_id=" + tenant].filter(Boolean).join(" "));
-  return createDatabase(url.toString(), environment.DATABASE_DRIVER);
+async function operation<T>(execution: AppVariables["execution"], event: string, work: () => Promise<T>): Promise<T> {
+  const started = execution.clock.now().getTime();
+  execution.log.info(event + ".started");
+  try {
+    const result = await work();
+    execution.log.info(event + ".completed", { durationMs: execution.clock.now().getTime() - started });
+    return result;
+  } catch (error) {
+    execution.log.error(event + ".failed", { durationMs: execution.clock.now().getTime() - started, errorName: error instanceof Error ? error.name : "UnknownError" });
+    throw error;
+  }
 }
 ${n.camel}Routes.get("${routePath}", async (context) => {
-  const tenant = await organizationId(context.req.raw.headers, context.env);
-  if (!tenant) return context.json({ error: "An active organization is required" }, 401);
-  return context.json({ ${n.camel}s: await tenantDatabase(context.env, tenant).select().from(${n.camel}).where(eq(${n.camel}.organizationId, tenant)) });
+  const execution = context.get("execution");
+  return context.json({ ${n.camel}s: await operation(execution, "resource.${n.kebab}.list", () => service(execution).list()) });
 });
 ${n.camel}Routes.post("${routePath}", async (context) => {
-  const tenant = await organizationId(context.req.raw.headers, context.env);
-  if (!tenant) return context.json({ error: "An active organization is required" }, 401);
-  const input = ${n.camel}CreateSchema.parse(await context.req.json());
-  const [created] = await tenantDatabase(context.env, tenant).insert(${n.camel}).values({ ...input, organizationId: tenant }).returning();
-  return context.json({ ${n.camel}: created }, 201);
+  const parsed = ${n.camel}CreateSchema.safeParse(await context.req.json());
+  if (!parsed.success) return context.json({ error: "validation_failed", issues: parsed.error.issues }, 400);
+  const execution = context.get("execution");
+  return context.json({ ${n.camel}: await operation(execution, "resource.${n.kebab}.create", () => service(execution).create(parsed.data)) }, 201);
 });
 ${n.camel}Routes.get("${routePath}/:id", async (context) => {
-  const tenant = await organizationId(context.req.raw.headers, context.env);
-  if (!tenant) return context.json({ error: "An active organization is required" }, 401);
-  const [record] = await tenantDatabase(context.env, tenant).select().from(${n.camel}).where(and(eq(${n.camel}.id, context.req.param("id")), eq(${n.camel}.organizationId, tenant))).limit(1);
+  const execution = context.get("execution");
+  const record = await operation(execution, "resource.${n.kebab}.read", () => service(execution).get(context.req.param("id")));
   return record ? context.json({ ${n.camel}: record }) : context.json({ error: "Not found" }, 404);
 });
 ${n.camel}Routes.patch("${routePath}/:id", async (context) => {
-  const tenant = await organizationId(context.req.raw.headers, context.env);
-  if (!tenant) return context.json({ error: "An active organization is required" }, 401);
-  const input = ${n.camel}UpdateSchema.parse(await context.req.json());
-  const [updated] = await tenantDatabase(context.env, tenant).update(${n.camel}).set({ ...input, updatedAt: new Date() }).where(and(eq(${n.camel}.id, context.req.param("id")), eq(${n.camel}.organizationId, tenant))).returning();
+  const parsed = ${n.camel}UpdateSchema.safeParse(await context.req.json());
+  if (!parsed.success) return context.json({ error: "validation_failed", issues: parsed.error.issues }, 400);
+  const execution = context.get("execution");
+  const updated = await operation(execution, "resource.${n.kebab}.update", () => service(execution).update(context.req.param("id"), parsed.data));
   return updated ? context.json({ ${n.camel}: updated }) : context.json({ error: "Not found" }, 404);
 });
 ${n.camel}Routes.delete("${routePath}/:id", async (context) => {
-  const tenant = await organizationId(context.req.raw.headers, context.env);
-  if (!tenant) return context.json({ error: "An active organization is required" }, 401);
-  const removed = await tenantDatabase(context.env, tenant).delete(${n.camel}).where(and(eq(${n.camel}.id, context.req.param("id")), eq(${n.camel}.organizationId, tenant))).returning();
-  return removed.length ? context.body(null, 204) : context.json({ error: "Not found" }, 404);
+  const execution = context.get("execution");
+  return await operation(execution, "resource.${n.kebab}.delete", () => service(execution).remove(context.req.param("id"))) ? context.body(null, 204) : context.json({ error: "Not found" }, 404);
 });
-`, "utf8");
+`);
 
-  await writeFile(targets[6]!, `import { useForm } from "@tanstack/react-form";
-import { useQuery } from "@tanstack/react-query";
-import { ${n.camel}CreateSchema, type ${n.className} } from "@${project}/contracts";
+  await writeGenerated(targets[6]!, `import { ${n.camel}CreateSchema, ${n.camel}Schema, ${n.camel}UpdateSchema, type ${n.className} } from "@${project}/contracts";
+import { useForm } from "@tanstack/react-form";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+
+import { authClient } from "../auth-client.js";
 
 const apiOrigin = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.replace(/\\\/$/u, "") ?? "";
-export function ${n.className}Screen() {
-  const query = useQuery({ queryKey: ["${n.pluralKebab}"], queryFn: async () => (await fetch(\`${"${apiOrigin}"}${routePath}\`, { credentials: "include" })).json() as Promise<{ ${n.camel}s: ${n.className}[] }> });
-  const form = useForm({ defaultValues: { name: "" }, onSubmit: async ({ value }) => { const input = ${n.camel}CreateSchema.parse(value); await fetch(\`${"${apiOrigin}"}${routePath}\`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(input) }); await query.refetch(); } });
-  return <section className="card p-8"><h1 className="text-3xl font-semibold">${n.className}</h1><form className="mt-6 flex gap-3" onSubmit={(event) => { event.preventDefault(); void form.handleSubmit(); }}><form.Field name="name">{(field) => <input aria-label="Name" className="min-w-0 flex-1 rounded-xl border px-4 py-3" value={field.state.value} onChange={(event) => field.handleChange(event.target.value)} />}</form.Field><button className="button" type="submit">Create</button></form><ul className="mt-6 space-y-2">{query.data?.${n.camel}s.map((record) => <li className="rounded-xl border p-4" key={record.id}>{record.name}</li>)}</ul></section>;
+async function request<T>(organizationId: string, path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(\`${"${apiOrigin}"}\${path}\`, { ...init, credentials: "include", headers: { "content-type": "application/json", "x-trestle-tenant": organizationId, ...init?.headers } });
+  const body = response.status === 204 ? undefined : await response.json();
+  if (!response.ok) throw new Error((body as { message?: string; error?: string } | undefined)?.message ?? (body as { error?: string } | undefined)?.error ?? \`Request failed (\${response.status})\`);
+  return body as T;
 }
-`, "utf8");
 
-  await writeFile(targets[7]!, `import { describe, expect, it } from "vitest";
+export function ${n.className}Screen() {
+  const activeOrganization = authClient.useActiveOrganization();
+  const organizationId = activeOrganization.data?.id;
+  const queryClient = useQueryClient();
+  const key = ["${n.pluralKebab}", organizationId] as const;
+  const [editing, setEditing] = useState<${n.className} | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const query = useQuery({
+    queryKey: key,
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const result = await request<{ ${n.camel}s: unknown[] }>(organizationId!, "${routePath}");
+      return result.${n.camel}s.map((record) => ${n.camel}Schema.parse(record));
+    },
+  });
+  const create = useMutation({ mutationFn: async (input: unknown) => {
+    const result = await request<{ ${n.camel}: unknown }>(organizationId!, "${routePath}", { method: "POST", body: JSON.stringify(${n.camel}CreateSchema.parse(input)) });
+    return ${n.camel}Schema.parse(result.${n.camel});
+  }, onSuccess: async () => await queryClient.invalidateQueries({ queryKey: key }) });
+  const update = useMutation({ mutationFn: async (input: { id: string; name: string }) => {
+    const result = await request<{ ${n.camel}: unknown }>(organizationId!, \`${routePath}/\${input.id}\`, { method: "PATCH", body: JSON.stringify(${n.camel}UpdateSchema.parse({ name: input.name })) });
+    return ${n.camel}Schema.parse(result.${n.camel});
+  }, onSuccess: async () => { setEditing(null); await queryClient.invalidateQueries({ queryKey: key }); } });
+  const remove = useMutation({ mutationFn: async (id: string) => await request<void>(organizationId!, \`${routePath}/\${id}\`, { method: "DELETE" }), onSuccess: async () => await queryClient.invalidateQueries({ queryKey: key }) });
+  const form = useForm({ defaultValues: { name: "" }, onSubmit: async ({ value }) => { await create.mutateAsync(value); form.reset(); } });
+  const error = query.error ?? create.error ?? update.error ?? remove.error;
+  if (!organizationId) return <section className="card p-8"><h1 className="text-3xl font-semibold">${n.className}</h1><p className="mt-4 text-slate-600">Select an organization before managing ${n.pluralKebab}.</p></section>;
+  return <section className="card p-8">
+    <h1 className="text-3xl font-semibold">${n.className}</h1>
+    <form className="mt-6 flex gap-3" onSubmit={(event) => { event.preventDefault(); void form.handleSubmit(); }}>
+      <form.Field name="name">{(field) => <input aria-label="New ${n.className} name" className="min-w-0 flex-1 rounded-xl border px-4 py-3" value={field.state.value} onChange={(event) => field.handleChange(event.target.value)} />}</form.Field>
+      <button className="button" disabled={create.isPending} type="submit">{create.isPending ? "Creating…" : "Create"}</button>
+    </form>
+    {error && <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700" role="alert">{error.message}</p>}
+    {query.isPending ? <p className="mt-6 text-slate-600">Loading…</p> : query.data?.length === 0 ? <p className="mt-6 text-slate-600">No ${n.pluralKebab} yet.</p> : <ul className="mt-6 space-y-2">{query.data?.map((record) => <li className="rounded-xl border p-4" key={record.id}>{editing?.id === record.id ? <div className="flex gap-3"><input aria-label="Edit ${n.className} name" className="min-w-0 flex-1 rounded-lg border px-3 py-2" value={editingName} onChange={(event) => setEditingName(event.target.value)} /><button className="button" onClick={() => void update.mutateAsync({ id: record.id, name: editingName })}>Save</button><button className="text-sm font-semibold" onClick={() => setEditing(null)}>Cancel</button></div> : <div className="flex items-center justify-between gap-4"><span>{record.name}</span><span className="flex gap-3"><button className="text-sm font-semibold text-brand-500" onClick={() => { setEditing(record); setEditingName(record.name); }}>Edit</button><button className="text-sm font-semibold text-red-600" onClick={() => void remove.mutateAsync(record.id)}>Delete</button></span></div>}</li>)}</ul>}
+  </section>;
+}
+`);
+
+  await writeGenerated(targets[7]!, `import { describe, expect, it } from "vitest";
 import { ${n.camel}CreateSchema, ${n.camel}UpdateSchema } from "./${n.kebab}.js";
 
 describe("${n.className} contracts", () => {
@@ -221,9 +300,9 @@ describe("${n.className} contracts", () => {
     expect(() => ${n.camel}UpdateSchema.parse({})).toThrow();
   });
 });
-`, "utf8");
+`);
 
-  await writeFile(targets[8]!, `import postgres from "postgres";
+  await writeGenerated(targets[8]!, `import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
@@ -245,7 +324,7 @@ suite("${n.className} forced tenant isolation", () => {
     });
   });
 });
-`, "utf8");
+`);
 
   await appendExport(path.join(root, contractsPath, "src", "index.ts"), `export * from "./resources/${n.kebab}.js";`);
   await appendExport(path.join(root, domainPath, "src", "index.ts"), `export * from "./resources/${n.kebab}.js";`);
@@ -253,20 +332,29 @@ suite("${n.className} forced tenant isolation", () => {
   await appendExport(path.join(root, dbPath, "src", "index.ts"), `export * from "./${n.kebab}-schema.js";`);
   const workerIndex = path.join(root, workerPath, "src", "index.ts");
   let workerSource = await readFile(workerIndex, "utf8");
-  workerSource = `import { ${n.camel}Routes } from "./resources/${n.kebab}-routes.js";\n${workerSource}`;
-  workerSource = workerSource.replace("\nexport default app;", `\napp.route("/", ${n.camel}Routes);\n\nexport default app;`);
+  const workerImport = `import { ${n.camel}Routes } from "./resources/${n.kebab}-routes.js";`;
+  if (!workerSource.includes(workerImport)) workerSource = `${workerImport}\n${workerSource}`;
+  const workerRegistration = `app.route("/", ${n.camel}Routes);`;
+  if (!workerSource.includes(workerRegistration)) workerSource = workerSource.replace("\nexport default app;", `\n${workerRegistration}\n\nexport default app;`);
   await writeFile(workerIndex, workerSource, "utf8");
 
   const appIndex = path.join(root, appPath, "src", "main.tsx");
   let appSource = await readFile(appIndex, "utf8");
-  appSource = `import { ${n.className}Screen } from "./resources/${n.kebab}.js";\n${appSource}`;
-  appSource = appSource.replace(
+  const appImport = `import { ${n.className}Screen } from "./resources/${n.kebab}.js";`;
+  if (!appSource.includes(appImport)) appSource = `${appImport}\n${appSource}`;
+  const routeDeclaration = `const ${n.camel}Route = createRoute({ getParentRoute: () => rootRoute, path: "/${n.pluralKebab}", component: ${n.className}Screen });`;
+  if (!appSource.includes(routeDeclaration)) appSource = appSource.replace(
     "const routeTree = rootRoute.addChildren([",
-    `const ${n.camel}Route = createRoute({ getParentRoute: () => rootRoute, path: "/${n.pluralKebab}", component: ${n.className}Screen });\nconst routeTree = rootRoute.addChildren([${n.camel}Route, `,
+    `${routeDeclaration}\nconst routeTree = rootRoute.addChildren([${n.camel}Route, `,
+  );
+  const navigationLink = `<Link to="/${n.pluralKebab}" activeProps={{ className: "text-brand-500" }}>${n.className}</Link>`;
+  if (!appSource.includes(navigationLink)) appSource = appSource.replace(
+    "        {/* trestle:resource-links */}",
+    `        ${navigationLink}\n        {/* trestle:resource-links */}`,
   );
   await writeFile(appIndex, appSource, "utf8");
 
-  return targets.map((target) => path.relative(root, target));
+  return created;
 }
 
 export async function generateResourceMigration(root: string, manifest: ProjectManifest, resources: SetupResource[]): Promise<string[]> {
