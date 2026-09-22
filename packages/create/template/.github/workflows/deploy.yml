@@ -23,6 +23,14 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Verify staging configuration and Cloudflare access
+        run: |
+          pnpm exec trestle doctor --env staging
+          node scripts/cloudflare-preflight.mjs
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - run: pnpm typecheck && pnpm test && pnpm build
         env:
           APP_URL: "${{ vars.APP_URL }}"
@@ -110,6 +118,14 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Verify production configuration and Cloudflare access
+        run: |
+          pnpm exec trestle doctor --env production
+          node scripts/cloudflare-preflight.mjs
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - run: pnpm typecheck && pnpm test && pnpm build
         env:
           APP_URL: "${{ vars.APP_URL }}"
