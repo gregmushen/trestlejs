@@ -48,6 +48,8 @@ describe("preview lifecycle", () => {
     expect(preview.indexOf("neon-preflight.mjs")).toBeLessThan(preview.indexOf("neon-preview.mjs ensure"));
     expect(preview.indexOf("cloudflare-preflight.mjs")).toBeLessThan(preview.indexOf("trestle doctor --env preview"));
     expect(preview.indexOf("neon-preflight.mjs")).toBeLessThan(preview.indexOf("trestle doctor --env preview"));
+    expect(preview.indexOf("steps.cloudflare_access.outcome")).toBeLessThan(preview.indexOf("trestle doctor --env preview"));
+    expect(preview.indexOf("steps.neon_access.outcome")).toBeLessThan(preview.indexOf("trestle doctor --env preview"));
     expect(preview.indexOf("trestle doctor --env preview")).toBeLessThan(preview.indexOf("neon-preview.mjs ensure"));
     expect(deploy.indexOf("trestle doctor --env staging")).toBeLessThan(deploy.indexOf("Bootstrap staging runtime role"));
     expect(deploy.indexOf("trestle doctor --env production")).toBeLessThan(deploy.indexOf("Bootstrap production runtime role"));

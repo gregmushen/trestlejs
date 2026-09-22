@@ -27,18 +27,28 @@ jobs:
       - id: preview
         name: Derive isolated preview resources
         run: node scripts/preview-context.mjs --project __TRESTLE_PROJECT_NAME__ --pr "${{ github.event.pull_request.number }}" --workers-subdomain "${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}" --format github >> "$GITHUB_OUTPUT"
-      - name: Verify Cloudflare access before provisioning
+      - id: cloudflare_access
+        name: Verify Cloudflare access before provisioning
+        continue-on-error: true
         run: node scripts/cloudflare-preflight.mjs
         env:
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
-      - name: Verify Neon project access before provisioning
+      - id: neon_access
+        name: Verify Neon project access before provisioning
+        continue-on-error: true
         run: |
           export NEON_API_KEY="$(pnpm exec trestle secrets get NEON_API_KEY --env preview --raw)"
           node scripts/neon-preflight.mjs
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           NEON_PROJECT_ID: "${{ vars.NEON_PROJECT_ID }}"
+      - name: Require both provider access checks
+        run: |
+          if [[ "${{ steps.cloudflare_access.outcome }}" != "success" || "${{ steps.neon_access.outcome }}" != "success" ]]; then
+            echo "Cloudflare and Neon access must both pass before preview provisioning" >&2
+            exit 1
+          fi
       - name: Validate preview configuration
         run: pnpm exec trestle doctor --env preview
         env:

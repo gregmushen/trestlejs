@@ -127,6 +127,17 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.provider-preflight", status: "fail" }));
   });
 
+  it("requires both provider probes to finish even if Cloudflare access fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replace("- id: cloudflare_access\n        name: Verify Cloudflare access before provisioning\n        continue-on-error: true", "- id: cloudflare_access\n        name: Verify Cloudflare access before provisioning"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.provider-preflight", status: "fail" }));
+  });
+
   it("rejects a preview whose authentication URL is not bound to the isolated application", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
