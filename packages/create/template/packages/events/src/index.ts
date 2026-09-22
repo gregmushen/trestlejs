@@ -64,6 +64,43 @@ export class LocalWorkflowScheduler {
   private readonly jobs = new Map<string, WorkflowJob>();
   constructor(private readonly clock: OutboxClock = { now: () => new Date() }) {}
   schedule(message: EventEnvelope, runAt: Date): WorkflowJob { const existing = [...this.jobs.values()].find((job) => job.message.idempotencyKey === message.idempotencyKey); if (existing) return existing; const job = { id: message.id, runAt, message, status: "scheduled" as const, attempts: 0 }; this.jobs.set(job.id, job); return job; }
-  async runDue(handler: (message: EventEnvelope) => Promise<void>): Promise<number> { let completed = 0; for (const job of this.jobs.values()) { if (job.status !== "scheduled" || job.runAt > this.clock.now()) continue; job.status = "running"; job.attempts += 1; try { await handler(job.message); job.status = "succeeded"; completed += 1; } catch (error) { job.status = "failed"; job.lastError = error instanceof Error ? error.message : String(error); } } return completed; }
+  async runDue(handler: (message: EventEnvelope) => Promise<void>, options: { maxAttempts?: number; retryDelayMs?: number } = {}): Promise<number> { const maxAttempts = options.maxAttempts ?? 5; const retryDelayMs = options.retryDelayMs ?? 1_000; let completed = 0; for (const job of this.jobs.values()) { if (!["scheduled", "failed"].includes(job.status) || job.runAt > this.clock.now()) continue; job.status = "running"; job.attempts += 1; try { await handler(job.message); job.status = "succeeded"; completed += 1; } catch (error) { job.lastError = error instanceof Error ? error.message : String(error); if (job.attempts >= maxAttempts) job.status = "failed"; else { job.status = "scheduled"; job.runAt = new Date(this.clock.now().getTime() + 2 ** (job.attempts - 1) * retryDelayMs); } } } return completed; }
   list(): WorkflowJob[] { return [...this.jobs.values()].map((job) => ({ ...job, message: { ...job.message } })); }
+}
+
+export interface OutboxStore {
+  append(message: EventEnvelope): Promise<OutboxEntry>;
+  lease(limit?: number, leaseMs?: number): Promise<OutboxEntry[]>;
+  succeed(id: string): Promise<void>;
+  fail(id: string, error: unknown, maxAttempts?: number): Promise<void>;
+  listDead(): Promise<OutboxEntry[]>;
+  redrive(id: string): Promise<OutboxEntry>;
+}
+
+export interface QueuePublisher { send(message: EventEnvelope): Promise<void> }
+
+export async function dispatchOutbox(store: OutboxStore, publisher: QueuePublisher, options: { limit?: number; leaseMs?: number; maxAttempts?: number } = {}): Promise<{ sent: number; failed: number }> {
+  const leased = await store.lease(options.limit, options.leaseMs);
+  let sent = 0; let failed = 0;
+  for (const entry of leased) {
+    try { await publisher.send(entry.message); await store.succeed(entry.id); sent += 1; }
+    catch (error) { await store.fail(entry.id, error, options.maxAttempts); failed += 1; }
+  }
+  return { sent, failed };
+}
+
+export type CloudflareQueueBinding = { send(body: EventEnvelope, options?: { contentType?: "json" }): Promise<void> };
+export class CloudflareQueuePublisher implements QueuePublisher {
+  constructor(private readonly binding: CloudflareQueueBinding) {}
+  async send(message: EventEnvelope): Promise<void> { await this.binding.send(eventEnvelopeSchema.parse(message), { contentType: "json" }); }
+}
+
+export type QueueBatchMessage = { body: unknown; ack(): void; retry(options?: { delaySeconds?: number }): void };
+export async function processQueueBatch(messages: QueueBatchMessage[], handler: (message: EventEnvelope) => Promise<void>, retryDelaySeconds = 30): Promise<{ acknowledged: number; retried: number }> {
+  let acknowledged = 0; let retried = 0;
+  for (const item of messages) {
+    try { await handler(eventEnvelopeSchema.parse(item.body)); item.ack(); acknowledged += 1; }
+    catch { item.retry({ delaySeconds: retryDelaySeconds }); retried += 1; }
+  }
+  return { acknowledged, retried };
 }
