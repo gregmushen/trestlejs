@@ -1,5 +1,6 @@
 const token = process.env.CLOUDFLARE_API_TOKEN ?? "";
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID ?? "";
+const expectedWorkersSubdomain = process.env.CLOUDFLARE_WORKERS_SUBDOMAIN ?? "";
 const apiBase = (process.env.CLOUDFLARE_API_BASE ?? "https://api.cloudflare.com/client/v4").replace(/\/$/u, "");
 
 if (!token || !accountId) throw new Error("Cloudflare API token and account ID are required before deployment");
@@ -20,4 +21,10 @@ const verification = await check("/user/tokens/verify", "Cloudflare token verifi
 if (verification.result?.status !== "active") throw new Error("Cloudflare token is not active");
 await check(`/accounts/${accountId}/pages/projects?per_page=1`, "Cloudflare Pages account access");
 await check(`/accounts/${accountId}/workers/scripts`, "Cloudflare Workers account access");
+if (expectedWorkersSubdomain) {
+  const subdomain = await check(`/accounts/${accountId}/workers/subdomain`, "Cloudflare Workers subdomain access");
+  if (subdomain.result?.subdomain !== expectedWorkersSubdomain) {
+    throw new Error(`Cloudflare Workers subdomain does not match CLOUDFLARE_WORKERS_SUBDOMAIN; check the account ID and preview URL configuration`);
+  }
+}
 process.stdout.write("Cloudflare token, Pages, and Workers account access verified; credential values were not printed.\n");

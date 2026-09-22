@@ -64,6 +64,26 @@ test("Cloudflare preflight fails closed on missing Workers access", async () => 
   });
 });
 
+test("Cloudflare preflight rejects a preview URL on another account's Workers subdomain", async () => {
+  await withApi((request) => ({ body: { success: true, result: request.url === "/user/tokens/verify" ? { status: "active" } : { subdomain: "different-account" } } }), async (base, requests) => {
+    const result = await runScript("./cloudflare-preflight.mjs", {
+      CLOUDFLARE_API_BASE: base, CLOUDFLARE_API_TOKEN: "test-cloudflare-token", CLOUDFLARE_ACCOUNT_ID: accountId,
+      CLOUDFLARE_WORKERS_SUBDOMAIN: "expected-account",
+    });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /subdomain does not match CLOUDFLARE_WORKERS_SUBDOMAIN/u);
+    assert.deepEqual(requests.map(({ path }) => path).at(-1), `/accounts/${accountId}/workers/subdomain`);
+    assert.doesNotMatch(result.stderr, /test-cloudflare-token/u);
+  });
+  await withApi((request) => ({ body: { success: true, result: request.url === "/user/tokens/verify" ? { status: "active" } : { subdomain: "expected-account" } } }), async (base) => {
+    const result = await runScript("./cloudflare-preflight.mjs", {
+      CLOUDFLARE_API_BASE: base, CLOUDFLARE_API_TOKEN: "test-cloudflare-token", CLOUDFLARE_ACCOUNT_ID: accountId,
+      CLOUDFLARE_WORKERS_SUBDOMAIN: "expected-account",
+    });
+    assert.equal(result.code, 0, result.stderr);
+  });
+});
+
 test("Neon preflight verifies access to the exact project without printing credentials", async () => {
   await withApi(() => ({ body: { project: { id: "example-project" } } }), async (base, requests) => {
     const result = await runScript("./neon-preflight.mjs", {
