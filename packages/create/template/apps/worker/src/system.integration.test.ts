@@ -1,4 +1,4 @@
-import { createDatabase, organization, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createDatabase, organization, outboxMessage, user } from "@__TRESTLE_PROJECT_NAME__/db";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -24,6 +24,7 @@ suite("local product path", () => {
     };
     const database = createDatabase(databaseUrl!, "postgres-js");
     let organizationId: string | undefined;
+    let articleId: string | undefined;
     clearCapturedEmails();
     try {
       const signUp = await app.request("http://localhost:8787/api/auth/sign-up/email", {
@@ -67,6 +68,10 @@ suite("local product path", () => {
         }, environment);
         expect(createdArticle.status).toBe(201);
         const { article } = await createdArticle.json() as { article: { id: string } };
+        articleId = article.id;
+        const [outbox] = await database.select().from(outboxMessage).where(eq(outboxMessage.resourceId, article.id)).limit(1);
+        expect(outbox).toMatchObject({ eventName: "resource.article.created", resourceType: "article", resourceId: article.id, status: "pending", payload: { organizationId, resourceId: article.id } });
+        expect(outbox?.correlationId).toBeTruthy();
         const listed = await app.request("http://localhost:8787/api/articles", { headers }, environment);
         expect(listed.status).toBe(200);
         expect((await listed.json() as { articles: Array<{ id: string }> }).articles.some((item) => item.id === article.id)).toBe(true);
@@ -85,6 +90,7 @@ suite("local product path", () => {
       }, environment);
       expect(unjoined.status).toBe(404);
     } finally {
+      if (articleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, articleId));
       if (organizationId && process.env.TRESTLE_SYSTEM_TEST_ARTICLES === "1") await database.execute(sql`delete from article where organization_id = ${organizationId}`);
       if (organizationId) await database.delete(organization).where(eq(organization.id, organizationId));
       await database.delete(user).where(eq(user.email, email));
