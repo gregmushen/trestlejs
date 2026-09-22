@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -33,6 +33,19 @@ describe("generated CI deployment contract", () => {
     const report = await validateCi(root);
     expect(report.valid).toBe(false);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.workflow.ci.yml.actions-pinned", status: "fail", evidence: "actions/checkout@v4" }));
+  });
+
+  it("rejects runtime secrets declared only at the top level", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await mkdir(path.join(root, "apps", "worker"), { recursive: true });
+    await cp(path.join(templateRoot, "apps", "worker", "wrangler.jsonc"), path.join(root, "apps", "worker", "wrangler.jsonc"), { recursive: true });
+    const configPath = path.join(root, "apps", "worker", "wrangler.jsonc");
+    const source = await readFile(configPath, "utf8");
+    await writeFile(configPath, source.replace('"name": "__TRESTLE_PROJECT_NAME__-worker-preview",\n      "secrets": { "required": ["DATABASE_URL", "DATABASE_DRIVER", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"] },', '"name": "__TRESTLE_PROJECT_NAME__-worker-preview",'));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.worker.preview.secrets", status: "fail" }));
   });
 
   it("rejects a workflow that downloads whatever CLI is currently latest", async () => {
