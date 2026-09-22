@@ -201,6 +201,8 @@ pnpm exec trestle email list
 pnpm exec trestle email show <id>
 pnpm exec trestle email open <id>
 pnpm exec trestle email clear
+pnpm exec trestle email status --env staging
+pnpm exec trestle email doctor --env staging
 ```
 
 Application code depends on `EmailService`, templates are application-owned
@@ -216,6 +218,7 @@ uses Stripe test mode; production uses live mode.
 ```bash
 pnpm exec trestle payments stripe status
 pnpm exec trestle payments stripe doctor
+pnpm exec trestle payments stripe sync --env staging
 pnpm exec trestle payments stripe listen
 pnpm exec trestle payments stripe test
 ```
@@ -272,6 +275,7 @@ trestle plan ...                    validate and inspect setup intent
 trestle apply <plan> --yes          apply reviewed supported mutations
 trestle resources                   inspect declared domain resources
 trestle routes                      inspect API routes and auth posture
+trestle logs --env <env>            tail redacted structured Worker logs
 ```
 
 Run `pnpm exec trestle --help` and the relevant subcommand help for the exact

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "currency": "usd",
+  "plans": {
+    "starter": { "version": 1, "name": "Starter", "unitAmount": 1900, "interval": "month" },
+    "pro": { "version": 1, "name": "Pro", "unitAmount": 4900, "interval": "month" },
+    "business": { "version": 1, "name": "Business", "unitAmount": 9900, "interval": "month" }
+  }
+}

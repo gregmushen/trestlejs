@@ -16,10 +16,12 @@ describe("execution context", () => {
     const context = await resolveExecutionContext(new Headers({ "x-correlation-id": "corr-1" }), environment, {
       getSession: async () => session,
       findMembership: async (userId, organizationId) => { seen.push(userId, organizationId); return { role: "owner" }; },
+      findSubscription: async () => ({ organizationId: "org-a", provider: "local", plan: "pro", planVersion: 1, status: "active", cancelAtPeriodEnd: false, entitlements: ["workflows.advanced"] }),
     });
     expect(seen).toEqual(["user-1", "org-a"]);
     expect(context.tenant).toEqual({ organizationId: "org-a", role: "owner" });
-    expect(context.permissions.has("organization:manage")).toBe(true);
+    expect(context.authority.permissions.has("organization:manage")).toBe(true);
+    expect(context.entitlements.has("workflows.advanced")).toBe(true);
     expect(context.correlation.correlationId).toBe("corr-1");
   });
 
@@ -27,6 +29,7 @@ describe("execution context", () => {
     await expect(resolveExecutionContext(new Headers(), environment, {
       getSession: async () => session,
       findMembership: async () => null,
+      findSubscription: async () => null,
     })).rejects.toMatchObject<Partial<ExecutionContextError>>({ code: "not_found", status: 404 });
   });
 
@@ -35,6 +38,7 @@ describe("execution context", () => {
     await expect(resolveExecutionContext(new Headers({ "x-trestle-tenant": "org-b" }), environment, {
       getSession: async () => session,
       findMembership: async (_userId, organizationId) => { selected.push(organizationId); return null; },
+      findSubscription: async () => null,
     })).rejects.toMatchObject({ code: "not_found" });
     expect(selected).toEqual(["org-b"]);
   });

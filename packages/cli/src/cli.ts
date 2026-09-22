@@ -14,6 +14,7 @@ import { projectContext } from "./context.js";
 import { formatDoctorHuman, formatDoctorJson, runDoctor } from "./doctor.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
 import { localEnvironment } from "./local.js";
+import { buildLogTailArguments } from "./logs.js";
 import { clearLocalEmail, formatEmail, formatEmailList, getLocalEmail, listLocalEmail, openLocalEmail } from "./email.js";
 import { generateEmail } from "./generate-email.js";
 import { generateResource, generateResourceMigration } from "./generate-resource.js";
@@ -21,6 +22,9 @@ import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment
 import { inspectResources, inspectRoutes } from "./inspect.js";
 import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readApplyState, readSetupPlan } from "./plan.js";
 import { runCommand, runDevelopment } from "./processes.js";
+import { inspectResendSender } from "./resend-status.js";
+import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
+import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import {
   credentialsPaths,
   editSecrets,
@@ -379,6 +383,37 @@ export function createProgram(runtime: CliRuntime): Command {
       await clearLocalEmail(options.apiUrl);
       runtime.stdout("Cleared locally captured email\n");
     });
+  email.command("status")
+    .option("--env <environment>", "email environment", environment, "local")
+    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      const workerPath = context.manifest.apps.worker ?? "apps/worker";
+      const config = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
+      const block = wranglerEnvironmentBlock(config, options.env);
+      const mode = options.env === "local" ? "local" : "resend";
+      const stagingProtected = options.env !== "staging" || /"EMAIL_STAGING_REDIRECT"\s*:\s*"(?!CHANGE_ME)[^"]+"/u.test(block);
+      runtime.stdout(["Email", `Environment:        ${options.env}`, `Adapter:            ${mode}`, `API key:            ${values.RESEND_API_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.RESEND_WEBHOOK_SECRET ? "present" : mode === "local" ? "not required" : "missing"}`, `Sender:             ${/"EMAIL_FROM"\s*:\s*"(?!CHANGE_ME)[^"]+"/u.test(block) ? "configured" : mode === "local" ? "local default" : "missing"}`, `Staging protection: ${stagingProtected ? "configured" : "missing"}`, ""].join("\n"));
+    });
+  email.command("doctor")
+    .option("--env <environment>", "email environment", environment, "local")
+    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
+      if (options.env === "local") { runtime.stdout("✓ Local email capture requires no provider account\n"); return; }
+      const context = await projectContext(command, runtime);
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      const workerPath = context.manifest.apps.worker ?? "apps/worker";
+      const config = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
+      const block = wranglerEnvironmentBlock(config, options.env);
+      const senderValue = wranglerStringVariable(block, "EMAIL_FROM");
+      const sender = senderValue && senderValue !== "CHANGE_ME" ? senderValue : undefined;
+      const problems = [!values.RESEND_API_KEY?.startsWith("re_") ? "RESEND_API_KEY must start with re_" : "", !values.RESEND_WEBHOOK_SECRET ? "RESEND_WEBHOOK_SECRET is missing" : "", !sender ? "EMAIL_FROM is not configured" : "", options.env === "staging" && !/"EMAIL_STAGING_REDIRECT"\s*:\s*"(?!CHANGE_ME)[^"]+"/u.test(block) ? "staging recipient redirect is not configured" : ""].filter(Boolean);
+      if (values.RESEND_API_KEY?.startsWith("re_") && sender) {
+        try { const provider = await inspectResendSender(values.RESEND_API_KEY, sender); if (!provider.verified) problems.push(`Resend sender domain ${provider.domain} is ${provider.providerStatus ?? "not registered"}`); }
+        catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
+      }
+      runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Resend ${options.env} lifecycle and delivery safety are configured\n`);
+      if (problems.length) throw new CliFailure("email doctor found failures");
+    });
 
   const queue = program.command("queue").description("operate asynchronous delivery queues");
   const dlq = queue.command("dlq").description("inspect dead-lettered outbox messages");
@@ -444,10 +479,10 @@ export function createProgram(runtime: CliRuntime): Command {
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
       const workerPath = context.manifest.apps.worker ?? "apps/worker";
       const routeSource = await readFile(path.join(context.root, workerPath, "src/index.ts"), "utf8");
-      const mode = options.env === "production" ? "live" : options.env === "staging" ? "test" : "local";
-      const planSource = await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "src/plans.ts"), "utf8");
-      const plans = [...planSource.matchAll(/^\s{2}([a-z][a-z0-9]*):/gmu)].length;
-      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${plans}`, ""].join("\n"));
+      const workerConfig = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
+      const mode = wranglerStringVariable(wranglerEnvironmentBlock(workerConfig, options.env), "STRIPE_MODE") ?? (options.env === "local" ? "local" : "missing");
+      const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json"), "utf8")) as unknown);
+      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${Object.keys(catalog.plans).length}`, ""].join("\n"));
     });
   stripe.command("doctor")
     .option("--env <environment>", "billing environment", environment, "local")
@@ -463,13 +498,18 @@ export function createProgram(runtime: CliRuntime): Command {
   stripe.command("sync")
     .requiredOption("--env <environment>", "remote environment", environment)
     .option("--apply", "create missing products/prices after reviewing the plan")
-    .action(async (options: { env: ReturnType<typeof environment>; apply?: boolean }, command: Command) => {
+    .option("--yes", "confirm production provider mutation")
+    .action(async (options: { env: ReturnType<typeof environment>; apply?: boolean; yes?: boolean }, command: Command) => {
       if (options.env === "local") throw new CliFailure("Stripe sync requires staging or production");
+      if (options.env === "production" && options.apply && !options.yes) throw new CliFailure("production Stripe sync requires --apply --yes after review");
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
       if (!values.STRIPE_SECRET_KEY) throw new CliFailure(`STRIPE_SECRET_KEY is missing for ${options.env}`);
-      runtime.stdout(`Stripe sync plan (${options.env})\nunknown  provider products and prices require reconciliation\n${options.apply ? "blocked  automatic creation is disabled until price currency and amount are declared\n" : "Review only; rerun with --apply after resolving blocked declarations.\n"}`);
-      if (options.apply) throw new CliFailure("Stripe sync is blocked by incomplete price declarations");
+      const catalogPath = path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json");
+      const catalog = validateStripeCatalog(JSON.parse(await readFile(catalogPath, "utf8")) as unknown);
+      const report = await reconcileStripeCatalog(values.STRIPE_SECRET_KEY, catalog, Boolean(options.apply));
+      runtime.stdout([`Stripe sync plan (${options.env})`, ...report.items.map((item) => `${item.classification.padEnd(16)} ${item.plan}@${catalog.plans[item.plan]?.version ?? "?"}${item.reason ? ` — ${item.reason}` : ""}`), ...(Object.keys(report.prices).length ? [`STRIPE_PRICES=${JSON.stringify(report.prices)}`] : []), options.apply ? "Provider reconciliation complete." : "Review only; rerun with --apply to create missing resources.", ""].join("\n"));
+      if (report.items.some((item) => item.classification === "blocked")) throw new CliFailure("Stripe sync found blocked immutable drift");
     });
   stripe.command("listen").action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("stripe", ["listen", "--forward-to", "localhost:8787/webhooks/stripe"], { cwd: context.root, env: process.env }); });
   stripe.command("webhook").action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("stripe", ["trigger", "customer.subscription.updated"], { cwd: context.root, env: process.env }); });
@@ -477,12 +517,37 @@ export function createProgram(runtime: CliRuntime): Command {
     .requiredOption("--organization <id>", "local organization ID")
     .option("--plan <plan>", "plan to activate", "pro")
     .option("--api-url <url>", "local Worker URL", "http://localhost:8787")
-    .action(async (options: { organization: string; plan: string; apiUrl: string }) => {
-      const response = await fetch(`${options.apiUrl.replace(/\/$/u, "")}/api/dev/billing`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "activate", organizationId: options.organization, plan: options.plan }) });
+    .option("--cookie-stdin", "read the local authenticated session Cookie header from standard input")
+    .action(async (options: { organization: string; plan: string; apiUrl: string; cookieStdin?: boolean }) => {
+      if (!options.cookieStdin || !runtime.stdin) throw new CliFailure("local billing seed requires --cookie-stdin so tenant membership is revalidated");
+      const cookie = (await runtime.stdin()).trim();
+      if (!cookie) throw new CliFailure("local billing seed received an empty session cookie");
+      const response = await fetch(`${options.apiUrl.replace(/\/$/u, "")}/api/dev/billing`, { method: "POST", headers: { "content-type": "application/json", cookie, "x-trestle-tenant": options.organization }, body: JSON.stringify({ action: "activate", plan: options.plan }) });
       if (!response.ok) throw new CliFailure(`local billing seed failed with HTTP ${response.status}`);
       runtime.stdout(`${JSON.stringify(await response.json(), null, 2)}\n`);
     });
   stripe.command("test").action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/billing`, "test"], { cwd: context.root, env: process.env }); });
+
+  program.command("logs")
+    .description("tail redacted structured Worker logs")
+    .requiredOption("--env <environment>", "remote environment", environment)
+    .option("--worker-name <name>", "override the Worker target for an isolated preview")
+    .option("--format <format>", "pretty or json", "pretty")
+    .option("--status <status>", "ok, error, or canceled")
+    .option("--search <text>", "search semantic event names and safe metadata")
+    .option("--sampling-rate <rate>", "sample between 0 and 1", Number)
+    .option("--yes", "confirm production log access")
+    .action(async (options: { env: ReturnType<typeof environment>; workerName?: string; format: string; status?: string; search?: string; samplingRate?: number; yes?: boolean }, command: Command) => {
+      if (options.env === "production" && !options.yes) throw new CliFailure("production log access requires --yes and is recorded by Cloudflare");
+      if (options.workerName && options.env !== "preview") throw new CliFailure("worker name overrides are only allowed for isolated previews");
+      if (options.format !== "pretty" && options.format !== "json") throw new CliFailure("log format must be pretty or json");
+      if (options.status && !["ok", "error", "canceled"].includes(options.status)) throw new CliFailure("log status must be ok, error, or canceled");
+      const context = await projectContext(command, runtime);
+      let arguments_: string[];
+      try { arguments_ = buildLogTailArguments({ environment: options.env, ...(options.workerName ? { workerName: options.workerName } : {}), format: options.format as "pretty" | "json", ...(options.status ? { status: options.status as "ok" | "error" | "canceled" } : {}), ...(options.search ? { search: options.search } : {}), ...(options.samplingRate !== undefined ? { samplingRate: options.samplingRate } : {}) }); }
+      catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
+      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", ...arguments_], { cwd: context.root, env: process.env });
+    });
 
   program
     .command("dev")

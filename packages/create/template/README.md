@@ -40,6 +40,10 @@ Worker is running. Staging and production use the Resend adapter with
 `EMAIL_FROM`, `EMAIL_REPLY_TO`, and the staging redirect recipient are typed
 non-secret deployment configuration.
 
+Verify provider lifecycle and staging safety with `pnpm exec trestle email
+doctor --env staging`. The generated protected provider workflow performs a
+read-only Resend-domain and Stripe-test-account check when manually dispatched.
+
 Cloud deployments default to Neon's Worker-native HTTP driver. Local development
 sets `DATABASE_DRIVER=postgres-js` in encrypted credentials so the same app can
 use the Compose PostgreSQL instance directly. No persistent `.dev.vars` file is
@@ -87,4 +91,5 @@ Validate the checked-in delivery contract locally with:
 ```bash
 pnpm exec trestle ci validate
 pnpm exec trestle env status --env staging
+pnpm exec trestle logs --env staging --status error
 ```

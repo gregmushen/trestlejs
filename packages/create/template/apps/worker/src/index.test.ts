@@ -38,6 +38,14 @@ describe("worker routes", () => {
     await expect(response.json()).resolves.toMatchObject({ status: "ok" });
   });
 
+  it("reports provider capability readiness without returning credential values", async () => {
+    const response = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "staging" as const, EMAIL_DELIVERY_MODE: "resend" as const, RESEND_API_KEY: "re_sensitive", EMAIL_FROM: "sender@example.test", EMAIL_STAGING_REDIRECT: "capture@example.test", STRIPE_MODE: "test" as const, STRIPE_SECRET_KEY: "sk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive", STRIPE_PRICES: "{\"pro\":\"price_1\"}" });
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('"configured":true');
+    expect(body).not.toContain("sensitive");
+  });
+
   it("rejects an anonymous protected request", async () => {
     const response = await app.request("/api/me", undefined, environment);
     expect(response.status).toBe(401);

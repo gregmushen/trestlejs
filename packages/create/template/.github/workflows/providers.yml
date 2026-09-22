@@ -1,0 +1,26 @@
+name: Protected Provider Verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  staging:
+    environment: staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Verify provider credentials and staging safety
+        run: pnpm --filter @__TRESTLE_PROJECT_NAME__/integrations exec vitest run src/provider.integration.test.ts
+        env:
+          TRESTLE_PROVIDER_INTEGRATION_TESTS: "1"
+          RESEND_API_KEY: "${{ secrets.RESEND_API_KEY }}"
+          EMAIL_STAGING_REDIRECT: "${{ vars.EMAIL_STAGING_REDIRECT }}"
+          STRIPE_SECRET_KEY: "${{ secrets.STRIPE_SECRET_KEY }}"

@@ -18,7 +18,7 @@ describe("generated CI deployment contract", () => {
     const report = await validateCi(templateRoot);
     expect(report.valid).toBe(true);
     const pinned = report.checks.filter(({ id }) => id.endsWith("actions-pinned"));
-    expect(pinned).toHaveLength(5);
+    expect(pinned).toHaveLength(6);
     expect(pinned.every(({ status }) => status === "pass")).toBe(true);
     expect(report.checks.filter(({ id }) => id.endsWith("project-cli")).every(({ status }) => status === "pass")).toBe(true);
   });

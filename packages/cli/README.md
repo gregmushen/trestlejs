@@ -24,6 +24,9 @@ trestle generate resource Article --tenant --crud
 trestle resources --json
 trestle routes --json
 trestle doctor
+trestle email doctor --env staging
+trestle payments stripe sync --env staging
+trestle logs --env staging --status error
 ```
 
 See the [TrestleJS repository](https://github.com/gregmushen/trestlejs) for

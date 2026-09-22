@@ -1,8 +1,10 @@
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { createLogger, type ExecutionContext } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createAccessController, createLogger, createMetrics, type EntitlementDecision, type Entitlements, type ExecutionContext } from "@__TRESTLE_PROJECT_NAME__/context";
 import { createDatabase, createTenantDatabase, member } from "@__TRESTLE_PROJECT_NAME__/db";
+import type { SubscriptionSummary } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createMiddleware } from "hono/factory";
+import { createServices, type AppServices } from "./services.js";
 
 type AuthenticatedSession = {
   user: { id: string; email: string };
@@ -13,10 +15,10 @@ type Membership = { role: string };
 
 export type AppExecutionContext = ExecutionContext<
   ReturnType<typeof createTenantDatabase>,
-  Record<string, never>
+  AppServices
 >;
 
-export type AppVariables = { execution: AppExecutionContext };
+export type AppVariables = { execution: AppExecutionContext; correlationId: string; requestStartedAt: number };
 
 export class ExecutionContextError extends Error {
   constructor(readonly code: "unauthorized" | "tenant_required" | "not_found", message: string, readonly status: 401 | 400 | 404) {
@@ -28,6 +30,7 @@ export class ExecutionContextError extends Error {
 type ContextDependencies = {
   getSession: (headers: Headers, environment: AuthEnvironment) => Promise<AuthenticatedSession | null>;
   findMembership: (userId: string, organizationId: string, environment: AuthEnvironment) => Promise<Membership | null>;
+  findSubscription: (organizationId: string, environment: AuthEnvironment) => Promise<SubscriptionSummary | null>;
 };
 
 const defaults: ContextDependencies = {
@@ -40,6 +43,7 @@ const defaults: ContextDependencies = {
       .limit(1);
     return record ?? null;
   },
+  findSubscription: async (organizationId, environment) => await createServices(environment).billing.getSubscription(organizationId),
 };
 
 function permissionsFor(role: string): ReadonlySet<string> {
@@ -57,6 +61,7 @@ export async function resolveExecutionContext(
   headers: Headers,
   environment: AuthEnvironment,
   dependencies: ContextDependencies = defaults,
+  suppliedCorrelationId?: string,
 ): Promise<AppExecutionContext> {
   const session = await dependencies.getSession(headers, environment);
   if (!session) throw new ExecutionContextError("unauthorized", "Authentication is required", 401);
@@ -64,25 +69,35 @@ export async function resolveExecutionContext(
   if (!organizationId) throw new ExecutionContextError("tenant_required", "An organization must be selected", 400);
   const membership = await dependencies.findMembership(session.user.id, organizationId, environment);
   if (!membership) throw new ExecutionContextError("not_found", "Organization not found", 404);
-  const correlation = { correlationId: correlationId(headers) };
+  const subscription = await dependencies.findSubscription(organizationId, environment);
+  const decisions = new Map((subscription?.effectiveEntitlements ?? subscription?.entitlements.map((code) => ({ code, enabled: true, source: "plan" as const, inheritedFrom: `${subscription.plan}@${subscription.planVersion}`, effectiveAt: new Date() })) ?? []).map((decision) => [decision.code, decision]));
+  const entitlements: Entitlements = {
+    resolve: (code): EntitlementDecision => decisions.get(code) ?? { code, enabled: false, source: "default", effectiveAt: new Date(0) },
+    has: (code) => decisions.get(code)?.enabled ?? false,
+  };
+  const authority = { plane: "organization" as const, permissions: permissionsFor(membership.role) };
+  const correlation = { correlationId: suppliedCorrelationId ?? correlationId(headers) };
   const log = createLogger({ correlationId: correlation.correlationId, userId: session.user.id, organizationId });
   log.info("auth.context.resolved", { role: membership.role });
   return {
     principal: { id: session.user.id, kind: "user", email: session.user.email },
     tenant: { organizationId, role: membership.role },
-    permissions: permissionsFor(membership.role),
+    authority,
+    entitlements,
+    access: createAccessController(authority, entitlements),
     correlation,
     data: createTenantDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER, organizationId),
     log,
+    metrics: createMetrics(log),
     clock: { now: () => new Date() },
-    features: { enabled: () => false },
-    services: {},
+    features: { enabled: (name) => entitlements.has(name) },
+    services: createServices(environment),
   };
 }
 
 export const requireExecutionContext = createMiddleware<{ Bindings: AuthEnvironment; Variables: AppVariables }>(async (context, next) => {
   try {
-    const execution = await resolveExecutionContext(context.req.raw.headers, context.env);
+    const execution = await resolveExecutionContext(context.req.raw.headers, context.env, defaults, context.get("correlationId"));
     context.set("execution", execution);
     context.header("x-correlation-id", execution.correlation.correlationId);
     await next();

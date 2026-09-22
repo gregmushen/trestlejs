@@ -45,6 +45,7 @@ jobs:
       - run: pnpm test
         env:
           TRESTLE_RLS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_test
+          TRESTLE_PROVIDER_INTEGRATION_TESTS: "0"
       - run: pnpm build
       - name: Validate Wrangler configuration
         run: pnpm --filter @__TRESTLE_PROJECT_NAME__/worker exec wrangler deploy --dry-run
