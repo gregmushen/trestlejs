@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +29,10 @@ try {
   manifest.pnpm = { ...(manifest.pnpm ?? {}), overrides: { ...(manifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await run("pnpm", ["install"], project);
+  const upgradePlan = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "plan", "--json"], { cwd: project, encoding: "utf8" }));
+  for (const operation of upgradePlan.data.operations) {
+    if (operation.classification === "manual-review") throw new Error(`Generated project requires manual upgrade review: ${operation.id}`);
+  }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Author"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article", "--field", "summary:text?", "published:boolean?", "authorId:relation?:Author:set-null"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], project);
