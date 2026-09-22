@@ -125,6 +125,7 @@ jobs:
           command: pages deploy dist --project-name ${{ steps.preview.outputs.site_project }} --branch main
       - run: node scripts/smoke.mjs
         env:
+          TRESTLE_DEPLOY_ENV: preview
           SITE_URL: "${{ steps.preview.outputs.site_url }}"
           APP_URL: "${{ steps.preview.outputs.app_url }}"
           API_URL: "${{ steps.preview.outputs.api_url }}"

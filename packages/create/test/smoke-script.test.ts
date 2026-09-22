@@ -22,13 +22,18 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map(async (server) => await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))));
 });
 
-async function surfaces(webhookStatus = 400): Promise<{ apiURL: string; appURL: string; siteURL: string }> {
+async function surfaces(webhookStatus = 400, operational = { status: "ok", environment: "staging", capabilities: { database: { configured: true }, email: { mode: "resend", configured: true, stagingProtected: true }, billing: { mode: "test", configured: true } } }): Promise<{ apiURL: string; appURL: string; siteURL: string }> {
   let appURL = "";
   const apiURL = await listen((request, response) => {
     response.setHeader("access-control-allow-origin", appURL);
     if (request.url === "/api/health") {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ status: "ok", service: "smoke-worker" }));
+      return;
+    }
+    if (request.url === "/api/health/operational") {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify(operational));
       return;
     }
     if (request.url === "/api/me" || request.url === "/api/billing/subscription") {
@@ -58,12 +63,28 @@ async function surfaces(webhookStatus = 400): Promise<{ apiURL: string; appURL: 
 describe("deployed smoke gate", () => {
   it("checks health, CORS, anonymous authorization, webhook configuration, app routes, and site handoff", async () => {
     const urls = await surfaces();
-    const result = await execute(process.execPath, [smokeScript], { env: { ...process.env, API_URL: urls.apiURL, APP_URL: urls.appURL, SITE_URL: urls.siteURL } });
+    const result = await execute(process.execPath, [smokeScript], { env: { ...process.env, TRESTLE_DEPLOY_ENV: "staging", API_URL: urls.apiURL, APP_URL: urls.appURL, SITE_URL: urls.siteURL } });
     expect(result.stdout).toContain("Smoke passed");
   });
 
   it("fails when provider webhooks are not configured to reject unsigned traffic", async () => {
     const urls = await surfaces(503);
-    await expect(execute(process.execPath, [smokeScript], { env: { ...process.env, API_URL: urls.apiURL, APP_URL: urls.appURL, SITE_URL: urls.siteURL } })).rejects.toMatchObject({ stderr: expect.stringContaining("Unsigned Resend webhook was not rejected as configured") });
+    await expect(execute(process.execPath, [smokeScript], { env: { ...process.env, TRESTLE_DEPLOY_ENV: "staging", API_URL: urls.apiURL, APP_URL: urls.appURL, SITE_URL: urls.siteURL } })).rejects.toMatchObject({ stderr: expect.stringContaining("Unsigned Resend webhook was not rejected as configured") });
+  });
+
+  it("fails when the deployed Worker reports the wrong environment or provider mode", async () => {
+    const urls = await surfaces(400, { status: "ok", environment: "preview", capabilities: { database: { configured: true }, email: { mode: "resend", configured: true, stagingProtected: true }, billing: { mode: "test", configured: true } } });
+    await expect(execute(process.execPath, [smokeScript], { env: { ...process.env, TRESTLE_DEPLOY_ENV: "staging", API_URL: urls.apiURL, APP_URL: urls.appURL, SITE_URL: urls.siteURL } })).rejects.toMatchObject({ stderr: expect.stringContaining("operational environment") });
+  });
+
+  it.each([
+    { field: "database", override: { database: { configured: false } }, expected: "database binding" },
+    { field: "email", override: { email: { mode: "resend", configured: false, stagingProtected: true } }, expected: "Resend email" },
+    { field: "recipient", override: { email: { mode: "resend", configured: true, stagingProtected: false } }, expected: "recipient protection" },
+    { field: "billing", override: { billing: { mode: "live", configured: true } }, expected: "Stripe test" },
+  ])("fails when operational $field is unsafe", async ({ override, expected }) => {
+    const capabilities = { database: { configured: true }, email: { mode: "resend", configured: true, stagingProtected: true }, billing: { mode: "test", configured: true }, ...override };
+    const urls = await surfaces(400, { status: "ok", environment: "staging", capabilities });
+    await expect(execute(process.execPath, [smokeScript], { env: { ...process.env, TRESTLE_DEPLOY_ENV: "staging", API_URL: urls.apiURL, APP_URL: urls.appURL, SITE_URL: urls.siteURL } })).rejects.toMatchObject({ stderr: expect.stringContaining(expected) });
   });
 });

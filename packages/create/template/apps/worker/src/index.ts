@@ -170,7 +170,7 @@ app.get("/api/health/operational", (context) => context.json({
   environment: context.env.APP_ENV ?? "local",
   capabilities: {
     database: { configured: Boolean(context.env.DATABASE_URL) },
-    email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && context.env.EMAIL_FROM), stagingProtected: context.env.APP_ENV !== "staging" || Boolean(context.env.EMAIL_STAGING_REDIRECT) },
+    email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && context.env.EMAIL_FROM), stagingProtected: !["preview", "staging"].includes(context.env.APP_ENV ?? "local") || Boolean(context.env.EMAIL_STAGING_REDIRECT) },
     billing: { mode: context.env.STRIPE_MODE ?? "local", configured: (context.env.STRIPE_MODE ?? "local") === "local" || Boolean(context.env.STRIPE_SECRET_KEY && context.env.STRIPE_WEBHOOK_SECRET && context.env.STRIPE_PRICES), plans: Object.keys(plans).length },
   },
 }));

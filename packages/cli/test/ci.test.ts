@@ -46,6 +46,19 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.system.local", status: "fail" }));
   });
 
+  it("rejects deployed smoke tests without an explicit environment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const previewPath = path.join(root, ".github", "workflows", "preview.yml");
+    await writeFile(previewPath, (await readFile(previewPath, "utf8")).replace("TRESTLE_DEPLOY_ENV: preview", "TRESTLE_DEPLOY_ENV: staging"));
+    const deployPath = path.join(root, ".github", "workflows", "deploy.yml");
+    await writeFile(deployPath, (await readFile(deployPath, "utf8")).replace("TRESTLE_DEPLOY_ENV: production", "TRESTLE_DEPLOY_ENV: staging"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.operational-smoke", status: "fail" }));
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.operational-smoke", status: "fail" }));
+  });
+
   it("rejects runtime secrets declared only at the top level", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
