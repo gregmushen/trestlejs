@@ -39,6 +39,18 @@ function localEmailEnabled(environment: AuthEnvironment): boolean {
     && (!environment.EMAIL_DELIVERY_MODE || environment.EMAIL_DELIVERY_MODE === "capture" || environment.EMAIL_DELIVERY_MODE === "local");
 }
 
+function configuredValue(value: string | undefined): boolean {
+  return Boolean(value?.trim() && value.trim() !== "CHANGE_ME");
+}
+
+function configuredPrices(value: string | undefined): boolean {
+  if (!configuredValue(value)) return false;
+  try {
+    const prices: unknown = JSON.parse(value!);
+    return Boolean(prices && typeof prices === "object" && !Array.isArray(prices) && Object.keys(prices).length > 0);
+  } catch { return false; }
+}
+
 app.get("/api/dev/emails", (context) => {
   if (!localEmailEnabled(context.env)) return context.notFound();
   return context.json({ emails: listCapturedEmails() });
@@ -170,8 +182,8 @@ app.get("/api/health/operational", (context) => context.json({
   environment: context.env.APP_ENV ?? "local",
   capabilities: {
     database: { configured: Boolean(context.env.DATABASE_URL) },
-    email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && context.env.EMAIL_FROM), stagingProtected: context.env.APP_ENV !== "staging" || Boolean(context.env.EMAIL_STAGING_REDIRECT) },
-    billing: { mode: context.env.STRIPE_MODE ?? "local", configured: (context.env.STRIPE_MODE ?? "local") === "local" || Boolean(context.env.STRIPE_SECRET_KEY && context.env.STRIPE_WEBHOOK_SECRET && context.env.STRIPE_PRICES), plans: Object.keys(plans).length },
+    email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && configuredValue(context.env.EMAIL_FROM)), stagingProtected: !["preview", "staging"].includes(context.env.APP_ENV ?? "local") || configuredValue(context.env.EMAIL_STAGING_REDIRECT) },
+    billing: { mode: context.env.STRIPE_MODE ?? "local", configured: (context.env.STRIPE_MODE ?? "local") === "local" || Boolean(context.env.STRIPE_SECRET_KEY && context.env.STRIPE_WEBHOOK_SECRET && configuredValue(context.env.STRIPE_PUBLISHABLE_KEY) && configuredPrices(context.env.STRIPE_PRICES) && configuredValue(context.env.BILLING_RETURN_URL)), plans: Object.keys(plans).length },
   },
 }));
 
