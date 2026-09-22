@@ -183,12 +183,12 @@ export class ${n.className}Service {
 `);
 
   await writeGenerated(targets[3]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
-import { ${n.camel}, type Database } from "@${project}/db";
+import { ${n.camel}, outboxMessage, type Database } from "@${project}/db";
 import type { ${n.className}Repository } from "@${project}/domain";
 import { and, asc, eq, gt } from "drizzle-orm";
 
 export class Postgres${n.className}Repository implements ${n.className}Repository {
-  constructor(private readonly database: Database, private readonly organizationId: string) {}
+  constructor(private readonly database: Database, private readonly organizationId: string, private readonly correlationId: string) {}
   async list(input: { cursor?: string; limit: number }): Promise<{ items: ${n.className}[]; nextCursor?: string }> {
     const rows = await this.database.select().from(${n.camel}).where(and(eq(${n.camel}.organizationId, this.organizationId), input.cursor ? gt(${n.camel}.id, input.cursor) : undefined)).orderBy(asc(${n.camel}.id)).limit(input.limit + 1);
     const hasMore = rows.length > input.limit;
@@ -200,9 +200,18 @@ export class Postgres${n.className}Repository implements ${n.className}Repositor
     return record ?? null;
   }
   async create(input: Create${n.className}): Promise<${n.className}> {
-    const [record] = await this.database.insert(${n.camel}).values({ ...input, organizationId: this.organizationId }).returning();
-    if (!record) throw new Error("Failed to create ${n.className}");
-    return record;
+    return this.database.transaction(async (transaction) => {
+      const [record] = await transaction.insert(${n.camel}).values({ ...input, organizationId: this.organizationId }).returning();
+      if (!record) throw new Error("Failed to create ${n.className}");
+      const occurredAt = new Date();
+      await transaction.insert(outboxMessage).values({
+        id: crypto.randomUUID(), eventName: "resource.${n.kebab}.created", schemaVersion: 1,
+        occurredAt, resourceType: "${n.kebab}", resourceId: record.id,
+        correlationId: this.correlationId, idempotencyKey: "resource.${n.kebab}.created:" + record.id,
+        payload: { organizationId: this.organizationId, resourceId: record.id }, availableAt: occurredAt,
+      });
+      return record;
+    });
   }
   async update(id: string, input: Update${n.className}): Promise<${n.className} | null> {
     const [record] = await this.database.update(${n.camel}).set({ ...input, updatedAt: new Date() }).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).returning();
@@ -247,7 +256,7 @@ export const ${n.camel}Routes = new Hono<{ Bindings: AuthEnvironment; Variables:
 ${n.camel}Routes.use("${routePath}", requireExecutionContext);
 ${n.camel}Routes.use("${routePath}/*", requireExecutionContext);
 function service(execution: AppVariables["execution"]) {
-  return new ${n.className}Service(new Postgres${n.className}Repository(execution.data, execution.tenant.organizationId));
+  return new ${n.className}Service(new Postgres${n.className}Repository(execution.data, execution.tenant.organizationId, execution.correlation.correlationId));
 }
 async function operation<T>(execution: AppVariables["execution"], event: string, work: () => Promise<T>): Promise<T> {
   const started = execution.clock.now().getTime();
