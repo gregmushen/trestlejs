@@ -39,11 +39,17 @@ describe("worker routes", () => {
   });
 
   it("reports provider capability readiness without returning credential values", async () => {
-    const response = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "staging" as const, EMAIL_DELIVERY_MODE: "resend" as const, RESEND_API_KEY: "re_sensitive", EMAIL_FROM: "sender@example.test", EMAIL_STAGING_REDIRECT: "capture@example.test", STRIPE_MODE: "test" as const, STRIPE_SECRET_KEY: "sk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive", STRIPE_PRICES: "{\"pro\":\"price_1\"}" });
+    const response = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "staging" as const, EMAIL_DELIVERY_MODE: "resend" as const, RESEND_API_KEY: "re_sensitive", EMAIL_FROM: "sender@example.test", EMAIL_STAGING_REDIRECT: "capture@example.test", STRIPE_MODE: "test" as const, STRIPE_SECRET_KEY: "sk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive", STRIPE_PUBLISHABLE_KEY: "pk_test_example", STRIPE_PRICES: "{\"pro\":\"price_1\"}", BILLING_RETURN_URL: "https://example.test/billing" });
     expect(response.status).toBe(200);
     const body = await response.text();
     expect(body).toContain('"configured":true');
     expect(body).not.toContain("sensitive");
+  });
+
+  it("does not mistake generated placeholders for configured preview providers", async () => {
+    const response = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "preview" as const, EMAIL_DELIVERY_MODE: "resend" as const, RESEND_API_KEY: "re_sensitive", EMAIL_FROM: "CHANGE_ME", EMAIL_STAGING_REDIRECT: "CHANGE_ME", STRIPE_MODE: "test" as const, STRIPE_SECRET_KEY: "sk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive", STRIPE_PUBLISHABLE_KEY: "CHANGE_ME", STRIPE_PRICES: "{}", BILLING_RETURN_URL: "CHANGE_ME" });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ capabilities: { email: { configured: false, stagingProtected: false }, billing: { configured: false } } });
   });
 
   it("rejects an anonymous protected request", async () => {
