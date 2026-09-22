@@ -50,6 +50,13 @@
       "when": 1790121600000,
       "tag": "0006_commercial_control_plane",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790208000000,
+      "tag": "0007_thin_gravity",
+      "breakpoints": true
     }
   ]
 }

@@ -11,7 +11,7 @@ type AuthenticatedSession = {
   session: { activeOrganizationId?: string | null };
 };
 
-type Membership = { role: string };
+type Membership = { role: string; applicationRole: string | null };
 
 export type AppExecutionContext = ExecutionContext<
   ReturnType<typeof createTenantDatabase>,
@@ -37,7 +37,7 @@ const defaults: ContextDependencies = {
   getSession: async (headers, environment) => await createAuth(environment).api.getSession({ headers }) as AuthenticatedSession | null,
   findMembership: async (userId, organizationId, environment) => {
     const [record] = await createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER)
-      .select({ role: member.role })
+      .select({ role: member.role, applicationRole: member.applicationRole })
       .from(member)
       .where(and(eq(member.userId, userId), eq(member.organizationId, organizationId)))
       .limit(1);
@@ -46,10 +46,14 @@ const defaults: ContextDependencies = {
   findSubscription: async (organizationId, environment) => await createServices(environment).billing.getSubscription(organizationId),
 };
 
-function permissionsFor(role: string): ReadonlySet<string> {
-  const permissions = new Set(["resource:read", "resource:write"]);
-  if (role === "owner" || role === "admin") permissions.add("organization:manage");
-  return permissions;
+function organizationPermissions(role: string): ReadonlySet<string> {
+  return role === "owner" || role === "admin" ? new Set(["organization:manage"]) : new Set();
+}
+
+function applicationPermissions(role: string | null): ReadonlySet<string> | undefined {
+  if (role === "contributor") return new Set(["resource:read", "resource:write"]);
+  if (role === "viewer") return new Set(["resource:read"]);
+  return undefined;
 }
 
 function correlationId(headers: Headers): string {
@@ -75,10 +79,14 @@ export async function resolveExecutionContext(
     resolve: (code): EntitlementDecision => decisions.get(code) ?? { code, enabled: false, source: "default", effectiveAt: new Date(0) },
     has: (code) => decisions.get(code)?.enabled ?? false,
   };
-  const authority = { plane: "organization" as const, permissions: permissionsFor(membership.role) };
+  const appPermissions = applicationPermissions(membership.applicationRole);
+  const authority = { planes: {
+    organization: organizationPermissions(membership.role),
+    ...(appPermissions ? { application: appPermissions } : {}),
+  } };
   const correlation = { correlationId: suppliedCorrelationId ?? correlationId(headers) };
   const log = createLogger({ correlationId: correlation.correlationId, userId: session.user.id, organizationId });
-  log.info("auth.context.resolved", { role: membership.role });
+  log.info("auth.context.resolved", { organizationRole: membership.role, applicationRole: membership.applicationRole });
   return {
     principal: { id: session.user.id, kind: "user", email: session.user.email },
     tenant: { organizationId, role: membership.role },

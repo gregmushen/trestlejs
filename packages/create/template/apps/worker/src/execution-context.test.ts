@@ -15,14 +15,36 @@ describe("execution context", () => {
     const seen: string[] = [];
     const context = await resolveExecutionContext(new Headers({ "x-correlation-id": "corr-1" }), environment, {
       getSession: async () => session,
-      findMembership: async (userId, organizationId) => { seen.push(userId, organizationId); return { role: "owner" }; },
+      findMembership: async (userId, organizationId) => { seen.push(userId, organizationId); return { role: "owner", applicationRole: "contributor" }; },
       findSubscription: async () => ({ organizationId: "org-a", provider: "local", plan: "pro", planVersion: 1, status: "active", cancelAtPeriodEnd: false, entitlements: ["workflows.advanced"] }),
     });
     expect(seen).toEqual(["user-1", "org-a"]);
     expect(context.tenant).toEqual({ organizationId: "org-a", role: "owner" });
-    expect(context.authority.permissions.has("organization:manage")).toBe(true);
+    expect(context.authority.planes.organization?.has("organization:manage")).toBe(true);
+    expect(context.authority.planes.application?.has("resource:write")).toBe(true);
     expect(context.entitlements.has("workflows.advanced")).toBe(true);
     expect(context.correlation.correlationId).toBe("corr-1");
+  });
+
+  it("does not infer application authority from organization ownership", async () => {
+    const context = await resolveExecutionContext(new Headers(), environment, {
+      getSession: async () => session,
+      findMembership: async () => ({ role: "owner", applicationRole: null }),
+      findSubscription: async () => null,
+    });
+    expect(context.access.check({ plane: "organization", permission: "organization:manage" }).allowed).toBe(true);
+    expect(context.access.check({ plane: "application", permission: "resource:read" })).toMatchObject({ allowed: false, missing: ["authority_plane"] });
+  });
+
+  it("grants a viewer only application reads regardless of organization role", async () => {
+    const context = await resolveExecutionContext(new Headers(), environment, {
+      getSession: async () => session,
+      findMembership: async () => ({ role: "member", applicationRole: "viewer" }),
+      findSubscription: async () => null,
+    });
+    expect(context.access.check({ plane: "application", permission: "resource:read" }).allowed).toBe(true);
+    expect(context.access.check({ plane: "application", permission: "resource:write" })).toMatchObject({ allowed: false, missing: ["permission"] });
+    expect(context.access.check({ plane: "organization", permission: "organization:manage" })).toMatchObject({ allowed: false, missing: ["permission"] });
   });
 
   it("fails closed for revoked membership", async () => {
