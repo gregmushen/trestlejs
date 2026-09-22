@@ -84,6 +84,7 @@ permissions in each GitHub deployment environment; an interactive
 Wrangler OAuth access token is not a durable CI credential.
 `CLOUDFLARE_WORKERS_SUBDOMAIN` is the account label before `.workers.dev`; it
 is used to derive the Worker URL exercised by the preview smoke gate. Preview
+preflight verifies that it matches the configured Cloudflare account. Preview
 database branching is a separate provider lifecycle and must be configured
 with `NEON_PROJECT_ID`, `NEON_DATABASE`, `NEON_MIGRATION_ROLE`, and the
 encrypted CI credential `NEON_API_KEY`. Each trusted pull request then receives
