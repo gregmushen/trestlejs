@@ -5,10 +5,11 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
-import { billingProviderEvent, createDatabase, emailDeliveryEvent } from "@__TRESTLE_PROJECT_NAME__/db";
+import { billingProviderEvent, createDatabase, emailDeliveryEvent, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
+import type { CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
-import { createQueueConsumer, EventConsumerRegistry, type QueueBatch } from "./async-runtime.js";
+import { createQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type QueueBatch } from "./async-runtime.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
 import { createBillingService } from "./services.js";
@@ -194,7 +195,18 @@ app.onError((error, context) => {
 });
 
 const consumeQueue = createQueueConsumer(eventConsumers);
+type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBinding };
 export default {
   fetch: app.fetch.bind(app),
   queue: async (batch: QueueBatch, environment: AuthEnvironment) => await consumeQueue(batch, environment),
+  scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
+    if (!environment.TRESTLE_EVENTS) return;
+    const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
+    try {
+      const result = await dispatchQueuedOutbox(store, environment.TRESTLE_EVENTS);
+      createLogger({ environment: environment.APP_ENV ?? "local" }).info("outbox.dispatch.completed", result);
+    } finally {
+      await store.close();
+    }
+  },
 };

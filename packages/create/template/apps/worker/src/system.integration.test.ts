@@ -2,7 +2,7 @@ import { createDatabase, organization, outboxMessage, user } from "@__TRESTLE_PR
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { app } from "./index.js";
+import worker, { app } from "./index.js";
 
 const databaseUrl = process.env.TRESTLE_SYSTEM_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -72,6 +72,14 @@ suite("local product path", () => {
         const [outbox] = await database.select().from(outboxMessage).where(eq(outboxMessage.resourceId, article.id)).limit(1);
         expect(outbox).toMatchObject({ eventName: "resource.article.created", resourceType: "article", resourceId: article.id, status: "pending", payload: { organizationId, resourceId: article.id } });
         expect(outbox?.correlationId).toBeTruthy();
+        const queued: unknown[] = [];
+        await worker.scheduled(undefined, {
+          ...environment,
+          TRESTLE_EVENTS: { send: async (body: unknown) => { queued.push(body); } },
+        });
+        expect(queued).toMatchObject([{ id: outbox!.id, name: "resource.article.created", resource: { type: "article", id: article.id } }]);
+        const [dispatched] = await database.select().from(outboxMessage).where(eq(outboxMessage.id, outbox!.id)).limit(1);
+        expect(dispatched?.status).toBe("succeeded");
         const listed = await app.request("http://localhost:8787/api/articles", { headers }, environment);
         expect(listed.status).toBe(200);
         expect((await listed.json() as { articles: Array<{ id: string }> }).articles.some((item) => item.id === article.id)).toBe(true);
