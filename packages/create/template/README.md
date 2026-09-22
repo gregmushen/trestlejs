@@ -44,3 +44,35 @@ Cloud deployments default to Neon's Worker-native HTTP driver. Local development
 sets `DATABASE_DRIVER=postgres-js` in encrypted credentials so the same app can
 use the Compose PostgreSQL instance directly. No persistent `.dev.vars` file is
 created by `trestle dev`.
+
+Staging and production use separate database credentials:
+
+- `DATABASE_MIGRATION_URL` is available only to the protected deployment job;
+- `DATABASE_URL` is the restricted Worker runtime credential; and
+- the GitHub environment variable `DATABASE_RUNTIME_ROLE` names that runtime
+  PostgreSQL login role.
+
+The generated deployment workflow grants that login permission to assume the
+non-login `trestle_app` role, rejects superuser or `BYPASSRLS` runtime roles,
+runs migrations with the migration credential, and verifies the runtime
+credential before deploying. Preview derives equivalent credentials from its
+isolated Neon branch without committing them. Configure `APP_URL`, `API_URL`, `SITE_URL`, and
+`DATABASE_RUNTIME_ROLE` independently in the `preview`, `staging`, and
+`production` GitHub environments. Preview also requires
+`CLOUDFLARE_WORKERS_SUBDOMAIN`.
+
+Trusted pull requests receive isolated, deterministically named Workers and
+Pages projects. Closing the pull request deletes those Cloudflare resources.
+`CLOUDFLARE_WORKERS_SUBDOMAIN` is the account label before `.workers.dev`; it
+is used to derive the Worker URL exercised by the preview smoke gate. Preview
+database branching is a separate provider lifecycle and must be configured
+with `NEON_PROJECT_ID`, `NEON_DATABASE`, `NEON_MIGRATION_ROLE`, and the
+encrypted CI credential `NEON_API_KEY`. Each trusted pull request then receives
+an isolated Neon branch and pooled runtime URL; closure deletes that branch.
+
+Validate the checked-in delivery contract locally with:
+
+```bash
+pnpm exec trestle ci validate
+pnpm exec trestle env status --env staging
+```

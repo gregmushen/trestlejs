@@ -1,0 +1,58 @@
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { validateCi } from "../src/ci.js";
+
+const temporaryDirectories: string[] = [];
+const templateRoot = path.resolve("packages/create/template");
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })));
+});
+
+describe("generated CI deployment contract", () => {
+  it("pins external Actions and uses the project-local Trestle CLI", async () => {
+    const report = await validateCi(templateRoot);
+    expect(report.valid).toBe(true);
+    const pinned = report.checks.filter(({ id }) => id.endsWith("actions-pinned"));
+    expect(pinned).toHaveLength(5);
+    expect(pinned.every(({ status }) => status === "pass")).toBe(true);
+    expect(report.checks.filter(({ id }) => id.endsWith("project-cli")).every(({ status }) => status === "pass")).toBe(true);
+  });
+
+  it("rejects mutable Action references", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "ci.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replace(/actions\/checkout@[0-9a-f]{40}/u, "actions/checkout@v4"));
+    const report = await validateCi(root);
+    expect(report.valid).toBe(false);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.workflow.ci.yml.actions-pinned", status: "fail", evidence: "actions/checkout@v4" }));
+  });
+
+  it("rejects a workflow that downloads whatever CLI is currently latest", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "deploy.yml");
+    await writeFile(workflowPath, `${await readFile(workflowPath, "utf8")}\n# pnpm dlx trestlejs@latest secrets check\n`);
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.workflow.deploy.yml.project-cli", status: "fail" }));
+  });
+
+  it("rejects removal of preview teardown", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replaceAll("cloudflare-pages.mjs delete", "cloudflare-pages.mjs retain"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.cleanup", status: "fail" }));
+  });
+});

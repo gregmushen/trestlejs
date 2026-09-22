@@ -15,7 +15,7 @@
   "env": {
     "preview": {
       "name": "__TRESTLE_PROJECT_NAME__-worker-preview",
-      "vars": { "APP_ENV": "preview", "EMAIL_DELIVERY_MODE": "local", "EMAIL_FROM": "CHANGE_ME", "WEB_ORIGIN": "CHANGE_ME" }
+      "vars": { "APP_ENV": "preview", "EMAIL_DELIVERY_MODE": "resend", "EMAIL_FROM": "CHANGE_ME", "EMAIL_STAGING_REDIRECT": "CHANGE_ME", "WEB_ORIGIN": "CHANGE_ME", "STRIPE_MODE": "test", "STRIPE_PUBLISHABLE_KEY": "CHANGE_ME", "STRIPE_PRICES": "{}", "BILLING_RETURN_URL": "CHANGE_ME" }
     },
     "staging": {
       "name": "__TRESTLE_PROJECT_NAME__-worker-staging",

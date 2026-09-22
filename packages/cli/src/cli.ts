@@ -8,6 +8,7 @@ import {
 } from "@trestlejs/core";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 
+import { formatCiValidation, validateCi } from "./ci.js";
 import { projectContext } from "./context.js";
 import { formatDoctorHuman, formatDoctorJson, runDoctor } from "./doctor.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
@@ -15,6 +16,7 @@ import { localEnvironment } from "./local.js";
 import { clearLocalEmail, formatEmail, formatEmailList, getLocalEmail, listLocalEmail, openLocalEmail } from "./email.js";
 import { generateEmail } from "./generate-email.js";
 import { generateResource, generateResourceMigration } from "./generate-resource.js";
+import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
 import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readApplyState, readSetupPlan } from "./plan.js";
 import { runCommand, runDevelopment } from "./processes.js";
@@ -109,6 +111,28 @@ export function createProgram(runtime: CliRuntime): Command {
         return;
       }
       runtime.stdout(`${context.manifest.environments.join("\n")}\n`);
+    });
+  env
+    .command("status")
+    .description("inspect one declared environment without contacting providers")
+    .option("--env <environment>", "environment to inspect", environment, "local")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const status = await inspectEnvironmentStatus(context.root, context.manifest, options.env);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(status), null, 2)}\n` : formatEnvironmentStatus(status));
+      if (!status.declared || status.applications.some(({ present }) => !present)) throw new CliFailure(`${options.env} environment is incomplete`);
+    });
+
+  const ci = program.command("ci").description("validate generated continuous-delivery configuration");
+  ci.command("validate")
+    .description("validate the static GitHub Actions deployment contract")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = await validateCi(context.root);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatCiValidation(report));
+      if (!report.valid) throw new CliFailure("CI deployment contract has failures");
     });
 
   program
@@ -270,14 +294,17 @@ export function createProgram(runtime: CliRuntime): Command {
   secrets
     .command("push")
     .requiredOption("--env <environment>", "remote environment", environment)
-    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
+    .option("--worker-name <name>", "override the generated Worker target for an isolated preview")
+    .action(async (options: { env: ReturnType<typeof environment>; workerName?: string }, command: Command) => {
       if (options.env === "local") throw new CliFailure("local credentials are injected by trestle dev and cannot be pushed remotely");
+      if (options.workerName && !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(options.workerName)) throw new CliFailure("worker name must be a lowercase DNS-safe name of at most 63 characters");
+      if (options.workerName && options.env !== "preview") throw new CliFailure("worker name overrides are only allowed for isolated previews");
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
       const problems = validateSecrets(values, context.manifest, options.env);
       if (problems.length > 0) throw new CliFailure(`credentials check failed:\n${problems.join("\n")}`);
       const workerValues = Object.fromEntries(Object.entries(values).filter(([name]) => context.manifest.secrets?.[name]?.target === "worker"));
-      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", "secret", "bulk", "--env", options.env], { cwd: context.root, env: process.env, input: JSON.stringify(workerValues) });
+      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", "secret", "bulk", "--env", options.env, ...(options.workerName ? ["--name", options.workerName] : [])], { cwd: context.root, env: process.env, input: JSON.stringify(workerValues) });
       runtime.stdout(`Pushed ${Object.keys(workerValues).length} Worker secrets to ${options.env}; local encrypted credentials remain authoritative\n`);
     });
 
@@ -350,6 +377,33 @@ export function createProgram(runtime: CliRuntime): Command {
     .action(async (options: { apiUrl: string }) => {
       await clearLocalEmail(options.apiUrl);
       runtime.stdout("Cleared locally captured email\n");
+    });
+
+  const queue = program.command("queue").description("operate asynchronous delivery queues");
+  const dlq = queue.command("dlq").description("inspect dead-lettered outbox messages");
+  dlq.command("list")
+    .requiredOption("--env <environment>", "remote environment", environment)
+    .option("--json", "emit JSON")
+    .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
+      if (options.env === "local") throw new CliFailure("local DLQ inspection requires a running application adapter");
+      const context = await projectContext(command, runtime);
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      if (!values.DATABASE_URL) throw new CliFailure(`DATABASE_URL is not set for ${options.env}`);
+      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "list"], { cwd: context.root, env: { ...process.env, DATABASE_URL: values.DATABASE_URL }, stdio: "pipe" });
+      const entries = JSON.parse(result.stdout) as unknown;
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ environment: options.env, entries }), null, 2)}\n` : `${(entries as Array<{ id: string; event: string; attempts: number }>).map((entry) => `${entry.id} ${entry.event} attempts=${entry.attempts}`).join("\n")}\n`);
+    });
+  dlq.command("redrive")
+    .argument("<id>")
+    .requiredOption("--env <environment>", "remote environment", environment)
+    .action(async (id: string, options: { env: ReturnType<typeof environment> }, command: Command) => {
+      if (options.env === "local") throw new CliFailure("local DLQ redrive requires a running application adapter");
+      const context = await projectContext(command, runtime);
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      if (!values.DATABASE_URL) throw new CliFailure(`DATABASE_URL is not set for ${options.env}`);
+      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "redrive", id], { cwd: context.root, env: { ...process.env, DATABASE_URL: values.DATABASE_URL }, stdio: "pipe" });
+      runtime.stdout(`Redriven ${id} in ${options.env}\n`);
+      if (result.stderr) runtime.stderr(result.stderr);
     });
 
   const generate = program.command("generate").description("generate application-owned source");

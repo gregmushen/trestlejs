@@ -47,6 +47,9 @@ describe("createProject", () => {
     expect(await readFile(path.join(result.directory, ".trestle", "project.yaml"), "utf8")).toContain(
       "name: hello",
     );
+    expect(await readFile(path.join(result.directory, ".trestle", "project.yaml"), "utf8")).toContain(
+      "queues: false",
+    );
     expect(await readFile(path.join(result.directory, "package.json"), "utf8")).toContain(
       '"name": "hello"',
     );
@@ -82,6 +85,16 @@ describe("createProject", () => {
     expect(
       await readFile(path.join(result.directory, "apps", "site", "src", "config", "site.ts"), "utf8"),
     ).toContain('"http://localhost:42069"');
+    const deployWorkflow = await readFile(path.join(result.directory, ".github", "workflows", "deploy.yml"), "utf8");
+    expect(deployWorkflow).toContain("actions/checkout@11d5960a326750d5838078e36cf38b85af677262");
+    expect(deployWorkflow).toContain("pnpm exec trestle secrets check --env staging");
+    expect(deployWorkflow).not.toContain("trestlejs@latest");
+    const previewWorkflow = await readFile(path.join(result.directory, ".github", "workflows", "preview.yml"), "utf8");
+    expect(previewWorkflow).toContain("--worker-name");
+    expect(previewWorkflow).toContain("cloudflare-worker.mjs delete");
+    expect(previewWorkflow).toContain("cloudflare-pages.mjs delete");
+    expect(previewWorkflow).toContain("neon-preview.mjs ensure");
+    expect(previewWorkflow).toContain("neon-preview.mjs delete");
     const setupSkill = await readFile(
       path.join(result.directory, ".agents", "skills", "trestle-setup", "SKILL.md"),
       "utf8",

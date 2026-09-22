@@ -14,6 +14,7 @@ suite("forced PostgreSQL tenant isolation", () => {
   });
 
   afterAll(async () => {
+    await sql!`delete from artifact_metadata where id in ('artifact-a', 'artifact-b')`;
     await sql!`delete from tenant_record where name like ${`${prefix}%`}`;
     await sql!`delete from organization_entitlement where organization_id in ('billing-org-a', 'billing-org-b')`;
     await sql!`delete from organization_subscription where organization_id in ('billing-org-a', 'billing-org-b')`;
@@ -29,6 +30,16 @@ suite("forced PostgreSQL tenant isolation", () => {
       expect((await transaction`select organization_id from organization_subscription order by organization_id`).map((row) => row.organization_id)).toEqual(["billing-org-a"]);
       expect((await transaction`select entitlement from organization_entitlement`).map((row) => row.entitlement)).toEqual(["workflows.advanced"]);
       expect((await transaction`update organization_subscription set plan = 'business' where organization_id = 'billing-org-b'`).count).toBe(0);
+    });
+  });
+
+  it("applies forced tenant isolation to R2 artifact metadata", async () => {
+    await sql!`insert into artifact_metadata (id,organization_id,storage_key,content_type,size) values ('artifact-a','org-a','org-a/a','text/plain',1),('artifact-b','org-b','org-b/b','text/plain',1)`;
+    await sql!.begin(async (transaction) => {
+      await transaction`set local role trestle_app`;
+      await transaction`select set_config('app.organization_id', 'org-a', true)`;
+      expect((await transaction`select id from artifact_metadata order by id`).map((row) => row.id)).toEqual(["artifact-a"]);
+      expect((await transaction`delete from artifact_metadata where id='artifact-b'`).count).toBe(0);
     });
   });
 

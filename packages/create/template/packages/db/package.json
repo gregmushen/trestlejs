@@ -7,15 +7,19 @@
     "build": "tsc --noEmit",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
+    "db:roles:configure": "tsx scripts/runtime-role.ts configure",
+    "db:roles:verify": "tsx scripts/runtime-role.ts verify",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/events": "workspace:*",
     "@neondatabase/serverless": "1.1.0",
     "drizzle-orm": "0.45.3",
     "postgres": "3.4.9"
   },
   "devDependencies": {
-    "drizzle-kit": "0.31.11"
+    "drizzle-kit": "0.31.11",
+    "tsx": "4.20.6"
   }
 }

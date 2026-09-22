@@ -1,4 +1,6 @@
 export * from "./cli.js";
+export * from "./ci.js";
+export * from "./environment-status.js";
 export * from "./doctor.js";
 export * from "./runtime.js";
 export * from "./secrets.js";

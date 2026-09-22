@@ -12,10 +12,79 @@ release.
 | Stage | Outcome | Status |
 | --- | --- | --- |
 | Alpha 1–5 | Reproducible starter, local runtime, auth, Southwind site, setup skill, encrypted credentials, email and billing boundaries, SetupPlan, and initial resource generation | Shipped |
-| Alpha 6 | A trustworthy tenant-owned CRUD slice from browser to forced PostgreSQL RLS, plus safe plan/apply repair | Current |
-| Later alphas | Broader generators, operational depth, deployment lifecycle, and upgrade tooling | Planned |
+| Alpha 6 | A trustworthy tenant-owned CRUD slice from browser to forced PostgreSQL RLS, plus safe plan/apply repair | Shipped |
+| Alpha 7 | Production deployment evidence through GitHub, Cloudflare, and Neon | Next |
+| Alpha 8 | Asynchronous execution spine: outbox, Queues, Workflows, DLQ, schedules, and R2 | Core shipped; provider wiring remaining |
+| Alpha 9 | Production integrations and end-to-end observability | Planned |
+| Alpha 10 | Recovery, operational tooling, deterministic data, and safe remote access | Planned |
+| Alpha 11 | Resource evolution and framework upgrade lifecycle | Planned |
+| Alpha 12 | Optional admin, enforcement, full-system hardening, and beta preparation | Planned |
 | Beta | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
 | v1 | Supported end-to-end product-development and deployment path with documented compatibility guarantees | Planned |
+
+## Today’s push: Alpha 7/8 → Beta candidate
+
+The goal for today is to produce a credible beta candidate from a clean
+`create-trestlejs` project. This is an execution plan, not a promise that
+beta is complete before the evidence gates pass.
+
+### Must-pass gates
+
+- [ ] **Clean-project canary:** create a fresh project from the checked-in
+  package, install with the frozen lockfile, and run the complete generated
+  typecheck, test, build, and Worker dry-run suite.
+- [ ] **Local product path:** boot PostgreSQL, create an account, complete
+  local email verification through captured email, create/select an
+  organization, and exercise generated CRUD across two tenants.
+- [ ] **Deployment path:** configure GitHub, Cloudflare, Neon, Resend, and
+  Stripe test-mode environments with encrypted secrets; deploy an isolated
+  preview and staging from GitHub Actions.
+- [ ] **Staging system gate:** run browser/API tests against the deployed
+  Astro site, React application, Worker, authentication, email, billing,
+  resource CRUD, tenant switching, forced RLS, CORS, deep links, health, and
+  invalid webhook signatures.
+- [ ] **Promotion evidence:** publish GitHub Deployment records, verify the
+  restricted runtime database role, promote the exact reviewed commit, and
+  pass production smoke checks without exposing credentials.
+- [ ] **Async smoke path:** exercise HTTP mutation → PostgreSQL outbox → Queue
+  delivery → idempotent consumer, plus one deterministic Workflow retry and
+  one artifact signed-access check.
+
+### Same-day hardening
+
+- [ ] Finish generated Cloudflare Queue, Workflow, and R2 binding/config
+  support behind capability flags.
+- [ ] Connect the Worker mutation path to the transactional outbox and wire
+  the Queue consumer to the event registry.
+- [ ] Add PostgreSQL-backed artifact metadata, retention, and cleanup.
+- [ ] Align Drizzle snapshots and make migration generation idempotent.
+- [ ] Add protected Resend/Stripe test-mode integration tests and staging
+  recipient protection.
+- [ ] Add operational checks for deployment identity, bindings, migration
+  state, runtime role, queue/DLQ state, and provider mode.
+
+### Beta-candidate exit criteria
+
+We can call the result a **beta candidate** only when a clean generated
+project can complete the following without manual source repair:
+
+```text
+create project
+  → configure encrypted environments
+  → boot locally and verify email/auth/tenancy/RLS
+  → deploy preview
+  → deploy staging
+  → pass deployed system gate
+  → promote the same commit
+  → pass production smoke checks
+  → exercise async delivery and recovery
+  → record non-secret evidence
+```
+
+If a provider account, domain verification, or deployment credential blocks a
+gate, record the exact external prerequisite and keep the local substitute
+and deterministic test green. Do not mark that gate complete on the basis of
+unit tests alone.
 
 ## Alpha 6: trustworthy vertical slice
 
@@ -45,31 +114,212 @@ testable path rather than a collection of adjacent files.
 Alpha 6 does **not** turn resource generation into a dynamic runtime or
 overwrite customized domain code. Generated source belongs to the application.
 
-## Before beta
+## Alpha 7: deployment truth
 
-The next alphas should deepen the shipped path in this order:
+Alpha 7 proves that a freshly generated Trestle application can move safely
+from GitHub to preview, staging, and production on Cloudflare and Neon. It
+should deepen the vertical slice instead of introducing another application
+subsystem.
 
-1. **Production deployment evidence** — provision and verify preview,
-   staging, and production environments through the generated GitHub Actions
-   and Cloudflare configuration, including secrets projection and rollback
-   documentation.
-2. **Upgrade tooling** — introduce versioned template migrations, dry-run
-   inspection, and safe upgrades for existing Trestle applications.
-3. **Resource evolution** — support additional field types, relationships,
-   authorization policies, pagination, and migration-safe edits without
-   becoming a generic low-code schema engine.
-4. **Background execution** — generate queue consumers, scheduled work, and
-   workflows with stable idempotency, outbox conventions, and local test
-   controls.
-5. **Operational adapters** — finish production-grade Resend and Stripe
-   lifecycle commands, verified webhooks, reconciliation, staging safety, and
-   provider integration tests.
-6. **Observability** — standardize request, domain, queue, workflow, email,
-   billing, and deployment telemetry with consistent redaction and useful
-   diagnostics.
-7. **System testing** — exercise authentication, tenant switching, resource
-   CRUD, email verification, billing projection, and deployment from freshly
-   generated applications in CI.
+### Production database roles
+
+- Separate schema-migration credentials from runtime credentials.
+- Ensure the runtime identity cannot bypass forced RLS.
+- Prove that tenant-scoped role selection works through the production Neon
+  driver, not only local `postgres-js` connections.
+- Verify role membership, grants, forced RLS, and fail-closed tenant behavior
+  through remote Doctor checks.
+- Use the same production role model for generated resources and other
+  tenant-owned application projections.
+
+### Cloudflare deployment
+
+- Deploy the Hono Worker, authenticated React application, and Astro site.
+- Keep preview, staging, and production Worker names, Pages projects,
+  databases, origins, bindings, credentials, and provider modes separate.
+- Publish actual GitHub Deployments with the resulting URLs.
+- Serialize staging and production migration/deployment operations.
+- Promote the same reviewed commit only after the staging smoke gate passes.
+- Document a code rollback that does not pretend destructive database changes
+  can be reversed automatically.
+
+### Generated GitHub Actions
+
+- Use the project's pinned Trestle CLI instead of
+  `pnpm dlx trestlejs@latest`.
+- Pin third-party Actions to reviewed commit SHAs.
+- Retain the trusted-pull-request boundary so forks receive no deployment
+  secrets.
+- Add preview lifecycle cleanup and non-secret deployment evidence.
+- Project encrypted credentials into Worker secrets without printing values
+  or rewriting unchanged secrets on ordinary deployments.
+- Validate the generated workflows and Wrangler configuration before a
+  deployment begins.
+
+### Deployed system test
+
+The staging gate should exercise the deployed system rather than merely rerun
+unit tests. It must:
+
+1. load the public Astro site and authenticated application;
+2. create an account and complete an email-verification flow safely;
+3. create an organization and select it explicitly;
+4. create, list, update, and delete a generated `Article` through the real
+   application/API boundary;
+5. switch tenants without reusing another tenant's TanStack Query cache;
+6. attempt cross-tenant reads and mutations and prove PostgreSQL rejects
+   them;
+7. confirm missing or revoked membership fails closed;
+8. reject unsigned or invalid Resend and Stripe webhook requests; and
+9. verify health, CORS, SPA deep links, and required bindings without exposing
+   secret values.
+
+### Remote diagnostics
+
+Alpha 7 should provide a coherent read-only production view through commands
+such as:
+
+```bash
+trestle env status --env staging
+trestle doctor --env staging --json
+trestle ci validate
+```
+
+Whether deployment is initiated through `trestle deploy --env <env>` or only
+through generated GitHub Actions must be explicit. The CLI must not imply a
+deployment command exists when GitHub is the actual control plane.
+
+Diagnostics should report environment URLs, deployment identity, binding
+presence, secret-name completeness, migration state, database roles, forced
+RLS, runtime mode, and smoke-test status without revealing credentials.
+
+### Capability honesty
+
+The starter currently declares R2, Queues, Workflows, and Durable Objects
+before those application paths are implemented. Alpha 7 must distinguish:
+
+```text
+declared → configured → deployed → verified
+```
+
+Until a capability is implemented, generated projects should disable it or
+report it accurately as unavailable. A provider feature is not a shipped
+Trestle capability merely because it appears in a manifest or Wrangler
+supports it.
+
+### Release canary
+
+Maintain a clean generated application as a release canary. Every framework
+release should create or safely upgrade it, generate a representative tenant
+resource, run the complete local check, deploy staging, run the deployed
+system gate, and preserve non-secret evidence. This converts production
+compatibility from an assumption into a release artifact.
+
+### Alpha 7 acceptance criteria
+
+Alpha 7 is complete when this path succeeds without manual source repair:
+
+```text
+create project
+  → configure declared GitHub environments and provider credentials
+  → push a trusted branch
+  → migrate and deploy an isolated preview
+  → publish preview URLs and pass preview smoke tests
+  → merge the reviewed commit
+  → migrate and deploy staging
+  → pass authentication, resource, tenancy, and RLS system tests
+  → promote the same commit to production
+  → pass production smoke tests and record deployment evidence
+```
+
+## Alpha 8–12
+
+After production deployment is proven, the remaining alphas should proceed in
+dependency order.
+
+### Alpha 8: asynchronous execution spine
+
+The Alpha 8 core checkpoint is now implemented and committed. Generated
+projects have versioned event envelopes, a persistent transactional-outbox
+store, leasing/retry/dead-letter recovery, Queue adapters, deterministic
+Workflow retry, tenant-owned artifact metadata, local/R2 storage adapters,
+signed artifact access, and DLQ inspection/redrive commands. The generated
+release canary covers these paths without external provider accounts.
+
+Remaining Alpha 8 release work is provider wiring and operational hardening:
+
+- configure generated Cloudflare Queue, Workflow, and R2 bindings only when
+  the corresponding capability is enabled;
+- connect the Worker HTTP/domain mutation path to a database transaction plus
+  outbox append, and connect the Worker Queue consumer to the event registry;
+- persist artifact metadata through the PostgreSQL repository in the R2 path;
+- align Drizzle snapshots with the checked-in asynchronous migrations; and
+- add protected provider integration tests and retention/cleanup jobs.
+
+- Versioned domain-event and message-envelope registries.
+- Transactional outbox with leasing, retry, recovery, and retention.
+- Cloudflare Queue producer/consumer generation with idempotency.
+- DLQ inspection and selective redrive.
+- Workflow and scheduled-job generation with deterministic retry behavior.
+- R2 artifact metadata, tenant authorization, signed access, and cleanup.
+- Local adapters and tests for the complete HTTP → outbox → Queue → Workflow
+  path.
+
+### Alpha 9: production integrations and observability
+
+- Finish Resend and Stripe environment lifecycle, reconciliation, staging
+  safety, and protected provider integration tests.
+- Use `ExecutionContext` consistently for every authenticated application
+  route, including billing.
+- Standardize shared error mapping, semantic event names, correlation across
+  asynchronous boundaries, redaction, metrics, and operational health.
+- Add `trestle logs` without turning it into a secret or request-body escape
+  hatch.
+
+### Alpha 10: operations and recovery
+
+- Provider backup status, isolated restore, verification, and evidence.
+- Queue/DLQ and Workflow inspection/retry operations.
+- A tenant-bound, audited, remote-safe application console distinct from raw
+  database administration.
+- Deterministic default, demo, and two-tenant isolation seed scenarios.
+- A fixed, advanceable test clock and `trestle dev --fresh` lifecycle.
+
+### Alpha 11: evolution and upgrades
+
+- Additional resource field types, relationships, pagination, authorization
+  policies, and migration-safe edits.
+- Generated typed API clients instead of screen-local request helpers.
+- Versioned template migrations, dry-run project upgrades, compatibility
+  checks, and narrowly scoped codemods.
+- Static architectural checks and managed-guidance freshness without
+  overwriting application-owned custom sections.
+
+### Alpha 12: beta hardening
+
+- Optional admin application and application-backed admin resources.
+- Full browser, deployment, authorization, idempotency, upgrade, recovery,
+  and adjacent-version migration suites.
+- Complete machine-readable inspection for routes, resources, events,
+  workflows, queues, Durable Objects, bindings, permissions, and environments.
+- Resolve remaining specification/implementation contradictions and freeze
+  the supported beta command and compatibility contracts.
+
+## Remaining v1 gaps
+
+The largest gaps between Alpha 6 and the current v1 specification are:
+
+- production evidence for Cloudflare, Neon, Resend, and Stripe;
+- the outbox, Queue, DLQ, Workflow, schedule, Durable Object, and R2 paths;
+- provider-backed backup and isolated restore verification;
+- shared error mapping and cross-boundary observability;
+- secure remote operational tooling and application console behavior;
+- richer resources, generated typed clients, and authorization policies;
+- framework upgrade/sync tooling and compatibility guarantees;
+- optional admin installation and admin-resource generation;
+- static architectural enforcement and complete machine-readable discovery;
+  and
+- full browser and deployed-system tests from a clean generated application.
 
 ## v1 target
 
