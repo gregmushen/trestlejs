@@ -240,7 +240,7 @@ export async function runDoctor(
 
   if (environment !== "local") {
     const workerPath = manifest.apps.worker;
-    const workerConfig = workerPath ? await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8").catch(() => "") : "";
+    const workerConfig = workerPath ? await readFile(path.join(root, process.env.TRESTLE_WRANGLER_CONFIG ?? path.join(workerPath, "wrangler.jsonc")), "utf8").catch(() => "") : "";
     const block = wranglerEnvironmentBlock(workerConfig, environment);
     for (const capability of ["queues", "r2", "workflows", "durableObjects"] as const satisfies readonly CloudflareBindingCapability[]) {
       if (!manifest.capabilities[capability]) continue;

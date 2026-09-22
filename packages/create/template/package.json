@@ -13,7 +13,7 @@
     "db:migrate": "pnpm --filter ./packages/db db:migrate",
     "db:seed": "tsx seed/index.ts",
     "dev": "trestle dev",
-    "test": "node --test scripts/provider-preflight.test.mjs && pnpm -r test",
+    "test": "node --test scripts/provider-preflight.test.mjs scripts/queue-config.test.mjs scripts/cloudflare-queues.test.mjs && pnpm -r test",
     "typecheck": "tsc --noEmit -p tsconfig.tools.json && pnpm -r typecheck"
   },
   "devDependencies": {
