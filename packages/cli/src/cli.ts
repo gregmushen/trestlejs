@@ -10,6 +10,7 @@ import {
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 
 import { formatCiValidation, validateCi } from "./ci.js";
+import { checkArchitecture, formatArchitecture } from "./architecture.js";
 import { parseRecoveryConnectionOutput, readRecoveryPolicy, validateRecoveryPoint, validateRecoveryTarget } from "./backup.js";
 import { projectContext } from "./context.js";
 import { formatDoctorHuman, formatDoctorJson, runDoctor } from "./doctor.js";
@@ -18,7 +19,7 @@ import { localEnvironment } from "./local.js";
 import { buildLogTailArguments } from "./logs.js";
 import { clearLocalEmail, formatEmail, formatEmailList, getLocalEmail, listLocalEmail, openLocalEmail } from "./email.js";
 import { generateEmail } from "./generate-email.js";
-import { generateResource, generateResourceMigration } from "./generate-resource.js";
+import { addResourceField, generateResource, generateResourceMigration, parseResourceField } from "./generate-resource.js";
 import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
@@ -28,6 +29,7 @@ import { inspectResendSender } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
+import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import {
   credentialsPaths,
   editSecrets,
@@ -160,6 +162,43 @@ export function createProgram(runtime: CliRuntime): Command {
       if (!report.valid) throw new CliFailure("CI deployment contract has failures");
     });
 
+  const architecture = program.command("architecture").description("validate static application boundaries and managed guidance");
+  architecture.command("check")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = await checkArchitecture(context.root);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatArchitecture(report));
+      if (!report.valid) throw new CliFailure("architecture contract has failures");
+    });
+
+  const upgrade = program.command("upgrade").description("plan and apply versioned, application-preserving project migrations");
+  upgrade.command("plan")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = await planUpgrade(context.root);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatUpgradePlan(report));
+    });
+  upgrade.command("check")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = await planUpgrade(context.root);
+      const compatible = report.operations.every(({ classification }) => classification === "already-correct");
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ compatible, ...report }), null, 2)}\n` : compatible ? `✓ Project metadata, managed guidance, and CLI are compatible with ${report.targetVersion}\n` : formatUpgradePlan(report));
+      if (!compatible) throw new CliFailure("project requires a reviewed upgrade");
+    });
+  upgrade.command("apply")
+    .option("--yes", "confirm the reviewed upgrade plan")
+    .action(async (options: { yes?: boolean }, command: Command) => {
+      if (!options.yes) throw new CliFailure("upgrade apply requires --yes after reviewing trestle upgrade plan");
+      const context = await projectContext(command, runtime);
+      const report = await applyUpgrade(context.root);
+      await runCommand("pnpm", ["install", "--lockfile-only"], { cwd: context.root, env: process.env });
+      runtime.stdout(`Applied upgrade to ${report.targetVersion}\n${report.operations.filter(({ classification }) => classification === "update").map(({ id }) => `✓ ${id}`).join("\n")}\nApplication-owned source was preserved.\n`);
+    });
+
   program
     .command("doctor")
     .description("run read-only environment and architecture checks")
@@ -230,6 +269,19 @@ export function createProgram(runtime: CliRuntime): Command {
       const context = await projectContext(command, runtime);
       const values = await inspectRoutes(context.root, context.manifest);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ routes: values }), null, 2)}\n` : values.length ? `${values.map((route) => `${route.method.padEnd(7)} ${route.path}  ${route.auth ? "auth" : "public"}${route.resource ? `  ${route.resource}` : ""}`).join("\n")}\n` : "No routes discovered.\n");
+    });
+
+  const resource = program.command("resource").description("evolve declared application resources with migration safety");
+  resource.command("add-field")
+    .argument("<resource>", "existing PascalCase resource")
+    .argument("<field>", "optional field as name:type? or name:relation?:Resource:set-null")
+    .option("--yes", "confirm source and migration generation")
+    .action(async (resourceName: string, fieldDefinition: string, options: { yes?: boolean }, command: Command) => {
+      if (!options.yes) throw new CliFailure("resource add-field requires --yes after reviewing the migration-safe optional field");
+      const context = await projectContext(command, runtime);
+      const field = parseResourceField(fieldDefinition);
+      const changed = await addResourceField(context.root, context.manifest, resourceName, field);
+      runtime.stdout(`Added ${field.name} to ${resourceName}\n${changed.map((file) => `  ${file}`).join("\n")}\n`);
     });
 
   const secrets = program.command("secrets").description("manage encrypted application credentials");
@@ -612,9 +664,18 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--no-tenant", "generate without organization ownership")
     .option("--crud", "generate CRUD contracts, routes, and UI", true)
     .option("--no-crud", "generate persistence without CRUD surfaces")
-    .action(async (name: string, options: { tenant: boolean; crud: boolean }, command: Command) => {
+    .option("--field <definition...>", "additional field as name:type[?] or name:relation:Resource[:onDelete]")
+    .option("--read-permission <permission>", "organization permission required to list/read", "resource:read")
+    .option("--write-permission <permission>", "organization permission required to create/update/delete", "resource:write")
+    .option("--page-size <size>", "default cursor page size", Number, 25)
+    .option("--max-page-size <size>", "maximum cursor page size", Number, 100)
+    .action(async (name: string, options: { tenant: boolean; crud: boolean; field?: string[]; readPermission: string; writePermission: string; pageSize: number; maxPageSize: number }, command: Command) => {
       const context = await projectContext(command, runtime);
-      const resource = { name, tenant: options.tenant, crud: options.crud };
+      const additional = (options.field ?? []).map(parseResourceField);
+      if (additional.some(({ name: fieldName }) => fieldName === "name")) throw new CliFailure("the required name:string field is generated automatically; do not redeclare it");
+      if (additional.some(({ required }) => required)) throw new CliFailure("additional generated fields must initially be optional; append ? to the field type");
+      if (!Number.isInteger(options.pageSize) || !Number.isInteger(options.maxPageSize) || options.pageSize < 1 || options.maxPageSize > 250 || options.pageSize > options.maxPageSize) throw new CliFailure("page sizes must be integers with 1 <= default <= maximum <= 250");
+      const resource = { name, tenant: options.tenant, crud: options.crud, fields: [{ name: "name", type: "string", required: true } as const, ...additional], authorization: { read: options.readPermission, write: options.writePermission }, pagination: { defaultLimit: options.pageSize, maxLimit: options.maxPageSize } };
       const files = await generateResource(context.root, context.manifest, resource);
       files.push(...await generateResourceMigration(context.root, context.manifest, [resource]));
       runtime.stdout(`Generated ${name}\n${files.map((file) => `  ${file}`).join("\n")}\n`);

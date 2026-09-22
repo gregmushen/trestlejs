@@ -3,6 +3,8 @@ name: trestle-setup
 description: Design, review, apply, and verify a new or existing TrestleJS application from product requirements. Use when a user wants to plan, scaffold, configure, or finish a TrestleJS project; do not use for an isolated routine code edit that does not change application architecture or setup.
 ---
 
+<!-- trestle-managed-guidance:1 -->
+
 # Trestle Setup
 
 Turn product intent into a reviewed Trestle architecture and, only after explicit approval, a verified application. Supply discovery and architectural judgment; use the Trestle CLI for deterministic operations it supports.

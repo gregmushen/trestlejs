@@ -14,6 +14,41 @@ type ResourceNames = {
   pluralKebab: string;
 };
 
+type ResourceField = SetupResource["fields"][number];
+
+export function parseResourceField(value: string): ResourceField {
+  const [name, type = "string", reference, onDelete = "restrict"] = value.split(":");
+  const required = !type.endsWith("?");
+  const normalizedType = type.replace(/\?$/u, "") as ResourceField["type"];
+  if (!name || !/^[a-z][A-Za-z0-9]*$/u.test(name) || !["string", "text", "integer", "boolean", "datetime", "relation"].includes(normalizedType)) throw new CliFailure(`invalid field ${value}; expected name:type[?] or name:relation:Resource[:onDelete]`);
+  if (normalizedType === "relation") {
+    if (!reference || !/^[A-Z][A-Za-z0-9]*$/u.test(reference) || !["restrict", "cascade", "set-null"].includes(onDelete)) throw new CliFailure(`invalid relationship field ${value}`);
+    if (required) throw new CliFailure("relationship fields must initially be optional; use name:relation?:Resource:onDelete");
+    return { name, type: normalizedType, required, references: { resource: reference, onDelete: onDelete as "restrict" | "cascade" | "set-null" } };
+  }
+  if (reference) throw new CliFailure(`non-relation field ${name} cannot reference ${reference}`);
+  return { name, type: normalizedType, required };
+}
+
+function zodExpression(field: ResourceField): string {
+  const base = field.type === "string" ? "z.string().trim().min(1).max(200)" : field.type === "text" ? "z.string().max(10000)" : field.type === "integer" ? "z.number().int()" : field.type === "boolean" ? "z.boolean()" : field.type === "datetime" ? "z.coerce.date()" : "z.string().uuid()";
+  return field.required ? base : `${base}.optional()`;
+}
+
+function columnExpression(field: ResourceField): string {
+  const column = field.name.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase();
+  const base = field.type === "integer" ? `integer("${column}")` : field.type === "boolean" ? `boolean("${column}")` : field.type === "datetime" ? `timestamp("${column}", { withTimezone: true })` : field.type === "relation" ? `uuid("${column}").references(() => ${names(field.references!.resource).camel}.id, { onDelete: "${field.references!.onDelete === "set-null" ? "set null" : field.references!.onDelete}" })` : `text("${column}")`;
+  return field.required ? `${base}.notNull()` : base;
+}
+
+function exampleExpression(field: ResourceField): string {
+  if (field.type === "integer") return "42";
+  if (field.type === "boolean") return "true";
+  if (field.type === "datetime") return '"2026-01-01T00:00:00.000Z"';
+  if (field.type === "relation") return '"00000000-0000-4000-8000-000000000001"';
+  return `"${field.name === "name" ? "Example" : "Example value"}"`;
+}
+
 function names(name: string): ResourceNames {
   if (!/^[A-Z][A-Za-z0-9]*$/u.test(name)) throw new CliFailure("resource name must be PascalCase");
   const words = name.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").split(" ").map((word) => word.toLowerCase());
@@ -58,13 +93,15 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     path.join(root, appPath, "src", "resources", `${n.kebab}.tsx`),
     path.join(root, contractsPath, "src", "resources", `${n.kebab}.test.ts`),
     path.join(root, dbPath, "src", `${n.kebab}-rls.integration.test.ts`),
+    path.join(root, appPath, "src", "api", `${n.kebab}.ts`),
   ];
   const declarationExists = await exists(declarationPath);
   const collisions = (await Promise.all(targets.map(async (target) => (await exists(target) ? target : undefined)))).filter((target): target is string => Boolean(target));
   if (collisions.length && !declarationExists) throw new CliFailure(`resource ${resource.name} collides with existing files: ${collisions.join(", ")}`);
   if (declarationExists) {
-    const current = JSON.parse(await readFile(declarationPath, "utf8")) as { name?: string; tenant?: boolean; crud?: boolean };
-    if (current.name !== resource.name || current.tenant !== resource.tenant || current.crud !== resource.crud) {
+    const current = JSON.parse(await readFile(declarationPath, "utf8")) as { name?: string; tenant?: boolean; crud?: boolean; fields?: unknown; authorization?: unknown; pagination?: unknown };
+    const intended = { fields: resource.fields, authorization: resource.authorization ?? { read: "resource:read", write: "resource:write" }, pagination: resource.pagination };
+    if (current.name !== resource.name || current.tenant !== resource.tenant || current.crud !== resource.crud || JSON.stringify({ fields: current.fields, authorization: current.authorization, pagination: current.pagination }) !== JSON.stringify(intended)) {
       throw new CliFailure(`resource ${resource.name} already exists with a different declaration`);
     }
   }
@@ -77,12 +114,17 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     created.push(path.relative(root, target));
   };
   const routePath = `/api/${n.pluralKebab}`;
+  const readPermission = resource.authorization?.read ?? "resource:read";
+  const writePermission = resource.authorization?.write ?? "resource:write";
 
   const declaration = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: resource.name,
     tenant: resource.tenant,
     crud: resource.crud,
+    fields: resource.fields,
+    authorization: { read: readPermission, write: writePermission },
+    pagination: resource.pagination,
     persistence: { table: n.snake, schema: path.relative(root, targets[4]!) },
     contracts: path.relative(root, targets[1]!),
     files: targets.slice(1).map((target) => path.relative(root, target)),
@@ -100,9 +142,12 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
 
   await writeGenerated(targets[1]!, `import { z } from "zod";
 
-export const ${n.camel}CreateSchema = z.object({ name: z.string().trim().min(1).max(200) });
+export const ${n.camel}CreateSchema = z.object({
+${resource.fields.map((field) => `  ${field.name}: ${zodExpression(field)},`).join("\n")}
+});
 export const ${n.camel}UpdateSchema = ${n.camel}CreateSchema.partial().refine((value) => Object.keys(value).length > 0, "at least one field is required");
-export const ${n.camel}Schema = ${n.camel}CreateSchema.extend({
+export const ${n.camel}Schema = z.object({
+${resource.fields.map((field) => `  ${field.name}: ${field.required ? zodExpression(field) : `${zodExpression({ ...field, required: true })}.nullable()`},`).join("\n")}
   id: z.string().uuid(),
   organizationId: z.string().min(1),
   createdAt: z.coerce.date(),
@@ -116,7 +161,7 @@ export type Update${n.className} = z.infer<typeof ${n.camel}UpdateSchema>;
   await writeGenerated(targets[2]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
 
 export interface ${n.className}Repository {
-  list(): Promise<${n.className}[]>;
+  list(input: { cursor?: string; limit: number }): Promise<{ items: ${n.className}[]; nextCursor?: string }>;
   get(id: string): Promise<${n.className} | null>;
   create(input: Create${n.className}): Promise<${n.className}>;
   update(id: string, input: Update${n.className}): Promise<${n.className} | null>;
@@ -125,7 +170,7 @@ export interface ${n.className}Repository {
 
 export class ${n.className}Service {
   constructor(private readonly repository: ${n.className}Repository) {}
-  list() { return this.repository.list(); }
+  list(input: { cursor?: string; limit: number }) { return this.repository.list(input); }
   get(id: string) { return this.repository.get(id); }
   create(input: Create${n.className}) { return this.repository.create(input); }
   update(id: string, input: Update${n.className}) { return this.repository.update(id, input); }
@@ -136,12 +181,15 @@ export class ${n.className}Service {
   await writeGenerated(targets[3]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
 import { ${n.camel}, type Database } from "@${project}/db";
 import type { ${n.className}Repository } from "@${project}/domain";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, gt } from "drizzle-orm";
 
 export class Postgres${n.className}Repository implements ${n.className}Repository {
   constructor(private readonly database: Database, private readonly organizationId: string) {}
-  async list(): Promise<${n.className}[]> {
-    return await this.database.select().from(${n.camel}).where(eq(${n.camel}.organizationId, this.organizationId));
+  async list(input: { cursor?: string; limit: number }): Promise<{ items: ${n.className}[]; nextCursor?: string }> {
+    const rows = await this.database.select().from(${n.camel}).where(and(eq(${n.camel}.organizationId, this.organizationId), input.cursor ? gt(${n.camel}.id, input.cursor) : undefined)).orderBy(asc(${n.camel}.id)).limit(input.limit + 1);
+    const hasMore = rows.length > input.limit;
+    const items = hasMore ? rows.slice(0, input.limit) : rows;
+    return { items, ...(hasMore && items.at(-1) ? { nextCursor: items.at(-1)!.id } : {}) };
   }
   async get(id: string): Promise<${n.className} | null> {
     const [record] = await this.database.select().from(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).limit(1);
@@ -163,12 +211,13 @@ export class Postgres${n.className}Repository implements ${n.className}Repositor
 `);
 
   await writeGenerated(targets[4]!, `import { sql } from "drizzle-orm";
-import { index, pgPolicy, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgPolicy, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+${[...new Set(resource.fields.filter((field) => field.type === "relation").map((field) => field.references!.resource))].map((related) => `import { ${names(related).camel} } from "./${names(related).kebab}-schema.js";`).join("\n")}
 
 export const ${n.camel} = pgTable("${n.snake}", {
   id: uuid("id").defaultRandom().primaryKey(),
   organizationId: text("organization_id").notNull(),
-  name: text("name").notNull(),
+${resource.fields.map((field) => `  ${field.name}: ${columnExpression(field)},`).join("\n")}
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
@@ -210,16 +259,24 @@ async function operation<T>(execution: AppVariables["execution"], event: string,
 }
 ${n.camel}Routes.get("${routePath}", async (context) => {
   const execution = context.get("execution");
-  return context.json({ ${n.camel}s: await operation(execution, "resource.${n.kebab}.list", () => service(execution).list()) });
+  execution.access.require({ plane: "organization", permission: "${readPermission}" });
+  const cursor = context.req.query("cursor");
+  const requestedLimit = Number(context.req.query("limit") ?? "${resource.pagination.defaultLimit}");
+  if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > ${resource.pagination.maxLimit}) return context.json({ error: "validation_failed", message: "limit must be between 1 and ${resource.pagination.maxLimit}" }, 400);
+  if (cursor && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(cursor)) return context.json({ error: "validation_failed", message: "cursor must be a UUID" }, 400);
+  const page = await operation(execution, "resource.${n.kebab}.list", () => service(execution).list({ ...(cursor ? { cursor } : {}), limit: requestedLimit }));
+  return context.json({ ${n.camel}s: page.items, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) });
 });
 ${n.camel}Routes.post("${routePath}", async (context) => {
   const parsed = ${n.camel}CreateSchema.safeParse(await context.req.json());
   if (!parsed.success) return context.json({ error: "validation_failed", issues: parsed.error.issues }, 400);
   const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "${writePermission}" });
   return context.json({ ${n.camel}: await operation(execution, "resource.${n.kebab}.create", () => service(execution).create(parsed.data)) }, 201);
 });
 ${n.camel}Routes.get("${routePath}/:id", async (context) => {
   const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "${readPermission}" });
   const record = await operation(execution, "resource.${n.kebab}.read", () => service(execution).get(context.req.param("id")));
   return record ? context.json({ ${n.camel}: record }) : context.json({ error: "Not found" }, 404);
 });
@@ -227,11 +284,13 @@ ${n.camel}Routes.patch("${routePath}/:id", async (context) => {
   const parsed = ${n.camel}UpdateSchema.safeParse(await context.req.json());
   if (!parsed.success) return context.json({ error: "validation_failed", issues: parsed.error.issues }, 400);
   const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "${writePermission}" });
   const updated = await operation(execution, "resource.${n.kebab}.update", () => service(execution).update(context.req.param("id"), parsed.data));
   return updated ? context.json({ ${n.camel}: updated }) : context.json({ error: "Not found" }, 404);
 });
 ${n.camel}Routes.delete("${routePath}/:id", async (context) => {
   const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "${writePermission}" });
   return await operation(execution, "resource.${n.kebab}.delete", () => service(execution).remove(context.req.param("id"))) ? context.body(null, 204) : context.json({ error: "Not found" }, 404);
 });
 `);
@@ -242,18 +301,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { authClient } from "../auth-client.js";
-
-const apiOrigin = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.replace(/\\\/$/u, "") ?? "";
-async function request<T>(organizationId: string, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(\`${"${apiOrigin}"}\${path}\`, { ...init, credentials: "include", headers: { "content-type": "application/json", "x-trestle-tenant": organizationId, ...init?.headers } });
-  const body = response.status === 204 ? undefined : await response.json();
-  if (!response.ok) throw new Error((body as { message?: string; error?: string } | undefined)?.message ?? (body as { error?: string } | undefined)?.error ?? \`Request failed (\${response.status})\`);
-  return body as T;
-}
+import { create${n.className}Api } from "../api/${n.kebab}.js";
 
 export function ${n.className}Screen() {
   const activeOrganization = authClient.useActiveOrganization();
   const organizationId = activeOrganization.data?.id;
+  const api = organizationId ? create${n.className}Api(organizationId) : undefined;
   const queryClient = useQueryClient();
   const key = ["${n.pluralKebab}", organizationId] as const;
   const [editing, setEditing] = useState<${n.className} | null>(null);
@@ -261,20 +314,15 @@ export function ${n.className}Screen() {
   const query = useQuery({
     queryKey: key,
     enabled: Boolean(organizationId),
-    queryFn: async () => {
-      const result = await request<{ ${n.camel}s: unknown[] }>(organizationId!, "${routePath}");
-      return result.${n.camel}s.map((record) => ${n.camel}Schema.parse(record));
-    },
+    queryFn: async () => (await api!.list()).items,
   });
   const create = useMutation({ mutationFn: async (input: unknown) => {
-    const result = await request<{ ${n.camel}: unknown }>(organizationId!, "${routePath}", { method: "POST", body: JSON.stringify(${n.camel}CreateSchema.parse(input)) });
-    return ${n.camel}Schema.parse(result.${n.camel});
+    return await api!.create(${n.camel}CreateSchema.parse(input));
   }, onSuccess: async () => await queryClient.invalidateQueries({ queryKey: key }) });
   const update = useMutation({ mutationFn: async (input: { id: string; name: string }) => {
-    const result = await request<{ ${n.camel}: unknown }>(organizationId!, \`${routePath}/\${input.id}\`, { method: "PATCH", body: JSON.stringify(${n.camel}UpdateSchema.parse({ name: input.name })) });
-    return ${n.camel}Schema.parse(result.${n.camel});
+    return await api!.update(input.id, ${n.camel}UpdateSchema.parse({ name: input.name }));
   }, onSuccess: async () => { setEditing(null); await queryClient.invalidateQueries({ queryKey: key }); } });
-  const remove = useMutation({ mutationFn: async (id: string) => await request<void>(organizationId!, \`${routePath}/\${id}\`, { method: "DELETE" }), onSuccess: async () => await queryClient.invalidateQueries({ queryKey: key }) });
+  const remove = useMutation({ mutationFn: async (id: string) => await api!.remove(id), onSuccess: async () => await queryClient.invalidateQueries({ queryKey: key }) });
   const form = useForm({ defaultValues: { name: "" }, onSubmit: async ({ value }) => { await create.mutateAsync(value); form.reset(); } });
   const error = query.error ?? create.error ?? update.error ?? remove.error;
   if (!organizationId) return <section className="card p-8"><h1 className="text-3xl font-semibold">${n.className}</h1><p className="mt-4 text-slate-600">Select an organization before managing ${n.pluralKebab}.</p></section>;
@@ -290,12 +338,40 @@ export function ${n.className}Screen() {
 }
 `);
 
+  await writeGenerated(targets[9]!, `import { ${n.camel}CreateSchema, ${n.camel}Schema, ${n.camel}UpdateSchema, type Create${n.className}, type ${n.className}, type Update${n.className} } from "@${project}/contracts";
+
+const apiOrigin = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.replace(/\\\/$/u, "") ?? "";
+async function request<T>(organizationId: string, pathname: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(\`${"${apiOrigin}"}\${pathname}\`, { ...init, credentials: "include", headers: { "content-type": "application/json", "x-trestle-tenant": organizationId, ...init?.headers } });
+  const body = response.status === 204 ? undefined : await response.json();
+  if (!response.ok) throw new Error((body as { message?: string; error?: string } | undefined)?.message ?? (body as { error?: string } | undefined)?.error ?? \`Request failed (\${response.status})\`);
+  return body as T;
+}
+
+export function create${n.className}Api(organizationId: string) {
+  return {
+    async list(input: { cursor?: string; limit?: number } = {}): Promise<{ items: ${n.className}[]; nextCursor?: string }> {
+      const query = new URLSearchParams();
+      if (input.cursor) query.set("cursor", input.cursor);
+      if (input.limit) query.set("limit", String(input.limit));
+      const result = await request<{ ${n.camel}s: unknown[]; nextCursor?: string }>(organizationId, "${routePath}" + (query.size ? "?" + query.toString() : ""));
+      return { items: result.${n.camel}s.map((item) => ${n.camel}Schema.parse(item)), ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}) };
+    },
+    async get(id: string): Promise<${n.className}> { const result = await request<{ ${n.camel}: unknown }>(organizationId, \`${routePath}/\${id}\`); return ${n.camel}Schema.parse(result.${n.camel}); },
+    async create(input: Create${n.className}): Promise<${n.className}> { const result = await request<{ ${n.camel}: unknown }>(organizationId, "${routePath}", { method: "POST", body: JSON.stringify(${n.camel}CreateSchema.parse(input)) }); return ${n.camel}Schema.parse(result.${n.camel}); },
+    async update(id: string, input: Update${n.className}): Promise<${n.className}> { const result = await request<{ ${n.camel}: unknown }>(organizationId, \`${routePath}/\${id}\`, { method: "PATCH", body: JSON.stringify(${n.camel}UpdateSchema.parse(input)) }); return ${n.camel}Schema.parse(result.${n.camel}); },
+    async remove(id: string): Promise<void> { await request<void>(organizationId, \`${routePath}/\${id}\`, { method: "DELETE" }); },
+  };
+}
+`);
+
   await writeGenerated(targets[7]!, `import { describe, expect, it } from "vitest";
 import { ${n.camel}CreateSchema, ${n.camel}UpdateSchema } from "./${n.kebab}.js";
 
 describe("${n.className} contracts", () => {
   it("validates create and update boundaries", () => {
-    expect(${n.camel}CreateSchema.parse({ name: "Example" })).toEqual({ name: "Example" });
+    const valid = { ${resource.fields.filter(({ required }) => required).map((field) => `${field.name}: ${exampleExpression(field)}`).join(", ")} };
+    expect(${n.camel}CreateSchema.parse(valid)).toMatchObject(valid);
     expect(() => ${n.camel}CreateSchema.parse({ name: "" })).toThrow();
     expect(() => ${n.camel}UpdateSchema.parse({})).toThrow();
   });
@@ -386,4 +462,36 @@ export async function generateResourceMigration(root: string, manifest: ProjectM
   await writeFile(migrationPath, sqlSource, "utf8");
   const metaCreated = (await readdir(metaDirectory)).filter((entry) => !metaBefore.has(entry));
   return [path.relative(root, migrationPath), ...metaCreated.map((entry) => path.relative(root, path.join(metaDirectory, entry)))];
+}
+
+export async function addResourceField(root: string, manifest: ProjectManifest, resourceName: string, field: ResourceField): Promise<string[]> {
+  if (field.required) throw new CliFailure("migration-safe field additions must be optional; backfill data before making a field required");
+  const n = names(resourceName);
+  const declarationPath = path.join(root, ".trestle", "resources", `${n.kebab}.json`);
+  const declaration = JSON.parse(await readFile(declarationPath, "utf8")) as SetupResource & { schemaVersion: number };
+  if (declaration.schemaVersion !== 2 || !Array.isArray(declaration.fields)) throw new CliFailure(`resource ${resourceName} must be regenerated with a version 2 declaration before safe edits`);
+  if (declaration.fields.some(({ name }) => name === field.name)) throw new CliFailure(`resource ${resourceName} already has field ${field.name}`);
+  const contractsPath = path.join(root, manifest.packages.contracts ?? "packages/contracts", "src", "resources", `${n.kebab}.ts`);
+  const schemaPath = path.join(root, manifest.packages.db ?? "packages/db", "src", `${n.kebab}-schema.ts`);
+  let contracts = await readFile(contractsPath, "utf8");
+  const contractAnchor = "});\nexport const";
+  if (!contracts.includes(contractAnchor)) throw new CliFailure("resource contract does not contain the managed field anchor");
+  contracts = contracts.replace(contractAnchor, `  ${field.name}: ${zodExpression(field)},\n});\nexport const`);
+  const responseAnchor = "  id: z.string().uuid(),";
+  if (!contracts.includes(responseAnchor)) throw new CliFailure("resource response contract does not contain the managed field anchor");
+  contracts = contracts.replace(responseAnchor, `  ${field.name}: ${zodExpression({ ...field, required: true })}.nullable(),\n${responseAnchor}`);
+  let schema = await readFile(schemaPath, "utf8");
+  const schemaAnchor = "  createdAt: timestamp";
+  if (!schema.includes(schemaAnchor)) throw new CliFailure("resource schema does not contain the managed field anchor");
+  if (field.type === "relation") {
+    const related = names(field.references!.resource);
+    const importLine = `import { ${related.camel} } from "./${related.kebab}-schema.js";`;
+    if (!schema.includes(importLine)) schema = schema.replace("\n\nexport const", `\n${importLine}\n\nexport const`);
+  }
+  schema = schema.replace(schemaAnchor, `  ${field.name}: ${columnExpression(field)},\n${schemaAnchor}`);
+  await writeFile(contractsPath, contracts, "utf8");
+  await writeFile(schemaPath, schema, "utf8");
+  declaration.fields = [...declaration.fields, field];
+  await writeFile(declarationPath, `${JSON.stringify(declaration, null, 2)}\n`, "utf8");
+  return [path.relative(root, contractsPath), path.relative(root, schemaPath), path.relative(root, declarationPath), ...await generateResourceMigration(root, manifest, [declaration])];
 }

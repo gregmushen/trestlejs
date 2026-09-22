@@ -143,3 +143,42 @@ and records evidence in the GitHub Actions summary. Configure `NEON_PROJECT_ID`,
 `NEON_DATABASE`, `NEON_MIGRATION_ROLE`, and `DATABASE_RUNTIME_ROLE` as protected
 environment variables; keep `NEON_API_KEY` in Trestle encrypted credentials and
 provide `TRESTLE_MASTER_KEY` only to the protected GitHub environment.
+
+## Evolving a Trestle project
+
+Resource generation accepts additive field, relationship, authorization, and
+cursor-pagination declarations. Extra fields start optional so the first
+migration is safe for existing rows; relationships start nullable for the same
+reason.
+
+```bash
+pnpm exec trestle generate resource Author
+pnpm exec trestle generate resource Article \
+  --field summary:text? \
+  --field published:boolean? \
+  --field authorId:relation?:Author:set-null \
+  --read-permission resource:read \
+  --write-permission resource:write
+pnpm exec trestle resource add-field Article archived:boolean? --yes
+```
+
+Generated screens use application-owned typed API clients rather than local
+unvalidated fetch helpers. List endpoints use bounded cursor pagination, and
+every generated operation declares its organization permission before reaching
+the repository. `resource add-field` refuses required additions: add, backfill,
+verify, and only then tighten a database constraint deliberately.
+
+Project upgrades are dry-run first and preserve application-owned source and
+custom skill guidance:
+
+```bash
+pnpm exec trestle upgrade plan
+pnpm exec trestle upgrade check
+pnpm exec trestle upgrade apply --yes
+pnpm exec trestle architecture check
+```
+
+Upgrade state and framework compatibility are versioned under `.trestle`.
+Static architecture checks detect direct provider leakage into application or
+domain code, missing declared resource source, missing forced RLS, and stale
+managed-guidance markers. CI runs those checks on every change.

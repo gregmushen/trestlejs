@@ -38,6 +38,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec trestle ci validate
+      - run: pnpm exec trestle architecture check
       - run: pnpm typecheck
       - run: pnpm db:migrate
         env:

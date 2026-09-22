@@ -150,6 +150,19 @@ describe("TrestleJS CLI", () => {
     expect(workflow.stderr()).toContain("requires --yes");
   });
 
+  it("plans upgrades without mutation and requires confirmation to apply", async () => {
+    const root = await fixture();
+    const packagePath = path.join(root, "package.json");
+    await writeFile(packagePath, '{"devDependencies":{"trestlejs":"0.1.0-alpha.8"}}\n');
+    const plan = capture(root);
+    expect(await executeCli(["upgrade", "plan"], plan.runtime)).toBe(0);
+    expect(plan.stdout()).toContain("cli-version");
+    expect(await readFile(packagePath, "utf8")).toContain("alpha.8");
+    const apply = capture(root);
+    expect(await executeCli(["upgrade", "apply"], apply.runtime)).toBe(1);
+    expect(apply.stderr()).toContain("requires --yes");
+  });
+
   it("rejects runtime-role bootstrap for local and preview environments", async () => {
     const root = await fixture();
     const output = capture(root);
@@ -275,8 +288,11 @@ describe("TrestleJS CLI", () => {
     expect(repositorySource).toContain("eq(article.organizationId, this.organizationId)");
     const screenSource = await readFile(path.join(root, "apps/app/src/resources/article.tsx"), "utf8");
     expect(screenSource).toContain('const key = ["articles", organizationId] as const');
-    expect(screenSource).toContain('method: "PATCH"');
-    expect(screenSource).toContain('method: "DELETE"');
+    expect(screenSource).toContain("createArticleApi");
+    const clientSource = await readFile(path.join(root, "apps/app/src/api/article.ts"), "utf8");
+    expect(clientSource).toContain('method: "PATCH"');
+    expect(clientSource).toContain('method: "DELETE"');
+    expect(clientSource).toContain("nextCursor");
 
     const resources = capture(root);
     expect(await executeCli(["resources", "--json"], resources.runtime)).toBe(0);
