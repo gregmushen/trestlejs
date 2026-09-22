@@ -1,5 +1,7 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+
+import { wranglerCapabilityBinding, wranglerEnvironmentBlock, type CloudflareBindingCapability } from "./wrangler-config.js";
 
 import type { EnvironmentName, ProjectManifest } from "@trestlejs/core";
 
@@ -7,7 +9,7 @@ export type EnvironmentStatus = {
   environment: EnvironmentName;
   declared: boolean;
   applications: Array<{ name: string; path: string; present: boolean }>;
-  capabilities: Array<{ name: keyof ProjectManifest["capabilities"]; state: "declared" | "unavailable" }>;
+  capabilities: Array<{ name: keyof ProjectManifest["capabilities"]; state: "declared" | "configured" | "unavailable" }>;
   requiredSecrets: Array<{ name: string; target: "worker" | "ci" }>;
   requiredVariables: string[];
 };
@@ -18,9 +20,14 @@ export async function inspectEnvironmentStatus(root: string, manifest: ProjectMa
     path: relativePath,
     present: await access(path.join(root, relativePath)).then(() => true, () => false),
   })));
+  const workerConfig = manifest.apps.worker ? await readFile(path.join(root, manifest.apps.worker, "wrangler.jsonc"), "utf8").catch(() => "") : "";
+  const workerBlock = wranglerEnvironmentBlock(workerConfig, environment);
+  const cloudflareCapabilities = new Set<CloudflareBindingCapability>(["queues", "r2", "workflows", "durableObjects"]);
   const capabilities = Object.entries(manifest.capabilities).map(([name, enabled]) => ({
     name: name as keyof ProjectManifest["capabilities"],
-    state: enabled ? "declared" as const : "unavailable" as const,
+    state: !enabled ? "unavailable" as const
+      : environment !== "local" && cloudflareCapabilities.has(name as CloudflareBindingCapability) && wranglerCapabilityBinding(workerBlock, name as CloudflareBindingCapability) ? "configured" as const
+      : "declared" as const,
   }));
   const requiredSecrets = Object.entries(manifest.secrets ?? {})
     .filter(([, declaration]) => declaration.required.includes(environment))

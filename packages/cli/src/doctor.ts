@@ -1,6 +1,6 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
+import { wranglerCapabilityBinding, wranglerEnvironmentBlock, wranglerStringVariable, type CloudflareBindingCapability } from "./wrangler-config.js";
 
 import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "@trestlejs/core";
 
@@ -236,6 +236,23 @@ export async function runDoctor(
       message: appPath ? "authenticated application is declared separately from the public site" : "apps.app is not declared",
       ...(!appPath ? { remediation: "Declare the authenticated TanStack application as apps.app" } : {}),
     });
+  }
+
+  if (environment !== "local") {
+    const workerPath = manifest.apps.worker;
+    const workerConfig = workerPath ? await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8").catch(() => "") : "";
+    const block = wranglerEnvironmentBlock(workerConfig, environment);
+    for (const capability of ["queues", "r2", "workflows", "durableObjects"] as const satisfies readonly CloudflareBindingCapability[]) {
+      if (!manifest.capabilities[capability]) continue;
+      const configured = wranglerCapabilityBinding(block, capability);
+      checks.push({
+        id: `cloudflare.${capability}.binding`,
+        group: "architecture",
+        status: configured ? "pass" : "fail",
+        message: configured ? `${capability} has a ${environment} Worker binding` : `${capability} is enabled but has no ${environment} Worker binding`,
+        ...(!configured ? { remediation: `Declare the ${capability} binding in ${workerPath ?? "apps/worker"}/wrangler.jsonc for ${environment}, or disable the capability in .trestle/project.yaml` } : {}),
+      });
+    }
   }
 
   if (manifest.secrets && Object.keys(manifest.secrets).length > 0) {
