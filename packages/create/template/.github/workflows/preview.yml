@@ -62,6 +62,11 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+      - name: Provision isolated preview R2 bucket
+        run: node scripts/cloudflare-r2.mjs ensure "${{ steps.preview.outputs.worker_name }}"
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - id: neon
         name: Provision isolated Neon branch
         run: |
@@ -194,6 +199,12 @@ jobs:
       - name: Delete isolated preview Queues
         if: always()
         run: node scripts/cloudflare-queues.mjs delete-preview "${{ steps.preview.outputs.worker_name }}"
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+      - name: Delete isolated preview R2 bucket if empty
+        if: always()
+        run: node scripts/cloudflare-r2.mjs delete-preview "${{ steps.preview.outputs.worker_name }}"
         env:
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"

@@ -11,6 +11,12 @@ export function queuesEnabled(manifestSource) {
   return /^  queues: true(?:\s+#.*)?$/mu.test(section);
 }
 
+export function r2Enabled(manifestSource) {
+  const section = manifestSource.match(/^capabilities:\s*\n((?:^[ \t]+.*\n|^\s*\n)*)/mu)?.[1];
+  if (!section || !/^  r2: (?:true|false)(?:\s+#.*)?$/mu.test(section)) throw new Error("project manifest must declare capabilities.r2");
+  return /^  r2: true(?:\s+#.*)?$/mu.test(section);
+}
+
 function resourceName(value, maximum = 63) {
   if (value.length <= maximum) return value;
   const digest = createHash("sha256").update(value).digest("hex").slice(0, 8);
@@ -22,33 +28,40 @@ export function queueNames(workerName) {
   return { primary: resourceName(`${workerName}-events`), deadLetter: resourceName(`${workerName}-events-dlq`) };
 }
 
-export function renderQueueConfig(source, environment, workerName) {
+export function artifactBucketName(workerName) {
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(workerName)) throw new Error("invalid Worker name for R2 deployment");
+  return resourceName(`${workerName}-artifacts`);
+}
+
+export function renderQueueConfig(source, environment, workerName, capabilities = { queues: true, r2: false }) {
   if (!["preview", "staging", "production"].includes(environment)) throw new Error("Queue deployment requires preview, staging, or production");
-  const { primary, deadLetter } = queueNames(workerName);
   const config = JSON.parse(source);
   if (!config.env?.[environment]) throw new Error(`Wrangler environment ${environment} is not declared`);
-  config.env[environment] = {
-    ...config.env[environment],
-    name: workerName,
-    queues: {
+  const target = { ...config.env[environment], name: workerName };
+  if (capabilities.queues) {
+    const { primary, deadLetter } = queueNames(workerName);
+    target.queues = {
       producers: [{ binding: "TRESTLE_EVENTS", queue: primary }],
       consumers: [{ queue: primary, max_batch_size: 10, max_retries: 5, dead_letter_queue: deadLetter }],
-    },
-    triggers: { ...config.env[environment].triggers, crons: ["* * * * *"] },
-  };
+    };
+    target.triggers = { ...config.env[environment].triggers, crons: ["* * * * *"] };
+  }
+  if (capabilities.r2) target.r2_buckets = [{ binding: "TRESTLE_ARTIFACTS", bucket_name: artifactBucketName(workerName) }];
+  config.env[environment] = target;
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
 async function main() {
   const [operation, environment, workerName] = process.argv.slice(2);
-  const enabled = queuesEnabled(await readFile(new URL("../.trestle/project.yaml", import.meta.url), "utf8"));
+  const manifest = await readFile(new URL("../.trestle/project.yaml", import.meta.url), "utf8");
+  const capabilities = { queues: queuesEnabled(manifest), r2: r2Enabled(manifest) };
   if (operation === "status") {
-    process.stdout.write(`enabled=${enabled}\n`);
+    process.stdout.write(`queues=${capabilities.queues} r2=${capabilities.r2}\n`);
     return;
   }
   if (operation !== "render" || !environment || !workerName) throw new Error("expected status or render <environment> <worker-name>");
   const source = await readFile(workerConfigUrl, "utf8");
-  const output = enabled ? renderQueueConfig(source, environment, workerName) : source;
+  const output = capabilities.queues || capabilities.r2 ? renderQueueConfig(source, environment, workerName, capabilities) : source;
   await writeFile(generatedConfigUrl, output);
   process.stdout.write(`${fileURLToPath(generatedConfigUrl)}\n`);
 }
