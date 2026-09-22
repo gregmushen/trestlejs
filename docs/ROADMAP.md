@@ -22,6 +22,70 @@ release.
 | Beta | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
 | v1 | Supported end-to-end product-development and deployment path with documented compatibility guarantees | Planned |
 
+## Today’s push: Alpha 7/8 → Beta candidate
+
+The goal for today is to produce a credible beta candidate from a clean
+`create-trestlejs` project. This is an execution plan, not a promise that
+beta is complete before the evidence gates pass.
+
+### Must-pass gates
+
+- [ ] **Clean-project canary:** create a fresh project from the checked-in
+  package, install with the frozen lockfile, and run the complete generated
+  typecheck, test, build, and Worker dry-run suite.
+- [ ] **Local product path:** boot PostgreSQL, create an account, complete
+  local email verification through captured email, create/select an
+  organization, and exercise generated CRUD across two tenants.
+- [ ] **Deployment path:** configure GitHub, Cloudflare, Neon, Resend, and
+  Stripe test-mode environments with encrypted secrets; deploy an isolated
+  preview and staging from GitHub Actions.
+- [ ] **Staging system gate:** run browser/API tests against the deployed
+  Astro site, React application, Worker, authentication, email, billing,
+  resource CRUD, tenant switching, forced RLS, CORS, deep links, health, and
+  invalid webhook signatures.
+- [ ] **Promotion evidence:** publish GitHub Deployment records, verify the
+  restricted runtime database role, promote the exact reviewed commit, and
+  pass production smoke checks without exposing credentials.
+- [ ] **Async smoke path:** exercise HTTP mutation → PostgreSQL outbox → Queue
+  delivery → idempotent consumer, plus one deterministic Workflow retry and
+  one artifact signed-access check.
+
+### Same-day hardening
+
+- [ ] Finish generated Cloudflare Queue, Workflow, and R2 binding/config
+  support behind capability flags.
+- [ ] Connect the Worker mutation path to the transactional outbox and wire
+  the Queue consumer to the event registry.
+- [ ] Add PostgreSQL-backed artifact metadata, retention, and cleanup.
+- [ ] Align Drizzle snapshots and make migration generation idempotent.
+- [ ] Add protected Resend/Stripe test-mode integration tests and staging
+  recipient protection.
+- [ ] Add operational checks for deployment identity, bindings, migration
+  state, runtime role, queue/DLQ state, and provider mode.
+
+### Beta-candidate exit criteria
+
+We can call the result a **beta candidate** only when a clean generated
+project can complete the following without manual source repair:
+
+```text
+create project
+  → configure encrypted environments
+  → boot locally and verify email/auth/tenancy/RLS
+  → deploy preview
+  → deploy staging
+  → pass deployed system gate
+  → promote the same commit
+  → pass production smoke checks
+  → exercise async delivery and recovery
+  → record non-secret evidence
+```
+
+If a provider account, domain verification, or deployment credential blocks a
+gate, record the exact external prerequisite and keep the local substitute
+and deterministic test green. Do not mark that gate complete on the basis of
+unit tests alone.
+
 ## Alpha 6: trustworthy vertical slice
 
 Alpha 6 makes `trestle generate resource <Name> --tenant --crud` a complete,
