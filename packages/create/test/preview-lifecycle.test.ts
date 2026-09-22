@@ -40,6 +40,40 @@ async function api(handler: (request: IncomingMessage, response: ServerResponse)
 }
 
 describe("preview lifecycle", () => {
+  it("runs provider preflight before Neon or staging/production database mutations", async () => {
+    const preview = await readFile(path.join(template, ".github/workflows/preview.yml"), "utf8");
+    const deploy = await readFile(path.join(template, ".github/workflows/deploy.yml"), "utf8");
+    expect(preview.indexOf("cloudflare-preflight.mjs")).toBeGreaterThan(0);
+    expect(preview.indexOf("cloudflare-preflight.mjs")).toBeLessThan(preview.indexOf("neon-preview.mjs ensure"));
+    expect(preview.indexOf("trestle doctor --env preview")).toBeLessThan(preview.indexOf("neon-preview.mjs ensure"));
+    expect(deploy.indexOf("trestle doctor --env staging")).toBeLessThan(deploy.indexOf("Bootstrap staging runtime role"));
+    expect(deploy.indexOf("trestle doctor --env production")).toBeLessThan(deploy.indexOf("Bootstrap production runtime role"));
+    expect((deploy.match(/cloudflare-preflight\.mjs/gu) ?? [])).toHaveLength(2);
+  });
+
+  it("verifies Cloudflare token and Pages account access before provider mutation", async () => {
+    const requests: string[] = [];
+    const base = await api((request, response) => {
+      requests.push(request.url ?? "");
+      response.setHeader("content-type", "application/json");
+      response.end(request.url === "/user/tokens/verify" ? '{"success":true,"result":{"status":"active"}}' : '{"success":true,"result":[]}');
+    });
+    const accountId = "a".repeat(32);
+    const result = await run("cloudflare-preflight.mjs", [], { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base });
+    expect(result.code).toBe(0);
+    expect(requests).toEqual(["/user/tokens/verify", `/accounts/${accountId}/pages/projects?per_page=1`]);
+    expect(result.stdout).toContain("access verified");
+    expect(`${result.stdout}${result.stderr}`).not.toContain("top-secret");
+  });
+
+  it("fails Cloudflare preflight on rejected credentials without revealing the token", async () => {
+    const base = await api((_request, response) => { response.statusCode = 401; response.end("top-secret provider body"); });
+    const result = await run("cloudflare-preflight.mjs", [], { CLOUDFLARE_ACCOUNT_ID: "a".repeat(32), CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("rejected the configured Cloudflare token");
+    expect(`${result.stdout}${result.stderr}`).not.toContain("top-secret");
+  });
+
   it("follows only same-origin redirects in deployed smoke checks", async () => {
     const base = await api((request, response) => {
       if (request.url === "/features") {
