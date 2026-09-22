@@ -63,7 +63,7 @@ export type R2ObjectBody = { arrayBuffer(): Promise<ArrayBuffer>; size: number; 
 export type R2BucketBinding = { put(key: string, body: Uint8Array, options: { httpMetadata: { contentType: string }; customMetadata: Record<string, string> }): Promise<unknown>; get(key: string): Promise<R2ObjectBody | null>; delete(key: string): Promise<void> };
 
 export class CloudflareR2ArtifactStore implements ArtifactStore {
-  constructor(private readonly bucket: R2BucketBinding, private readonly metadata: ArtifactMetadataRepository = new InMemoryArtifactMetadataRepository()) {}
+  constructor(private readonly bucket: R2BucketBinding, private readonly metadata: ArtifactMetadataRepository) {}
   async put(input: { id: string; organizationId: string; key: string; contentType: string; body: Uint8Array }): Promise<ArtifactMetadata> {
     const storageKey = `${input.organizationId}/${input.key}`;
     await this.bucket.put(storageKey, input.body, { httpMetadata: { contentType: input.contentType }, customMetadata: { artifactId: input.id, organizationId: input.organizationId } });
