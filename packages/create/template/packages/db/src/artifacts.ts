@@ -8,9 +8,8 @@ export class PostgresArtifactMetadataRepository implements ArtifactMetadataRepos
   constructor(private readonly database: Database) {}
 
   async put(metadata: ArtifactMetadata): Promise<ArtifactMetadata> {
-    const [record] = await this.database.insert(artifactMetadata).values({ id: metadata.id, organizationId: metadata.organizationId, storageKey: metadata.key, contentType: metadata.contentType, size: metadata.size, createdAt: metadata.createdAt }).onConflictDoUpdate({ target: artifactMetadata.id, set: { storageKey: metadata.key, contentType: metadata.contentType, size: metadata.size, deletedAt: null } }).returning();
-    if (!record) throw new Error("Failed to persist artifact metadata");
-    if (record.organizationId !== metadata.organizationId) throw new Error("artifact identifier belongs to another organization");
+    const [record] = await this.database.insert(artifactMetadata).values({ id: metadata.id, organizationId: metadata.organizationId, storageKey: metadata.key, contentType: metadata.contentType, size: metadata.size, createdAt: metadata.createdAt }).onConflictDoUpdate({ target: artifactMetadata.id, set: { storageKey: metadata.key, contentType: metadata.contentType, size: metadata.size, deletedAt: null }, setWhere: eq(artifactMetadata.organizationId, metadata.organizationId) }).returning();
+    if (!record) throw new Error("artifact identifier belongs to another organization");
     return { id: record.id, organizationId: record.organizationId, key: record.storageKey, contentType: record.contentType, size: record.size, createdAt: record.createdAt };
   }
 

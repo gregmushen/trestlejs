@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { tenantConnectionString } from "./index.js";
+import { createDatabase, PostgresArtifactMetadataRepository, tenantConnectionString } from "./index.js";
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -44,6 +44,18 @@ suite("forced PostgreSQL tenant isolation", () => {
       expect((await transaction`select id from artifact_metadata order by id`).map((row) => row.id)).toEqual(["artifact-a"]);
       expect((await transaction`delete from artifact_metadata where id='artifact-b'`).count).toBe(0);
     });
+  });
+
+  it("does not mutate another tenant's artifact metadata on an identifier collision", async () => {
+    const id = `${prefix}artifact-collision`;
+    const repository = new PostgresArtifactMetadataRepository(createDatabase(connectionString!, "postgres-js"));
+    try {
+      await repository.put({ id, organizationId: "org-a", key: "org-a/original", contentType: "text/plain", size: 1, createdAt: new Date() });
+      await expect(repository.put({ id, organizationId: "org-b", key: "org-b/replacement", contentType: "text/plain", size: 2, createdAt: new Date() })).rejects.toThrow("another organization");
+      expect(await repository.get("org-a", id)).toMatchObject({ key: "org-a/original", size: 1 });
+    } finally {
+      await sql!`delete from artifact_metadata where id = ${id}`;
+    }
   });
 
   it("fails closed without tenant context", async () => {
