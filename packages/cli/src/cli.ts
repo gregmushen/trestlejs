@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -30,6 +31,7 @@ import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js"
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
+import { loadSetupPlan, startSetupConsole } from "./setup.js";
 import {
   credentialsPaths,
   editSecrets,
@@ -197,6 +199,37 @@ export function createProgram(runtime: CliRuntime): Command {
       const report = await applyUpgrade(context.root);
       await runCommand("pnpm", ["install", "--lockfile-only"], { cwd: context.root, env: process.env });
       runtime.stdout(`Applied upgrade to ${report.targetVersion}\n${report.operations.filter(({ classification }) => classification === "update").map(({ id }) => `✓ ${id}`).join("\n")}\nApplication-owned source was preserved.\n`);
+    });
+
+  program.command("setup")
+    .description("review and apply a guided local SetupPlan with encrypted credentials")
+    .option("--env <environment>", "credential and Doctor environment", environment, "local")
+    .option("--resume", "require an existing saved SetupPlan")
+    .option("--plan-only", "print the current SetupPlan diff without starting the console")
+    .option("--no-open", "print the local console URL without opening a browser")
+    .action(async (options: { env: ReturnType<typeof environment>; resume?: boolean; planOnly?: boolean; open: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      if (!context.manifest.environments.includes(options.env)) throw new CliFailure(`${options.env} is not declared in this project`);
+      const loaded = await loadSetupPlan(context.root, context.manifest, options.resume);
+      if (options.planOnly) {
+        const diff = await diffSetupPlan(context.root, context.manifest, loaded.plan, loaded.input);
+        runtime.stdout(formatPlanDiff(diff));
+        return;
+      }
+      const console = await startSetupConsole(context.root, context.manifest, options.env, selectedMasterKey(runtime), options.resume);
+      runtime.stdout(`Trestle setup: ${console.url}\nOne-time access code: ${console.accessCode}\nPress Ctrl+C to close.\n`);
+      if (options.open) {
+        const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+        const arguments_ = process.platform === "win32" ? ["/c", "start", "", console.url] : [console.url];
+        const child = spawn(opener, arguments_, { stdio: "ignore", detached: true });
+        child.on("error", () => runtime.stderr(`Open ${console.url} in a browser to continue.\n`));
+        child.unref();
+      }
+      const stop = () => { void console.close(); };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      try { await console.closed; }
+      finally { process.off("SIGINT", stop); process.off("SIGTERM", stop); await console.close().catch(() => undefined); }
     });
 
   program
