@@ -7,15 +7,17 @@ import * as authSchema from "./auth-schema.js";
 import * as billingSchema from "./billing-schema.js";
 import * as emailSchema from "./email-schema.js";
 import * as tenantSchema from "./tenant-schema.js";
+import * as outboxSchema from "./outbox-schema.js";
 
 export * from "./auth-schema.js";
 export * from "./billing-schema.js";
 export * from "./email-schema.js";
 export * from "./roles.js";
 export * from "./tenant-schema.js";
+export * from "./outbox-schema.js";
 export * from "./tenancy.js";
 
-const schema = { ...authSchema, ...billingSchema, ...emailSchema, ...tenantSchema };
+const schema = { ...authSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema };
 
 export type DatabaseDriver = "neon-http" | "postgres-js";
 
