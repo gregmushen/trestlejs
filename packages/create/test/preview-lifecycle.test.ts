@@ -45,13 +45,14 @@ describe("preview lifecycle", () => {
     const deploy = await readFile(path.join(template, ".github/workflows/deploy.yml"), "utf8");
     expect(preview.indexOf("cloudflare-preflight.mjs")).toBeGreaterThan(0);
     expect(preview.indexOf("cloudflare-preflight.mjs")).toBeLessThan(preview.indexOf("neon-preview.mjs ensure"));
+    expect(preview.indexOf("neon-preflight.mjs")).toBeLessThan(preview.indexOf("neon-preview.mjs ensure"));
     expect(preview.indexOf("trestle doctor --env preview")).toBeLessThan(preview.indexOf("neon-preview.mjs ensure"));
     expect(deploy.indexOf("trestle doctor --env staging")).toBeLessThan(deploy.indexOf("Bootstrap staging runtime role"));
     expect(deploy.indexOf("trestle doctor --env production")).toBeLessThan(deploy.indexOf("Bootstrap production runtime role"));
     expect((deploy.match(/cloudflare-preflight\.mjs/gu) ?? [])).toHaveLength(2);
   });
 
-  it("verifies Cloudflare token and Pages account access before provider mutation", async () => {
+  it("verifies Cloudflare token, Pages, and Workers account access before provider mutation", async () => {
     const requests: string[] = [];
     const base = await api((request, response) => {
       requests.push(request.url ?? "");
@@ -61,7 +62,7 @@ describe("preview lifecycle", () => {
     const accountId = "a".repeat(32);
     const result = await run("cloudflare-preflight.mjs", [], { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base });
     expect(result.code).toBe(0);
-    expect(requests).toEqual(["/user/tokens/verify", `/accounts/${accountId}/pages/projects?per_page=1`]);
+    expect(requests).toEqual(["/user/tokens/verify", `/accounts/${accountId}/pages/projects?per_page=1`, `/accounts/${accountId}/workers/scripts?per_page=1`]);
     expect(result.stdout).toContain("access verified");
     expect(`${result.stdout}${result.stderr}`).not.toContain("top-secret");
   });
