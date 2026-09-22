@@ -19,5 +19,5 @@ async function check(endpoint, label) {
 const verification = await check("/user/tokens/verify", "Cloudflare token verification");
 if (verification.result?.status !== "active") throw new Error("Cloudflare token is not active");
 await check(`/accounts/${accountId}/pages/projects?per_page=1`, "Cloudflare Pages account access");
-await check(`/accounts/${accountId}/workers/scripts?per_page=1`, "Cloudflare Workers account access");
+await check(`/accounts/${accountId}/workers/scripts`, "Cloudflare Workers account access");
 process.stdout.write("Cloudflare token, Pages, and Workers account access verified; credential values were not printed.\n");

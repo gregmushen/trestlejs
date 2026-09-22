@@ -46,7 +46,7 @@ test("Cloudflare preflight verifies token, Pages, and Workers without printing c
     assert.deepEqual(requests.map(({ path }) => path), [
       "/user/tokens/verify",
       `/accounts/${accountId}/pages/projects?per_page=1`,
-      `/accounts/${accountId}/workers/scripts?per_page=1`,
+      `/accounts/${accountId}/workers/scripts`,
     ]);
     assert.ok(requests.every(({ authorization }) => authorization === "Bearer test-cloudflare-token"));
     assert.doesNotMatch(result.stdout, /test-cloudflare-token/u);
