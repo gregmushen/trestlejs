@@ -19,6 +19,12 @@ function check(id: string, condition: boolean, message: string, evidence?: strin
   return { id, status: condition ? "pass" : "fail", message, ...(evidence ? { evidence } : {}) };
 }
 
+function occursInOrder(source: string, first: string, second: string): boolean {
+  const firstIndex = source.indexOf(first);
+  const secondIndex = source.indexOf(second);
+  return firstIndex >= 0 && secondIndex > firstIndex;
+}
+
 export async function validateCi(root: string): Promise<CiValidationReport> {
   const checks: CiValidationCheck[] = [];
   const sources = new Map<string, string>();
@@ -61,18 +67,27 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     "preview deployment is restricted to trusted repository branches",
   ));
   checks.push(check("ci.preview.environment", preview.includes("environment: preview"), "preview uses the protected preview environment"));
-  checks.push(check("ci.preview.runtime-role", preview.includes("db:roles:configure") && preview.includes("db:roles:verify"), "preview configures and verifies a restricted database runtime role"));
+  checks.push(check("ci.preview.runtime-role", preview.includes("bootstrap-managed") && preview.includes("db:roles:configure") && preview.includes("db:roles:verify"), "preview bootstraps, configures, and verifies a restricted database runtime role"));
+  checks.push(check("ci.preview.migrate-before-role", occursInOrder(preview, "Bootstrap restricted preview runtime role", "Migrate preview database") && occursInOrder(preview, "Migrate preview database", "Configure preview database roles"), "preview bootstraps its runtime login, then migrates before configuring database roles"));
   checks.push(check("ci.preview.isolated-cloudflare", preview.includes("--worker-name") && preview.includes("cloudflare-pages.mjs ensure"), "preview uses isolated Worker and Pages resources"));
   checks.push(check("ci.preview.cleanup", preview.includes("types: [opened, synchronize, reopened, closed]") && preview.includes("cloudflare-worker.mjs delete") && preview.includes("cloudflare-pages.mjs delete"), "closed pull requests clean up isolated Cloudflare resources"));
   checks.push(check("ci.preview.dynamic-smoke", preview.includes("steps.preview.outputs.api_url") && preview.includes("steps.preview.outputs.app_url") && preview.includes("steps.preview.outputs.site_url"), "preview smoke tests use derived per-PR URLs"));
   checks.push(check("ci.preview.deployment-evidence", (preview.match(/github-deployment\.mjs/gu) ?? []).length >= 2, "preview publishes and deactivates URL-bearing GitHub Deployments"));
-  checks.push(check("ci.preview.isolated-database", preview.includes("neon-preview.mjs ensure") && preview.includes("neon-preview.mjs runtime") && preview.includes("neon-preview.mjs delete") && preview.includes("steps.neon-runtime.outputs.runtime_url"), "preview provisions, configures, uses, and deletes an isolated Neon branch"));
+  checks.push(check("ci.preview.isolated-database", preview.includes("neon-preview.mjs ensure") && preview.includes("neon-preview.mjs delete") && preview.includes("steps.runtime-role.outputs.runtime_url"), "preview provisions, configures, uses, and deletes an isolated Neon branch"));
 
   const deploy = sources.get("deploy.yml") ?? "";
   checks.push(check("ci.deploy.serialized", deploy.includes("cancel-in-progress: false"), "staging and production deployment is serialized"));
   checks.push(check("ci.deploy.promotion-gate", /production:[\s\S]*?needs:\s*staging/u.test(deploy), "production requires the staging job"));
   checks.push(check("ci.deploy.smoke", (deploy.match(/scripts\/smoke\.mjs/gu) ?? []).length >= 2, "staging and production run deployed smoke tests"));
-  checks.push(check("ci.deploy.runtime-role", (deploy.match(/db:roles:configure/gu) ?? []).length >= 2 && (deploy.match(/db:roles:verify/gu) ?? []).length >= 2, "staging and production configure and verify restricted database runtime roles"));
+  checks.push(check("ci.deploy.runtime-role", (deploy.match(/db:roles:bootstrap/gu) ?? []).length >= 2 && (deploy.match(/db:roles:configure/gu) ?? []).length >= 2 && (deploy.match(/db:roles:verify/gu) ?? []).length >= 2, "staging and production bootstrap, configure, and verify restricted database runtime roles"));
+  checks.push(check(
+    "ci.deploy.migrate-before-role",
+    occursInOrder(deploy, "Bootstrap staging runtime role", "Migrate staging")
+      && occursInOrder(deploy, "Migrate staging", "Configure staging database roles")
+      && occursInOrder(deploy, "Bootstrap production runtime role", "Migrate production")
+      && occursInOrder(deploy, "Migrate production", "Configure production database roles"),
+    "staging and production bootstrap runtime logins, then migrate before configuring database roles",
+  ));
 
   return { checks, valid: checks.every(({ status }) => status === "pass") };
 }

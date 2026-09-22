@@ -55,4 +55,28 @@ describe("generated CI deployment contract", () => {
     const report = await validateCi(root);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.cleanup", status: "fail" }));
   });
+
+  it("rejects database role configuration before migrations", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+
+    const previewPath = path.join(root, ".github", "workflows", "preview.yml");
+    const preview = await readFile(previewPath, "utf8");
+    await writeFile(previewPath, preview
+      .replace("Migrate preview database", "ROLE_SETUP_PLACEHOLDER")
+      .replace("Configure preview database roles", "Migrate preview database")
+      .replace("ROLE_SETUP_PLACEHOLDER", "Configure preview database roles"));
+
+    const deployPath = path.join(root, ".github", "workflows", "deploy.yml");
+    const deploy = await readFile(deployPath, "utf8");
+    await writeFile(deployPath, deploy
+      .replace("Migrate staging", "ROLE_SETUP_PLACEHOLDER")
+      .replace("Configure staging database roles", "Migrate staging")
+      .replace("ROLE_SETUP_PLACEHOLDER", "Configure staging database roles"));
+
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.migrate-before-role", status: "fail" }));
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.migrate-before-role", status: "fail" }));
+  });
 });

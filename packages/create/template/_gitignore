@@ -8,5 +8,6 @@ dist/
 !.env.example
 config/master.key
 config/*.key
+config/credentials/*.key
 *.log
 .DS_Store

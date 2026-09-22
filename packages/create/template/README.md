@@ -55,14 +55,26 @@ Staging and production use separate database credentials:
 The generated deployment workflow grants that login permission to assume the
 non-login `trestle_app` role, rejects superuser or `BYPASSRLS` runtime roles,
 runs migrations with the migration credential, and verifies the runtime
-credential before deploying. Preview derives equivalent credentials from its
-isolated Neon branch without committing them. Configure `APP_URL`, `API_URL`, `SITE_URL`, and
+credential before deploying. Create the restricted login and write its generated
+connection URL directly into encrypted credentials with:
+
+```bash
+pnpm exec trestle db roles bootstrap --env staging --role trestle_runtime --yes
+pnpm exec trestle db roles bootstrap --env production --role trestle_runtime --yes
+```
+
+The command never prints the generated password or connection URL. Preview
+bootstraps an equivalent restricted login inside its isolated Neon branch and
+passes the masked URL only between deployment steps. Configure `APP_URL`, `API_URL`, `SITE_URL`, and
 `DATABASE_RUNTIME_ROLE` independently in the `preview`, `staging`, and
 `production` GitHub environments. Preview also requires
 `CLOUDFLARE_WORKERS_SUBDOMAIN`.
 
 Trusted pull requests receive isolated, deterministically named Workers and
 Pages projects. Closing the pull request deletes those Cloudflare resources.
+Use a long-lived, account-scoped `CLOUDFLARE_API_TOKEN` with Workers Scripts
+and Pages edit access in each GitHub deployment environment; an interactive
+Wrangler OAuth access token is not a durable CI credential.
 `CLOUDFLARE_WORKERS_SUBDOMAIN` is the account label before `.workers.dev`; it
 is used to derive the Worker URL exercised by the preview smoke gate. Preview
 database branching is a separate provider lifecycle and must be configured

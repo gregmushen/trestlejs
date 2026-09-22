@@ -88,6 +88,9 @@ describe("createProject", () => {
     const deployWorkflow = await readFile(path.join(result.directory, ".github", "workflows", "deploy.yml"), "utf8");
     expect(deployWorkflow).toContain("actions/checkout@11d5960a326750d5838078e36cf38b85af677262");
     expect(deployWorkflow).toContain("pnpm exec trestle secrets check --env staging");
+    expect(deployWorkflow).toContain("db:roles:bootstrap");
+    expect(deployWorkflow.indexOf("Migrate staging")).toBeLessThan(deployWorkflow.indexOf("Configure staging database roles"));
+    expect(deployWorkflow.indexOf("Migrate production")).toBeLessThan(deployWorkflow.indexOf("Configure production database roles"));
     expect(deployWorkflow).not.toContain("trestlejs@latest");
     const previewWorkflow = await readFile(path.join(result.directory, ".github", "workflows", "preview.yml"), "utf8");
     expect(previewWorkflow).toContain("--worker-name");
@@ -95,6 +98,8 @@ describe("createProject", () => {
     expect(previewWorkflow).toContain("cloudflare-pages.mjs delete");
     expect(previewWorkflow).toContain("neon-preview.mjs ensure");
     expect(previewWorkflow).toContain("neon-preview.mjs delete");
+    expect(previewWorkflow).toContain("bootstrap-managed");
+    expect(previewWorkflow.indexOf("Migrate preview database")).toBeLessThan(previewWorkflow.indexOf("Configure preview database roles"));
     const setupSkill = await readFile(
       path.join(result.directory, ".agents", "skills", "trestle-setup", "SKILL.md"),
       "utf8",
