@@ -203,18 +203,26 @@ describe("preview lifecycle", () => {
       NEON_PROJECT_ID: "project-1",
       NEON_DATABASE: "app",
       NEON_MIGRATION_ROLE: "owner",
-      NEON_RUNTIME_ROLE: "trestle_runtime",
       GITHUB_OUTPUT: output,
       GITHUB_ACTIONS: "false",
     });
     expect(result).toMatchObject({ code: 0, stdout: "Ready pr-42\n", stderr: "" });
-    expect(requests.map(({ method }) => method)).toEqual(["GET", "POST", "GET", "GET"]);
+    expect(requests.map(({ method }) => method)).toEqual(["GET", "POST", "GET"]);
     expect(JSON.parse(requests[1]!.body)).toEqual({ branch: { name: "pr-42" }, endpoints: [{ type: "read_write" }] });
     const outputs = await readFile(output, "utf8");
     expect(outputs).toContain("branch_id=br-preview-42");
     expect(outputs).toContain("migration-secret");
-    expect(outputs).toContain("runtime-secret");
+    expect(outputs).not.toContain("runtime-secret");
     expect(`${result.stdout}${result.stderr}`).not.toMatch(/neon-secret|migration-secret|runtime-secret/u);
+  });
+
+  it("resolves the runtime connection only after the restricted role is configured", async () => {
+    const base = await api((request, response) => { response.setHeader("content-type", "application/json"); if (request.url?.includes("/branches?")) response.end('{"branches":[{"id":"br-preview-42","name":"pr-42"}]}'); else response.end('{"uri":"postgresql://runtime:runtime-secret@host-pooler/db"}'); });
+    const directory = await mkdtemp(path.join(os.tmpdir(), "trestle-neon-runtime-")); temporaryDirectories.push(directory); const output = path.join(directory, "github-output");
+    const result = await run("neon-preview.mjs", ["runtime", "pr-42"], { NEON_API_BASE: base, NEON_API_KEY: "neon-secret", NEON_PROJECT_ID: "project-1", NEON_DATABASE: "app", NEON_RUNTIME_ROLE: "trestle_runtime", GITHUB_OUTPUT: output, GITHUB_ACTIONS: "false" });
+    expect(result).toMatchObject({ code: 0, stdout: "Resolved runtime connection for pr-42\n", stderr: "" });
+    expect(await readFile(output, "utf8")).toContain("runtime_url=postgresql://runtime:runtime-secret@host-pooler/db");
+    expect(`${result.stdout}${result.stderr}`).not.toMatch(/neon-secret|runtime-secret/u);
   });
 
   it("deletes an exact Neon preview branch and treats absence as idempotent", async () => {
