@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { assertRuntimeRole, bootstrapRuntimeRole, configureRuntimeRole, inspectRuntimeRole } from "./roles.js";
+import { assertRuntimeRole, bootstrapRuntimeRole, configureRuntimeRole, inspectRuntimeRole, verifyRuntimeRoleDataAccess } from "./roles.js";
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -18,6 +18,7 @@ suite("production PostgreSQL runtime role", () => {
   });
 
   afterAll(async () => {
+    await admin!`drop owned by ${admin!(runtimeRole)}`;
     await admin!`drop role if exists ${admin!(runtimeRole)}`;
     await admin!.end();
   });
@@ -33,6 +34,7 @@ suite("production PostgreSQL runtime role", () => {
     const inspected = await inspectRuntimeRole(url.toString());
     expect(inspected).toEqual(configured);
     expect(() => assertRuntimeRole(inspected, runtimeRole)).not.toThrow();
+    await expect(verifyRuntimeRoleDataAccess(url.toString())).resolves.toBeUndefined();
   });
 
   it("rejects privileged or malformed runtime roles", async () => {

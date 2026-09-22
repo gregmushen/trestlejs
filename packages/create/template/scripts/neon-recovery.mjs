@@ -52,7 +52,7 @@ if (operation === "status") {
     return uri;
   }
   const migrationUrl = await connectionUri(migrationRole, false);
-  const runtimeUrl = await connectionUri(runtimeRole, true);
+  const runtimeUrl = await connectionUri(runtimeRole, false);
   if (process.env.GITHUB_ACTIONS === "true") process.stdout.write(`::add-mask::${migrationUrl}\n::add-mask::${runtimeUrl}\n`);
   await appendFile(outputPath, `branch_id=${branch.id}\nmigration_url=${migrationUrl}\nruntime_url=${runtimeUrl}\n`, { encoding: "utf8", mode: 0o600 });
   process.stdout.write(`${JSON.stringify({ provider: "neon", source: source.name, target: branch.name, branchId: branch.id, recoveryPoint: point ?? "latest", isolated: true })}\n`);
