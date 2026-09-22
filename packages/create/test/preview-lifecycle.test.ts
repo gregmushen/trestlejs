@@ -62,7 +62,7 @@ describe("preview lifecycle", () => {
     const accountId = "a".repeat(32);
     const result = await run("cloudflare-preflight.mjs", [], { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base });
     expect(result.code).toBe(0);
-    expect(requests).toEqual(["/user/tokens/verify", `/accounts/${accountId}/pages/projects?per_page=1`, `/accounts/${accountId}/workers/scripts?per_page=1`]);
+    expect(requests).toEqual(["/user/tokens/verify", `/accounts/${accountId}/pages/projects?per_page=1`, `/accounts/${accountId}/workers/scripts`]);
     expect(result.stdout).toContain("access verified");
     expect(`${result.stdout}${result.stderr}`).not.toContain("top-secret");
   });
