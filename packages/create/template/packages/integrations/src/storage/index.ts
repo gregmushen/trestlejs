@@ -6,6 +6,18 @@ export interface ArtifactStore {
   get(organizationId: string, id: string): Promise<Artifact | null>;
   delete(organizationId: string, id: string): Promise<boolean>;
 }
+export interface ArtifactMetadataRepository {
+  put(metadata: ArtifactMetadata): Promise<ArtifactMetadata>;
+  get(organizationId: string, id: string): Promise<ArtifactMetadata | null>;
+  remove(organizationId: string, id: string): Promise<boolean>;
+}
+
+export class InMemoryArtifactMetadataRepository implements ArtifactMetadataRepository {
+  private readonly records = new Map<string, ArtifactMetadata>();
+  async put(metadata: ArtifactMetadata): Promise<ArtifactMetadata> { const existing = this.records.get(metadata.id); if (existing && existing.organizationId !== metadata.organizationId) throw new Error("artifact identifier belongs to another organization"); this.records.set(metadata.id, metadata); return metadata; }
+  async get(organizationId: string, id: string): Promise<ArtifactMetadata | null> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId ? { ...metadata } : null; }
+  async remove(organizationId: string, id: string): Promise<boolean> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId ? this.records.delete(id) : false; }
+}
 
 export function createArtifactSigner(secret: string, now: () => Date = () => new Date()) {
   if (!secret) throw new Error("artifact signing secret is required");
@@ -35,13 +47,12 @@ export type R2ObjectBody = { arrayBuffer(): Promise<ArrayBuffer>; size: number; 
 export type R2BucketBinding = { put(key: string, body: Uint8Array, options: { httpMetadata: { contentType: string }; customMetadata: Record<string, string> }): Promise<unknown>; get(key: string): Promise<R2ObjectBody | null>; delete(key: string): Promise<void> };
 
 export class CloudflareR2ArtifactStore implements ArtifactStore {
-  constructor(private readonly bucket: R2BucketBinding, private readonly metadataById: Map<string, ArtifactMetadata> = new Map()) {}
+  constructor(private readonly bucket: R2BucketBinding, private readonly metadata: ArtifactMetadataRepository = new InMemoryArtifactMetadataRepository()) {}
   async put(input: { id: string; organizationId: string; key: string; contentType: string; body: Uint8Array }): Promise<ArtifactMetadata> {
     const storageKey = `${input.organizationId}/${input.key}`;
     await this.bucket.put(storageKey, input.body, { httpMetadata: { contentType: input.contentType }, customMetadata: { artifactId: input.id, organizationId: input.organizationId } });
-    const metadata = { id: input.id, organizationId: input.organizationId, key: storageKey, contentType: input.contentType, size: input.body.byteLength, createdAt: new Date() };
-    this.metadataById.set(input.id, metadata); return metadata;
+    return await this.metadata.put({ id: input.id, organizationId: input.organizationId, key: storageKey, contentType: input.contentType, size: input.body.byteLength, createdAt: new Date() });
   }
-  async get(organizationId: string, id: string): Promise<Artifact | null> { const metadata = this.metadataById.get(id); if (!metadata || metadata.organizationId !== organizationId) return null; const object = await this.bucket.get(metadata.key); return object ? { ...metadata, body: new Uint8Array(await object.arrayBuffer()) } : null; }
-  async delete(organizationId: string, id: string): Promise<boolean> { const metadata = this.metadataById.get(id); if (!metadata || metadata.organizationId !== organizationId) return false; await this.bucket.delete(metadata.key); this.metadataById.delete(id); return true; }
+  async get(organizationId: string, id: string): Promise<Artifact | null> { const metadata = await this.metadata.get(organizationId, id); if (!metadata) return null; const object = await this.bucket.get(metadata.key); return object ? { ...metadata, body: new Uint8Array(await object.arrayBuffer()) } : null; }
+  async delete(organizationId: string, id: string): Promise<boolean> { const metadata = await this.metadata.get(organizationId, id); if (!metadata) return false; await this.bucket.delete(metadata.key); return await this.metadata.remove(organizationId, id); }
 }

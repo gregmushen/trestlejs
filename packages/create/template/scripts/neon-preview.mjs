@@ -5,7 +5,7 @@ const apiKey = process.env.NEON_API_KEY ?? "";
 const projectId = process.env.NEON_PROJECT_ID ?? "";
 const apiBase = (process.env.NEON_API_BASE ?? "https://console.neon.tech/api/v2").replace(/\/$/u, "");
 
-if (!['ensure', 'delete'].includes(operation ?? '')) throw new Error("expected ensure or delete");
+if (!['ensure', 'runtime', 'delete'].includes(operation ?? '')) throw new Error("expected ensure, runtime, or delete");
 if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(branchName ?? "")) throw new Error("invalid Neon branch name");
 if (!/^[a-z0-9-]{1,60}$/u.test(projectId)) throw new Error("NEON_PROJECT_ID is required");
 if (!apiKey) throw new Error("NEON_API_KEY is required");
@@ -38,12 +38,11 @@ if (operation === "delete") {
   }
 } else {
   const database = process.env.NEON_DATABASE ?? "";
-  const migrationRole = process.env.NEON_MIGRATION_ROLE ?? "";
-  const runtimeRole = process.env.NEON_RUNTIME_ROLE ?? "";
   const outputPath = process.env.GITHUB_OUTPUT ?? "";
-  if (!database || !migrationRole || !runtimeRole || !outputPath) throw new Error("Neon database, migration role, runtime role, and GITHUB_OUTPUT are required");
+  if (!database || !outputPath) throw new Error("Neon database and GITHUB_OUTPUT are required");
 
   let branch = await exactBranch();
+  if (!branch && operation === "runtime") throw new Error(`Neon branch ${branchName} does not exist`);
   if (!branch) {
     const response = await request(`${apiBase}/projects/${projectId}/branches`, {
       method: "POST",
@@ -62,9 +61,19 @@ if (operation === "delete") {
     return body.uri;
   }
 
-  const migrationUrl = await connectionUri(migrationRole, false);
-  const runtimeUrl = await connectionUri(runtimeRole, true);
-  if (process.env.GITHUB_ACTIONS === "true") process.stdout.write(`::add-mask::${migrationUrl}\n::add-mask::${runtimeUrl}\n`);
-  await appendFile(outputPath, `branch_id=${branch.id}\nmigration_url=${migrationUrl}\nruntime_url=${runtimeUrl}\n`, { encoding: "utf8", mode: 0o600 });
-  process.stdout.write(`Ready ${branchName}\n`);
+  if (operation === "ensure") {
+    const migrationRole = process.env.NEON_MIGRATION_ROLE ?? "";
+    if (!migrationRole) throw new Error("NEON_MIGRATION_ROLE is required");
+    const migrationUrl = await connectionUri(migrationRole, false);
+    if (process.env.GITHUB_ACTIONS === "true") process.stdout.write(`::add-mask::${migrationUrl}\n`);
+    await appendFile(outputPath, `branch_id=${branch.id}\nmigration_url=${migrationUrl}\n`, { encoding: "utf8", mode: 0o600 });
+    process.stdout.write(`Ready ${branchName}\n`);
+  } else {
+    const runtimeRole = process.env.NEON_RUNTIME_ROLE ?? "";
+    if (!runtimeRole) throw new Error("NEON_RUNTIME_ROLE is required");
+    const runtimeUrl = await connectionUri(runtimeRole, true);
+    if (process.env.GITHUB_ACTIONS === "true") process.stdout.write(`::add-mask::${runtimeUrl}\n`);
+    await appendFile(outputPath, `runtime_url=${runtimeUrl}\n`, { encoding: "utf8", mode: 0o600 });
+    process.stdout.write(`Resolved runtime connection for ${branchName}\n`);
+  }
 }

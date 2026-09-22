@@ -16,6 +16,7 @@
     "@__TRESTLE_PROJECT_NAME__/data": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/domain": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/events": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*",
     "better-auth": "1.7.5",
     "drizzle-orm": "0.45.3",

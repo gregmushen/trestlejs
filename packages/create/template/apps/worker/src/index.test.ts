@@ -18,7 +18,7 @@ vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
   }),
 }));
 
-import app from "./index.js";
+import { app } from "./index.js";
 
 const environment = {
   DATABASE_URL: "postgres://unused",

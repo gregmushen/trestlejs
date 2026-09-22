@@ -47,6 +47,14 @@ jobs:
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
+      - id: neon-runtime
+        name: Resolve restricted preview runtime connection
+        run: node scripts/neon-preview.mjs runtime "${{ steps.preview.outputs.branch }}"
+        env:
+          NEON_API_KEY: "${{ secrets.NEON_API_KEY }}"
+          NEON_PROJECT_ID: "${{ vars.NEON_PROJECT_ID }}"
+          NEON_DATABASE: "${{ vars.NEON_DATABASE }}"
+          NEON_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
       - name: Migrate preview database
         run: |
           export DATABASE_URL="${{ steps.neon.outputs.migration_url }}"
@@ -54,7 +62,7 @@ jobs:
         env: { TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}" }
       - name: Verify preview runtime role
         run: |
-          export DATABASE_URL="${{ steps.neon.outputs.runtime_url }}"
+          export DATABASE_URL="${{ steps.neon-runtime.outputs.runtime_url }}"
           pnpm --filter ./packages/db db:roles:verify
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
@@ -75,7 +83,7 @@ jobs:
       - name: Override preview database secret with isolated branch
         run: printf '%s' "$DATABASE_URL" | pnpm --filter @__TRESTLE_PROJECT_NAME__/worker exec wrangler secret put DATABASE_URL --env preview --name "${{ steps.preview.outputs.worker_name }}"
         env:
-          DATABASE_URL: "${{ steps.neon.outputs.runtime_url }}"
+          DATABASE_URL: "${{ steps.neon-runtime.outputs.runtime_url }}"
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
