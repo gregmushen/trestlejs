@@ -18,7 +18,7 @@ describe("generated CI deployment contract", () => {
     const report = await validateCi(templateRoot);
     expect(report.valid).toBe(true);
     const pinned = report.checks.filter(({ id }) => id.endsWith("actions-pinned"));
-    expect(pinned).toHaveLength(6);
+    expect(pinned).toHaveLength(7);
     expect(pinned.every(({ status }) => status === "pass")).toBe(true);
     expect(report.checks.filter(({ id }) => id.endsWith("project-cli")).every(({ status }) => status === "pass")).toBe(true);
   });
@@ -54,6 +54,17 @@ describe("generated CI deployment contract", () => {
     await writeFile(workflowPath, source.replaceAll("cloudflare-pages.mjs delete", "cloudflare-pages.mjs retain"));
     const report = await validateCi(root);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.cleanup", status: "fail" }));
+  });
+
+  it("rejects bypassing encrypted Neon preview credentials", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replaceAll("$(pnpm exec trestle secrets get NEON_API_KEY --env preview --raw)", "${{ secrets.NEON_API_KEY }}"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.encrypted-neon-credential", status: "fail" }));
   });
 
   it("rejects database role configuration before migrations", async () => {

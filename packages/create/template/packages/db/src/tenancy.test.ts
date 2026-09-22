@@ -8,6 +8,8 @@ describe("withTenant", () => {
     const url = new URL(tenantConnectionString("postgres://user:password@localhost/database", "org-a"));
     expect(url.searchParams.get("options")).toBe("-c role=trestle_app -c app.organization_id=org-a");
     expect(() => tenantConnectionString("postgres://localhost/database", "bad tenant")).toThrow("Invalid organization identifier");
+    const readOnly = new URL(tenantConnectionString("postgres://user:password@localhost/database", "org-a", { readOnly: true }));
+    expect(readOnly.searchParams.get("options")).toContain("default_transaction_read_only=on");
   });
   it("sets tenant context inside the same transaction before application work", async () => {
     const events: string[] = [];

@@ -29,9 +29,11 @@ jobs:
         run: node scripts/preview-context.mjs --project __TRESTLE_PROJECT_NAME__ --pr "${{ github.event.pull_request.number }}" --workers-subdomain "${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}" --format github >> "$GITHUB_OUTPUT"
       - id: neon
         name: Provision isolated Neon branch
-        run: node scripts/neon-preview.mjs ensure "${{ steps.preview.outputs.branch }}"
+        run: |
+          export NEON_API_KEY="$(pnpm exec trestle secrets get NEON_API_KEY --env preview --raw)"
+          node scripts/neon-preview.mjs ensure "${{ steps.preview.outputs.branch }}"
         env:
-          NEON_API_KEY: "${{ secrets.NEON_API_KEY }}"
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           NEON_PROJECT_ID: "${{ vars.NEON_PROJECT_ID }}"
           NEON_DATABASE: "${{ vars.NEON_DATABASE }}"
           NEON_MIGRATION_ROLE: "${{ vars.NEON_MIGRATION_ROLE }}"
@@ -134,6 +136,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
       - id: preview
         name: Derive isolated preview resources
         run: node scripts/preview-context.mjs --project __TRESTLE_PROJECT_NAME__ --pr "${{ github.event.pull_request.number }}" --workers-subdomain "${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}" --format github >> "$GITHUB_OUTPUT"
@@ -157,9 +163,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Delete isolated Neon branch
         if: always()
-        run: node scripts/neon-preview.mjs delete "${{ steps.preview.outputs.branch }}"
+        run: |
+          export NEON_API_KEY="$(pnpm exec trestle secrets get NEON_API_KEY --env preview --raw)"
+          node scripts/neon-preview.mjs delete "${{ steps.preview.outputs.branch }}"
         env:
-          NEON_API_KEY: "${{ secrets.NEON_API_KEY }}"
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           NEON_PROJECT_ID: "${{ vars.NEON_PROJECT_ID }}"
       - name: Deactivate GitHub Deployment
         if: always()

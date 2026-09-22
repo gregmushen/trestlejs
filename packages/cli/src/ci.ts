@@ -13,7 +13,7 @@ export type CiValidationReport = {
   valid: boolean;
 };
 
-const requiredWorkflows = ["ci.yml", "preview.yml", "deploy.yml", "secrets.yml", "diagnose.yml", "providers.yml"] as const;
+const requiredWorkflows = ["ci.yml", "preview.yml", "deploy.yml", "secrets.yml", "diagnose.yml", "providers.yml", "backup-verify.yml"] as const;
 
 function check(id: string, condition: boolean, message: string, evidence?: string): CiValidationCheck {
   return { id, status: condition ? "pass" : "fail", message, ...(evidence ? { evidence } : {}) };
@@ -78,6 +78,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.preview.dynamic-smoke", preview.includes("steps.preview.outputs.api_url") && preview.includes("steps.preview.outputs.app_url") && preview.includes("steps.preview.outputs.site_url"), "preview smoke tests use derived per-PR URLs"));
   checks.push(check("ci.preview.deployment-evidence", (preview.match(/github-deployment\.mjs/gu) ?? []).length >= 2, "preview publishes and deactivates URL-bearing GitHub Deployments"));
   checks.push(check("ci.preview.isolated-database", preview.includes("neon-preview.mjs ensure") && preview.includes("neon-preview.mjs delete") && preview.includes("steps.runtime-role.outputs.runtime_url"), "preview provisions, configures, uses, and deletes an isolated Neon branch"));
+  checks.push(check("ci.preview.encrypted-neon-credential", (preview.match(/trestle secrets get NEON_API_KEY --env preview --raw/gu) ?? []).length >= 2 && !preview.includes("secrets.NEON_API_KEY"), "preview creation and teardown use the declared encrypted Neon CI credential"));
 
   const deploy = sources.get("deploy.yml") ?? "";
   checks.push(check("ci.deploy.serialized", deploy.includes("cancel-in-progress: false"), "staging and production deployment is serialized"));
@@ -92,6 +93,12 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
       && occursInOrder(deploy, "Migrate production", "Configure production database roles"),
     "staging and production bootstrap runtime logins, then migrate before configuring database roles",
   ));
+
+  const backup = sources.get("backup-verify.yml") ?? "";
+  checks.push(check("ci.backup.scheduled", backup.includes("schedule:") && backup.includes("workflow_dispatch:"), "backup restore verification is scheduled and manually runnable"));
+  checks.push(check("ci.backup.protected", backup.includes("environment: production") && backup.includes("cancel-in-progress: false"), "backup restore verification uses the protected production environment and cannot overlap"));
+  checks.push(check("ci.backup.isolated", backup.includes("backup verify --env production --to restore-test --yes") && backup.includes("NEON_PROJECT_ID") && backup.includes("DATABASE_RUNTIME_ROLE"), "backup verification restores to the declared isolated target with migration and runtime role checks"));
+  checks.push(check("ci.backup.evidence", backup.includes("recovery-evidence.json") && backup.includes("GITHUB_STEP_SUMMARY"), "backup verification records non-secret recovery evidence"));
 
   return { checks, valid: checks.every(({ status }) => status === "pass") };
 }

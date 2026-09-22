@@ -93,3 +93,53 @@ pnpm exec trestle ci validate
 pnpm exec trestle env status --env staging
 pnpm exec trestle logs --env staging --status error
 ```
+
+## Operations and recovery
+
+Local development is deterministic. `trestle dev` applies the idempotent
+default seed; `trestle dev --fresh --yes` removes only this project's declared
+Compose volumes and Wrangler local state before migrating and reseeding. Use
+`pnpm exec trestle db seed --scenario demo` or `tenant-isolation` for explicit
+fixtures. Tests can use the fixed, advanceable clock exported by the context
+package without sleeping.
+
+The application console is tenant-bound and read-only by default:
+
+```bash
+pnpm exec trestle console --tenant <slug>
+pnpm exec trestle console --tenant <slug> --write
+pnpm exec trestle console --platform-admin
+```
+
+Tenant and platform access are separate authority planes. The console exposes
+curated application helpers rather than a raw database handle, records session
+audit events, and requires explicit confirmation for remote environments.
+
+Queue and Cloudflare Workflow operations are similarly explicit:
+
+```bash
+pnpm exec trestle queue dlq list --env staging
+pnpm exec trestle queue dlq redrive <id> --env staging
+pnpm exec trestle workflow list <name> --env staging
+pnpm exec trestle workflow status <name> <instance-id> --env staging
+pnpm exec trestle workflow retry <name> <instance-id> --env staging --yes
+```
+
+Neon recovery policy lives in `.trestle/recovery.json`. Provider history alone
+is not accepted as proof of recovery. `backup verify` creates an isolated
+point-in-time branch, verifies migration history, Better Auth integrity,
+forced RLS, the restricted runtime role, and adversarial tenant isolation,
+writes non-secret evidence, and deletes the drill branch:
+
+```bash
+pnpm exec trestle backup status --env production
+pnpm exec trestle backup verify --env production --to restore-test --yes
+pnpm exec trestle restore create --env production --to restore-test --at <iso-time> --yes
+pnpm exec trestle restore delete --env production --target restore-test --yes
+```
+
+The generated weekly `backup-verify.yml` workflow runs the same protected drill
+and records evidence in the GitHub Actions summary. Configure `NEON_PROJECT_ID`,
+`NEON_DATABASE`, `NEON_MIGRATION_ROLE`, and `DATABASE_RUNTIME_ROLE` as protected
+environment variables; keep `NEON_API_KEY` in Trestle encrypted credentials and
+provide `TRESTLE_MASTER_KEY` only to the protected GitHub environment.

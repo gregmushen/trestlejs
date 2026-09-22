@@ -263,8 +263,9 @@ for the reasoning behind those decisions.
 
 ```text
 trestle dev                         boot the complete local application
+trestle dev --fresh --yes           reset only declared local state and reseed
 trestle doctor [--env <env>]        verify project and environment health
-trestle console                     open the application-aware TS console
+trestle console --tenant <slug>     open the audited tenant-safe TS console
 trestle db ...                      operate local PostgreSQL
 trestle secrets ...                 manage encrypted credentials
 trestle email ...                   inspect local transactional email
@@ -276,6 +277,9 @@ trestle apply <plan> --yes          apply reviewed supported mutations
 trestle resources                   inspect declared domain resources
 trestle routes                      inspect API routes and auth posture
 trestle logs --env <env>            tail redacted structured Worker logs
+trestle queue dlq list --env <env>  inspect dead-lettered outbox delivery
+trestle workflow status <name> <id> inspect a Cloudflare Workflow instance
+trestle backup verify ... --yes     prove an isolated Neon restore and RLS
 ```
 
 Run `pnpm exec trestle --help` and the relevant subcommand help for the exact
