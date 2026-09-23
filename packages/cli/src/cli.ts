@@ -31,6 +31,7 @@ import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js"
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
+import { formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { loadSetupPlan, startSetupConsole } from "./setup.js";
 import {
   credentialsPaths,
@@ -179,6 +180,14 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const upgrade = program.command("upgrade").description("plan and apply versioned, application-preserving project migrations");
+  upgrade.command("diff")
+    .description("inspect target-template paths without changing application-owned source")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = await planSourceDiff(context.root, context.manifest.project.name);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatSourceDiff(report));
+    });
   upgrade.command("plan")
     .option("--json", "emit versioned structured output")
     .action(async (options: { json?: boolean }, command: Command) => {

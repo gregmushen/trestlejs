@@ -42,20 +42,23 @@ function render(input: string, projectName: string): string {
     .replaceAll("__TRESTLEJS_VERSION__", TRESTLEJS_VERSION);
 }
 
-async function copyTemplate(source: string, destination: string, projectName: string): Promise<void> {
+async function copyTemplate(source: string, destination: string, projectName: string, baseline: Record<string, string>, relative = ""): Promise<void> {
   await mkdir(destination, { recursive: true });
-  for (const entry of await readdir(source, { withFileTypes: true })) {
+  for (const entry of (await readdir(source, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
     const outputName = entry.name === "_gitignore" ? ".gitignore" : entry.name;
     const sourcePath = path.join(source, entry.name);
     const destinationPath = path.join(destination, outputName);
+    const relativePath = path.posix.join(relative, outputName);
     if (entry.isDirectory()) {
-      await copyTemplate(sourcePath, destinationPath, projectName);
+      await copyTemplate(sourcePath, destinationPath, projectName, baseline, relativePath);
       continue;
     }
     if (!entry.isFile()) {
       throw new Error(`Template contains unsupported entry: ${sourcePath}`);
     }
-    await writeFile(destinationPath, render(await readFile(sourcePath, "utf8"), projectName));
+    const rendered = render(await readFile(sourcePath, "utf8"), projectName);
+    await writeFile(destinationPath, rendered);
+    baseline[relativePath] = createHash("sha256").update(rendered).digest("hex");
   }
 }
 
@@ -92,7 +95,9 @@ export async function createProject(options: CreateProjectOptions): Promise<Crea
   }
 
   try {
-    await copyTemplate(templateRoot, destination, name);
+    const baseline: Record<string, string> = {};
+    await copyTemplate(templateRoot, destination, name, baseline);
+    await writeFile(path.join(destination, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files: Object.fromEntries(Object.entries(baseline).sort(([left], [right]) => left.localeCompare(right))) }, null, 2)}\n`);
     const manifest = await loadProjectManifest(destination);
     if (manifest.project.name !== name) {
       throw new Error("Rendered project manifest name does not match target directory");

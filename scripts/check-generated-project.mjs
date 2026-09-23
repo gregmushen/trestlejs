@@ -29,6 +29,10 @@ try {
   manifest.pnpm = { ...(manifest.pnpm ?? {}), overrides: { ...(manifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await run("pnpm", ["install"], project);
+  const sourceDiff = JSON.parse(execFileSync("pnpm", ["exec", "trestle", "upgrade", "diff", "--json"], { cwd: project, encoding: "utf8" }));
+  if (!sourceDiff.data.baselineTrusted || sourceDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
+    throw new Error("Fresh generated project did not match its bundled target template");
+  }
   const migrationsPath = path.join(project, "packages", "db", "migrations");
   const journalPath = path.join(migrationsPath, "meta", "_journal.json");
   const assertMonotonicJournal = async () => {

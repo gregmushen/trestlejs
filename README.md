@@ -283,6 +283,7 @@ trestle backup verify ... --yes     prove an isolated Neon restore and RLS
 trestle architecture check          enforce static application boundaries
 trestle upgrade plan                preview an application-preserving upgrade
 trestle upgrade apply --yes         update metadata only after source-version review
+trestle upgrade diff                inventory target-template source changes
 trestle resource add-field ...      add an optional field and tracked migration
 ```
 
@@ -296,6 +297,11 @@ project. Updating the CLI with pnpm updates the package and lockfile, but a
 project whose `.trestle/framework.json` records an older template version
 remains a manual-review upgrade until its source migration is reviewed. The
 upgrade command will not relabel that source as current.
+Freshly generated projects record checksums of their generated files in
+`.trestle/template-baseline.json`. `trestle upgrade diff` compares those files
+with the target template without changing them. Older projects without a
+matching baseline receive an unverified inventory rather than an automatic
+overwrite recommendation.
 
 ## Repository packages
 
