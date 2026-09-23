@@ -282,9 +282,12 @@ subscriptions with forced tenant RLS and cross-tenant foreign-key checks.
 Alpha 38 adds tenant-owned immutable message and delivery rows plus a
 post-commit projector that reloads trusted outbox provenance, validates the
 public contract, enforces payload limits and entitlements, and snapshots active
-subscriptions idempotently. It does not yet store signing secrets, invoke the
-projector automatically, or send requests. The next slices are deterministic
-local capture, native Queue-backed delivery and recovery, and then the optional
+subscriptions idempotently. Alpha 39 adds durable, tenant-isolated local attempt
+capture with signed request snapshots, scripted responses, bounded retry, and
+an advanceable clock; local capture makes no network requests. It does not yet
+store signing secrets, invoke the projector or local capture automatically, or
+provide customer inspection UI. The next slices are secret lifecycle and
+runtime wiring, native Queue-backed delivery and recovery, and then the optional
 Svix adapter. A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

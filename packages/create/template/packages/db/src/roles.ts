@@ -108,16 +108,17 @@ export function assertRuntimeRole(status: RuntimeRoleStatus, expectedRole?: stri
 export async function verifyRuntimeRoleDataAccess(connectionString: string): Promise<void> {
   const sql = postgres(connectionString, { max: 1, prepare: false });
   try {
-    const [access] = await sql<{ auth_read: boolean; receipt_write: boolean; tenant_read: boolean; webhook_read: boolean; message_read: boolean; delivery_read: boolean }[]>`
+    const [access] = await sql<{ auth_read: boolean; receipt_write: boolean; tenant_read: boolean; webhook_read: boolean; message_read: boolean; delivery_read: boolean; attempt_read: boolean }[]>`
       select has_table_privilege(current_user, 'member', 'SELECT') as auth_read,
              has_table_privilege(current_user, 'billing_provider_event', 'INSERT') as receipt_write,
              has_table_privilege(current_user, 'tenant_record', 'SELECT') as tenant_read,
              has_table_privilege(current_user, 'webhook_endpoint', 'SELECT') as webhook_read,
              has_table_privilege(current_user, 'webhook_message', 'SELECT') as message_read,
-             has_table_privilege(current_user, 'webhook_delivery', 'SELECT') as delivery_read
+             has_table_privilege(current_user, 'webhook_delivery', 'SELECT') as delivery_read,
+             has_table_privilege(current_user, 'webhook_attempt', 'SELECT') as attempt_read
     `;
     if (!access?.auth_read || !access.receipt_write) throw new Error("Runtime login lacks required non-tenant table access");
-    if (access.tenant_read || access.webhook_read || access.message_read || access.delivery_read) throw new Error("Runtime login can read tenant records without assuming the RLS role");
+    if (access.tenant_read || access.webhook_read || access.message_read || access.delivery_read || access.attempt_read) throw new Error("Runtime login can read tenant records without assuming the RLS role");
     await sql`select id, application_role from member limit 0`;
     const url = new URL(connectionString);
     const existingOptions = url.searchParams.get("options");
