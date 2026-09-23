@@ -30,9 +30,11 @@ beta is complete before the evidence gates pass.
 
 ### Must-pass gates
 
-- [ ] **Clean-project canary:** create a fresh project from the checked-in
+- [x] **Clean-project canary:** create a fresh project from the checked-in
   package, install with the frozen lockfile, and run the complete generated
-  typecheck, test, build, and Worker dry-run suite.
+  typecheck, test, build, and Worker dry-run suite. The published Alpha 77
+  [hosted release run](https://github.com/gregmushen/trestlejs/actions/runs/35913795347)
+  passed this gate with PostgreSQL and Chromium.
 - [x] **Local product path:** boot PostgreSQL, create an account, complete
   local email verification through captured email, create/select an
   organization, and exercise generated CRUD across two tenants. The published
@@ -566,9 +568,11 @@ provider configuration gates.
 Alpha 77 adds a frozen-lockfile reinstall to the packed clean-project release
 canary and asserts that it does not rewrite the lockfile. This closes a gap
 between the first install, which necessarily resolves a new project's lock,
-and the subsequent reproducible install used in CI. The clean-project gate
-remains open until the hosted Alpha 77 release run proves this check alongside
-typecheck, tests, build, browser, and Worker dry-run checks.
+and the subsequent reproducible install used in CI. The hosted Alpha 77
+release run passed this check alongside typecheck, tests, build, browser, and
+Worker dry-run checks. The clean-project and local-product gates are complete;
+deployed provider, staging, promotion, and asynchronous provider-backed gates
+remain open.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
