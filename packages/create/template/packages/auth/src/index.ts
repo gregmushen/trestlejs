@@ -1,7 +1,8 @@
-import { createDatabase, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createDatabase, member, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import * as schema from "@__TRESTLE_PROJECT_NAME__/db";
 import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate, type R2BucketBinding } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { betterAuth } from "better-auth";
+import { and, eq } from "drizzle-orm";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization } from "better-auth/plugins";
 
@@ -75,6 +76,15 @@ export function createAuth(environment: AuthEnvironment) {
         subject: `Join ${invitedOrganization.name}`,
         template: invitationTemplate({ organizationName: invitedOrganization.name, invitationUrl: `${baseURL}/accept-invitation?id=${id}` }),
       }, { idempotencyKey: `organization-invite:${id}` }); },
+      organizationHooks: {
+        // New members have no application role; product access is granted explicitly. The one
+        // exception is bootstrap: the creator of an organization can use and administer its product.
+        afterCreateOrganization: async ({ organization: created, user }) => {
+          await createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER).update(member)
+            .set({ applicationRole: "contributor" })
+            .where(and(eq(member.organizationId, created.id), eq(member.userId, user.id)));
+        },
+      },
     })],
   });
 }

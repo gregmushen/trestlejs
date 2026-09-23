@@ -1,0 +1,1 @@
+ALTER TABLE "member" ALTER COLUMN "application_role" DROP DEFAULT;

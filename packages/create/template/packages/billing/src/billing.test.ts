@@ -24,4 +24,15 @@ describe("local billing and entitlements", () => {
     expect(entitlements.resolve("support.priority")).toMatchObject({ enabled: true, source: "override", inheritedFrom: "contract" });
     expect(entitlements.resolve("article.basic")).toMatchObject({ enabled: true, source: "plan", inheritedFrom: "pro@1" });
   });
+
+  it("never exposes an override's internal reason or author in customer-visible provenance", () => {
+    const now = new Date("2026-09-22T12:00:00.000Z");
+    const entitlements = new Entitlements(new Set(["article.basic"]), { plan: "pro", planVersion: 1, now, overrides: [
+      { code: "workflows.advanced", enabled: true, reason: "churn risk: CFO escalation, 40% discount", authorId: "operator-7", effectiveAt: new Date("2026-09-22T11:00:00.000Z") },
+    ] });
+    expect(entitlements.resolve("workflows.advanced")).toMatchObject({ enabled: true, source: "override", inheritedFrom: "contract" });
+    const customerView = JSON.stringify(entitlements.explain());
+    expect(customerView).not.toMatch(/churn|CFO|discount|operator-7/u);
+  });
 });
+

@@ -1,4 +1,4 @@
-import { createDatabase, organizationEntitlement, organizationSubscription, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createDatabase, organizationEntitlement, organizationEntitlementOverride, organizationSubscription, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { PostgresBillingProjectionRepository } from "./repository.js";
@@ -25,4 +25,22 @@ suite("tenant-scoped billing projection", () => {
       await database.delete(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId));
     }
   });
+
+  it("returns override provenance to customers without the operator's reason or author", async () => {
+    const organizationId = `billing-override-${crypto.randomUUID()}`;
+    const repository = new PostgresBillingProjectionRepository(runtimeConnectionString ?? connectionString!, "postgres-js");
+    const database = createDatabase(connectionString!, "postgres-js");
+    try {
+      await repository.put({ organizationId, provider: "local", plan: "pro", planVersion: 1, status: "active", cancelAtPeriodEnd: false, entitlements: ["article.basic"] });
+      await database.insert(organizationEntitlementOverride).values({ organizationId, entitlement: "workflows.advanced", enabled: true, reason: "internal: retention offer for churn risk", authorId: "operator-9", effectiveAt: new Date(Date.now() - 60_000) });
+      const subscription = await repository.get(organizationId);
+      expect(subscription?.effectiveEntitlements).toContainEqual(expect.objectContaining({ code: "workflows.advanced", enabled: true, source: "override", inheritedFrom: "contract" }));
+      expect(JSON.stringify(subscription)).not.toMatch(/retention offer|churn|operator-9/u);
+    } finally {
+      await database.delete(organizationEntitlementOverride).where(eq(organizationEntitlementOverride.organizationId, organizationId));
+      await database.delete(organizationEntitlement).where(eq(organizationEntitlement.organizationId, organizationId));
+      await database.delete(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId));
+    }
+  });
 });
+

@@ -320,11 +320,13 @@ the repository. `resource add-field` refuses required additions: add, backfill,
 verify, and only then tighten a database constraint deliberately.
 
 Organization membership and product-resource access are separate authority
-planes. A new member receives the application's starter `contributor` role
-(resource read/write); changing the organization role does not change that
-application role. Clearing `member.application_role` revokes resource access
-without removing membership. Applications should replace this starter policy
-with domain-specific roles before granting sensitive product actions.
+planes. New members have no application role, so an organization Owner or
+Admin has no product access until one is granted; only the organization's
+creator is bootstrapped with the starter `contributor` role (resource
+read/write). Changing the organization role does not change the application
+role, and clearing `member.application_role` revokes resource access without
+removing membership. Applications should replace this starter policy with
+domain-specific roles before granting sensitive product actions.
 
 Project upgrades are dry-run first and preserve application-owned source and
 custom skill guidance:
