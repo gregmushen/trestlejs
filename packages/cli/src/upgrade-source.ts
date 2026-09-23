@@ -75,6 +75,24 @@ function adjacentAlpha(from: string | null, to: string): boolean {
   return Boolean(before && after && Number(after![1]) === Number(before![1]) + 1);
 }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+async function expectedPackageManifest(root: string, projectName: string, templateRoot: string): Promise<boolean> {
+  if (!(await safeApplicationPath(root, "package.json"))) return false;
+  try {
+    const current = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+    const target = JSON.parse(render(await readFile(path.join(templateRoot, "package.json"), "utf8"), projectName));
+    return canonicalJson(current) === canonicalJson(target);
+  } catch { return false; }
+}
+
 /** Read-only inventory of paths owned by the target template. It never reads
  * through an application symlink and never assumes a missing baseline means
  * that application source is safe to replace. */
@@ -131,8 +149,10 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
   if (upgrade.operations.find(({ id }) => id === "cli-version")?.classification !== "already-correct") {
     throw new Error("Source apply requires the target CLI version in both package.json and pnpm-lock.yaml");
   }
+  const packageManifestMatches = await expectedPackageManifest(root, projectName, templateRoot);
   const conflicts = report.entries.filter(({ path: relative, classification }) => {
     if (relative === ".trestle/framework.json") return classification === "unsafe";
+    if (relative === "package.json" && packageManifestMatches) return false;
     const safeChange = classification === "same" || classification === "unchanged" || classification === "new";
     return !safeChange || (classification !== "same" && protectedSourcePath(relative));
   });
@@ -141,6 +161,7 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
   const changed: string[] = [];
   for (const entry of report.entries) {
     if (entry.path === ".trestle/framework.json") continue;
+    if (entry.path === "package.json" && packageManifestMatches) continue;
     if (entry.classification !== "unchanged" && entry.classification !== "new") continue;
     if (!(await safeApplicationPath(root, entry.path))) throw new Error(`Unsafe application path: ${entry.path}`);
     const current = await optionalText(path.join(root, entry.path));
