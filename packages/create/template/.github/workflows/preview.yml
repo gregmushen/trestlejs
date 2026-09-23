@@ -161,6 +161,14 @@ jobs:
           SITE_URL: "${{ steps.preview.outputs.site_url }}"
           APP_URL: "${{ steps.preview.outputs.app_url }}"
           API_URL: "${{ steps.preview.outputs.api_url }}"
+      - name: Install deployed browser runtime
+        run: pnpm exec playwright install --with-deps --only-shell chromium
+      - name: Verify deployed site and application in Chromium
+        run: pnpm test:deployed
+        env:
+          SITE_URL: "${{ steps.preview.outputs.site_url }}"
+          APP_URL: "${{ steps.preview.outputs.app_url }}"
+          API_URL: "${{ steps.preview.outputs.api_url }}"
       - name: Publish GitHub Deployment
         run: node scripts/github-deployment.mjs create "${{ steps.preview.outputs.environment }}" "${{ github.event.pull_request.head.sha }}" "${{ steps.preview.outputs.app_url }}"
         env:
@@ -174,6 +182,7 @@ jobs:
             echo "- Site: ${{ steps.preview.outputs.site_url }}"
             echo "- API: ${{ steps.preview.outputs.api_url }}"
             echo "- Smoke gate: passed"
+            echo "- Browser gate: passed"
           } >> "$GITHUB_STEP_SUMMARY"
 
   cleanup:

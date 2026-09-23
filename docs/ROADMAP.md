@@ -233,6 +233,15 @@ the selected tenant. The release canary also generates Article and exercises
 browser create, edit, delete, cache isolation, and cross-tenant API denial.
 This is local browser evidence, not a substitute for the deployed staging gate.
 
+Alpha 48 extends that browser gate across Southwind and the application:
+it follows sign-in and Pro pricing intent into hydrated React routes, checks
+API CORS through a real browser, and opens an application deep link directly.
+The same read-only browser test is required after preview, staging, and
+production HTTP smoke checks, before deployment evidence is published. Its
+deployed execution is still unverified until provider configuration lets the
+canary reach an actual deployment; authenticated staging and production
+provider flows remain separate beta work.
+
 ### Alpha 7 acceptance criteria
 
 Alpha 7 is complete when this path succeeds without manual source repair:

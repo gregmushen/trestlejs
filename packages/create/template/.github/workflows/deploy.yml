@@ -116,6 +116,11 @@ jobs:
           command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-site-staging --branch main
       - run: node scripts/smoke.mjs
         env: { TRESTLE_DEPLOY_ENV: staging, SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
+      - name: Install deployed browser runtime
+        run: pnpm exec playwright install --with-deps --only-shell chromium
+      - name: Verify deployed staging site and application in Chromium
+        run: pnpm test:deployed
+        env: { SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
       - name: Publish staging deployment evidence
         run: node scripts/github-deployment.mjs create staging "${{ github.sha }}" "${{ vars.APP_URL }}"
         env: { GITHUB_TOKEN: "${{ github.token }}" }
@@ -224,6 +229,11 @@ jobs:
           command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-site --branch main
       - run: node scripts/smoke.mjs
         env: { TRESTLE_DEPLOY_ENV: production, SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
+      - name: Install deployed browser runtime
+        run: pnpm exec playwright install --with-deps --only-shell chromium
+      - name: Verify deployed production site and application in Chromium
+        run: pnpm test:deployed
+        env: { SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
       - name: Publish production deployment evidence
         run: node scripts/github-deployment.mjs create production "${{ github.sha }}" "${{ vars.APP_URL }}"
         env: { GITHUB_TOKEN: "${{ github.token }}" }
