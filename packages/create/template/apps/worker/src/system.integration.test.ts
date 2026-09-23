@@ -99,7 +99,10 @@ suite("local product path", () => {
       expect(r2Upload.status).toBe(201);
       r2ArtifactId = (await r2Upload.json() as { artifact: { id: string } }).artifact.id;
       const [persistedArtifact] = await database.select().from(artifactMetadata).where(eq(artifactMetadata.id, r2ArtifactId)).limit(1);
-      expect(persistedArtifact).toMatchObject({ organizationId, storageKey: `${organizationId}/${r2ArtifactId}`, contentType: "text/plain" });
+      if (!persistedArtifact) throw new Error("R2 artifact metadata was not persisted");
+      expect(persistedArtifact).toMatchObject({ organizationId, contentType: "text/plain" });
+      expect(persistedArtifact.storageKey).toMatch(new RegExp(`^${organizationId}/${r2ArtifactId}/[0-9a-f-]{36}/${r2ArtifactId}$`));
+      expect(r2Objects.has(persistedArtifact.storageKey)).toBe(true);
       const r2Access = await app.request(`http://localhost:8787/api/artifacts/${r2ArtifactId}/access`, { headers: artifactHeaders }, r2Environment);
       expect(r2Access.status).toBe(200);
       const r2Url = (await r2Access.json() as { url: string }).url;

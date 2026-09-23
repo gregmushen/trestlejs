@@ -46,6 +46,17 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.system.local", status: "fail" }));
   });
 
+  it("rejects omission of durable inbox and outbox database tests", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "ci.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replace("TRESTLE_INBOX_TEST_DATABASE_URL", "SKIP_INBOX_TEST_DATABASE_URL"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.database.async", status: "fail" }));
+  });
+
   it("rejects deployed smoke tests without an explicit environment", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
