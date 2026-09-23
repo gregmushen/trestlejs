@@ -495,6 +495,12 @@ it never edits `package.json` without updating that lockfile. The existing
 canary still records Alpha 37 application source, so its upgrade remains a
 manual-review item rather than a false success. Automated source migrations
 and adjacent-version rehearsals remain beta work.
+Alpha 69 records a generated-file checksum baseline in new projects and ships
+a bundled target-template inventory. `trestle upgrade diff` is read-only and
+distinguishes matching files, untouched generated files, application edits,
+missing paths, and unsafe symlinks. The Alpha 37 canary has no baseline, so
+its 105 differing target-template paths remain unverified. Safe source apply,
+migration ordering, and a reviewed canary migration remain beta work.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

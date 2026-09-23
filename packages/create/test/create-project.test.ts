@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -59,6 +60,12 @@ describe("createProject", () => {
     ) as { scripts: Record<string, string>; devDependencies: Record<string, string> };
     expect(packageDocument.scripts.dev).toBe("trestle dev");
     expect(packageDocument.devDependencies.trestlejs).toBe(TRESTLEJS_VERSION);
+    const baseline = JSON.parse(await readFile(path.join(result.directory, ".trestle", "template-baseline.json"), "utf8")) as { schemaVersion: number; templateVersion: string; files: Record<string, string> };
+    expect(baseline.schemaVersion).toBe(1);
+    expect(baseline.templateVersion).toBe(TRESTLEJS_VERSION);
+    expect(baseline.files["apps/worker/src/index.ts"]).toBe(createHash("sha256").update(await readFile(path.join(result.directory, "apps", "worker", "src", "index.ts"))).digest("hex"));
+    expect(baseline.files[".gitignore"]).toMatch(/^[0-9a-f]{64}$/u);
+    expect(baseline.files["config/credentials.yml.enc"]).toBeUndefined();
     expect(await readFile(path.join(result.directory, "compose.yaml"), "utf8")).toContain(
       "postgres:17-alpine",
     );
