@@ -547,6 +547,26 @@ export function createProgram(runtime: CliRuntime): Command {
       if (result.stderr) runtime.stderr(result.stderr);
     });
 
+  queue.command("prune")
+    .description("preview or prune succeeded outbox records older than an explicit UTC cutoff")
+    .requiredOption("--env <environment>", "remote environment", environment)
+    .requiredOption("--before <timestamp>", "exclusive ISO UTC processed-at cutoff")
+    .option("--limit <count>", "maximum records to remove per run", "1000")
+    .option("--apply", "perform deletion; otherwise report the eligible count")
+    .action(async (options: { env: ReturnType<typeof environment>; before: string; limit: string; apply?: boolean }, command: Command) => {
+      if (options.env === "local") throw new CliFailure("local outbox retention requires a running application adapter");
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(options.before) || !Number.isFinite(new Date(options.before).getTime())) throw new CliFailure("--before must be an ISO UTC timestamp");
+      const limit = Number(options.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) throw new CliFailure("--limit must be between 1 and 10000");
+      const context = await projectContext(command, runtime);
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      if (!values.DATABASE_URL) throw new CliFailure(`DATABASE_URL is not set for ${options.env}`);
+      const operation = options.apply ? "retention-prune" : "retention-count";
+      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", operation, options.before, String(limit)], { cwd: context.root, env: { ...process.env, DATABASE_URL: values.DATABASE_URL }, stdio: "pipe" });
+      const summary = JSON.parse(result.stdout) as { count: number };
+      runtime.stdout(`${options.apply ? "Pruned" : "Eligible"} ${summary.count} succeeded outbox record(s) in ${options.env} before ${options.before}${options.apply ? ` (limit ${limit})` : " (dry run)"}\n`);
+    });
+
   const workflow = program.command("workflow").description("inspect and retry Cloudflare Workflow instances");
   workflow.command("list")
     .argument("<name>", "workflow name")

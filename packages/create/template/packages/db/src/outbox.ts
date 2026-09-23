@@ -1,4 +1,4 @@
-import { eventEnvelopeSchema, type EventEnvelope, type OutboxEntry, type OutboxStore } from "@__TRESTLE_PROJECT_NAME__/events";
+import { eventEnvelopeSchema, safeErrorCategory, type EventEnvelope, type OutboxEntry, type OutboxStore } from "@__TRESTLE_PROJECT_NAME__/events";
 import postgres from "postgres";
 
 type Row = { id: string; event_name: string; schema_version: number; occurred_at: Date; resource_type: string; resource_id: string; correlation_id: string; causation_id: string | null; idempotency_key: string; payload: unknown; status: "pending" | "leased" | "succeeded" | "dead"; attempts: number; available_at: Date; leased_until: Date | null; last_error: string | null };
@@ -30,7 +30,17 @@ export class PostgresOutboxStore implements OutboxStore {
     return rows.map(entry);
   }
   async succeed(id: string): Promise<void> { const result = await this.sql`update outbox_message set status='succeeded', leased_until=null, processed_at=now() where id=${id} and status in ('leased','succeeded')`; if (result.count === 0) throw new Error(`Outbox entry ${id} is not leased`); }
-  async fail(id: string, error: unknown, maxAttempts = 5): Promise<void> { const message = error instanceof Error ? error.message : String(error); const result = await this.sql`update outbox_message set attempts=attempts+1,last_error=${message.slice(0, 2000)},leased_until=null,status=case when attempts+1 >= ${maxAttempts} then 'dead' else 'pending' end,available_at=case when attempts+1 >= ${maxAttempts} then available_at else now()+(power(2,attempts)*interval '1 second') end where id=${id} and status='leased'`; if (result.count === 0) throw new Error(`Outbox entry ${id} is not leased`); }
+  async fail(id: string, error: unknown, maxAttempts = 5): Promise<void> { const category = safeErrorCategory(error); const result = await this.sql`update outbox_message set attempts=attempts+1,last_error=${category},leased_until=null,status=case when attempts+1 >= ${maxAttempts} then 'dead' else 'pending' end,available_at=case when attempts+1 >= ${maxAttempts} then available_at else now()+(power(2,attempts)*interval '1 second') end where id=${id} and status='leased'`; if (result.count === 0) throw new Error(`Outbox entry ${id} is not leased`); }
   async listDead(): Promise<OutboxEntry[]> { return (await this.sql<Row[]>`select * from outbox_message where status='dead' order by available_at,id`).map(entry); }
   async redrive(id: string): Promise<OutboxEntry> { const [row] = await this.sql<Row[]>`update outbox_message set status='pending',available_at=now(),leased_until=null,last_error=null where id=${id} and status='dead' returning *`; if (!row) throw new Error(`Outbox entry ${id} is not dead-lettered`); return entry(row); }
+  async countPrunableSucceeded(before: Date): Promise<number> {
+    if (!Number.isFinite(before.getTime())) throw new Error("Invalid outbox retention cutoff");
+    const [row] = await this.sql<[{ count: string }]>`select count(*)::text as count from outbox_message where status='succeeded' and processed_at < ${before}`;
+    return Number(row?.count ?? 0);
+  }
+  async pruneSucceeded(before: Date, limit = 1_000): Promise<number> {
+    if (!Number.isFinite(before.getTime()) || !Number.isInteger(limit) || limit < 1 || limit > 10_000) throw new Error("Invalid outbox retention parameters");
+    const result = await this.sql`with candidates as (select id from outbox_message where status='succeeded' and processed_at < ${before} order by processed_at,id limit ${limit} for update skip locked) delete from outbox_message using candidates where outbox_message.id=candidates.id`;
+    return result.count;
+  }
 }

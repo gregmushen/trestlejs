@@ -41,7 +41,9 @@ suite("durable Queue inbox", () => {
     try {
       const first = await inbox.claim(event);
       if (first.state !== "claimed") throw new Error("expected claim");
-      await inbox.release(key, first.token, new Error("sk_secret_should_never_persist"));
+      const sensitiveError = new Error("sk_secret_should_never_persist");
+      sensitiveError.name = "Secret sk_secret_should_never_persist";
+      await inbox.release(key, first.token, sensitiveError);
       expect((await admin`select last_error from event_inbox where idempotency_key = ${key}`)[0]).toMatchObject({ last_error: "Error" });
       const second = await inbox.claim(event);
       if (second.state !== "claimed") throw new Error("expected reclaimed event");

@@ -3,7 +3,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
 import { PostgresEventInbox } from "@__TRESTLE_PROJECT_NAME__/db";
-import { eventEnvelopeSchema, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
+import { eventEnvelopeSchema, safeErrorCategory, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { handleEventWithInbox } from "./async-runtime.js";
 import { eventConsumers } from "./index.js";
 
@@ -16,7 +16,7 @@ export class TrestleWorkflow extends WorkflowEntrypoint<AuthEnvironment, EventEn
         await handleEventWithInbox(eventConsumers, inbox, envelope, this.env);
         createLogger({ correlationId: envelope.correlationId }).info("workflow.event.completed", { workflowId: event.instanceId, eventName: envelope.name });
       } catch (error) {
-        createLogger({ correlationId: envelope.correlationId }).warn("workflow.event.retrying", { workflowId: event.instanceId, eventName: envelope.name, errorCategory: error instanceof Error ? error.name : "Error" });
+        createLogger({ correlationId: envelope.correlationId }).warn("workflow.event.retrying", { workflowId: event.instanceId, eventName: envelope.name, errorCategory: safeErrorCategory(error) });
         throw new Error("Workflow handler failed");
       } finally {
         await inbox.close();
