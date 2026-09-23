@@ -242,6 +242,14 @@ deployed execution is still unverified until provider configuration lets the
 canary reach an actual deployment; authenticated staging and production
 provider flows remain separate beta work.
 
+Alpha 49 hardens the generated browser gate after Alpha 48's tag publish job
+timed out starting its local web servers (while PR CI had passed). Browser
+tests now serve the built Astro output with a small foreground Node server,
+record each server's startup output, and give Worker/App startup a bounded
+three-minute window. The release canary verifies static routes and traversal
+rejection. Alpha 48 was not published; Alpha 49 is its superseding package
+release. Neither tag is deployed-system evidence until preview passes.
+
 ### Alpha 7 acceptance criteria
 
 Alpha 7 is complete when this path succeeds without manual source repair:

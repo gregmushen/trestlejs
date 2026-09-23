@@ -30,7 +30,8 @@ It signs up through the app, opens the locally captured verification link,
 signs in, creates two organizations, and checks that switching organizations
 also switches the visible billing state. If an Article resource is generated,
 the release canary additionally exercises browser CRUD and cross-tenant denial.
-To run it locally, migrate an isolated local database, install Chromium with
+To run it locally, migrate an isolated local database, run `pnpm build` to
+produce the Astro site, install Chromium with
 `pnpm exec playwright install --only-shell chromium`, then run
 `TRESTLE_BROWSER_DATABASE_URL=<local-postgres-url> pnpm test:browser`.
 The test starts its own Worker and app on ports 8787 and 42069; it refuses to
