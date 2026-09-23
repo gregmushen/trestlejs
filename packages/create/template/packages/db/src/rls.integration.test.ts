@@ -117,6 +117,33 @@ suite("forced PostgreSQL tenant isolation", () => {
     }
   });
 
+  it("makes a requested R2 deletion inaccessible before physical cleanup and recoverable after failure", async () => {
+    const id = `${prefix}customer-delete`;
+    const repository = new PostgresArtifactMetadataRepository(createDatabase(connectionString!, "postgres-js"));
+    const createdAt = new Date("2026-01-01T00:00:00Z");
+    const key = `org-a/${id}`;
+    try {
+      await repository.put({ id, organizationId: "org-a", key, contentType: "text/plain", size: 1, createdAt });
+      expect(await repository.beginDeletion("org-a", id)).toBeNull();
+      expect(await repository.complete("org-a", id, key)).toBe(true);
+      expect(await repository.beginDeletion("org-b", id)).toBeNull();
+      expect(await repository.get("org-a", id)).not.toBeNull();
+      expect(await repository.beginDeletion("org-a", id)).toMatchObject({ id, key });
+      expect(await repository.get("org-a", id)).toBeNull();
+      expect(await repository.complete("org-a", id, key)).toBe(false);
+      expect((await sql!`select upload_state from artifact_metadata where id = ${id}`)[0]?.upload_state).toBe("cleaning");
+      const cutoff = new Date("2026-01-02T00:00:00Z");
+      expect((await repository.listIncomplete("org-a", cutoff, 10)).map((entry) => entry.id)).toContain(id);
+      expect(await repository.claimIncomplete("org-a", id, key, cutoff)).toBe(true);
+      expect(await repository.retire("org-a", id, key)).toBe(true);
+      expect(await repository.beginDeletion("org-a", id)).toBeNull();
+      expect(await repository.get("org-a", id)).toBeNull();
+      await expect(repository.put({ id, organizationId: "org-a", key: "org-a/reuse", contentType: "text/plain", size: 1, createdAt })).rejects.toThrow("unavailable");
+    } finally {
+      await sql!`delete from artifact_metadata where id = ${id}`;
+    }
+  });
+
   it("fails closed without tenant context", async () => {
     await sql!.begin(async (transaction) => {
       await transaction`set local role trestle_app`;
