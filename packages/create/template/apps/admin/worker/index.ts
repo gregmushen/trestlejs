@@ -4,7 +4,7 @@ import { featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
-  listPlatformWebhookEndpoints, platformCommercialDetail, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
+  listPlatformApiKeys, listPlatformWebhookEndpoints, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   type DatabaseDriver, type PlatformChangeContext,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { Hono, type Context } from "hono";
@@ -198,6 +198,16 @@ admin.post("/api/admin/commercial/subscriptions/:organizationId/overrides/:entit
   return context.json({ revoked: true, correlationId: context.get("correlationId") });
 });
 
+admin.get("/api/admin/security/api-keys", async (context) => {
+  const keys = await listPlatformApiKeys(platformDatabase(context.env), { activeOnly: context.req.query("active") === "true" });
+  return context.json({ keys: keys.map((key) => ({ ...key, createdAt: key.createdAt.toISOString(), expiresAt: iso(key.expiresAt), revokedAt: iso(key.revokedAt) })) });
+});
+
+admin.post("/api/admin/security/api-keys/:organizationId/:keyId/revoke", async (context) => {
+  await platformRevokeApiKey(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), keyId: context.req.param("keyId") }, await actionContext(context));
+  return context.json({ revoked: true, correlationId: context.get("correlationId") });
+});
+
 admin.get("/api/admin/operations/artifacts", async (context) => {
   // Pending uploads older than a day are stale; the artifact maintenance job cleans them up.
   return context.json(await artifactOperations(platformDatabase(context.env), { staleBefore: new Date(Date.now() - 86_400_000) }));
@@ -237,7 +247,7 @@ admin.get("/api/admin/health", async (context) => {
 const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const;
 
 admin.onError((error, context) => {
-  if (error instanceof PlatformOperationError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code]);
+  if (error instanceof PlatformOperationError || error instanceof MachineAccessError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code]);
   createLogger({ correlationId: context.get("correlationId"), surface: "admin" }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);
 });

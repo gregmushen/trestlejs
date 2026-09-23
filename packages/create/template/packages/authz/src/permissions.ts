@@ -22,10 +22,12 @@ export const permissions = definePermissions({
   "organization.webhooks.manage": { plane: "organization", description: "Create, pause, and change webhook endpoints and subscriptions" },
   "organization.webhooks.deliveries.read": { plane: "organization", description: "Inspect webhook deliveries and attempts" },
 
-  "resource.read": { plane: "application", description: "Read tenant-owned application resources" },
-  "resource.write": { plane: "application", description: "Create, update, and delete tenant-owned application resources" },
+  "resource.read": { plane: "application", description: "Read tenant-owned application resources", principals: ["user", "api_key"] },
+  "resource.write": { plane: "application", description: "Create, update, and delete tenant-owned application resources", principals: ["user", "api_key"] },
   "application.roles.read": { plane: "application", description: "List application-role assignments in the organization" },
   "application.roles.assign": { plane: "application", description: "Grant and revoke application roles for organization members" },
+  "application.service_accounts.read": { plane: "application", description: "List service accounts and their API keys (never tokens)" },
+  "application.service_accounts.manage": { plane: "application", description: "Create service accounts and mint, rotate, and revoke their scoped API keys" },
 
   "platform.overview.read": { plane: "platform", description: "Read the platform overview and capability health" },
   "platform.organizations.read": { plane: "platform", description: "Search organizations and read their sanitized summaries" },
@@ -37,6 +39,8 @@ export const permissions = definePermissions({
   "platform.webhooks.manage": { plane: "platform", description: "Disable webhook endpoints and replay failed deliveries" },
   "platform.subscriptions.read": { plane: "platform", description: "Read organizations' plans, subscriptions, and entitlement overrides with internal reasons" },
   "platform.entitlements.manage": { plane: "platform", description: "Grant and revoke entitlement overrides" },
+  "platform.machine_access.read": { plane: "platform", description: "List service accounts and API key metadata across organizations" },
+  "platform.api_keys.revoke": { plane: "platform", description: "Revoke an organization's API key, for example after a leak" },
 });
 
 export type PermissionCode = (typeof permissions.codes)[number];

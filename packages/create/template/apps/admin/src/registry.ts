@@ -80,5 +80,9 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "POST", path: "/api/admin/commercial/subscriptions/:organizationId/overrides", permission: "platform.entitlements.manage" },
     { method: "POST", path: "/api/admin/commercial/subscriptions/:organizationId/overrides/:entitlement/revoke", permission: "platform.entitlements.manage" },
   ] },
+  { id: "machine-access", path: "/security/machine-access", label: "Machine access", group: "Security", permission: "platform.machine_access.read", api: [
+    { method: "GET", path: "/api/admin/security/api-keys" },
+    { method: "POST", path: "/api/admin/security/api-keys/:organizationId/:keyId/revoke", permission: "platform.api_keys.revoke" },
+  ] },
   { id: "artifacts", path: "/operations/artifacts", label: "Artifacts", group: "Operations", permission: "platform.operations.read", capability: "artifacts", api: [{ method: "GET", path: "/api/admin/operations/artifacts" }] },
 ]);

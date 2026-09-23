@@ -1,4 +1,4 @@
-export type Principal = Readonly<{ id: string; kind: "user" | "system"; email?: string }>;
+export type Principal = Readonly<{ id: string; kind: "user" | "service_account" | "system"; email?: string; credentialId?: string }>;
 /**
  * Authority model 3: a reviewed permission registry, organization roles from
  * membership, and separately stored application-role assignments.

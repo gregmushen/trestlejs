@@ -68,6 +68,14 @@ describe("platform admin Worker", () => {
     expect(await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "x" } })).toMatchObject({ status: 403 });
   });
 
+  it("gives machine-access oversight to security administrators only", async () => {
+    state.roles = ["platform_operator"];
+    expect((await call("GET", "/api/admin/security/api-keys")).status).toBe(403);
+    expect((await call("POST", "/api/admin/security/api-keys/org-1/K000000000000000/revoke", { body: { reason: "leak" } })).status).toBe(403);
+    state.roles = ["security_admin"];
+    expect(await call("POST", "/api/admin/security/api-keys/org-1/K000000000000000/revoke", { body: {} })).toMatchObject({ status: 400, body: { error: "invalid" } });
+  });
+
   it("exposes no sign-up, organization, or unknown admin routes on the admin origin", async () => {
     expect((await call("POST", "/api/auth/sign-up/email")).status).toBe(404);
     expect((await call("POST", "/api/auth/organization/create")).status).toBe(404);

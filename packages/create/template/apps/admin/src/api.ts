@@ -60,3 +60,4 @@ export async function adminPost<T>(path: string, body: Record<string, unknown>):
   if (!response.ok) throw new AdminApiError(response.status, payload.reason ?? payload.error ?? "request_failed", payload.message ?? "The action failed", payload.repair);
   return payload as T;
 }
+export type PlatformApiKey = { id: string; organizationId: string; serviceAccountId: string; serviceAccountName: string; name: string; environment: string; displayPrefix: string; scopes: string[]; expiresAt: string | null; createdAt: string; rotatedFrom: string | null; revokedAt: string | null; revocationReason: string | null };
