@@ -25,6 +25,18 @@ sessions, a protected dashboard, and organization creation. Replace the
 local credentials before using the app outside local development. The generated
 local document has this shape:
 
+CI runs a Chromium product test against a freshly migrated PostgreSQL database.
+It signs up through the app, opens the locally captured verification link,
+signs in, creates two organizations, and checks that switching organizations
+also switches the visible billing state. If an Article resource is generated,
+the release canary additionally exercises browser CRUD and cross-tenant denial.
+To run it locally, migrate an isolated local database, install Chromium with
+`pnpm exec playwright install --only-shell chromium`, then run
+`TRESTLE_BROWSER_DATABASE_URL=<local-postgres-url> pnpm test:browser`.
+The test starts its own Worker and app on ports 8787 and 42069; it refuses to
+reuse an unrelated service already listening on either port. It is separate
+from `pnpm check` because it requires a real browser and database.
+
 ```yaml
 BETTER_AUTH_SECRET: <randomly generated>
 BETTER_AUTH_URL: http://localhost:42069

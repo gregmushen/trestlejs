@@ -226,6 +226,13 @@ test now creates two organizations, switches the active session organization,
 and denies cross-tenant Article reads and mutations. This is local system
 evidence; deployed browser and provider gates remain open.
 
+Alpha 47 adds a real Chromium local-product gate to generated project CI and
+release verification. It signs up, opens the captured verification email,
+signs in, creates two organizations, and confirms that the billing view follows
+the selected tenant. The release canary also generates Article and exercises
+browser create, edit, delete, cache isolation, and cross-tenant API denial.
+This is local browser evidence, not a substitute for the deployed staging gate.
+
 ### Alpha 7 acceptance criteria
 
 Alpha 7 is complete when this path succeeds without manual source repair:

@@ -41,6 +41,8 @@ jobs:
           package-manager-cache: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - name: Install browser test runtime
+        run: npx --yes playwright@1.63.0 install --with-deps --only-shell chromium
       - run: pnpm check:generated
         env:
           TRESTLE_GENERATED_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_generated

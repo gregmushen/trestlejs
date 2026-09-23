@@ -51,5 +51,11 @@ jobs:
           TRESTLE_SYSTEM_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_test
           TRESTLE_PROVIDER_INTEGRATION_TESTS: "0"
       - run: pnpm build
+      - name: Install browser test runtime
+        run: pnpm exec playwright install --with-deps --only-shell chromium
+      - name: Exercise the local product in Chromium
+        run: pnpm test:browser
+        env:
+          TRESTLE_BROWSER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_test
       - name: Validate Wrangler configuration
         run: pnpm --filter @__TRESTLE_PROJECT_NAME__/worker exec wrangler deploy --dry-run

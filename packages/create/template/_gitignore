@@ -11,5 +11,7 @@ config/master.key
 config/*.key
 config/credentials/*.key
 *.log
+playwright-report/
+test-results/
 .trestle/recovery-evidence/
 .DS_Store

@@ -13,10 +13,12 @@
     "db:migrate": "pnpm --filter ./packages/db db:migrate",
     "db:seed": "tsx seed/index.ts",
     "dev": "trestle dev",
+    "test:browser": "playwright test",
     "test": "node --test scripts/provider-preflight.test.mjs scripts/queue-config.test.mjs scripts/cloudflare-queues.test.mjs scripts/cloudflare-r2.test.mjs && pnpm -r test",
     "typecheck": "tsc --noEmit -p tsconfig.tools.json && pnpm -r typecheck"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "26.6.2",
     "drizzle-orm": "0.45.3",
     "postgres": "3.4.9",

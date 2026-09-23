@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["scripts/**/*.ts", "seed/**/*.ts"]
+  "include": ["scripts/**/*.ts", "seed/**/*.ts", "playwright.config.ts", "tests/browser/**/*.ts"]
 }
