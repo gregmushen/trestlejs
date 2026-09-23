@@ -60,6 +60,10 @@ try {
       throw new Error(`Generated ${resource} Worker route or event handler was not registered`);
     }
   }
+  const articleScreen = await readFile(path.join(project, "apps", "app", "src", "resources", "article.tsx"), "utf8");
+  if (!articleScreen.includes('session?.user.id, organizationId') || !articleScreen.includes('enabled: Boolean(session?.user.id && organizationId)')) {
+    throw new Error("Generated resource query is not scoped to both the current user and organization");
+  }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "resource", "add-field", "Article", "archived:boolean?", "--yes"], project);
