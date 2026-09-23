@@ -33,9 +33,11 @@ beta is complete before the evidence gates pass.
 - [ ] **Clean-project canary:** create a fresh project from the checked-in
   package, install with the frozen lockfile, and run the complete generated
   typecheck, test, build, and Worker dry-run suite.
-- [ ] **Local product path:** boot PostgreSQL, create an account, complete
+- [x] **Local product path:** boot PostgreSQL, create an account, complete
   local email verification through captured email, create/select an
-  organization, and exercise generated CRUD across two tenants.
+  organization, and exercise generated CRUD across two tenants. The published
+  Alpha 76 release canary completed this with PostgreSQL and Chromium in
+  [its hosted release run](https://github.com/gregmushen/trestlejs/actions/runs/35911785778).
 - [ ] **Deployment path:** configure GitHub, Cloudflare, Neon, Resend, and
   Stripe test-mode environments with encrypted secrets; deploy an isolated
   preview and staging from GitHub Actions.
@@ -561,6 +563,12 @@ canonical staging Worker variables and reject unsafe Resend/Stripe modes.
 Deterministic generated-project tests cover configuration selection. This does
 not replace live provider verification or close the canary preview's missing
 provider configuration gates.
+Alpha 77 adds a frozen-lockfile reinstall to the packed clean-project release
+canary and asserts that it does not rewrite the lockfile. This closes a gap
+between the first install, which necessarily resolves a new project's lock,
+and the subsequent reproducible install used in CI. The clean-project gate
+remains open until the hosted Alpha 77 release run proves this check alongside
+typecheck, tests, build, browser, and Worker dry-run checks.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
