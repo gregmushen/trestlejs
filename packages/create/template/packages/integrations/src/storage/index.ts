@@ -13,18 +13,36 @@ export interface ArtifactMetadataRepository {
   remove(organizationId: string, id: string): Promise<boolean>;
   discard(organizationId: string, id: string, key: string): Promise<boolean>;
   retire(organizationId: string, id: string, key: string): Promise<boolean>;
+  listIncomplete(organizationId: string, before: Date, limit: number): Promise<ArtifactMetadata[]>;
+  claimIncomplete(organizationId: string, id: string, key: string, before: Date): Promise<boolean>;
+}
+
+function validateRecovery(before: Date, limit: number): void {
+  if (!Number.isFinite(before.getTime()) || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid artifact recovery parameters");
 }
 
 export class InMemoryArtifactMetadataRepository implements ArtifactMetadataRepository {
   private readonly records = new Map<string, ArtifactMetadata>();
   private readonly reservedIds = new Set<string>();
   private readonly pendingIds = new Set<string>();
+  private readonly cleaningIds = new Set<string>();
   async put(metadata: ArtifactMetadata): Promise<ArtifactMetadata> { if (this.reservedIds.has(metadata.id)) throw new Error("artifact identifier is unavailable"); this.records.set(metadata.id, metadata); this.reservedIds.add(metadata.id); this.pendingIds.add(metadata.id); return metadata; }
   async complete(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key || !this.pendingIds.has(id)) return false; this.pendingIds.delete(id); return true; }
-  async get(organizationId: string, id: string): Promise<ArtifactMetadata | null> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId && !this.pendingIds.has(id) ? { ...metadata } : null; }
-  async remove(organizationId: string, id: string): Promise<boolean> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId && !this.pendingIds.has(id) ? this.records.delete(id) : false; }
+  async get(organizationId: string, id: string): Promise<ArtifactMetadata | null> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId && !this.pendingIds.has(id) && !this.cleaningIds.has(id) ? { ...metadata } : null; }
+  async remove(organizationId: string, id: string): Promise<boolean> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId && !this.pendingIds.has(id) && !this.cleaningIds.has(id) ? this.records.delete(id) : false; }
   async discard(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key || !this.pendingIds.has(id)) return false; this.pendingIds.delete(id); this.reservedIds.delete(id); return this.records.delete(id); }
-  async retire(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key) return false; this.pendingIds.delete(id); return this.records.delete(id); }
+  async retire(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key) return false; this.pendingIds.delete(id); this.cleaningIds.delete(id); return this.records.delete(id); }
+  async listIncomplete(organizationId: string, before: Date, limit: number): Promise<ArtifactMetadata[]> {
+    validateRecovery(before, limit);
+    return [...this.records.values()].filter((metadata) => metadata.organizationId === organizationId && metadata.createdAt < before && (this.pendingIds.has(metadata.id) || this.cleaningIds.has(metadata.id)))
+      .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id)).slice(0, limit).map((metadata) => ({ ...metadata }));
+  }
+  async claimIncomplete(organizationId: string, id: string, key: string, before: Date): Promise<boolean> {
+    if (!Number.isFinite(before.getTime())) throw new Error("Invalid artifact recovery cutoff");
+    const metadata = this.records.get(id);
+    if (metadata?.organizationId !== organizationId || metadata.key !== key || metadata.createdAt >= before || (!this.pendingIds.has(id) && !this.cleaningIds.has(id))) return false;
+    this.pendingIds.delete(id); this.cleaningIds.add(id); return true;
+  }
 }
 
 export function createArtifactSigner(secret: string, now: () => Date = () => new Date()) {
@@ -98,4 +116,19 @@ export class CloudflareR2ArtifactStore implements ArtifactStore {
   }
   async get(organizationId: string, id: string): Promise<Artifact | null> { const metadata = await this.metadata.get(organizationId, id); if (!metadata) return null; const object = await this.bucket.get(metadata.key); return object ? { ...metadata, body: new Uint8Array(await object.arrayBuffer()) } : null; }
   async delete(organizationId: string, id: string): Promise<boolean> { const metadata = await this.metadata.get(organizationId, id); if (!metadata) return false; await this.bucket.delete(metadata.key); return await this.metadata.remove(organizationId, id); }
+  async recoverIncomplete(organizationId: string, before: Date, limit = 25): Promise<{ claimed: number; retired: number; failed: number }> {
+    validateRecovery(before, limit);
+    if (!organizationId) throw new Error("Artifact owner is required for recovery");
+    const candidates = await this.metadata.listIncomplete(organizationId, before, limit);
+    let claimed = 0; let retired = 0; let failed = 0;
+    for (const artifact of candidates) {
+      if (!await this.metadata.claimIncomplete(organizationId, artifact.id, artifact.key, before)) continue;
+      claimed += 1;
+      try { await this.bucket.delete(artifact.key); }
+      catch { failed += 1; continue; }
+      try { if (await this.metadata.retire(organizationId, artifact.id, artifact.key)) retired += 1; else failed += 1; }
+      catch { failed += 1; }
+    }
+    return { claimed, retired, failed };
+  }
 }
