@@ -7,3 +7,4 @@ export * from "./roles.js";
 export * from "./route-policy.js";
 export * from "./routes.js";
 
+export * from "./platform.js";

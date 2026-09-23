@@ -11,9 +11,13 @@
     "db:roles:configure": "tsx scripts/runtime-role.ts configure",
     "db:roles:verify": "tsx scripts/runtime-role.ts verify",
     "test": "vitest run --passWithNoTests",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:platform:configure": "tsx scripts/platform-role.ts configure",
+    "db:platform:verify": "tsx scripts/platform-role.ts verify",
+    "platform:admin": "tsx scripts/platform-admin.ts"
   },
   "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/events": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*",
     "@neondatabase/serverless": "1.1.0",

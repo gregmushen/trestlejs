@@ -5,6 +5,7 @@ import postgres from "postgres";
 
 import * as accessSchema from "./access-schema.js";
 import * as auditSchema from "./audit-schema.js";
+import * as platformSchema from "./platform-schema.js";
 import * as authSchema from "./auth-schema.js";
 import * as artifactSchema from "./artifact-schema.js";
 import * as artifactMaintenanceSchema from "./artifact-maintenance-schema.js";
@@ -21,6 +22,8 @@ export * from "./access-schema.js";
 export * from "./application-roles.js";
 export * from "./audit-schema.js";
 export * from "./audit.js";
+export * from "./platform-schema.js";
+export * from "./platform-roles.js";
 export * from "./auth-schema.js";
 export * from "./artifact-schema.js";
 export * from "./artifact-maintenance-schema.js";
@@ -50,7 +53,7 @@ export * from "./outbox.js";
 export * from "./inbox.js";
 export * from "./tenancy.js";
 
-const schema = { ...accessSchema, ...auditSchema, ...authSchema, ...artifactSchema, ...artifactMaintenanceSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema, ...webhookSchema, ...webhookProjectionSchema, ...webhookAttemptSchema, ...webhookSecretSchema };
+const schema = { ...accessSchema, ...auditSchema, ...platformSchema, ...authSchema, ...artifactSchema, ...artifactMaintenanceSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema, ...webhookSchema, ...webhookProjectionSchema, ...webhookAttemptSchema, ...webhookSecretSchema };
 
 export type DatabaseDriver = "neon-http" | "neon-serverless" | "postgres-js";
 
@@ -82,6 +85,22 @@ export function tenantConnectionString(connectionString: string, organizationId:
 
 export function createTenantDatabase(connectionString: string, driver: DatabaseDriver | undefined, organizationId: string, options: { readOnly?: boolean } = {}) {
   return createDatabase(tenantConnectionString(connectionString, organizationId, options), driver);
+}
+
+/**
+ * The platform admin's connection: assumes trestle_platform, never trestle_app,
+ * and sets no tenant. Platform reads are limited to explicit grants and policies.
+ */
+export function platformConnectionString(connectionString: string): string {
+  const url = new URL(connectionString);
+  const existing = url.searchParams.get("options");
+  if (existing && /(?:^|\s)-c\s*role=/u.test(existing)) throw new Error("The platform connection string must not already select a database role");
+  url.searchParams.set("options", [existing, "-c role=trestle_platform"].filter(Boolean).join(" "));
+  return url.toString();
+}
+
+export function createPlatformDatabase(connectionString: string, driver: DatabaseDriver | undefined) {
+  return createDatabase(platformConnectionString(connectionString), driver);
 }
 
 export type Database = ReturnType<typeof createDatabase>;

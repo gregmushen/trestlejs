@@ -32,4 +32,7 @@ export const auditEvent = pgTable("audit_event", {
   check("audit_event_outcome_check", sql`${table.outcome} IN ('succeeded', 'denied', 'failed')`),
   pgPolicy("audit_event_tenant_select", { for: "select", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
   pgPolicy("audit_event_tenant_insert", { for: "insert", to: "trestle_app", withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
+  // The platform admin reads all history and records platform actions (any tenant or none).
+  pgPolicy("audit_event_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
+  pgPolicy("audit_event_platform_insert", { for: "insert", to: "trestle_platform", withCheck: sql`true` }),
 ]).enableRLS();

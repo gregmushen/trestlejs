@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { AccessDeniedError, AccessEvaluator, publicDenial } from "./access.js";
 import { permissions } from "./permissions.js";
+import { platformAccess } from "./platform.js";
 import { memberDefaultApplicationRoles, organizationCreatorApplicationRoles, unknownApplicationRoles } from "./policies.js";
 import { definePermissions, PermissionRegistryError } from "./registry.js";
 import { applicationRoles, organizationRoles, platformRoles } from "./role-definitions.js";
@@ -74,6 +75,15 @@ describe("access evaluation", () => {
     }
     const tenantAdmin = subject(["owner"], ["app_admin"]);
     for (const { code } of permissions.list("platform")) expect(tenantAdmin.explain({ permission: code }).reason).toBe("permission_missing");
+  });
+
+  it("resolves admin access from platform roles only, never granting tenant permissions", () => {
+    const { access, unknownRoles } = platformAccess("operator-1", ["platform_operator", "ghost"]);
+    expect(unknownRoles).toEqual(["ghost"]);
+    expect(access.check({ permission: "platform.organizations.read" })).toBe(true);
+    expect(access.check({ permission: "platform.roles.manage" })).toBe(false);
+    for (const { code } of [...permissions.list("organization"), ...permissions.list("application")]) expect(access.check({ permission: code })).toBe(false);
+    expect(platformAccess("user-1", []).access.permitted()).toEqual([]);
   });
 
   it("fails closed on unknown permissions and missing entitlements", () => {
