@@ -30,7 +30,7 @@ function requireReason(reason: string): string {
 }
 
 function pageSize(limit: number | undefined): number {
-  return Math.min(Math.max(Math.trunc(limit ?? 50), 1), 100);
+  return Math.min(Math.max(Math.trunc(Number.isFinite(limit) ? limit! : 50), 1), 100);
 }
 
 const auditContext = (context: PlatformChangeContext) => ({ actor: context.actor, environment: context.environment, correlationId: context.correlationId, ...(context.now ? { occurredAt: context.now } : {}) });

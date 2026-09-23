@@ -81,6 +81,19 @@ suite("platform admin Worker against PostgreSQL", () => {
     await sql!`delete from support_session where id = ${id}`;
   });
 
+  it("shows recent audit activity on the overview only with platform.audit.read", async () => {
+    const commercial = `${run}-commercial`;
+    await sql!`insert into "user" (id, name, email, email_verified, created_at, updated_at) values (${commercial}, ${commercial}, ${`${commercial}@example.test`}, true, now(), now())`;
+    await grantPlatformRole(createDatabase(connectionString!, "postgres-js"), { userId: commercial, role: "commercial_admin" }, { actor: { type: "system", id: "test" }, reason: "overview test", environment: "local", correlationId: `${run}-corr` });
+    signedIn = commercial;
+    const limited = await (await admin.request("/api/admin/overview", undefined, environment)).json() as { organizations: number; recentAudit: unknown[] };
+    expect(limited.organizations).toBeGreaterThanOrEqual(1);
+    expect(limited.recentAudit).toEqual([]);
+    signedIn = operator;
+    expect(((await (await admin.request("/api/admin/overview", undefined, environment)).json()) as { recentAudit: unknown[] }).recentAudit.length).toBeGreaterThan(0);
+    await sql!`delete from platform_role_assignment where user_id = ${commercial}`;
+  });
+
   it("denies a tenant Owner with no platform role", async () => {
     signedIn = owner;
     const response = await admin.request("/api/admin/overview", undefined, environment);

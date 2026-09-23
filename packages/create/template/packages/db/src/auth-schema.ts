@@ -105,8 +105,8 @@ export const member = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     role: text("role").default("member").notNull(),
-    /** Product authority, separate from organization `role`. Null means no application role:
-     *  members start without one; only the organization creator is bootstrapped (packages/auth). */
+    /** Legacy authority model 2 column, retained unused for rollback (migration 0020). Application
+     *  authority now lives in application_role_assignment; nothing reads or writes this for access. */
     applicationRole: text("application_role"),
     createdAt: timestamp("created_at").notNull(),
   },

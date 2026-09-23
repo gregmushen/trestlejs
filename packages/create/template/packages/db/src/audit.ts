@@ -80,7 +80,7 @@ export type AuditRecord = Readonly<{ id: string; occurredAt: Date; name: string;
  * reason stay internal: customers see that the platform acted, what changed, and the correlation ID.
  */
 export async function listAuditEvents(database: Database, organizationId: string, options: Readonly<{ limit?: number; before?: Date }> = {}): Promise<AuditRecord[]> {
-  const limit = Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), 100);
+  const limit = Math.min(Math.max(Math.trunc(Number.isFinite(options.limit) ? options.limit! : 50), 1), 100);
   const rows = await database.select({
     id: auditEvent.id, occurredAt: auditEvent.occurredAt, name: auditEvent.name, actorType: auditEvent.actorType, actorId: auditEvent.actorId,
     targetType: auditEvent.targetType, targetId: auditEvent.targetId, reason: auditEvent.reason, summary: auditEvent.summary, outcome: auditEvent.outcome, correlationId: auditEvent.correlationId,

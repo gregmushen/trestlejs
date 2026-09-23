@@ -157,7 +157,7 @@ export type PlatformApiKey = ApiKeySummary & Readonly<{ organizationId: string; 
 
 /** API keys across organizations, without verifiers, for the platform admin. */
 export async function listPlatformApiKeys(database: Database, options: Readonly<{ activeOnly?: boolean; limit?: number }> = {}): Promise<PlatformApiKey[]> {
-  const limit = Math.min(Math.max(Math.trunc(options.limit ?? 100), 1), 200);
+  const limit = Math.min(Math.max(Math.trunc(Number.isFinite(options.limit) ? options.limit! : 100), 1), 200);
   return await database.select({ ...keyColumns, organizationId: apiKey.organizationId, serviceAccountName: serviceAccount.name }).from(apiKey)
     .innerJoin(serviceAccount, and(eq(serviceAccount.id, apiKey.serviceAccountId), eq(serviceAccount.organizationId, apiKey.organizationId)))
     .where(options.activeOnly ? isNull(apiKey.revokedAt) : undefined)

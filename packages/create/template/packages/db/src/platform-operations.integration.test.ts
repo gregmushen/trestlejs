@@ -57,6 +57,8 @@ suite("platform operations on the trestle_platform connection", () => {
   it("reads operational metadata but never payloads, envelopes, destinations, lease tokens, or storage keys", async () => {
     const platform = createPlatformDatabase(connectionString!, "postgres-js");
     expect((await listDeadOutboxEvents(platform, { limit: 100 })).map(({ id }) => id)).toContain(ids.outbox);
+    // A non-numeric page size falls back to the default instead of reaching SQL.
+    expect(Array.isArray(await listDeadOutboxEvents(platform, { limit: Number("abc") }))).toBe(true);
     expect((await listPlatformWebhookEndpoints(platform, { limit: 100 })).find(({ id }) => id === ids.endpoint)).toMatchObject({ organizationId, state: "active" });
     const failed = await listFailedWebhookDeliveries(platform, { limit: 100 });
     expect(failed.find(({ id }) => id === ids.dead)).toMatchObject({ state: "exhausted", replayable: true, eventType: "article.published" });

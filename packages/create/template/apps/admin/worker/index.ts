@@ -4,7 +4,7 @@ import { featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
-  activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportOrganizationView,
+  activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportableOrganizations, supportOrganizationView,
   listPlatformApiKeys, listPlatformWebhookEndpoints, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   type DatabaseDriver, type PlatformChangeContext,
 } from "@__TRESTLE_PROJECT_NAME__/db";
@@ -126,7 +126,7 @@ admin.get("/api/admin/session", (context) => {
   });
 });
 
-admin.get("/api/admin/overview", async (context) => context.json(await overview(platformDatabase(context.env))));
+admin.get("/api/admin/overview", async (context) => context.json(await overview(platformDatabase(context.env), { includeAudit: context.get("access").check({ permission: "platform.audit.read" }) })));
 
 type AdminContext = Context<{ Bindings: AdminEnvironment; Variables: Variables }>;
 
@@ -201,10 +201,10 @@ admin.post("/api/admin/commercial/subscriptions/:organizationId/overrides/:entit
 
 admin.get("/api/admin/support/sessions", async (context) => {
   const database = platformDatabase(context.env);
-  const [sessions, organizations] = await Promise.all([listSupportSessions(database, { operatorId: context.get("operator").id }), listPlatformSubscriptions(database)]);
+  const [sessions, organizations] = await Promise.all([listSupportSessions(database, { operatorId: context.get("operator").id }), supportableOrganizations(database)]);
   return context.json({
     sessions: sessions.map((session) => ({ ...session, startedAt: session.startedAt.toISOString(), expiresAt: session.expiresAt.toISOString(), endedAt: iso(session.endedAt) })),
-    organizations: organizations.map((row) => ({ ...row, currentPeriodEnd: iso(row.currentPeriodEnd) })),
+    organizations,
   });
 });
 

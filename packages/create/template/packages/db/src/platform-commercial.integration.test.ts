@@ -47,6 +47,9 @@ suite("platform commercial controls", () => {
     await grantEntitlementOverride(platform, { organizationId, entitlement: "support.priority", enabled: true }, context("internal: churn-risk retention offer", new Date(Date.now() - 2_000)));
     await grantEntitlementOverride(platform, { organizationId, entitlement: "support.priority", enabled: false }, context("contract amended", new Date(Date.now() - 1_000)));
     await expect(grantEntitlementOverride(platform, { organizationId: `${run}-missing`, entitlement: "support.priority", enabled: true }, context("x"))).rejects.toThrow("does not exist");
+    await sql!`insert into organization (id, name, slug, created_at) values (${`${run}-free`}, 'Free', ${`${run}-free`}, now())`;
+    await expect(grantEntitlementOverride(platform, { organizationId: `${run}-free`, entitlement: "support.priority", enabled: true }, context("x"))).rejects.toThrow("no subscription");
+    await sql!`delete from organization where id = ${`${run}-free`}`;
     let detail = await platformCommercialDetail(platform, organizationId);
     expect(detail.planEntitlements).toEqual(["article.basic"]);
     expect(detail.overrides.map((override) => [override.enabled, override.removalReason])).toEqual([[false, null], [true, "superseded by a newer override"]]);

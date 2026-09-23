@@ -67,8 +67,13 @@ export async function activeSupportSession(database: Database, sessionId: string
   return session ?? null;
 }
 
+/** Organizations a support session can target: identity only, never commercial state. */
+export async function supportableOrganizations(database: Database): Promise<Array<{ organizationId: string; organizationName: string }>> {
+  return await database.select({ organizationId: organization.id, organizationName: organization.name }).from(organization).orderBy(organization.name, organization.id).limit(200);
+}
+
 export async function listSupportSessions(database: Database, options: Readonly<{ operatorId?: string; limit?: number }> = {}): Promise<SupportSession[]> {
-  const limit = Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), 100);
+  const limit = Math.min(Math.max(Math.trunc(Number.isFinite(options.limit) ? options.limit! : 50), 1), 100);
   return await database.select(columns).from(supportSession).where(options.operatorId ? eq(supportSession.operatorId, options.operatorId) : undefined)
     .orderBy(desc(supportSession.startedAt)).limit(limit);
 }

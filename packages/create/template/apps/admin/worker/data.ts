@@ -10,11 +10,12 @@ export async function platformRolesFor(database: Database, userId: string): Prom
   return await activePlatformRoles(database, userId);
 }
 
-export async function overview(database: Database) {
+/** Counts need `platform.overview.read`; recent audit activity additionally needs `platform.audit.read`. */
+export async function overview(database: Database, options: Readonly<{ includeAudit: boolean }>) {
   const [organizations] = await database.select({ total: count(organization.id) }).from(organization);
   const [users] = await database.select({ total: count(user.id) }).from(user);
   const [operators] = await database.select({ total: countDistinct(platformRoleAssignment.userId) }).from(platformRoleAssignment).where(isNull(platformRoleAssignment.revokedAt));
-  const recentAudit = await database.select({
+  const recentAudit = !options.includeAudit ? [] : await database.select({
     name: auditEvent.name, occurredAt: auditEvent.occurredAt, actorType: auditEvent.actorType, organizationId: auditEvent.organizationId, outcome: auditEvent.outcome, correlationId: auditEvent.correlationId,
   }).from(auditEvent).orderBy(desc(auditEvent.occurredAt)).limit(10);
   return {
