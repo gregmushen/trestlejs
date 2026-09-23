@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, ne } from "drizzle-orm";
 import { artifactMetadata } from "./artifact-schema.js";
 import { artifactMaintenanceCursor } from "./artifact-maintenance-schema.js";
 import { organization } from "./auth-schema.js";
@@ -36,6 +36,36 @@ export async function artifactReferenceCursorName(organizationId: string): Promi
   if (!/^[A-Za-z0-9_-]+$/u.test(organizationId)) throw new Error("Invalid artifact audit organization");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(organizationId));
   return `artifact-ref-${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 48)}`;
+}
+
+export async function artifactOrphanCursorName(organizationId: string): Promise<string> {
+  return (await artifactReferenceCursorName(organizationId)).replace("artifact-ref-", "artifact-orphan-");
+}
+
+/** Inspect a physical key only through the tenant role; pending and cleaning
+ * reservations count as references while their cleanup is in flight. A retired
+ * row does not protect a physical object from being reported as leaked. */
+export async function hasArtifactStorageKey(tenantDatabase: Database, organizationId: string, key: string): Promise<boolean> {
+  if (!key.startsWith(`${organizationId}/`)) throw new Error("Artifact key is outside the tenant prefix");
+  const [record] = await tenantDatabase.select({ id: artifactMetadata.id }).from(artifactMetadata)
+    .where(and(eq(artifactMetadata.organizationId, organizationId), eq(artifactMetadata.storageKey, key), ne(artifactMetadata.uploadState, "deleted"), isNull(artifactMetadata.deletedAt))).limit(1);
+  return !!record;
+}
+
+/** The cursor is an opaque R2 continuation token, never an object key. */
+export async function getArtifactOrphanCursor(cursorDatabase: Database, organizationId: string): Promise<string> {
+  const name = await artifactOrphanCursorName(organizationId);
+  await cursorDatabase.insert(artifactMaintenanceCursor).values({ name }).onConflictDoNothing();
+  const [record] = await cursorDatabase.select({ afterId: artifactMaintenanceCursor.afterId }).from(artifactMaintenanceCursor)
+    .where(eq(artifactMaintenanceCursor.name, name)).limit(1);
+  if (!record) throw new Error("Artifact orphan audit cursor is unavailable");
+  return record.afterId;
+}
+
+export async function advanceArtifactOrphanCursor(cursorDatabase: Database, organizationId: string, previous: string, next: string): Promise<boolean> {
+  const name = await artifactOrphanCursorName(organizationId);
+  return (await cursorDatabase.update(artifactMaintenanceCursor).set({ afterId: next, updatedAt: new Date() })
+    .where(and(eq(artifactMaintenanceCursor.name, name), eq(artifactMaintenanceCursor.afterId, previous))).returning()).length > 0;
 }
 
 /** The login role advances only a cursor; artifact selection uses forced tenant

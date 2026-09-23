@@ -90,7 +90,9 @@ export class LocalArtifactStore implements ArtifactStore {
 
 export type R2ObjectBody = { arrayBuffer(): Promise<ArrayBuffer>; size: number; httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> };
 export type R2ObjectMetadata = { size: number; httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> };
-export type R2BucketBinding = { put(key: string, body: Uint8Array, options: { httpMetadata: { contentType: string }; customMetadata: Record<string, string> }): Promise<unknown>; get(key: string): Promise<R2ObjectBody | null>; head?(key: string): Promise<R2ObjectMetadata | null>; delete(key: string): Promise<void> };
+export type R2ListedObject = R2ObjectMetadata & { key: string; uploaded: Date };
+export type R2ListPage = { objects: R2ListedObject[]; truncated: boolean; cursor?: string };
+export type R2BucketBinding = { put(key: string, body: Uint8Array, options: { httpMetadata: { contentType: string }; customMetadata: Record<string, string> }): Promise<unknown>; get(key: string): Promise<R2ObjectBody | null>; head?(key: string): Promise<R2ObjectMetadata | null>; list?(options: { prefix: string; limit: number; cursor?: string }): Promise<R2ListPage>; delete(key: string): Promise<void> };
 
 export class CloudflareR2ArtifactStore implements ArtifactStore {
   constructor(private readonly bucket: R2BucketBinding, private readonly metadata: ArtifactMetadataRepository) {}

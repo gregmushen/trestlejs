@@ -1,11 +1,12 @@
 import { PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
-import { artifactMetadata, createDatabase, createTenantDatabase, eventInbox, organization, organizationEntitlement, organizationSubscription, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { artifactMetadata, createDatabase, createTenantDatabase, eventInbox, hasArtifactStorageKey, organization, organizationEntitlement, organizationSubscription, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { TrestleWorkflow } from "./cloudflare-workflow.js";
 import { runArtifactReferenceAudit } from "./artifact-reference-audit.js";
+import { runArtifactOrphanAudit } from "./artifact-orphan-audit.js";
 import worker, { app } from "./index.js";
 
 const databaseUrl = process.env.TRESTLE_SYSTEM_TEST_DATABASE_URL;
@@ -119,6 +120,18 @@ suite("local product path", () => {
         (item) => findings.push(item),
       )).toEqual({ selected: 1, checked: 1, skipped: 0, missing: 0, mismatched: 0, failed: 0 });
       expect(findings).toEqual([]);
+      const orphanKey = `${organizationId}/unreferenced/private-object`;
+      r2Objects.set(orphanKey, new TextEncoder().encode("unreferenced"));
+      const orphanFindings: unknown[] = [];
+      const orphanResult = await runArtifactOrphanAudit(organizationId!, [
+        { key: persistedArtifact.storageKey, size: 16, uploaded: new Date("2026-01-01T00:00:00Z") },
+        { key: orphanKey, size: 12, uploaded: new Date("2026-01-01T00:00:00Z") },
+      ], (tenantId, key) => hasArtifactStorageKey(createTenantDatabase(databaseUrl!, "postgres-js", tenantId, { readOnly: true }), tenantId, key),
+      (key) => r2Environment.TRESTLE_ARTIFACTS.head(key), (item) => orphanFindings.push(item), new Date("2026-09-23T12:00:00Z"));
+      expect(orphanResult).toEqual({ listed: 2, checked: 2, skipped: 0, orphaned: 1, failed: 0 });
+      expect(orphanFindings).toMatchObject([{ organizationId, reason: "orphan" }]);
+      expect(JSON.stringify(orphanFindings)).not.toContain(orphanKey);
+      r2Objects.delete(orphanKey);
       const r2Access = await app.request(`http://localhost:8787/api/artifacts/${r2ArtifactId}/access`, { headers: artifactHeaders }, r2Environment);
       expect(r2Access.status).toBe(200);
       const r2Url = (await r2Access.json() as { url: string }).url;

@@ -60,8 +60,8 @@ beta is complete before the evidence gates pass.
   adds bounded scheduled cleanup for incomplete R2 uploads. Alpha 61 makes
   requested deletion fail closed and durably retries failed R2 cleanup;
   Alpha 63 audits ready PostgreSQL references against R2 metadata in bounded,
-  tenant-scoped pages. Ready-object retention, orphan R2 object detection,
-  and restore-time provider verification remain.
+  tenant-scoped pages. Alpha 64 adds the inverse bounded, read-only R2 orphan
+  audit. Ready-object retention and restore-time provider verification remain.
 - [ ] Align Drizzle snapshots and make migration generation idempotent.
 - [ ] Add protected Resend/Stripe test-mode integration tests and staging
   recipient protection.
@@ -462,6 +462,14 @@ drift, and owner/ID metadata mismatches. Confirmed issues fail the scheduled
 run and emit safe semantic logs; no objects or metadata are deleted. This is
 not orphan-object detection, a ready-object retention policy, or proof that
 an isolated database restore can access the correct provider bucket.
+Alpha 64 adds the inverse R2-to-PostgreSQL audit. It scans one bounded R2 page
+per tenant using opaque provider cursors, checks each old physical key under
+forced tenant RLS (including pending/cleaning reservations but not retired
+rows), and rechecks
+unreferenced objects before reporting them. It logs only a key fingerprint and
+tenant ID, never the raw storage key or object body. Findings fail the scheduled
+run; the audit never deletes an object. Ready-object retention and provider
+reachability during restore remain unverified.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
