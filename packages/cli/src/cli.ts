@@ -31,7 +31,7 @@ import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js"
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
-import { formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
+import { applySourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { loadSetupPlan, startSetupConsole } from "./setup.js";
 import {
   credentialsPaths,
@@ -187,6 +187,15 @@ export function createProgram(runtime: CliRuntime): Command {
       const context = await projectContext(command, runtime);
       const report = await planSourceDiff(context.root, context.manifest.project.name);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatSourceDiff(report));
+    });
+  upgrade.command("source-apply")
+    .description("apply only pristine adjacent-alpha application source; does not certify the upgrade")
+    .option("--yes", "confirm the reviewed source diff")
+    .action(async (options: { yes?: boolean }, command: Command) => {
+      if (!options.yes) throw new CliFailure("upgrade source-apply requires --yes after reviewing trestle upgrade diff");
+      const context = await projectContext(command, runtime);
+      const changed = await applySourceUpgrade(context.root, context.manifest.project.name);
+      runtime.stdout(`Applied ${changed.length} pristine source paths. Application edits were preserved. The framework version was not advanced; review migrations and run all checks before certification.\n`);
     });
   upgrade.command("plan")
     .option("--json", "emit versioned structured output")

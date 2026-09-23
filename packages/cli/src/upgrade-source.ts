@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { TRESTLEJS_VERSION } from "@trestlejs/core";
+import { planUpgrade } from "./upgrade.js";
 
 export type SourceDiffClassification = "same" | "unchanged" | "modified" | "new" | "missing" | "unverified" | "unsafe";
 export type SourceDiffEntry = Readonly<{ path: string; classification: SourceDiffClassification }>;
@@ -44,13 +45,45 @@ async function optionalText(target: string): Promise<string | undefined> {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
 }
 
+async function safeApplicationPath(root: string, relative: string): Promise<boolean> {
+  let current = root;
+  for (const segment of relative.split("/")) {
+    current = path.join(current, segment);
+    try {
+      const stat = await lstat(current);
+      if (stat.isSymbolicLink()) return false;
+      if (current !== path.join(root, relative) && !stat.isDirectory()) return false;
+      if (current === path.join(root, relative) && !stat.isFile()) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      throw error;
+    }
+  }
+  return true;
+}
+
+function protectedSourcePath(relative: string): boolean {
+  return relative === ".trestle/framework.json" || relative === ".trestle/project.yaml"
+    || relative === ".trestle/recovery.json" || relative.startsWith(".github/workflows/")
+    || relative.startsWith("config/") || relative.startsWith("packages/db/migrations/")
+    || relative.endsWith("/wrangler.jsonc") || relative === "wrangler.jsonc";
+}
+
+function adjacentAlpha(from: string | null, to: string): boolean {
+  const before = /^0\.1\.0-alpha\.(\d+)$/u.exec(from ?? "");
+  const after = /^0\.1\.0-alpha\.(\d+)$/u.exec(to);
+  return Boolean(before && after && Number(after![1]) === Number(before![1]) + 1);
+}
+
 /** Read-only inventory of paths owned by the target template. It never reads
  * through an application symlink and never assumes a missing baseline means
  * that application source is safe to replace. */
 export async function planSourceDiff(root: string, projectName: string, templateRoot = defaultTemplateRoot): Promise<SourceDiffReport> {
   if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(projectName)) throw new Error("Invalid project name for source inventory");
-  const baselineSource = await optionalText(path.join(root, ".trestle", "template-baseline.json"));
-  const frameworkSource = await optionalText(path.join(root, ".trestle", "framework.json"));
+  const baselineSource = await safeApplicationPath(root, ".trestle/template-baseline.json")
+    ? await optionalText(path.join(root, ".trestle", "template-baseline.json")) : undefined;
+  const frameworkSource = await safeApplicationPath(root, ".trestle/framework.json")
+    ? await optionalText(path.join(root, ".trestle", "framework.json")) : undefined;
   let baseline: { schemaVersion?: number; templateVersion?: string; files?: Record<string, string> } | undefined;
   let framework: { templateVersion?: string } | undefined;
   try { baseline = baselineSource ? JSON.parse(baselineSource) : undefined; }
@@ -66,11 +99,13 @@ export async function planSourceDiff(root: string, projectName: string, template
     const targetHash = digest(render(await readFile(path.join(templateRoot, sourceRelative), "utf8"), projectName));
     const applicationPath = path.join(root, relative);
     let currentHash: string | undefined;
-    let unsafe = false;
+    let unsafe = !(await safeApplicationPath(root, relative));
     try {
-      const stat = await lstat(applicationPath);
-      if (!stat.isFile()) unsafe = true;
-      else currentHash = digest(await readFile(applicationPath, "utf8"));
+      if (!unsafe) {
+        const stat = await lstat(applicationPath);
+        if (!stat.isFile()) unsafe = true;
+        else currentHash = digest(await readFile(applicationPath, "utf8"));
+      }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     let classification: SourceDiffClassification;
     if (unsafe) classification = "unsafe";
@@ -82,6 +117,48 @@ export async function planSourceDiff(root: string, projectName: string, template
     entries.push({ path: relative, classification });
   }
   return { sourceTemplateVersion: framework?.templateVersion ?? null, targetTemplateVersion: TRESTLEJS_VERSION, baselineTrusted, entries, summary };
+}
+
+/** Applies only pristine files from the immediately preceding alpha. This is
+ * intentionally not certification: framework metadata stays at its old source
+ * version until migrations, generated tests, and provider wiring are reviewed. */
+export async function applySourceUpgrade(root: string, projectName: string, templateRoot = defaultTemplateRoot): Promise<readonly string[]> {
+  const report = await planSourceDiff(root, projectName, templateRoot);
+  if (!report.baselineTrusted || !adjacentAlpha(report.sourceTemplateVersion, report.targetTemplateVersion)) {
+    throw new Error("Source apply requires a matching baseline from the immediately preceding alpha; use upgrade diff for manual review");
+  }
+  const upgrade = await planUpgrade(root);
+  if (upgrade.operations.find(({ id }) => id === "cli-version")?.classification !== "already-correct") {
+    throw new Error("Source apply requires the target CLI version in both package.json and pnpm-lock.yaml");
+  }
+  const conflicts = report.entries.filter(({ path: relative, classification }) => {
+    if (relative === ".trestle/framework.json") return classification === "unsafe";
+    const safeChange = classification === "same" || classification === "unchanged" || classification === "new";
+    return !safeChange || (classification !== "same" && protectedSourcePath(relative));
+  });
+  if (conflicts.length) throw new Error(`Source apply requires manual review: ${conflicts.map(({ path: relative }) => relative).join(", ")}`);
+
+  const changed: string[] = [];
+  for (const entry of report.entries) {
+    if (entry.path === ".trestle/framework.json") continue;
+    if (entry.classification !== "unchanged" && entry.classification !== "new") continue;
+    if (!(await safeApplicationPath(root, entry.path))) throw new Error(`Unsafe application path: ${entry.path}`);
+    const current = await optionalText(path.join(root, entry.path));
+    const baselineSource = await readFile(path.join(root, ".trestle", "template-baseline.json"), "utf8");
+    const baseline = JSON.parse(baselineSource) as { files: Record<string, string> };
+    if ((current === undefined && entry.classification !== "new")
+      || (current !== undefined && (entry.classification !== "unchanged" || digest(current) !== baseline.files[entry.path]))) {
+      throw new Error(`Application file changed during source apply: ${entry.path}`);
+    }
+    const sourceRelative = entry.path === ".gitignore" ? "_gitignore" : entry.path;
+    const target = render(await readFile(path.join(templateRoot, sourceRelative), "utf8"), projectName);
+    const destination = path.join(root, entry.path);
+    await mkdir(path.dirname(destination), { recursive: true });
+    if (!(await safeApplicationPath(root, entry.path))) throw new Error(`Unsafe application path: ${entry.path}`);
+    await writeFile(destination, target, { encoding: "utf8", flag: entry.classification === "new" ? "wx" : "w" });
+    changed.push(entry.path);
+  }
+  return changed;
 }
 
 export function formatSourceDiff(report: SourceDiffReport): string {
