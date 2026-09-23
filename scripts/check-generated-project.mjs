@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,12 +29,31 @@ try {
   manifest.pnpm = { ...(manifest.pnpm ?? {}), overrides: { ...(manifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await run("pnpm", ["install"], project);
+  const migrationsPath = path.join(project, "packages", "db", "migrations");
+  const journalPath = path.join(migrationsPath, "meta", "_journal.json");
+  const assertMonotonicJournal = async () => {
+    const journal = JSON.parse(await readFile(journalPath, "utf8"));
+    let previous = -1;
+    for (const entry of journal.entries) {
+      if (!Number.isSafeInteger(entry.when) || entry.when <= previous) throw new Error(`Migration journal is not strictly monotonic at ${entry.tag}`);
+      previous = entry.when;
+    }
+  };
+  const migrationNames = async () => (await readdir(migrationsPath)).filter((name) => name.endsWith(".sql")).sort();
+  const migrationsBeforeGenerate = await migrationNames();
+  await run("pnpm", ["--filter", "./packages/db", "db:generate"], project, { DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/trestle_test" });
+  const migrationsAfterGenerate = await migrationNames();
+  if (JSON.stringify(migrationsAfterGenerate) !== JSON.stringify(migrationsBeforeGenerate)) {
+    throw new Error("Checked-in database snapshots are not idempotent; db:generate created an unexpected migration");
+  }
+  await assertMonotonicJournal();
   const upgradePlan = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "plan", "--json"], { cwd: project, encoding: "utf8" }));
   for (const operation of upgradePlan.data.operations) {
     if (operation.classification === "manual-review") throw new Error(`Generated project requires manual upgrade review: ${operation.id}`);
   }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Author"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article", "--field", "summary:text?", "published:boolean?", "authorId:relation?:Author:set-null"], project);
+  await assertMonotonicJournal();
   const workerEntry = await readFile(path.join(project, "apps", "worker", "src", "index.ts"), "utf8");
   for (const resource of ["author", "article"]) {
     if (!workerEntry.includes(`app.route("/", ${resource}Routes);`) || !workerEntry.includes(`eventConsumers.register(${resource}CreatedEvent, handle${resource[0].toUpperCase()}${resource.slice(1)}Created);`)) {
@@ -44,6 +63,7 @@ try {
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "resource", "add-field", "Article", "archived:boolean?", "--yes"], project);
+  await assertMonotonicJournal();
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], project);
   await run("pnpm", ["check"], project);
   if (process.env.TRESTLE_GENERATED_DATABASE_URL) {

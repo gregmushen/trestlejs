@@ -8,18 +8,23 @@ export interface ArtifactStore {
 }
 export interface ArtifactMetadataRepository {
   put(metadata: ArtifactMetadata): Promise<ArtifactMetadata>;
+  complete(organizationId: string, id: string, key: string): Promise<boolean>;
   get(organizationId: string, id: string): Promise<ArtifactMetadata | null>;
   remove(organizationId: string, id: string): Promise<boolean>;
   discard(organizationId: string, id: string, key: string): Promise<boolean>;
+  retire(organizationId: string, id: string, key: string): Promise<boolean>;
 }
 
 export class InMemoryArtifactMetadataRepository implements ArtifactMetadataRepository {
   private readonly records = new Map<string, ArtifactMetadata>();
   private readonly reservedIds = new Set<string>();
-  async put(metadata: ArtifactMetadata): Promise<ArtifactMetadata> { if (this.reservedIds.has(metadata.id)) throw new Error("artifact identifier is unavailable"); this.records.set(metadata.id, metadata); this.reservedIds.add(metadata.id); return metadata; }
-  async get(organizationId: string, id: string): Promise<ArtifactMetadata | null> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId ? { ...metadata } : null; }
-  async remove(organizationId: string, id: string): Promise<boolean> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId ? this.records.delete(id) : false; }
-  async discard(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key) return false; this.reservedIds.delete(id); return this.records.delete(id); }
+  private readonly pendingIds = new Set<string>();
+  async put(metadata: ArtifactMetadata): Promise<ArtifactMetadata> { if (this.reservedIds.has(metadata.id)) throw new Error("artifact identifier is unavailable"); this.records.set(metadata.id, metadata); this.reservedIds.add(metadata.id); this.pendingIds.add(metadata.id); return metadata; }
+  async complete(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key || !this.pendingIds.has(id)) return false; this.pendingIds.delete(id); return true; }
+  async get(organizationId: string, id: string): Promise<ArtifactMetadata | null> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId && !this.pendingIds.has(id) ? { ...metadata } : null; }
+  async remove(organizationId: string, id: string): Promise<boolean> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId && !this.pendingIds.has(id) ? this.records.delete(id) : false; }
+  async discard(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key || !this.pendingIds.has(id)) return false; this.pendingIds.delete(id); this.reservedIds.delete(id); return this.records.delete(id); }
+  async retire(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key) return false; this.pendingIds.delete(id); return this.records.delete(id); }
 }
 
 export function createArtifactSigner(secret: string, now: () => Date = () => new Date()) {
@@ -73,7 +78,6 @@ export class CloudflareR2ArtifactStore implements ArtifactStore {
     const metadata = await this.metadata.put({ id: input.id, organizationId: input.organizationId, key: storageKey, contentType: input.contentType, size: input.body.byteLength, createdAt: new Date() });
     try {
       await this.bucket.put(storageKey, input.body, { httpMetadata: { contentType: input.contentType }, customMetadata: { artifactId: input.id, organizationId: input.organizationId } });
-      return metadata;
     } catch (error) {
       // A failed response may follow a committed R2 write. Keep the metadata
       // reservation if physical cleanup cannot be confirmed.
@@ -81,6 +85,15 @@ export class CloudflareR2ArtifactStore implements ArtifactStore {
       catch { throw new Error("Artifact upload failed and object cleanup could not be verified"); }
       await this.metadata.discard(input.organizationId, input.id, storageKey);
       throw error;
+    }
+    try {
+      if (!await this.metadata.complete(input.organizationId, input.id, storageKey)) throw new Error("Artifact metadata reservation was not available");
+      return metadata;
+    } catch {
+      try { await this.bucket.delete(storageKey); }
+      catch { throw new Error("Artifact upload could not be finalized and object cleanup could not be verified"); }
+      await this.metadata.retire(input.organizationId, input.id, storageKey);
+      throw new Error("Artifact upload could not be finalized");
     }
   }
   async get(organizationId: string, id: string): Promise<Artifact | null> { const metadata = await this.metadata.get(organizationId, id); if (!metadata) return null; const object = await this.bucket.get(metadata.key); return object ? { ...metadata, body: new Uint8Array(await object.arrayBuffer()) } : null; }

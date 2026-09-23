@@ -97,8 +97,10 @@ artifact metadata in PostgreSQL, serves uploads through `POST /api/artifacts`,
 and issues short-lived download links through `GET /api/artifacts/:id/access`.
 Artifact IDs are single-use, including after deletion, so an old signed link
 cannot become valid for a replacement object. R2 uploads reserve tenant-owned
-metadata before writing a uniquely keyed object; if the upload fails, the
-reservation is released only after R2 deletion is confirmed. These links are
+metadata in a pending state before writing a uniquely keyed object. Pending
+artifacts cannot be read or signed; successful writes move to ready. If the
+upload fails, the reservation is released only after R2 deletion is confirmed;
+an uncertain finalization retires the ID. These links are
 bearer capabilities: do not log or share them. Local development
 uses an in-memory store and the local auth secret for signing if no dedicated
 artifact signing secret is set.
@@ -211,6 +213,10 @@ pnpm exec trestle generate resource Article \
   --write-permission resource:write
 pnpm exec trestle resource add-field Article archived:boolean? --yes
 ```
+
+`pnpm db:generate` preserves a strictly increasing migration journal timestamp,
+including when an older checked-in migration was future-dated. A generated
+release canary checks that running it without schema changes creates no drift.
 
 Generated screens use application-owned typed API clients rather than local
 unvalidated fetch helpers. List endpoints use bounded cursor pagination, and
