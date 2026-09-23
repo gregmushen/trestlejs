@@ -72,8 +72,19 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   }
 
   const providers = sources.get("providers.yml") ?? "";
+  const providerTests = await readFile(path.join(root, "packages", "integrations", "src", "provider.integration.test.ts"), "utf8").catch(() => "");
+  const providerConfig = await readFile(path.join(root, "packages", "integrations", "src", "provider-staging-config.ts"), "utf8").catch(() => "");
   checks.push(check("ci.providers.protected", providers.includes("environment: staging") && providers.includes("workflow_dispatch"), "provider verification is manual and protected by the staging environment"));
-  checks.push(check("ci.providers.safety", providers.includes("TRESTLE_PROVIDER_INTEGRATION_TESTS") && providers.includes("EMAIL_STAGING_REDIRECT") && providers.includes("STRIPE_SECRET_KEY"), "provider verification checks Resend staging safety and Stripe test mode"));
+  checks.push(check("ci.providers.encrypted-secrets", providers.includes("trestle secrets check --env staging")
+    && providers.includes("trestle doctor --env staging")
+    && providers.includes("trestle secrets get RESEND_API_KEY --env staging --raw")
+    && providers.includes("trestle secrets get STRIPE_SECRET_KEY --env staging --raw")
+    && providers.includes('TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"')
+    && !providers.includes("secrets.RESEND_API_KEY") && !providers.includes("secrets.STRIPE_SECRET_KEY"), "protected provider verification reads Trestle encrypted staging credentials, not duplicate GitHub provider secrets"));
+  checks.push(check("ci.providers.safety", providers.includes("TRESTLE_PROVIDER_INTEGRATION_TESTS")
+    && providers.includes("provider.integration.test.ts") && providerTests.includes("EMAIL_STAGING_REDIRECT")
+    && providerTests.includes("STRIPE_MODE") && providerTests.includes("sk_test_")
+    && providerTests.includes("readStagingProviderVariables") && providerConfig.includes("apps/worker/wrangler.jsonc"), "provider verification checks the declared Resend staging redirect and Stripe test mode"));
 
   const preview = sources.get("preview.yml") ?? "";
   checks.push(check(
