@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createTenantDatabase } from "./index.js";
-import { captureLocalWebhookDelivery } from "./webhook-local.js";
+import { captureLocalWebhookDelivery, flushDueLocalWebhookDeliveries } from "./webhook-local.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -118,6 +118,20 @@ suite("deterministic local outbound webhook capture", () => {
     const results = await Promise.all([captureLocalWebhookDelivery(input), captureLocalWebhookDelivery(input)]);
     expect(results.map((result) => result.state).sort()).toEqual(["not_due", "succeeded"]);
     expect((await sql!`select id from webhook_attempt where delivery_id=${deliveryId}`)).toHaveLength(1);
+  });
+
+  it("flushes only due local deliveries for the selected tenant within a bound", async () => {
+    const first = await fixture("local-flush-owner");
+    const second = await fixture("local-flush-owner");
+    const other = await fixture("local-flush-other");
+    const base = { tenantDatabase, signingSecretForEndpoint: async () => secret,
+      scenario: { kind: "succeed" as const }, clock: { now: () => new Date("2026-09-22T12:00:00.000Z") } };
+    expect(await flushDueLocalWebhookDeliveries({ ...base, organizationId: "local-flush-owner", limit: 1 })).toEqual({ captured: 1, skipped: 0 });
+    expect((await sql!`select id from webhook_attempt where delivery_id in (${first.deliveryId}, ${second.deliveryId})`)).toHaveLength(1);
+    expect(await flushDueLocalWebhookDeliveries({ ...base, organizationId: "local-flush-owner", limit: 1 })).toEqual({ captured: 1, skipped: 0 });
+    expect(await flushDueLocalWebhookDeliveries({ ...base, organizationId: "local-flush-owner" })).toEqual({ captured: 0, skipped: 0 });
+    expect((await sql!`select id from webhook_attempt where delivery_id=${other.deliveryId}`)).toHaveLength(0);
+    await expect(flushDueLocalWebhookDeliveries({ ...base, organizationId: "local-flush-owner", limit: 101 })).rejects.toThrow("flush limit");
   });
 
   it("rejects invalid local configuration before recording an attempt", async () => {

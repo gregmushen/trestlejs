@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { createTenantDatabase } from "./index.js";
-import { createWebhookSecretCipher, WebhookSecretService } from "./webhook-secrets.js";
+import { createWebhookSecretCipher, loadCurrentWebhookSigningSecret, WebhookSecretService } from "./webhook-secrets.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -64,6 +64,7 @@ suite("encrypted outbound webhook signing secrets", () => {
     expect(second.secret).not.toBe(first.secret);
     expect(second.metadata.version).toBe(2);
     expect(await scope.service.activeForDelivery("secrets-rotate-org", endpointId)).toEqual([first.secret, second.secret]);
+    expect(await loadCurrentWebhookSigningSecret({ tenantDatabase, masterKey, environment: "local", organizationId: "secrets-rotate-org", endpointId })).toBe(second.secret);
     expect((await scope.service.list("secrets-rotate-org", endpointId)).map((item) => item.state)).toEqual(["overlapping", "current"]);
     scope.advance(25);
     expect(await scope.service.activeForDelivery("secrets-rotate-org", endpointId)).toEqual([second.secret]);

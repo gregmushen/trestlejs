@@ -347,7 +347,14 @@ Tests reject forged tenants, swapped event/delivery identities, inactive
 endpoints, and environment mismatches. Queue publication/consumption and the
 pinned-address transport remain unimplemented, so native mode still fails
 closed.
-Trestle does not yet deliver projected webhooks automatically or provide
+Alpha 50 closes the local event-to-attempt gap: a committed event projected
+from Queue processing now captures signed attempts for active local endpoints
+without network access. Missing signing material fails the inbox operation
+for retry, duplicate Queue deliveries do not duplicate attempts, and a
+bounded, advanceable-clock flush processes later local retries. Native and
+Svix delivery remain disabled until their transport and provider contracts
+are complete.
+Trestle does not yet deliver projected webhooks externally or provide
 customer inspection UI. The next slices are native Queue-backed delivery and
 recovery, then the optional Svix adapter. A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.

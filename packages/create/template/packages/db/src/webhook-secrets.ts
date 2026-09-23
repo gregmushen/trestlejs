@@ -54,6 +54,29 @@ export async function createWebhookSecretCipher(masterKey: string, environment: 
   };
 }
 
+/** Internal dispatcher boundary: use the current key for new signatures.
+ * Overlapping keys remain available only for verification of older requests. */
+export async function loadCurrentWebhookSigningSecret(input: {
+  tenantDatabase: (organizationId: string) => Database;
+  masterKey: string;
+  environment: "local" | "preview" | "staging" | "production";
+  organizationId: string;
+  endpointId: string;
+}): Promise<string | null> {
+  const [row] = await input.tenantDatabase(input.organizationId).select({
+    ciphertext: webhookSecretVersion.ciphertext,
+    version: webhookSecretVersion.version,
+  }).from(webhookSecretVersion).where(and(
+    eq(webhookSecretVersion.organizationId, input.organizationId),
+    eq(webhookSecretVersion.endpointId, input.endpointId),
+    eq(webhookSecretVersion.state, "current"),
+  )).limit(1);
+  if (!row) return null;
+  if (!row.ciphertext) throw new WebhookSecretError("Current webhook signing secret is missing ciphertext");
+  const cipher = await createWebhookSecretCipher(input.masterKey, input.environment);
+  return cipher.decrypt(row.ciphertext, input.organizationId, input.endpointId, row.version);
+}
+
 function nowFrom(clock: { now(): Date }): Date {
   const value = clock.now();
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw new WebhookSecretError("Invalid webhook secret clock");
