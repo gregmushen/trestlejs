@@ -270,6 +270,15 @@ Remaining Alpha 8 release work is provider wiring and operational hardening:
 
 ### Alpha 9: production integrations and observability
 
+Outbound webhooks are an additional phased track. Alpha 35 provides
+only the event-definition contract: runtime schemas, safe public projection
+metadata, example and fixture validation, and independent internal/public
+versions. It does not yet persist webhook messages or deliver to endpoints.
+The next slices are normalized tenant-owned persistence and subscriptions,
+deterministic local capture, native Queue-backed delivery and recovery, and
+then the optional Svix adapter. A committed domain event remains authoritative;
+webhook failure must never undo its domain mutation.
+
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
 - Use `ExecutionContext` consistently for every authenticated application
