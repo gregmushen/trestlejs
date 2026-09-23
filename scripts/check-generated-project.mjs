@@ -48,7 +48,7 @@ try {
   await run("pnpm", ["check"], project);
   if (process.env.TRESTLE_GENERATED_DATABASE_URL) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
-    await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run", "src/inbox.integration.test.ts"], project, { TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run", "src/inbox.integration.test.ts", "src/outbox-retention.integration.test.ts"], project, { TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "src/system.integration.test.ts"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1" });
   }
   const generatedProjectManifest = path.join(project, ".trestle", "project.yaml");

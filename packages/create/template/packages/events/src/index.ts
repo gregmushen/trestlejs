@@ -8,6 +8,11 @@ export const eventEnvelopeSchema = z.object({
 export type EventEnvelope = z.infer<typeof eventEnvelopeSchema>;
 export type EventDefinition<T = unknown> = { name: string; schemaVersion: number; parse: (payload: unknown) => T };
 
+const safeErrorNames = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "AbortError", "TimeoutError"]);
+export function safeErrorCategory(error: unknown): string {
+  return error instanceof Error && safeErrorNames.has(error.name) ? error.name : "Error";
+}
+
 export class EventRegistry {
   private readonly definitions = new Map<string, EventDefinition>();
   register<T>(definition: EventDefinition<T>): void {
@@ -43,7 +48,7 @@ export class InMemoryOutbox {
   succeed(id: string): void { const entry = this.require(id); if (entry.status === "succeeded") return; if (entry.status !== "leased") throw new Error(`Outbox entry ${id} is not leased`); entry.status = "succeeded"; delete entry.leasedUntil; }
   fail(id: string, error: unknown, maxAttempts = 5): void {
     const entry = this.require(id); if (entry.status !== "leased") throw new Error(`Outbox entry ${id} is not leased`);
-    entry.attempts += 1; entry.lastError = error instanceof Error ? error.message : String(error); delete entry.leasedUntil;
+    entry.attempts += 1; entry.lastError = safeErrorCategory(error); delete entry.leasedUntil;
     if (entry.attempts >= maxAttempts) { entry.status = "dead"; return; }
     entry.status = "pending"; entry.availableAt = new Date(this.clock.now().getTime() + 2 ** (entry.attempts - 1) * 1_000);
   }
@@ -78,7 +83,7 @@ export class LocalWorkflowScheduler {
         job.status = "succeeded";
         completed += 1;
       } catch (error) {
-        job.lastError = error instanceof Error ? error.name : "Error";
+        job.lastError = safeErrorCategory(error);
         if (job.attempts >= maxAttempts) job.status = "failed";
         else {
           job.status = "scheduled";

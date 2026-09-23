@@ -158,10 +158,18 @@ Queue and Cloudflare Workflow operations are similarly explicit:
 ```bash
 pnpm exec trestle queue dlq list --env staging
 pnpm exec trestle queue dlq redrive <id> --env staging
+pnpm exec trestle queue prune --env staging --before 2026-01-01T00:00:00Z
+pnpm exec trestle queue prune --env staging --before 2026-01-01T00:00:00Z --limit 1000 --apply
 pnpm exec trestle workflow list <name> --env staging
 pnpm exec trestle workflow status <name> <instance-id> --env staging
 pnpm exec trestle workflow retry <name> <instance-id> --env staging --yes
 ```
+
+`queue prune` reports eligible records unless `--apply` is passed. It removes
+only succeeded outbox records processed before the explicit UTC cutoff, in
+bounded batches; pending, leased, and dead-lettered records are never pruned.
+Outbox failures record only a sanitized error category, never the error
+message, so provider secrets echoed in exceptions are not persisted.
 
 Neon recovery policy lives in `.trestle/recovery.json`. Provider history alone
 is not accepted as proof of recovery. `backup verify` creates an isolated

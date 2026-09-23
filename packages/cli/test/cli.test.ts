@@ -157,6 +157,19 @@ describe("TrestleJS CLI", () => {
     expect(mixed.stderr()).toContain("different authority planes");
   });
 
+  it("validates outbox retention cutoffs and limits before reading secrets", async () => {
+    const root = await fixture();
+    const local = capture(root);
+    expect(await executeCli(["queue", "prune", "--env", "local", "--before", "2026-01-01T00:00:00Z"], local.runtime)).toBe(1);
+    expect(local.stderr()).toContain("local outbox retention");
+    const cutoff = capture(root);
+    expect(await executeCli(["queue", "prune", "--env", "staging", "--before", "2026-01-01"], cutoff.runtime)).toBe(1);
+    expect(cutoff.stderr()).toContain("--before must be an ISO UTC timestamp");
+    const limit = capture(root);
+    expect(await executeCli(["queue", "prune", "--env", "staging", "--before", "2026-01-01T00:00:00Z", "--limit", "10001"], limit.runtime)).toBe(1);
+    expect(limit.stderr()).toContain("--limit must be between 1 and 10000");
+  });
+
   it("requires confirmation before creating recovery resources or retrying remote workflows", async () => {
     const root = await fixture();
     const backup = capture(root);
