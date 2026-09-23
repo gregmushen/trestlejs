@@ -104,15 +104,22 @@ an uncertain finalization retires the ID. These links are
 bearer capabilities: do not log or share them. Local development
 uses an in-memory store and the local auth secret for signing if no dedicated
 artifact signing secret is set.
-The R2 adapter exposes bounded `recoverIncomplete(organizationId, before, limit)`
-for a trusted maintenance process. It claims old pending records before deleting
-their exact R2 keys, retries deletion failures, and retires recovered IDs. This
-is a tenant-scoped recovery primitive, not an automatically scheduled job.
+The R2 adapter exposes bounded `recoverIncomplete(organizationId, before, limit)`.
+Scheduled maintenance pages through organizations and uses tenant-scoped recovery
+to claim stale pending records, delete their exact R2 keys, retry failures, and
+retire recovered IDs. Ready-artifact retention remains an application policy.
 Queue delivery is at least once. The PostgreSQL event inbox prevents a completed
 logical event from running its handler again and leases in-progress work for
 recovery. Handlers that call external services must still pass the event's
 stable `idempotencyKey`: a crash after an external side effect but before the
 inbox completion record can cause that operation to be retried.
+
+Define application events in `packages/events/src/application-catalog.ts` with
+`defineEvent(...)` and `defineEventCatalog(...)`. Internal event payloads have
+runtime schemas and are private by default. An explicit `webhook` projection
+adds a separately versioned, validated public contract with examples and
+projection fixtures. This catalog is a contract only: outbound webhook
+messages, endpoint management, and delivery are not yet generated.
 If `capabilities.workflows` is enabled, the deployment config binds the
 application-owned `TrestleWorkflow` class. Queue delivery starts a Workflow
 using the event ID as its stable instance ID; a repeated Queue delivery

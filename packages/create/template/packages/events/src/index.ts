@@ -1,7 +1,10 @@
 import { z } from "zod";
 
+export * from "./catalog.js";
+export * from "./application-catalog.js";
+
 export const eventEnvelopeSchema = z.object({
-  id: z.uuid(), name: z.string().regex(/^[a-z][a-z0-9]*(?:\.[a-z0-9]+)*$/u), schemaVersion: z.number().int().positive(),
+  id: z.uuid(), name: z.string().regex(/^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*$/u), schemaVersion: z.number().int().positive(),
   occurredAt: z.iso.datetime(), resource: z.object({ type: z.string().min(1), id: z.string().min(1) }),
   correlationId: z.string().min(1), causationId: z.string().min(1).optional(), idempotencyKey: z.string().min(1), payload: z.unknown(),
 });
