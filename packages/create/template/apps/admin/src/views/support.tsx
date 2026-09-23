@@ -36,6 +36,7 @@ function ActiveSession({ session }: { session: SupportSessionRecord }) {
     {view.error && <p role="alert" className="mt-2 text-sm text-destructive">{view.error.message}</p>}
     {view.data && <>
       <p className="mt-4 text-sm">Plan: {view.data.subscription ? `${view.data.subscription.plan}@${view.data.subscription.planVersion} (${view.data.subscription.status})` : "none"}</p>
+      <p className="mt-1 text-sm">Regional overrides: {view.data.regional ? Object.entries(view.data.regional).filter(([, value]) => value).map(([key, value]) => `${key} ${value}`).join(", ") || "none" : "none (application defaults)"}</p>
       <h3 className="mt-4 font-semibold">Members</h3>
       <table className="mt-2 w-full text-left text-sm"><tbody>{view.data.members.map((person) => <tr key={person.userId} className="border-t border-border"><td className="py-1">{person.name}</td><td>{person.email}</td><td>{person.role}</td></tr>)}</tbody></table>
       <h3 className="mt-4 font-semibold">Recent audit events</h3>

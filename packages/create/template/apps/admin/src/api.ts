@@ -66,5 +66,6 @@ export type SupportOrganization = {
   organization: { id: string; name: string; slug: string | null; createdAt: string } | null;
   members: Array<{ userId: string; role: string; name: string; email: string; joinedAt: string }>;
   subscription: { plan: string; planVersion: number; status: string; currentPeriodEnd: string | null } | null;
+  regional: { language: string | null; locale: string | null; timeZone: string | null; currency: string | null } | null;
   recentAudit: Array<{ name: string; occurredAt: string; actorType: string; outcome: string; correlationId: string }>;
 };

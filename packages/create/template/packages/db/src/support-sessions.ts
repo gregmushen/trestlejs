@@ -7,6 +7,7 @@ import { organizationSubscription } from "./billing-schema.js";
 import type { Database } from "./index.js";
 import { PlatformOperationError } from "./platform-operations.js";
 import type { PlatformChangeContext } from "./platform-roles.js";
+import { organizationRegionalSettings } from "./regional-schema.js";
 import { supportSession } from "./support-schema.js";
 
 /** The longest a support session may run; the database enforces the same bound. */
@@ -100,12 +101,14 @@ export async function supportOrganizationView(database: Database, session: Suppo
       .from(member).innerJoin(user, eq(user.id, member.userId)).where(eq(member.organizationId, organizationId)).orderBy(member.createdAt).limit(200);
     const [subscription] = await transaction.select({ plan: organizationSubscription.plan, planVersion: organizationSubscription.planVersion, status: organizationSubscription.status, currentPeriodEnd: organizationSubscription.currentPeriodEnd })
       .from(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId)).limit(1);
+    const [regional] = await transaction.select({ language: organizationRegionalSettings.language, locale: organizationRegionalSettings.locale, timeZone: organizationRegionalSettings.timeZone, currency: organizationRegionalSettings.currency })
+      .from(organizationRegionalSettings).where(eq(organizationRegionalSettings.organizationId, organizationId)).limit(1);
     const audit = await transaction.select({ name: auditEvent.name, occurredAt: auditEvent.occurredAt, actorType: auditEvent.actorType, outcome: auditEvent.outcome, correlationId: auditEvent.correlationId })
       .from(auditEvent).where(eq(auditEvent.organizationId, organizationId)).orderBy(desc(auditEvent.occurredAt)).limit(50);
     await recordAuditEvent(transaction, {
       name: "platform.support_session.accessed", actor: context.actor, organizationId, target: { type: "organization", id: organizationId },
       summary: { view: "organization" }, environment: context.environment, correlationId: context.correlationId, supportSessionId: session.id, ...(context.now ? { occurredAt: context.now } : {}),
     });
-    return { organization: profile ?? null, members, subscription: subscription ?? null, recentAudit: audit };
+    return { organization: profile ?? null, members, subscription: subscription ?? null, regional: regional ?? null, recentAudit: audit };
   });
 }
