@@ -393,6 +393,8 @@ wake-ups, retry, lease recovery, and metadata-only native attempt storage;
 generated browser and Worker dry-run checks pass. Live Cloudflare egress and
 end-to-end deployed delivery remain unproven, so the starter still defaults to
 disabled mode.
+A committed domain event remains authoritative; webhook failure must never
+undo its domain mutation.
 Alpha 55 enforces the first native dispatch backpressure rule at the
 PostgreSQL claim boundary: at most four unexpired leases may be active for one
 endpoint by default, even when several Queue workers compete. A capacity
@@ -525,8 +527,20 @@ and a passing project `pnpm check`; it rechecks parity afterward, then advances
 the source marker and checksum baseline. `upgrade apply` keeps that baseline
 aligned when it records the final managed metadata. This certifies local source
 parity only, not hosted deployment, external providers, or recovery readiness.
-A committed domain event remains authoritative;
-webhook failure must never undo its domain mutation.
+The separately versioned `trestlejs-canary` application was then reconciled
+from its Alpha 37 source to Alpha 73 in a reviewed migration (canary PR #2,
+merged 2026-09-23). Its original journaled Article migration chain, encrypted
+credentials, deployment workflows, and enabled Queue/R2/Workflow capabilities
+were preserved. The old and target migration chains were replayed into isolated
+PostgreSQL databases and compared; the canary-specific Article schema was the
+only physical-schema difference. The migrated canary passed local checks,
+Drizzle no-drift generation, database/Worker/billing suites, Chromium CRUD and
+two-tenant isolation, and post-merge hosted CI. Its generation baseline remains
+untrusted because application-owned changes cannot be retroactively labeled
+pristine. The preview deployment remains blocked by incomplete encrypted
+credentials, Resend sender/redirect configuration, and Stripe test-mode
+configuration; this migration is not deployed-provider evidence or beta
+certification.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
