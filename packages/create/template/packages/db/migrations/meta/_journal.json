@@ -127,6 +127,13 @@
       "when": 1790294400009,
       "tag": "0017_oval_pepper_potts",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790294400010,
+      "tag": "0018_ancient_moira_mactaggert",
+      "breakpoints": true
     }
   ]
 }

@@ -1,1 +1,1 @@
-export const TRESTLEJS_VERSION = "0.1.0-alpha.43";
+export const TRESTLEJS_VERSION = "0.1.0-alpha.44";
