@@ -1,4 +1,4 @@
-import { eventEnvelopeSchema, type EventEnvelope, type EventInboxStore, type InboxClaim } from "@__TRESTLE_PROJECT_NAME__/events";
+import { eventEnvelopeSchema, safeErrorCategory, type EventEnvelope, type EventInboxStore, type InboxClaim } from "@__TRESTLE_PROJECT_NAME__/events";
 import postgres from "postgres";
 
 import { outboxApplicationConnectionString } from "./outbox.js";
@@ -46,10 +46,10 @@ export class PostgresEventInbox implements EventInboxStore {
   }
 
   async release(idempotencyKey: string, token: string, error: unknown): Promise<void> {
-    const category = error instanceof Error ? error.name : "UnknownError";
+    const category = safeErrorCategory(error);
     const result = await this.sql`
       update event_inbox
-         set claim_token = null, leased_until = now(), last_error = ${category.slice(0, 100)}
+         set claim_token = null, leased_until = now(), last_error = ${category}
        where idempotency_key = ${idempotencyKey} and claim_token = ${token} and status = 'processing'
     `;
     if (result.count !== 1) throw new Error("Inbox claim is no longer active");
