@@ -43,14 +43,22 @@ environments:
 secrets:
   DATABASE_URL:
     target: worker
+    shareWith: [admin]
     required: [local, staging, production]
   DATABASE_DRIVER:
     target: worker
+    shareWith: [admin]
     required: [local, preview, staging, production]
   BETTER_AUTH_SECRET:
     target: worker
+    shareWith: [admin]
     required: [local, preview, staging, production]
     rotation: dual-value
+  # The optional platform admin's database login, granted only trestle_platform.
+  # Required only when capabilities.admin is enabled.
+  DATABASE_ADMIN_URL:
+    target: admin
+    required: [staging, production]
   BETTER_AUTH_URL:
     target: worker
     required: [local, preview, staging, production]

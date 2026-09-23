@@ -22,11 +22,15 @@ export const environmentNameSchema = z.enum([
 
 export const secretDeclarationSchema = z
   .object({
-    target: z.enum(["worker", "ci"]),
+    /** Where the value is pushed: the customer Worker, CI only, or the optional platform admin Worker. */
+    target: z.enum(["worker", "ci", "admin"]),
+    /** Also pushed to the platform admin Worker when capabilities.admin is enabled. */
+    shareWith: z.array(z.literal("admin")).min(1).optional(),
     required: z.array(environmentNameSchema),
     rotation: z.enum(["single-value", "dual-value"]).optional(),
   })
-  .strict();
+  .strict()
+  .refine((declaration) => !declaration.shareWith || declaration.target === "worker", { message: "only Worker secrets can be shared with the platform admin", path: ["shareWith"] });
 
 export const projectManifestSchema = z
   .object({

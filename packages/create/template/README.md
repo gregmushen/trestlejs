@@ -94,7 +94,9 @@ bootstraps an equivalent restricted login inside its isolated Neon branch and
 passes the masked URL only between deployment steps. Configure `APP_URL`, `API_URL`, `SITE_URL`, and
 `DATABASE_RUNTIME_ROLE` independently in the `preview`, `staging`, and
 `production` GitHub environments. Preview also requires
-`CLOUDFLARE_WORKERS_SUBDOMAIN`.
+`CLOUDFLARE_WORKERS_SUBDOMAIN`. When `capabilities.admin` is true, staging and
+production also need `ADMIN_URL`, `ADMIN_API_URL`, and
+`DATABASE_ADMIN_RUNTIME_ROLE`; see `apps/admin/README.md`.
 
 Trusted pull requests receive isolated, deterministically named Workers and
 Pages projects. Closing the pull request deletes those Cloudflare resources.

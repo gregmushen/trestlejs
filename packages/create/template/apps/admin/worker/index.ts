@@ -15,8 +15,8 @@ export type AdminEnvironment = {
   /** Distinct login granted only trestle_platform. Required outside local development. */
   DATABASE_ADMIN_URL?: string;
   BETTER_AUTH_SECRET: string;
-  /** This admin Worker's public URL. */
-  BETTER_AUTH_URL?: string;
+  /** This admin Worker's public URL (a deploy-time variable; the customer Worker's BETTER_AUTH_URL is not used). */
+  ADMIN_API_URL?: string;
   /** The admin SPA origin; the only browser origin the admin API trusts. */
   ADMIN_ORIGIN?: string;
   /** The customer Worker, read for sanitized capability status. */
@@ -40,7 +40,7 @@ export const adminDependencies = {
 
 function adminAuth(environment: AdminEnvironment) {
   // The same accounts sign in on a separate origin with separate cookies; customer sessions never reach the admin.
-  return createAuth({ ...environment, BETTER_AUTH_URL: environment.BETTER_AUTH_URL ?? "http://localhost:8788", WEB_ORIGIN: environment.ADMIN_ORIGIN ?? "http://localhost:42070", EMAIL_DELIVERY_MODE: "local" } as AuthEnvironment);
+  return createAuth({ ...environment, BETTER_AUTH_URL: environment.ADMIN_API_URL ?? "http://localhost:8788", WEB_ORIGIN: environment.ADMIN_ORIGIN ?? "http://localhost:42070", EMAIL_DELIVERY_MODE: "local" } as AuthEnvironment);
 }
 
 function platformConnection(environment: AdminEnvironment): string {

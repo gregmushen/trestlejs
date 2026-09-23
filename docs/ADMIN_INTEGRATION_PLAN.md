@@ -17,7 +17,7 @@ This plan lands the optional platform admin on `main` in small slices, next to t
 | 2 | Permission registry and route policy: one registry across the organization, application, and platform planes; roles resolved from it; central route enforcement; cross-plane proofs | Merged (#108) |
 | 3 | Persisted, redacted `audit_event` with correlation IDs for sensitive actions | Merged (#110) |
 | 4a | Platform plane persistence: `trestle_platform` database role, audited `platform_role_assignment`, platform-only access resolution, `trestle admin grant`, `revoke`, and `list` | Merged (#111) |
-| 4b | Optional admin shell (`capabilities.admin`): `apps/admin` on a separate origin, platform authentication, central view registry, Overview and Health, sanitized setup guidance; `create` gating (4b-1). `apply` scaffolding and deployment follow in 4b-2 | 4b-1 in review |
+| 4b | Optional admin shell (`capabilities.admin`): `apps/admin` on a separate origin, platform authentication, central view registry, Overview and Health, sanitized setup guidance; `create` gating (4b-1). 4b-2: `trestle apply` scaffolding, admin secret targets, and conditional staging/production deploy with an admin smoke | 4b-1 merged (#112); 4b-2 in review |
 | 5 | Operations views over `main`'s async (DLQ redrive), artifacts, and webhooks (disable and replay), with audit | Planned |
 | 6 | Commercial controls and machine access: plans and overrides; service accounts and scoped API keys (mint, rotate, revoke), with audit | Planned |
 | 7 | Support sessions (entry and exit audited), regional settings (re-targeted from #57), identity and SSO | Planned |

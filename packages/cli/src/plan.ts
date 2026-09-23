@@ -6,6 +6,7 @@ import { parseSetupPlan, structuredOutput, type ProjectManifest, type SetupPlan,
 
 import { generateResource, generateResourceMigration } from "./generate-resource.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
+import { enableAdminCapability } from "./upgrade-source.js";
 
 export type PlanClassification = "already correct" | "create" | "update" | "delete" | "blocked" | "unknown";
 export type PlanDiffItem = { id: string; classification: PlanClassification; summary: string };
@@ -155,7 +156,11 @@ export async function diffSetupPlan(root: string, manifest: ProjectManifest, pla
   }
   compare("tenancy", manifest.tenancy, plan.tenancy, "organization tenancy uses forced PostgreSQL RLS");
   compare("database", { engine: manifest.database.engine, provider: manifest.database.defaultProvider }, plan.database, `${plan.database.provider} ${plan.database.engine} database`);
-  compare("capabilities", manifest.capabilities, plan.capabilities, "declared Cloudflare capabilities match");
+  const { admin: currentAdmin, ...currentCapabilities } = manifest.capabilities;
+  const { admin: plannedAdmin, ...plannedCapabilities } = plan.capabilities;
+  compare("capabilities", currentCapabilities, plannedCapabilities, "declared Cloudflare capabilities match");
+  // Enabling the platform admin scaffolds apps/admin; disabling it is a destructive, manual change.
+  items.push({ id: "capabilities.admin", classification: currentAdmin === plannedAdmin ? "already correct" : plannedAdmin ? "create" : "delete", summary: `platform admin ${plannedAdmin ? "enabled" : "disabled"}` });
   compare("integrations", { email: Boolean(manifest.packages.integrations), billing: Boolean(manifest.packages.billing) }, plan.integrations, "declared application integrations match");
   compare("environments", manifest.environments, plan.environments, "declared environments match");
   for (const secret of plan.secrets) {
@@ -194,12 +199,16 @@ type ApplyState = { schemaVersion: 1; planHash: string; updatedAt: string; opera
 export async function applySetupPlan(root: string, manifest: ProjectManifest, plan: SetupPlan, input: string): Promise<ApplyState> {
   const diff = await diffSetupPlan(root, manifest, plan, input);
   const operations: ApplyState["operations"] = [];
-  const unsafe = diff.items.filter((item) => !["already correct", "create"].includes(item.classification) || (item.classification === "create" && !item.id.startsWith("resources.")));
+  const unsafe = diff.items.filter((item) => !["already correct", "create"].includes(item.classification) || (item.classification === "create" && !item.id.startsWith("resources.") && item.id !== "capabilities.admin"));
   if (unsafe.length) {
     for (const item of unsafe) operations.push({ id: item.id, status: "blocked", reason: `${item.classification}: ${item.summary}` });
     const state = { schemaVersion: 1 as const, planHash: diff.planHash, updatedAt: new Date().toISOString(), operations };
     await writeApplyState(root, state);
     throw new CliFailure(`apply is blocked:\n${unsafe.map((item) => `${item.classification} ${item.id}: ${item.summary}`).join("\n")}`);
+  }
+  if (diff.items.some(({ id, classification }) => id === "capabilities.admin" && classification === "create")) {
+    const files = await enableAdminCapability(root, manifest.project.name).catch((error: unknown) => { throw new CliFailure(error instanceof Error ? error.message : String(error)); });
+    operations.push({ id: "capabilities.admin", status: "completed", files: [...files] });
   }
   const migrations = new Map<string, SetupPlan["resources"][number]>();
   for (const resource of plan.resources) {

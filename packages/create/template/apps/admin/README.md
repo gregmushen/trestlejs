@@ -1,6 +1,6 @@
 # Platform admin
 
-The optional platform admin for operating this application. It exists only when the project is generated with `create-trestlejs --admin`, which sets `capabilities.admin: true` and `apps.admin: apps/admin`.
+The optional platform admin for operating this application. It exists only when `capabilities.admin` is true. Generate it with `create-trestlejs --admin`, or add it later with a SetupPlan that sets `capabilities.admin: true` and `pnpm exec trestle apply <plan> --yes`. The project must be on the installed CLI's template version. Disabling the admin is a manual change; `trestle apply` never removes it.
 
 - **Separate origin and sign-in.** The SPA (`src/`) and API Worker (`worker/`) deploy separately from the customer app. Operators sign in with their normal account on the admin origin. The admin exposes only sign-in, session, and sign-out, so it has no sign-up.
 - **Platform authority only.** A request needs an active platform role (`packages/authz/src/role-definitions.ts`). Tenant membership or ownership grants nothing here, and platform roles grant nothing inside a tenant.
@@ -19,3 +19,22 @@ Local development:
 pnpm --filter ./apps/admin dev       # API Worker on :8788
 pnpm --filter ./apps/admin dev:spa   # SPA on :42070
 ```
+
+## Deployment
+
+The Deploy workflow runs its admin steps only when `capabilities.admin` is true (`scripts/admin-capability.mjs status`). For staging and production, it:
+
+1. configures and verifies the platform database login (`db:platform:configure`, `db:platform:verify`);
+2. pushes `DATABASE_ADMIN_URL`, plus the Worker secrets declared with `shareWith: [admin]`, to the admin Worker (`trestle secrets push`);
+3. deploys the admin Worker and the SPA to the Pages project `__TRESTLE_PROJECT_NAME__-admin-staging` or `__TRESTLE_PROJECT_NAME__-admin`;
+4. smoke-checks liveness, anonymous rejection, the missing sign-up route, the CORS origin, and `noindex` (`scripts/admin-capability.mjs smoke`).
+
+Each GitHub environment needs these variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `ADMIN_URL` | The admin SPA origin, the only browser origin the admin API trusts |
+| `ADMIN_API_URL` | The admin Worker's public URL. Better Auth on the admin origin uses it, so customer cookies never apply here |
+| `DATABASE_ADMIN_RUNTIME_ROLE` | The login role in `DATABASE_ADMIN_URL`, granted only `trestle_platform` |
+
+Previews do not deploy the admin.
