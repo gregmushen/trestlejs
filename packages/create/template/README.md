@@ -157,6 +157,15 @@ runtime schemas and are private by default. An explicit `webhook` projection
 adds a separately versioned, validated public contract with examples and
 projection fixtures. The generated database now includes tenant-owned endpoint,
 subscription, message, delivery, attempt, and encrypted signing-secret tables.
+For a domain mutation, compose `execution.events.statement(name, payload,
+{ schemaVersion, idempotencyKey })` with the mutation inside one
+`execution.data.transaction(...)`, executing the returned statement through
+that transaction. The event publisher validates the internal schema, resolves
+the resource from the application catalog, and binds organization and
+correlation from the authenticated execution context. The idempotency key is
+scoped to that organization. The statement does not publish directly or commit
+on its own; if the domain transaction rolls back, the event rolls back too.
+Do not send a provider webhook inside the transaction.
 With `WEBHOOK_DELIVERY_MODE=local` in a local environment and Queues enabled,
 the Worker projects catalog-declared events after outbox dispatch, then
 automatically captures a signed local attempt for each active subscribed

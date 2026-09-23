@@ -4,6 +4,7 @@ import { createDatabase, createTenantDatabase, member } from "@__TRESTLE_PROJECT
 import type { SubscriptionSummary } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createMiddleware } from "hono/factory";
+import { createEventPublisher, type EventPublisher } from "./events.js";
 import { createServices, type AppServices } from "./services.js";
 
 type AuthenticatedSession = {
@@ -16,7 +17,7 @@ type Membership = { role: string; applicationRole: string | null };
 export type AppExecutionContext = ExecutionContext<
   ReturnType<typeof createTenantDatabase>,
   AppServices
->;
+> & Readonly<{ events: EventPublisher }>;
 
 export type AppVariables = { execution: AppExecutionContext; correlationId: string; requestStartedAt: number };
 
@@ -87,6 +88,7 @@ export async function resolveExecutionContext(
     ...(appPermissions ? { application: appPermissions } : {}),
   } };
   const correlation = { correlationId: suppliedCorrelationId ?? correlationId(headers) };
+  const clock = { now: () => new Date() };
   const log = createLogger({ correlationId: correlation.correlationId, userId: session.user.id, organizationId });
   log.info("auth.context.resolved", { organizationRole: membership.role, applicationRole: membership.applicationRole });
   return {
@@ -97,9 +99,10 @@ export async function resolveExecutionContext(
     access: createAccessController(authority, entitlements),
     correlation,
     data: createTenantDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER, organizationId),
+    events: createEventPublisher({ organizationId, correlationId: correlation.correlationId, clock }),
     log,
     metrics: createMetrics(log),
-    clock: { now: () => new Date() },
+    clock,
     features: { enabled: (name) => entitlements.has(name) },
     services: createServices(environment),
   };
