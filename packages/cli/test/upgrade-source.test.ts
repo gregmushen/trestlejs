@@ -158,4 +158,42 @@ describe("adjacent-alpha source apply", () => {
       await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("pnpm-lock.yaml");
     } finally { await rm(parent, { recursive: true, force: true }); }
   });
+
+  it("reports retired generated paths and refuses to leave obsolete source behind", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+      const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+      baseline.files["retired.txt"] = hash("old generated\n");
+      await writeFile(baselinePath, JSON.stringify(baseline));
+      await writeFile(path.join(root, "retired.txt"), "old generated\n");
+      expect((await planSourceDiff(root, "sample-app", template)).entries.find(({ path: relative }) => relative === "retired.txt")?.classification).toBe("retired");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("retired.txt");
+      await expect(readFile(path.join(root, "added.txt"))).rejects.toThrow();
+      await writeFile(path.join(root, "retired.txt"), "my custom edit\n");
+      expect((await planSourceDiff(root, "sample-app", template)).entries.find(({ path: relative }) => relative === "retired.txt")?.classification).toBe("retired-modified");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("retired.txt");
+      await rm(path.join(root, "retired.txt"));
+      expect((await planSourceDiff(root, "sample-app", template)).entries.find(({ path: relative }) => relative === "retired.txt")?.classification).toBe("retired-missing");
+      expect(await applySourceUpgrade(root, "sample-app", template)).toEqual(["added.txt", "changed.txt"]);
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("rejects malformed baseline paths before inspecting them", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+      const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+      baseline.files["../outside.txt"] = hash("outside\n");
+      await writeFile(baselinePath, JSON.stringify(baseline));
+      expect((await planSourceDiff(root, "sample-app", template)).baselineTrusted).toBe(false);
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("matching baseline");
+      await expect(readFile(path.join(root, "added.txt"))).rejects.toThrow();
+      delete baseline.files["../outside.txt"];
+      baseline.files["changed.txt"] = "not-a-checksum";
+      await writeFile(baselinePath, JSON.stringify(baseline));
+      expect((await planSourceDiff(root, "sample-app", template)).baselineTrusted).toBe(false);
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("matching baseline");
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
 });

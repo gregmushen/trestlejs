@@ -513,6 +513,12 @@ Alpha 71 fixes an upgrade rehearsal finding: pnpm reorders root
 that manifest only when its parsed content exactly matches the rendered
 target manifest, ignoring object key order; changed scripts, dependencies, or
 other application semantics still require manual review.
+Alpha 72 inventories files owned by the old generated template but absent
+from the target template. A present retired path, whether pristine or edited,
+blocks source apply for deliberate review; a path already removed is reported
+without blocking. Malformed baseline paths or checksums are untrusted and
+cannot direct reads outside the project. This closes a stale-source gap but
+does not yet certify migrations or advance the application template marker.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
