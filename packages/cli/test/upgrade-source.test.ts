@@ -6,7 +6,7 @@ import path from "node:path";
 import { TRESTLEJS_VERSION } from "@trestlejs/core";
 import { describe, expect, it } from "vitest";
 
-import { applySourceUpgrade, planSourceDiff } from "../src/upgrade-source.js";
+import { applySourceUpgrade, finalizeSourceUpgrade, planSourceDiff } from "../src/upgrade-source.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -58,15 +58,19 @@ describe("adjacent-alpha source apply", () => {
     const template = path.join(parent, "template");
     const alpha = Number(TRESTLEJS_VERSION.split(".").at(-1));
     await mkdir(path.join(root, ".trestle"), { recursive: true });
-    await mkdir(template);
-    await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}` }));
-    await writeFile(path.join(root, "package.json"), JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } }));
+    await mkdir(path.join(template, ".trestle"), { recursive: true });
+    const oldMarker = JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}` });
+    const packageSource = JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } });
+    await writeFile(path.join(root, ".trestle", "framework.json"), oldMarker);
+    await writeFile(path.join(template, ".trestle", "framework.json"), JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION }));
+    await writeFile(path.join(root, "package.json"), packageSource);
+    await writeFile(path.join(template, "package.json"), packageSource);
     await writeFile(path.join(root, "pnpm-lock.yaml"), `importers:\n  .:\n    devDependencies:\n      trestlejs:\n        specifier: ${TRESTLEJS_VERSION}\n        version: ${TRESTLEJS_VERSION}\n`);
     await writeFile(path.join(template, "changed.txt"), "new sample-app\n");
     await writeFile(path.join(template, "added.txt"), "added\n");
     await writeFile(path.join(root, "changed.txt"), "old sample-app\n");
     await writeFile(path.join(root, "custom.txt"), "my application data\n");
-    await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}`, files: { "changed.txt": hash("old sample-app\n") } }));
+    await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}`, files: { ".trestle/framework.json": hash(oldMarker), "package.json": hash(packageSource), "changed.txt": hash("old sample-app\n") } }));
     return { parent, root, template };
   }
 
@@ -78,6 +82,51 @@ describe("adjacent-alpha source apply", () => {
       expect(await readFile(path.join(root, "custom.txt"), "utf8")).toBe("my application data\n");
       expect(JSON.parse(await readFile(path.join(root, ".trestle", "framework.json"), "utf8")).templateVersion).not.toBe(TRESTLEJS_VERSION);
       expect(await applySourceUpgrade(root, "sample-app", template)).toEqual([]);
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("finalizes only after checks and target parity, refreshing the baseline without touching custom files", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      await applySourceUpgrade(root, "sample-app", template);
+      let checks = 0;
+      await finalizeSourceUpgrade(root, "sample-app", async () => { checks += 1; }, template);
+      expect(checks).toBe(1);
+      expect(JSON.parse(await readFile(path.join(root, ".trestle", "framework.json"), "utf8")).templateVersion).toBe(TRESTLEJS_VERSION);
+      const baseline = JSON.parse(await readFile(path.join(root, ".trestle", "template-baseline.json"), "utf8"));
+      expect(baseline.templateVersion).toBe(TRESTLEJS_VERSION);
+      expect(baseline.files[".trestle/framework.json"]).toBe(hash(await readFile(path.join(root, ".trestle", "framework.json"), "utf8")));
+      expect(baseline.files["changed.txt"]).toBe(hash("new sample-app\n"));
+      expect(await readFile(path.join(root, "custom.txt"), "utf8")).toBe("my application data\n");
+      expect((await planSourceDiff(root, "sample-app", template)).baselineTrusted).toBe(true);
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("never advances the marker when checks fail or source changes during checks", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      await applySourceUpgrade(root, "sample-app", template);
+      await expect(finalizeSourceUpgrade(root, "sample-app", async () => { throw new Error("checks failed"); }, template)).rejects.toThrow("checks failed");
+      expect(JSON.parse(await readFile(path.join(root, ".trestle", "framework.json"), "utf8")).templateVersion).not.toBe(TRESTLEJS_VERSION);
+      await expect(finalizeSourceUpgrade(root, "sample-app", async () => { await writeFile(path.join(root, "changed.txt"), "edited during checks\n"); }, template)).rejects.toThrow("changed.txt");
+      expect(JSON.parse(await readFile(path.join(root, ".trestle", "framework.json"), "utf8")).templateVersion).not.toBe(TRESTLEJS_VERSION);
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("refuses finalization before source parity or while retired generated source remains", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      let checks = 0;
+      await expect(finalizeSourceUpgrade(root, "sample-app", async () => { checks += 1; }, template)).rejects.toThrow("target parity");
+      expect(checks).toBe(0);
+      await applySourceUpgrade(root, "sample-app", template);
+      const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+      const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+      baseline.files["retired.txt"] = hash("old generated\n");
+      await writeFile(baselinePath, JSON.stringify(baseline));
+      await writeFile(path.join(root, "retired.txt"), "old generated\n");
+      await expect(finalizeSourceUpgrade(root, "sample-app", async () => { checks += 1; }, template)).rejects.toThrow("retired.txt");
+      expect(checks).toBe(0);
     } finally { await rm(parent, { recursive: true, force: true }); }
   });
 

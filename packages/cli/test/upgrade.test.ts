@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,7 +30,9 @@ describe("versioned project upgrades", () => {
     await writeFile(path.join(root, "packages/db/src/roles.ts"), "export function verifyRuntimeRoleDataAccess() {}\n");
     await writeFile(path.join(root, "packages/billing/src/repository.ts"), "import { createTenantDatabase } from '@project/db';\n");
     await writeFile(path.join(root, "scripts/neon-preview.mjs"), "const runtimeUrl = await connectionUri(runtimeRole, false);\n");
-    await writeFile(path.join(root, ".trestle", "framework.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, managedGuidanceVersion: 1 })}\n`);
+    const originalMarker = `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, managedGuidanceVersion: 1 })}\n`;
+    await writeFile(path.join(root, ".trestle", "framework.json"), originalMarker);
+    await writeFile(path.join(root, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files: { ".trestle/framework.json": createHash("sha256").update(originalMarker).digest("hex") } })}\n`);
     await writeFile(path.join(root, "package.json"), `${JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } })}\n`);
     await writeFile(path.join(root, "pnpm-lock.yaml"), `importers:\n  .:\n    devDependencies:\n      trestlejs:\n        specifier: ${TRESTLEJS_VERSION}\n        version: ${TRESTLEJS_VERSION}\n`);
     await applyUpgrade(root);
@@ -38,6 +41,9 @@ describe("versioned project upgrades", () => {
     const skill = await readFile(path.join(root, ".agents", "skills", "trestle-setup", "SKILL.md"), "utf8");
     expect(skill).toContain("# Custom guidance");
     expect(skill.match(/trestle-managed-guidance/g)).toHaveLength(1);
+    const currentMarker = await readFile(path.join(root, ".trestle", "framework.json"), "utf8");
+    const baseline = JSON.parse(await readFile(path.join(root, ".trestle", "template-baseline.json"), "utf8"));
+    expect(baseline.files[".trestle/framework.json"]).toBe(createHash("sha256").update(currentMarker).digest("hex"));
     expect((await planUpgrade(root)).operations.every(({ classification }) => classification === "already-correct")).toBe(true);
   });
 

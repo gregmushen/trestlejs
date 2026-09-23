@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import YAML from "yaml";
@@ -70,12 +71,24 @@ export async function applyUpgrade(root: string): Promise<UpgradePlan> {
   if (before.operations.some(({ classification }) => classification === "manual-review")) {
     throw new Error("Upgrade requires manual review of application source or the package lockfile; run trestle upgrade plan");
   }
+  const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+  const baselineSource = await optionalText(baselinePath);
+  let baseline: { schemaVersion?: number; templateVersion?: string; files?: Record<string, string> } | undefined;
+  if (baselineSource) {
+    try { baseline = JSON.parse(baselineSource); }
+    catch { throw new Error("Cannot update the generation baseline; review .trestle/template-baseline.json"); }
+  }
   const skillPath = path.join(root, ".agents", "skills", "trestle-setup", "SKILL.md");
   const skill = await readFile(skillPath, "utf8");
   const marker = `<!-- trestle-managed-guidance:${MANAGED_GUIDANCE_VERSION} -->`;
   if (!skill.includes(marker)) await writeFile(skillPath, `${skill.trimEnd()}\n\n${marker}\n`, "utf8");
 
-  await writeFile(path.join(root, ".trestle", "framework.json"), `${JSON.stringify({ schemaVersion: FRAMEWORK_METADATA_VERSION, templateVersion: TRESTLEJS_VERSION, managedGuidanceVersion: MANAGED_GUIDANCE_VERSION, upgradedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
+  const markerSource = `${JSON.stringify({ schemaVersion: FRAMEWORK_METADATA_VERSION, templateVersion: TRESTLEJS_VERSION, managedGuidanceVersion: MANAGED_GUIDANCE_VERSION, upgradedAt: new Date().toISOString() }, null, 2)}\n`;
+  await writeFile(path.join(root, ".trestle", "framework.json"), markerSource, "utf8");
+  if (baseline?.schemaVersion === 1 && baseline.templateVersion === TRESTLEJS_VERSION && baseline.files?.[".trestle/framework.json"]) {
+    baseline.files[".trestle/framework.json"] = createHash("sha256").update(markerSource).digest("hex");
+    await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
+  }
   await writeFile(path.join(root, ".trestle", "upgrade-state.json"), `${JSON.stringify({ schemaVersion: 1, from: before.installedVersion, to: TRESTLEJS_VERSION, operations: before.operations.filter(({ classification }) => classification === "update").map(({ id }) => id), completedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
   return before;
 }
