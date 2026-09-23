@@ -10,6 +10,7 @@ import type { CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type QueueBatch } from "./async-runtime.js";
+import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
 import { createBillingService } from "./services.js";
@@ -185,8 +186,74 @@ app.get("/api/health/operational", (context) => context.json({
     database: { configured: Boolean(context.env.DATABASE_URL) },
     email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && configuredValue(context.env.EMAIL_FROM)), stagingProtected: !["preview", "staging"].includes(context.env.APP_ENV ?? "local") || configuredValue(context.env.EMAIL_STAGING_REDIRECT) },
     billing: { mode: context.env.STRIPE_MODE ?? "local", configured: (context.env.STRIPE_MODE ?? "local") === "local" || Boolean(context.env.STRIPE_SECRET_KEY && context.env.STRIPE_WEBHOOK_SECRET && configuredValue(context.env.STRIPE_PUBLISHABLE_KEY) && configuredPrices(context.env.STRIPE_PRICES) && configuredValue(context.env.BILLING_RETURN_URL)), plans: Object.keys(plans).length },
+    artifacts: { configured: artifactRuntimeReady(context.env), mode: context.env.TRESTLE_ARTIFACTS ? "r2" : context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" : "unavailable" },
   },
 }));
+
+const artifactIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function canAccessArtifacts(execution: AppVariables["execution"], permission: "resource:read" | "resource:write"): boolean {
+  return execution.access.check({ plane: "organization", permission: "organization:manage" }).allowed
+    || execution.access.check({ plane: "application", permission }).allowed;
+}
+
+app.post("/api/artifacts", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  if (!canAccessArtifacts(execution, "resource:write")) return context.json({ error: "Forbidden" }, 403);
+  if (!artifactRuntimeReady(context.env)) return context.json({ error: "Artifact storage is not configured" }, 503);
+  const declaredLength = Number(context.req.header("content-length") ?? 0);
+  if (!Number.isSafeInteger(declaredLength) || declaredLength > 10 * 1024 * 1024) return context.json({ error: "Artifact exceeds 10 MiB" }, 413);
+  const body = new Uint8Array(await context.req.arrayBuffer());
+  if (body.byteLength === 0 || body.byteLength > 10 * 1024 * 1024) return context.json({ error: "Artifact must be 1 byte to 10 MiB" }, 413);
+  const contentType = context.req.header("content-type") ?? "application/octet-stream";
+  if (contentType.length > 128 || /[\r\n]/u.test(contentType)) return context.json({ error: "Invalid content type" }, 400);
+  const id = crypto.randomUUID();
+  const artifact = await artifactStore(context.env, execution.tenant.organizationId).put({ id, organizationId: execution.tenant.organizationId, key: id, contentType, body });
+  execution.log.info("artifact.created", { artifactId: id, size: artifact.size });
+  return context.json({ artifact }, 201);
+});
+
+app.get("/api/artifacts/:id/access", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  if (!canAccessArtifacts(execution, "resource:read")) return context.json({ error: "Forbidden" }, 403);
+  if (!artifactRuntimeReady(context.env)) return context.json({ error: "Artifact storage is not configured" }, 503);
+  const id = context.req.param("id");
+  if (!artifactIdPattern.test(id)) return context.notFound();
+  const artifact = await artifactStore(context.env, execution.tenant.organizationId).get(execution.tenant.organizationId, id);
+  if (!artifact) return context.notFound();
+  const signed = await artifactSigner(context.env).create(execution.tenant.organizationId, id);
+  return context.json({ url: new URL(signed.url, context.req.url).toString(), expiresAt: signed.expiresAt });
+});
+
+app.delete("/api/artifacts/:id", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  if (!canAccessArtifacts(execution, "resource:write")) return context.json({ error: "Forbidden" }, 403);
+  if (!artifactRuntimeReady(context.env)) return context.json({ error: "Artifact storage is not configured" }, 503);
+  const id = context.req.param("id");
+  if (!artifactIdPattern.test(id)) return context.notFound();
+  const deleted = await artifactStore(context.env, execution.tenant.organizationId).delete(execution.tenant.organizationId, id);
+  if (!deleted) return context.notFound();
+  execution.log.info("artifact.deleted", { artifactId: id });
+  return context.body(null, 204);
+});
+
+app.get("/artifacts/:id", async (context) => {
+  if (!artifactRuntimeReady(context.env)) return context.notFound();
+  const id = context.req.param("id");
+  const organizationId = context.req.query("organization") ?? "";
+  const expiresAt = Number(context.req.query("expires"));
+  const signature = context.req.query("signature") ?? "";
+  if (!artifactIdPattern.test(id) || !/^[A-Za-z0-9_-]+$/u.test(organizationId)
+    || !await artifactSigner(context.env).verify({ organizationId, artifactId: id, expiresAt, signature })) return context.notFound();
+  const artifact = await artifactStore(context.env, organizationId).get(organizationId, id);
+  if (!artifact) return context.notFound();
+  return new Response(artifact.body as BodyInit, { headers: {
+    "content-type": artifact.contentType,
+    "content-disposition": `attachment; filename="${id}"`,
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+  } });
+});
 
 app.onError((error, context) => {
   const mapped = mapHttpError(error);

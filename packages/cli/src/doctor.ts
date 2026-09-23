@@ -259,6 +259,16 @@ export async function runDoctor(
     try {
       const values = await readSecrets(root, environment, masterKey);
       const problems = validateSecrets(values, manifest, environment);
+      if (environment !== "local" && manifest.capabilities.r2) {
+        const signingSecret = values.ARTIFACT_SIGNING_SECRET;
+        checks.push({
+          id: "artifacts.signing_secret.configured",
+          group: "architecture",
+          status: signingSecret && Buffer.byteLength(signingSecret, "utf8") >= 32 ? "pass" : "fail",
+          message: signingSecret && Buffer.byteLength(signingSecret, "utf8") >= 32 ? "artifact signing secret is configured" : "R2 artifact access requires an encrypted signing secret of at least 32 bytes",
+          ...(!signingSecret || Buffer.byteLength(signingSecret, "utf8") < 32 ? { remediation: `Set ARTIFACT_SIGNING_SECRET with trestle secrets edit --env ${environment}` } : {}),
+        });
+      }
       checks.push({
         id: "configuration.secrets.valid",
         group: "architecture",

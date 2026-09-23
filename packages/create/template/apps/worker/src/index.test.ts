@@ -62,6 +62,13 @@ describe("worker routes", () => {
     expect(response.status).toBe(401);
   });
 
+  it("rejects anonymous artifact uploads and invalid signed access", async () => {
+    const upload = await app.request("/api/artifacts", { method: "POST", body: "private" }, environment);
+    expect(upload.status).toBe(401);
+    const download = await app.request(`/artifacts/${crypto.randomUUID()}?organization=org-a&expires=9999999999999&signature=invalid`, undefined, environment);
+    expect(download.status).toBe(404);
+  });
+
   it("returns the authenticated principal", async () => {
     state.authenticated = true;
     const response = await app.request("/api/me", undefined, environment);

@@ -91,6 +91,13 @@ path has been verified against a real account.
 If `capabilities.r2` is enabled, grant `Workers R2 Storage Write`. The workflows
 provision a separate bucket per environment; preview cleanup deletes its bucket
 only when empty and never purges application artifacts.
+Set the encrypted Worker secret `ARTIFACT_SIGNING_SECRET` to at least 32 random
+bytes in each R2-enabled remote environment. The Worker stores tenant-owned
+artifact metadata in PostgreSQL, serves uploads through `POST /api/artifacts`,
+and issues short-lived download links through `GET /api/artifacts/:id/access`.
+These links are bearer capabilities: do not log or share them. Local development
+uses an in-memory store and the local auth secret for signing if no dedicated
+artifact signing secret is set.
 Queue delivery is at least once. The PostgreSQL event inbox prevents a completed
 logical event from running its handler again and leases in-progress work for
 recovery. Handlers that call external services must still pass the event's

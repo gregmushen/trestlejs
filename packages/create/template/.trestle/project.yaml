@@ -54,6 +54,9 @@ secrets:
   BETTER_AUTH_URL:
     target: worker
     required: [local, preview, staging, production]
+  ARTIFACT_SIGNING_SECRET:
+    target: worker
+    required: []
   RESEND_API_KEY:
     target: worker
     required: [preview, staging, production]

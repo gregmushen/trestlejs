@@ -1,4 +1,4 @@
-import { createDatabase, eventInbox, organization, outboxMessage, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { artifactMetadata, createDatabase, eventInbox, organization, outboxMessage, user } from "@__TRESTLE_PROJECT_NAME__/db";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -25,6 +25,8 @@ suite("local product path", () => {
     const database = createDatabase(process.env.TRESTLE_SYSTEM_TEST_MIGRATION_URL ?? databaseUrl!, "postgres-js");
     let organizationId: string | undefined;
     let articleId: string | undefined;
+    let artifactId: string | undefined;
+    let r2ArtifactId: string | undefined;
     clearCapturedEmails();
     try {
       const signUp = await app.request("http://localhost:8787/api/auth/sign-up/email", {
@@ -61,6 +63,53 @@ suite("local product path", () => {
       }, environment);
       expect(billing.status).toBe(200);
       await expect(billing.json()).resolves.toHaveProperty("subscription");
+      const artifactHeaders = { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": organizationId! };
+      const upload = await app.request("http://localhost:8787/api/artifacts", {
+        method: "POST", headers: { ...artifactHeaders, "content-type": "text/plain" }, body: "private artifact",
+      }, environment);
+      expect(upload.status).toBe(201);
+      artifactId = (await upload.json() as { artifact: { id: string } }).artifact.id;
+      const access = await app.request(`http://localhost:8787/api/artifacts/${artifactId}/access`, { headers: artifactHeaders }, environment);
+      expect(access.status).toBe(200);
+      const signedUrl = (await access.json() as { url: string }).url;
+      const downloaded = await app.request(signedUrl, undefined, environment);
+      expect(downloaded.status).toBe(200);
+      expect(await downloaded.text()).toBe("private artifact");
+      expect(downloaded.headers.get("content-disposition")).toContain("attachment");
+      const forged = new URL(signedUrl);
+      forged.searchParams.set("organization", crypto.randomUUID());
+      expect((await app.request(forged.toString(), undefined, environment)).status).toBe(404);
+      expect((await app.request(`http://localhost:8787/api/artifacts/${artifactId}/access`, {
+        headers: { ...artifactHeaders, "x-trestle-tenant": crypto.randomUUID() },
+      }, environment)).status).toBe(404);
+      expect((await app.request(`http://localhost:8787/api/artifacts/${artifactId}`, { method: "DELETE", headers: artifactHeaders }, environment)).status).toBe(204);
+      artifactId = undefined;
+      expect((await app.request(signedUrl, undefined, environment)).status).toBe(404);
+      const r2Objects = new Map<string, Uint8Array>();
+      const r2Environment = { ...environment, TRESTLE_ARTIFACTS: {
+        put: async (key: string, body: Uint8Array) => { r2Objects.set(key, body.slice()); },
+        get: async (key: string) => { const body = r2Objects.get(key); return body ? { size: body.byteLength, arrayBuffer: async () => body.slice().buffer } : null; },
+        delete: async (key: string) => { r2Objects.delete(key); },
+      } };
+      const r2Upload = await app.request("http://localhost:8787/api/artifacts", {
+        method: "POST", headers: { ...artifactHeaders, "content-type": "text/plain" }, body: "durable artifact",
+      }, r2Environment);
+      expect(r2Upload.status).toBe(201);
+      r2ArtifactId = (await r2Upload.json() as { artifact: { id: string } }).artifact.id;
+      const [persistedArtifact] = await database.select().from(artifactMetadata).where(eq(artifactMetadata.id, r2ArtifactId)).limit(1);
+      expect(persistedArtifact).toMatchObject({ organizationId, storageKey: `${organizationId}/${r2ArtifactId}`, contentType: "text/plain" });
+      const r2Access = await app.request(`http://localhost:8787/api/artifacts/${r2ArtifactId}/access`, { headers: artifactHeaders }, r2Environment);
+      expect(r2Access.status).toBe(200);
+      const r2Url = (await r2Access.json() as { url: string }).url;
+      expect(await (await app.request(r2Url, undefined, r2Environment)).text()).toBe("durable artifact");
+      expect((await app.request(`http://localhost:8787/api/artifacts/${r2ArtifactId}/access`, {
+        headers: { ...artifactHeaders, "x-trestle-tenant": crypto.randomUUID() },
+      }, r2Environment)).status).toBe(404);
+      expect((await app.request(`http://localhost:8787/api/artifacts/${r2ArtifactId}`, { method: "DELETE", headers: artifactHeaders }, r2Environment)).status).toBe(204);
+      expect(r2Objects.size).toBe(0);
+      const [deletedArtifact] = await database.select().from(artifactMetadata).where(eq(artifactMetadata.id, r2ArtifactId)).limit(1);
+      expect(deletedArtifact?.deletedAt).toBeInstanceOf(Date);
+      expect((await app.request(r2Url, undefined, r2Environment)).status).toBe(404);
       if (process.env.TRESTLE_SYSTEM_TEST_ARTICLES === "1") {
         const headers = { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": organizationId!, "content-type": "application/json" };
         const createdArticle = await app.request("http://localhost:8787/api/articles", {
@@ -110,6 +159,7 @@ suite("local product path", () => {
       }, environment);
       expect(unjoined.status).toBe(404);
     } finally {
+      if (r2ArtifactId) await database.delete(artifactMetadata).where(eq(artifactMetadata.id, r2ArtifactId));
       if (articleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${articleId}`));
       if (articleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, articleId));
       if (organizationId && process.env.TRESTLE_SYSTEM_TEST_ARTICLES === "1") await database.execute(sql`delete from article where organization_id = ${organizationId}`);
