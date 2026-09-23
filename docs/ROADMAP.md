@@ -541,6 +541,13 @@ pristine. The preview deployment remains blocked by incomplete encrypted
 credentials, Resend sender/redirect configuration, and Stripe test-mode
 configuration; this migration is not deployed-provider evidence or beta
 certification.
+Alpha 74 adds `trestle upgrade migrations`, a read-only comparison of the
+application and bundled target PostgreSQL journals and SQL checksums. It
+reports common history, append-only tails, same-index divergences, malformed
+or symlinked journal files, missing SQL, and unjournaled SQL. A divergent
+canary correctly reports eight shared entries followed by different index-8
+migrations. The command does not rewrite history or claim physical-schema
+equivalence; an isolated replay and schema review remain required.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

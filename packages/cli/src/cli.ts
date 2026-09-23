@@ -32,6 +32,7 @@ import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-con
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { applySourceUpgrade, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
+import { auditMigrations, formatMigrationAudit } from "./upgrade-migrations.js";
 import { loadSetupPlan, startSetupConsole } from "./setup.js";
 import {
   credentialsPaths,
@@ -187,6 +188,17 @@ export function createProgram(runtime: CliRuntime): Command {
       const context = await projectContext(command, runtime);
       const report = await planSourceDiff(context.root, context.manifest.project.name);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatSourceDiff(report));
+    });
+  upgrade.command("migrations")
+    .description("audit application and target migration journals without changing either chain")
+    .option("--json", "emit versioned structured output")
+    .option("--check", "fail when migration history differs or is invalid")
+    .action(async (options: { json?: boolean; check?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = await auditMigrations(context.root);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatMigrationAudit(report));
+      if (report.classification === "invalid") throw new CliFailure("migration journal audit is invalid");
+      if (options.check && report.requiresReview) throw new CliFailure("migration history requires review");
     });
   upgrade.command("source-apply")
     .description("apply only pristine adjacent-alpha application source; does not certify the upgrade")
