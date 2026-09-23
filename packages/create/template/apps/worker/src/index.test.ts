@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({ authenticated: false }));
 
 vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
+  loadAuthPolicy: vi.fn(async () => ({ policy: {}, version: null, loadedAt: 0 })),
   createAuth: () => ({
     handler: vi.fn(),
     api: {
@@ -19,6 +20,7 @@ vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
 }));
 
 import worker, { app } from "./index.js";
+import { assertQueueBinding } from "./outbox-runner.js";
 
 const environment = {
   DATABASE_URL: "postgres://unused",
@@ -32,9 +34,12 @@ describe("worker routes", () => {
     state.authenticated = false;
   });
 
-  it("fails remote scheduled dispatch without its Queue binding", async () => {
-    await expect(worker.scheduled(undefined, { ...environment, APP_ENV: "preview" })).rejects.toThrow("TRESTLE_EVENTS Queue binding");
-    await expect(worker.scheduled(undefined, environment)).resolves.toBeUndefined();
+  it("fails remote scheduled dispatch without its Queue binding when Queues is declared", async () => {
+    expect(() => assertQueueBinding({ ...environment, APP_ENV: "preview" }, true)).toThrow("TRESTLE_EVENTS Queue binding");
+    expect(() => assertQueueBinding({ ...environment, APP_ENV: "preview" }, false)).not.toThrow();
+    expect(() => assertQueueBinding(environment, true)).not.toThrow();
+    // Locally the runner always publishes (trestle dev fires it); it reaches the database rather than failing on the queue.
+    await expect(worker.scheduled(undefined, environment)).rejects.not.toThrow("TRESTLE_EVENTS");
   });
 
   it("fails enabled Workflow delivery without its binding", async () => {

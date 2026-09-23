@@ -1,6 +1,7 @@
 export type BillingStatus = "active" | "trialing" | "past_due" | "cancelled" | "incomplete";
-export type EffectiveEntitlement = { code: string; enabled: boolean; source: "plan" | "override" | "default"; inheritedFrom?: string; effectiveAt: Date };
-export type SubscriptionSummary = { organizationId: string; provider: string; providerCustomerId?: string; providerSubscriptionId?: string; plan: string; planVersion: number; status: BillingStatus; currentPeriodStart?: Date; currentPeriodEnd?: Date; cancelAtPeriodEnd: boolean; entitlements: string[]; effectiveEntitlements?: EffectiveEntitlement[] };
+export type SubscriptionSummary = { organizationId: string; provider: string; providerCustomerId?: string; providerSubscriptionId?: string; plan: string; status: BillingStatus; currentPeriodStart?: Date; currentPeriodEnd?: Date; cancelAtPeriodEnd: boolean; entitlements: string[];
+  /** Provider subscription items resolved through explicit price mappings; written as subscription lines. */
+  lines?: ReadonlyArray<{ providerItemId: string; providerPriceId: string; planVersion: string | null; offer: string | null; quantity: number }> };
 export type CreateCheckoutInput = { organizationId: string; plan: string; requestId: string; customerEmail?: string; successUrl?: string; cancelUrl?: string };
 export type CheckoutSession = { id: string; url: string; expiresAt?: Date };
 export type CreatePortalInput = { organizationId: string; requestId: string; returnUrl?: string };

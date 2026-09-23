@@ -269,6 +269,10 @@ Remaining Alpha 8 release work is provider wiring and operational hardening:
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
+- Begin the commercial control plane defined by the
+  [Administration and Access Control Specification](ADMIN_SPEC.md): feature
+  definitions, versioned plans, subscription projections, effective
+  entitlements, overrides, and customer-visible plan/usage truth.
 - Use `ExecutionContext` consistently for every authenticated application
   route, including billing.
 - Standardize shared error mapping, semantic event names, correlation across
@@ -297,7 +301,10 @@ Remaining Alpha 8 release work is provider wiring and operational hardening:
 
 ### Alpha 12: beta hardening
 
-- Optional admin application and application-backed admin resources.
+- Guided `trestle setup`, the optional platform admin application,
+  application-backed admin resources, roles and permissions, service accounts,
+  scoped API keys, and explainable access decisions as defined by the
+  [Administration and Access Control Specification](ADMIN_SPEC.md).
 - Full browser, deployment, authorization, idempotency, upgrade, recovery,
   and adjacent-version migration suites.
 - Complete machine-readable inspection for routes, resources, events,

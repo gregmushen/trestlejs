@@ -1,6 +1,16 @@
 import { z } from "zod";
 
-import { environmentNameSchema } from "./manifest.js";
+import {
+  accessDeclarationSchema,
+  artifactsDeclarationSchema,
+  authenticationDeclarationSchema,
+  commercialDeclarationSchema,
+  communicationsDeclarationSchema,
+  declarationIssues,
+  environmentNameSchema,
+  identityDeclarationSchema,
+  integrationProvidersSchema,
+} from "./manifest.js";
 
 const namedIntent = z.object({
   name: z.string().min(1),
@@ -35,7 +45,7 @@ export const setupPlanSchema = z.object({
   schemaVersion: z.literal(1),
   minimumTrestleVersion: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u),
   project: z.object({ name: z.string().min(1) }).strict(),
-  apps: z.object({ site: z.boolean(), app: z.boolean(), worker: z.boolean() }).strict(),
+  apps: z.object({ site: z.boolean(), app: z.boolean(), worker: z.boolean(), admin: z.boolean().optional() }).strict(),
   tenancy: z.object({
     model: z.literal("organization"),
     enforcement: z.literal("postgres-rls"),
@@ -52,10 +62,17 @@ export const setupPlanSchema = z.object({
     admin: z.boolean(),
   }).strict(),
   integrations: z.object({ email: z.boolean(), billing: z.boolean() }).strict(),
+  providers: integrationProvidersSchema.optional(),
+  authentication: authenticationDeclarationSchema.optional(),
+  identity: identityDeclarationSchema.optional(),
+  access: accessDeclarationSchema.optional(),
+  commercial: commercialDeclarationSchema.optional(),
+  communications: communicationsDeclarationSchema.optional(),
+  artifacts: artifactsDeclarationSchema.optional(),
   environments: z.array(environmentNameSchema).min(1),
   secrets: z.array(z.object({
     name: z.string().regex(/^[A-Z][A-Z0-9_]*$/u),
-    target: z.enum(["worker", "ci"]),
+    target: z.enum(["worker", "ci", "admin"]),
     required: z.array(environmentNameSchema).min(1),
   }).strict()).default([]),
   resources: z.array(setupResourceSchema).default([]),
@@ -67,6 +84,10 @@ export const setupPlanSchema = z.object({
   }).strict()).default([]),
   verification: z.object({ commands: z.array(z.string().min(1)).default([]) }).strict(),
 }).strict().superRefine((plan, context) => {
+  for (const issue of declarationIssues({ integrations: plan.providers, access: plan.access, commercial: plan.commercial, communications: plan.communications, authentication: plan.authentication, identity: plan.identity, capabilities: plan.capabilities }, "providers")) context.addIssue({ code: "custom", ...issue });
+  if (plan.apps.admin && !plan.capabilities.admin) {
+    context.addIssue({ code: "custom", path: ["apps", "admin"], message: "the admin application requires capabilities.admin" });
+  }
   const uniqueEnvironments = new Set(plan.environments);
   if (uniqueEnvironments.size !== plan.environments.length) {
     context.addIssue({ code: "custom", path: ["environments"], message: "environments must not contain duplicates" });

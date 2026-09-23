@@ -1,0 +1,102 @@
+import { permissions } from "./permissions.js";
+import { defineRoutePolicies } from "./route-policy.js";
+
+/**
+ * Every Worker route declares its authentication audience and required
+ * authority here. `trestle permissions` and `trestle routes` read this table,
+ * and the route-drift test fails when a registered route has no policy.
+ */
+export const customerRoutePolicies = defineRoutePolicies(permissions, [
+  { method: "GET", path: "/api/health", public: true, audience: "public" },
+  { method: "GET", path: "/api/health/operational", public: true, audience: "public" },
+  // Signed, expiring artifact downloads; the signature is the authority.
+  { method: "GET", path: "/artifacts/:id", public: true, audience: "public" },
+  { method: "GET", path: "/api/auth/*", public: true, audience: "public" },
+  { method: "POST", path: "/api/auth/*", public: true, audience: "public" },
+  // SCIM 2.0 (/api/auth/scim/v2/*) authenticates with its own bearer credentials inside Better Auth.
+  { method: "PUT", path: "/api/auth/*", public: true, audience: "public" },
+  { method: "PATCH", path: "/api/auth/*", public: true, audience: "public" },
+  { method: "DELETE", path: "/api/auth/*", public: true, audience: "public" },
+  { method: "POST", path: "/api/webhooks/resend", public: true, audience: "public" },
+  { method: "POST", path: "/webhooks/stripe", public: true, audience: "public" },
+  { method: "POST", path: "/webhooks/workos", public: true, audience: "public" },
+  { method: "GET", path: "/api/auth-methods", public: true, audience: "public" },
+  { method: "GET", path: "/api/dev/emails", public: true, audience: "public" },
+  { method: "GET", path: "/api/dev/emails/:id", public: true, audience: "public" },
+  { method: "DELETE", path: "/api/dev/emails", public: true, audience: "public" },
+  { method: "POST", path: "/api/dev/emails/flush", public: true, audience: "public" },
+  { method: "GET", path: "/api/dev/webhook-receiver", public: true, audience: "public" },
+  { method: "POST", path: "/api/dev/webhook-receiver", public: true, audience: "public" },
+  { method: "POST", path: "/api/dev/webhook-receiver/:mode", public: true, audience: "public" },
+  { method: "DELETE", path: "/api/dev/webhook-receiver", public: true, audience: "public" },
+  { method: "GET", path: "/api/me", audience: "session" },
+
+  { method: "POST", path: "/api/billing/checkout", audience: "tenant", permission: "organization.billing.manage" },
+  { method: "POST", path: "/api/billing/portal", audience: "tenant", permission: "organization.billing.manage" },
+  { method: "GET", path: "/api/billing/subscription", audience: "tenant", permission: "organization.billing.read" },
+  // Local-only billing simulator; acts on the caller's own organization.
+  { method: "POST", path: "/api/dev/billing", audience: "tenant", permission: "organization.billing.manage" },
+
+  { method: "POST", path: "/api/artifacts", audience: "tenant", permission: "resource.write" },
+  { method: "GET", path: "/api/artifacts/:id/access", audience: "tenant", permission: "resource.read" },
+  { method: "DELETE", path: "/api/artifacts/:id", audience: "tenant", permission: "resource.write" },
+
+  { method: "GET", path: "/api/tenant/access", audience: "tenant", permission: "organization.read" },
+  { method: "GET", path: "/api/tenant/plan-usage", audience: "tenant", permission: "organization.entitlements.read" },
+  { method: "GET", path: "/api/tenant/members", audience: "tenant", permission: "organization.members.read" },
+  { method: "PUT", path: "/api/tenant/members/:memberId/organization-roles", audience: "tenant", permission: "organization.roles.assign" },
+  { method: "GET", path: "/api/tenant/application-roles", audience: "tenant", permission: "application.roles.read" },
+  { method: "POST", path: "/api/tenant/application-roles", audience: "tenant", permission: "application.roles.manage" },
+  { method: "PATCH", path: "/api/tenant/application-roles/:key", audience: "tenant", permission: "application.roles.manage" },
+  { method: "DELETE", path: "/api/tenant/application-roles/:key", audience: "tenant", permission: "application.roles.manage" },
+  { method: "GET", path: "/api/tenant/application-role-assignments", audience: "tenant", permission: "application.roles.read" },
+  { method: "PUT", path: "/api/tenant/users/:userId/application-roles", audience: "tenant", permission: "application.roles.assign" },
+  { method: "GET", path: "/api/tenant/service-accounts", audience: "tenant", permission: "organization.service_accounts.read" },
+  { method: "POST", path: "/api/tenant/service-accounts", audience: "tenant", permission: "organization.service_accounts.manage" },
+  { method: "PUT", path: "/api/tenant/service-accounts/:id/application-roles", audience: "tenant", permission: "application.roles.assign" },
+  { method: "POST", path: "/api/tenant/service-accounts/:id/suspend", audience: "tenant", permission: "organization.service_accounts.manage" },
+  { method: "POST", path: "/api/tenant/service-accounts/:id/reactivate", audience: "tenant", permission: "organization.service_accounts.manage" },
+  { method: "GET", path: "/api/tenant/service-accounts/:id/keys", audience: "tenant", permission: "organization.service_accounts.read" },
+  { method: "POST", path: "/api/tenant/service-accounts/:id/keys", audience: "tenant", permission: "organization.api_keys.manage", revealsSecret: true },
+  { method: "POST", path: "/api/tenant/api-keys/:id/rotate", audience: "tenant", permission: "organization.api_keys.manage", revealsSecret: true },
+  { method: "POST", path: "/api/tenant/api-keys/:id/revoke", audience: "tenant", permission: "organization.api_keys.manage" },
+  { method: "GET", path: "/api/tenant/api-keys/:id/usage", audience: "tenant", permission: "organization.service_accounts.read" },
+  { method: "GET", path: "/api/tenant/scope-profiles", audience: "tenant", permission: "organization.service_accounts.read" },
+  { method: "POST", path: "/api/tenant/scope-profiles", audience: "tenant", permission: "organization.service_accounts.manage" },
+  { method: "DELETE", path: "/api/tenant/scope-profiles/:id", audience: "tenant", permission: "organization.service_accounts.manage" },
+  { method: "GET", path: "/api/tenant/audit", audience: "tenant", permission: "organization.audit.read" },
+
+  // Integrations -> Webhooks.
+  { method: "GET", path: "/api/tenant/identity", audience: "tenant", permission: "organization.identity.read" },
+  { method: "POST", path: "/api/tenant/identity/sso", audience: "tenant", permission: "organization.identity.manage" },
+  { method: "POST", path: "/api/tenant/identity/sso/:providerId/verify-domain", audience: "tenant", permission: "organization.identity.manage" },
+  { method: "DELETE", path: "/api/tenant/identity/sso/:providerId", audience: "tenant", permission: "organization.identity.manage" },
+  { method: "POST", path: "/api/tenant/identity/workos/organization", audience: "tenant", permission: "organization.identity.manage" },
+  { method: "POST", path: "/api/tenant/identity/workos/directory", audience: "tenant", permission: "organization.identity.manage" },
+  { method: "DELETE", path: "/api/tenant/identity/workos/:kind/:externalId", audience: "tenant", permission: "organization.identity.manage" },
+  { method: "POST", path: "/api/tenant/identity/scim", audience: "tenant", permission: "organization.identity.manage", revealsSecret: true },
+  { method: "POST", path: "/api/tenant/identity/scim/:connectionId/rotate", audience: "tenant", permission: "organization.identity.manage", revealsSecret: true },
+  { method: "POST", path: "/api/tenant/identity/scim/:connectionId/decommission", audience: "tenant", permission: "organization.identity.manage" },
+  { method: "POST", path: "/api/tenant/identity/mappings", audience: "tenant", permission: "organization.identity.manage" },
+  { method: "DELETE", path: "/api/tenant/identity/mappings/:id", audience: "tenant", permission: "organization.identity.manage" },
+  { method: "GET", path: "/api/tenant/webhooks", audience: "tenant", permission: "organization.webhooks.read" },
+  { method: "POST", path: "/api/tenant/webhooks", audience: "tenant", permission: "organization.webhooks.manage", revealsSecret: true },
+  { method: "GET", path: "/api/tenant/webhooks/:id", audience: "tenant", permission: "organization.webhooks.read" },
+  { method: "PATCH", path: "/api/tenant/webhooks/:id", audience: "tenant", permission: "organization.webhooks.manage" },
+  { method: "DELETE", path: "/api/tenant/webhooks/:id", audience: "tenant", permission: "organization.webhooks.manage" },
+  { method: "POST", path: "/api/tenant/webhooks/:id/pause", audience: "tenant", permission: "organization.webhooks.manage" },
+  { method: "POST", path: "/api/tenant/webhooks/:id/resume", audience: "tenant", permission: "organization.webhooks.manage" },
+  { method: "POST", path: "/api/tenant/webhooks/:id/disable", audience: "tenant", permission: "organization.webhooks.manage" },
+  { method: "POST", path: "/api/tenant/webhooks/:id/test", audience: "tenant", permission: "organization.webhooks.manage" },
+  { method: "POST", path: "/api/tenant/webhooks/:id/rotate-secret", audience: "tenant", permission: "organization.webhooks.rotate_secret", revealsSecret: true },
+  { method: "GET", path: "/api/tenant/webhook-deliveries/:id", audience: "tenant", permission: "organization.webhooks.read" },
+  { method: "POST", path: "/api/tenant/webhook-deliveries/:id/replay", audience: "tenant", permission: "organization.webhooks.replay" },
+
+  // Notifications. Every member reads their own inbox and preferences.
+  { method: "GET", path: "/api/tenant/notifications", audience: "tenant", permission: "organization.read" },
+  { method: "POST", path: "/api/tenant/notifications/read", audience: "tenant", permission: "organization.read" },
+  { method: "GET", path: "/api/tenant/notification-preferences", audience: "tenant", permission: "organization.read" },
+  { method: "PUT", path: "/api/tenant/notification-preferences", audience: "tenant", permission: "organization.read" },
+  { method: "PUT", path: "/api/tenant/notification-defaults", audience: "tenant", permission: "organization.notifications.manage" },
+  { method: "GET", path: "/api/tenant/notification-deliveries", audience: "tenant", permission: "organization.notifications.read" },
+]);

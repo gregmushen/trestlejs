@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 
-import { assertRuntimeRole, bootstrapRuntimeRole, configureRuntimeRole, inspectRuntimeRole, verifyRuntimeRoleDataAccess } from "../src/roles.js";
+import { assertPlatformRole, assertRuntimeRole, bootstrapRuntimeRole, configurePlatformRole, configureRuntimeRole, inspectPlatformRole, inspectRuntimeRole, verifyRuntimeRoleDataAccess } from "../src/roles.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -10,9 +10,9 @@ function required(name: string): string {
 }
 
 const operation = process.argv[2];
-const expectedRole = required("DATABASE_RUNTIME_ROLE");
 
 if (operation === "bootstrap" || operation === "bootstrap-managed") {
+  const expectedRole = required("DATABASE_RUNTIME_ROLE");
   const migrationUrl = required("DATABASE_MIGRATION_URL");
   const managed = operation === "bootstrap-managed";
   const runtimeUrl = managed ? new URL(migrationUrl) : new URL(required("DATABASE_URL"));
@@ -30,14 +30,26 @@ if (operation === "bootstrap" || operation === "bootstrap-managed") {
   }
   console.log(`${result.created ? "Created" : "Updated"} restricted PostgreSQL runtime role ${result.role}`);
 } else if (operation === "configure") {
+  const expectedRole = required("DATABASE_RUNTIME_ROLE");
   const status = await configureRuntimeRole(required("DATABASE_MIGRATION_URL"), expectedRole);
   assertRuntimeRole(status, expectedRole);
   console.log(`Configured restricted PostgreSQL runtime role ${status.role}`);
 } else if (operation === "verify") {
+  const expectedRole = required("DATABASE_RUNTIME_ROLE");
   const status = await inspectRuntimeRole(required("DATABASE_URL"));
   assertRuntimeRole(status, expectedRole);
   await verifyRuntimeRoleDataAccess(required("DATABASE_URL"));
   console.log(`Verified restricted PostgreSQL runtime role and data access ${status.role}`);
+} else if (operation === "configure-platform") {
+  const expectedRole = required("DATABASE_ADMIN_RUNTIME_ROLE");
+  const status = await configurePlatformRole(required("DATABASE_MIGRATION_URL"), expectedRole);
+  assertPlatformRole(status, expectedRole);
+  console.log(`Configured platform PostgreSQL runtime role ${status.role}`);
+} else if (operation === "verify-platform") {
+  const expectedRole = required("DATABASE_ADMIN_RUNTIME_ROLE");
+  const status = await inspectPlatformRole(required("DATABASE_ADMIN_URL"));
+  assertPlatformRole(status, expectedRole);
+  console.log(`Verified platform PostgreSQL runtime role ${status.role}`);
 } else {
-  throw new Error("Expected bootstrap, bootstrap-managed, configure, or verify");
+  throw new Error("Expected bootstrap, bootstrap-managed, configure, verify, configure-platform, or verify-platform");
 }

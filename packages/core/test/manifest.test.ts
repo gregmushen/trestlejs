@@ -63,4 +63,61 @@ describe("project manifest", () => {
     const manifest = parseProjectManifest(`${validManifest}\nsecrets:\n  ARTIFACT_SIGNING_SECRET:\n    target: worker\n    required: []\n`);
     expect(manifest.secrets?.ARTIFACT_SIGNING_SECRET.required).toEqual([]);
   });
+
+  it("parses optional integration, access, commercial, and artifact declarations", () => {
+    const manifest = parseProjectManifest(`${validManifest}integrations:
+  email: resend
+  payments: lago
+access:
+  customRoles: true
+  serviceAccounts: true
+  apiKeys: true
+commercial:
+  plans: true
+  usage: false
+artifacts:
+  storage: r2
+  retentionDays: 30
+`);
+    expect(manifest.integrations).toEqual({ email: "resend", payments: "lago" });
+    expect(manifest.artifacts?.retentionDays).toBe(30);
+    expect(parseProjectManifest(validManifest).access).toBeUndefined();
+  });
+
+  it("parses communications and support-session declarations", () => {
+    const manifest = parseProjectManifest(validManifest.replace("admin: false", "admin: true") + "access:\n  customRoles: true\n  serviceAccounts: true\n  apiKeys: true\n  supportSessions: true\n  impersonation: false\ncommunications:\n  webhooks: true\n  notifications: false\n");
+    expect(manifest.access).toMatchObject({ supportSessions: true, impersonation: false });
+    expect(manifest.communications).toEqual({ webhooks: true, notifications: false });
+  });
+
+  it("keeps impersonation off and support sessions inside the admin capability", () => {
+    const issues = (text: string) => { try { parseProjectManifest(text); return []; } catch (error) { return (error as ManifestError).issues.map((issue) => issue.message); } };
+    expect(issues(`${validManifest}access:\n  customRoles: false\n  serviceAccounts: false\n  apiKeys: false\n  impersonation: true\n`)).toEqual([expect.stringMatching(/impersonation/u)]);
+    expect(issues(`${validManifest}access:\n  customRoles: false\n  serviceAccounts: false\n  apiKeys: false\n  supportSessions: true\n`)).toEqual([expect.stringMatching(/capabilities.admin/u)]);
+  });
+
+  it("rejects inconsistent optional declarations", () => {
+    expect(() => parseProjectManifest(`${validManifest}access:\n  customRoles: false\n  serviceAccounts: false\n  apiKeys: true\n`)).toThrow(ManifestError);
+    expect(() => parseProjectManifest(`${validManifest}integrations:\n  email: local\n  payments: lago\n`)).toThrow(ManifestError);
+    expect(() => parseProjectManifest(`${validManifest}artifacts:\n  storage: r2\n  retentionDays: 0\n`)).toThrow(ManifestError);
+    expect(() => parseProjectManifest(`${validManifest}integrations:\n  email: sendgrid\n  payments: local\n`)).toThrow(ManifestError);
+  });
+
+  it("accepts capability choices and rejects incompatible provider combinations", () => {
+    const issues = (text: string) => { try { parseProjectManifest(text); return []; } catch (error) { return (error as ManifestError).issues.map((issue) => issue.message); } };
+    const admin = validManifest.replace("admin: false", "admin: true");
+    const commercial = "commercial:\n  plans: true\n  usage: true\n";
+    const manifest = parseProjectManifest(`${admin}integrations:\n  email: resend\n  payments: stripe\n  metering: openmeter\n  webhooks: svix\nauthentication:\n  passkeys: better-auth\n  twoFactor: disabled\nidentity:\n  sso: better-auth\n  directory: better-auth-scim\ncommunications:\n  webhooks: true\n  notifications: true\n${commercial}`);
+    expect(manifest.identity).toEqual({ sso: "better-auth", directory: "better-auth-scim" });
+    expect(manifest.integrations?.metering).toBe("openmeter");
+    expect(issues(`${validManifest}integrations:\n  email: local\n  payments: stripe\n  metering: openmeter\n`)).toEqual([expect.stringMatching(/commercial.usage/u)]);
+    expect(issues(`${validManifest}integrations:\n  email: local\n  payments: stripe\n  metering: lago\n${commercial}`)).toEqual([expect.stringMatching(/requires payments: lago/u)]);
+    expect(issues(`${validManifest}integrations:\n  email: local\n  payments: local\n  webhooks: svix\n`)).toEqual([expect.stringMatching(/communications.webhooks/u)]);
+    expect(issues(`${admin}authentication:\n  passkeys: disabled\n  twoFactor: disabled\n`)).toEqual([expect.stringMatching(/step-up/u)]);
+    expect(issues(`${validManifest}authentication:\n  passkeys: disabled\n  twoFactor: disabled\n`)).toEqual([]);
+    expect(issues(`${validManifest}identity:\n  sso: disabled\n  directory: workos\n`)).toEqual(expect.arrayContaining([expect.stringMatching(/requires SSO/u)]));
+    expect(issues(`${validManifest}identity:\n  sso: better-auth\n  directory: workos\n`)).toEqual([expect.stringMatching(/WorkOS SSO/u)]);
+    expect(issues(`${validManifest}identity:\n  sso: workos\n  directory: better-auth-scim\n`)).toEqual([expect.stringMatching(/Better Auth SSO/u)]);
+    expect(issues(`${validManifest}identity:\n  sso: stytch\n  directory: disabled\n`)).toEqual([expect.stringMatching(/Stytch adapter is not available/u)]);
+  });
 });

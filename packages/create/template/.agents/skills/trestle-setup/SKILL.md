@@ -41,6 +41,8 @@ First determine whether this is a new project or an existing project. Never repl
 
 Probe the installed CLI surface with `trestle --help` and relevant subcommand help. Do not assume a command from this skill or the specification exists in the installed version.
 
+Use `pnpm exec trestle capabilities --env <environment> [--json]` to read each optional capability's lifecycle state (`disabled`, `declared`, `configured`, `deployed`, `verified`) and the safe list of missing source, bindings, or secret names. It is read-only, reports secret presence only, and prints the exact `pnpm exec trestle setup --env <environment>` repair command. `trestle doctor` reports the same gaps as warnings in its `capabilities` group.
+
 ## Understand the product
 
 Ask what users should accomplish, then follow the dependencies in their answer. Cover only relevant areas: users, organizations, resources, workflows, artifacts, integrations, transactional email, billing, administration, asynchronous behavior, coordination, environments, delivery, cost, compliance, latency, and geography.
@@ -91,6 +93,17 @@ After design approval, construct a versioned, deterministic, serializable SetupP
 The proposed path is `.trestle/setup.json`. Creating or updating it is itself a mutation and must appear in mutation review unless the user explicitly requested only a plan artifact.
 
 If `trestle plan validate` and `trestle plan diff` exist, validate the plan through standard input before persisting it and resolve all reported unsupported combinations, conflicts, blocked items, and unknowns. If they do not exist, report that capability gap. Do not pretend validation occurred, and do not invent a private schema as a substitute.
+
+## Guided setup console
+
+`pnpm exec trestle setup` opens a local, loopback-only console on a random port with a one-time link, a session cookie, and CSRF protection. It walks identity and environments, surfaces (site, app, admin), authentication, email, payments, plans, database, async processing, artifacts, access control, and deployment environments, then saves `.trestle/setup.json`, shows `trestle plan diff`, requires explicit approval of that exact diff, applies it, runs Doctor, and records non-secret evidence in `.trestle/evidence/<environment>.json`.
+
+- `--no-open` prints the link without opening a browser; `--resume` continues the saved plan; `--env <environment>` selects the credential environment edited first.
+- `--plan-only` edits and saves the SetupPlan but disables credential changes and apply. Use it when the user has approved only a plan artifact.
+- Secret values entered in the console are encrypted immediately into the environment credential document and are never shown again; the console displays only presence and an 8-character fingerprint. Connection tests call the provider server-side and return only reachable, unauthorized, unreachable, or not configured.
+- Saving the plan and applying it from the console are mutations. The same approval rules in this skill apply; approving the console's diff is the mutation approval for that diff only.
+
+`trestle setup` orchestrates `trestle plan`, `trestle apply`, and `trestle doctor`; those remain the reviewable engines for agents working without a browser.
 
 ## Review exact mutations
 

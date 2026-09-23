@@ -1,64 +1,9 @@
-export type Principal = Readonly<{ id: string; kind: "user" | "system"; email?: string }>;
-export const AUTHORITY_MODEL_VERSION = 2;
+export type PrincipalKind = "user" | "service_account" | "platform_operator" | "system";
+export type Principal = Readonly<{ id: string; kind: PrincipalKind; email?: string; label?: string; credentialId?: string }>;
+/** Bumped when the authority model changes shape; `trestle upgrade` gates on it. */
+export const AUTHORITY_MODEL_VERSION = 3;
 export type TenantIdentity = Readonly<{ organizationId: string; role?: string }>;
 export type Permissions = ReadonlySet<string>;
-export type AuthorityPlane = "organization" | "application" | "platform";
-export type AuthorityContext = Readonly<{
-  planes: Readonly<Partial<Record<AuthorityPlane, Permissions>>>;
-}>;
-export type EntitlementDecision = Readonly<{
-  code: string;
-  enabled: boolean;
-  values?: Readonly<Record<string, string | number | boolean>>;
-  source: "plan" | "override" | "default";
-  inheritedFrom?: string;
-  effectiveAt: Date;
-}>;
-export interface Entitlements {
-  resolve(code: string): EntitlementDecision;
-  has(code: string): boolean;
-}
-export type AccessRequirement = Readonly<{
-  plane: AuthorityPlane;
-  permission?: string;
-  entitlement?: string;
-}>;
-export type AccessDecision = Readonly<{
-  allowed: boolean;
-  missing: readonly ("permission" | "entitlement" | "authority_plane")[];
-  entitlement?: EntitlementDecision;
-}>;
-
-export class AccessDeniedError extends Error {
-  constructor(readonly decision: AccessDecision) {
-    super(`Access denied: ${decision.missing.join(", ")}`);
-    this.name = "AccessDeniedError";
-  }
-}
-
-export interface AccessController {
-  check(requirement: AccessRequirement): AccessDecision;
-  require(requirement: AccessRequirement): void;
-}
-
-export function createAccessController(authority: AuthorityContext, entitlements: Entitlements): AccessController {
-  const check = (requirement: AccessRequirement): AccessDecision => {
-    const missing: ("permission" | "entitlement" | "authority_plane")[] = [];
-    const permissions = authority.planes[requirement.plane];
-    if (!permissions) missing.push("authority_plane");
-    else if (requirement.permission && !permissions.has(requirement.permission)) missing.push("permission");
-    const entitlement = requirement.entitlement ? entitlements.resolve(requirement.entitlement) : undefined;
-    if (entitlement && !entitlement.enabled) missing.push("entitlement");
-    return { allowed: missing.length === 0, missing, ...(entitlement ? { entitlement } : {}) };
-  };
-  return {
-    check,
-    require(requirement) {
-      const decision = check(requirement);
-      if (!decision.allowed) throw new AccessDeniedError(decision);
-    },
-  };
-}
 export type CorrelationContext = Readonly<{
   correlationId: string;
   causationId?: string;
@@ -132,16 +77,44 @@ export function createLogger(
   };
 }
 
+/**
+ * Emits registered application events (packages/events/src/catalog.ts) to the
+ * transactional outbox. Use `statement` to commit an event atomically with a
+ * repository write; `emit` appends it on its own.
+ */
+export interface EventPublisher<Statement = unknown> {
+  emit(name: string, payload: Readonly<Record<string, unknown>>, resource: Readonly<{ type: string; id: string }>): Promise<void>;
+  statement(name: string, payload: Readonly<Record<string, unknown>>, resource: Readonly<{ type: string; id: string }>): Statement;
+}
+
+/** Present only while a platform operator acts inside an audited support session. */
+export type SupportAttribution = Readonly<{ sessionId: string; operatorId: string; reason: string }>;
+
 export interface Features {
   enabled(name: string, context?: Readonly<Record<string, unknown>>): boolean | Promise<boolean>;
 }
 
-export type ExecutionContext<Data, Services> = Readonly<{
+/** Structural view of the application's access evaluator (packages/authz). */
+export interface AccessControl<Requirement = Readonly<{ permission?: string; entitlement?: string }>, Decision = unknown> {
+  require(requirement: Requirement): Decision;
+  check(requirement: Requirement): boolean;
+  explain(requirement: Requirement): Decision;
+}
+
+/** Structural view of the local effective-entitlement projection (packages/billing). */
+export interface EntitlementReader {
+  has(code: string): boolean;
+  require(code: string): void;
+  list(): string[];
+}
+
+export type ExecutionContext<Data, Services, Access extends AccessControl = AccessControl, Entitlements extends EntitlementReader = EntitlementReader> = Readonly<{
   principal: Principal;
   tenant: TenantIdentity;
-  authority: AuthorityContext;
+  permissions: Permissions;
+  access: Access;
   entitlements: Entitlements;
-  access: AccessController;
+  environment: "local" | "preview" | "staging" | "production";
   correlation: CorrelationContext;
   data: Data;
   log: Logger;
@@ -149,4 +122,6 @@ export type ExecutionContext<Data, Services> = Readonly<{
   clock: Clock;
   features: Features;
   services: Services;
+  events: EventPublisher;
+  support?: SupportAttribution;
 }>;

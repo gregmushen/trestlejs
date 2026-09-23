@@ -1,0 +1,53 @@
+{
+  "name": "@__TRESTLE_PROJECT_NAME__/admin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && tsx scripts/check-admin-views.ts && vite build && wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "check:views": "tsx scripts/check-admin-views.ts",
+    "dev": "node scripts/dev.mjs",
+    "dev:spa": "vite --port 42070 --strictPort",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "test:keyboard": "node scripts/keyboard-matrix.mjs"
+  },
+  "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/auth": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/billing": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/context": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/contracts": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/data": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/domain": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/events": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/platform": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/theme": "workspace:*",
+    "@better-auth/passkey": "1.7.5",
+    "@cloudflare/kumo": "2.14.0",
+    "@phosphor-icons/react": "2.1.10",
+    "@tanstack/react-form": "1.33.5",
+    "@tanstack/react-hotkeys": "0.11.0",
+    "@tanstack/react-query": "5.103.2",
+    "@tanstack/react-router": "1.170.38",
+    "better-auth": "1.7.5",
+    "hono": "4.13.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.6.2",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "6.1.1",
+    "postgres": "3.4.9",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.20.6",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "5.0.1",
+    "wrangler": "4.135.0"
+  }
+}

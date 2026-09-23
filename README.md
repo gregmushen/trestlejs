@@ -37,7 +37,7 @@ truth and tenant isolation.
 [Resource generation](#generate-a-tenant-safe-resource) ·
 [Setup plans](#plans-humans-and-agents-can-review) ·
 [CLI](#cli-at-a-glance) · [Architecture specification](docs/TRESTLEJS_SPEC.md)
-· [Roadmap](docs/ROADMAP.md)
+· [Administration specification](docs/ADMIN_SPEC.md) · [Roadmap](docs/ROADMAP.md)
 
 ## Quick start
 
@@ -75,11 +75,12 @@ apps/
   site/          Astro + Southwind public site
   app/           React + TanStack + Tailwind application
   worker/        Cloudflare Worker + Hono API
+  admin/         optional platform admin SPA + separate admin Worker
 
 packages/
   auth/          Better Auth configuration
-  authz/         application authorization
-  billing/       plans and entitlement projection
+  authz/         three-plane permissions, roles, access decisions, API keys
+  billing/       features, versioned plans, and effective entitlements
   context/       request and execution context
   contracts/     shared Zod boundaries
   data/          repository interfaces
@@ -87,6 +88,7 @@ packages/
   domain/        application-owned domain logic
   events/        event contracts
   integrations/  email and payments adapters
+  platform/      platform-operator authority and cross-tenant repositories
   theme/         shared design tokens and Tailwind theme
 ```
 
@@ -107,7 +109,15 @@ The starter includes:
 - GitHub Actions for CI, previews, staging, production, diagnostics, and
   environment secret projection;
 - a project-local `trestle-setup` agent skill for architecture discovery,
-  reviewed setup plans, explicit mutation approval, and verification.
+  reviewed setup plans, explicit mutation approval, and verification;
+- `trestle setup`, a loopback-only guided console that collects encrypted
+  credentials, shows the plan diff, and applies it after explicit approval;
+- independent organization, application, and platform authority planes, with
+  explainable access decisions, service accounts, and scoped API keys;
+- versioned plans, audited subscription overrides, and an effective-entitlement
+  projection with provenance that customers can see; and
+- an optional, separately deployed platform admin application with an
+  extensible view registry.
 
 ## Generate a tenant-safe resource
 
@@ -264,6 +274,8 @@ for the reasoning behind those decisions.
 ```text
 trestle dev                         boot the complete local application
 trestle dev --fresh --yes           reset only declared local state and reseed
+trestle setup                       guided, loopback-only capability setup
+trestle capabilities                capability lifecycle per environment
 trestle doctor [--env <env>]        verify project and environment health
 trestle console --tenant <slug>     open the audited tenant-safe TS console
 trestle db ...                      operate local PostgreSQL
@@ -284,6 +296,14 @@ trestle architecture check          enforce static application boundaries
 trestle upgrade plan                preview an application-preserving upgrade
 trestle upgrade apply --yes         apply versioned metadata/codemod migrations
 trestle resource add-field ...      add an optional field and tracked migration
+trestle permissions [--plane <p>]   three-plane registry and enforcement
+trestle roles [--plane <p>]         organization, application, platform roles
+trestle entitlements                features and the plan comparison matrix
+trestle admin install|doctor|views  optional platform admin application
+trestle api-keys doctor             API-key storage, scope, and logging checks
+trestle generate permission <code> --plane <p>
+trestle generate admin-view <Name>  application-owned admin view
+trestle generate admin-resource <Name>
 ```
 
 Run `pnpm exec trestle --help` and the relevant subcommand help for the exact

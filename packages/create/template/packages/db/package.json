@@ -9,7 +9,9 @@
     "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
     "db:roles:bootstrap": "tsx scripts/runtime-role.ts bootstrap",
     "db:roles:configure": "tsx scripts/runtime-role.ts configure",
+    "db:roles:configure-platform": "tsx scripts/runtime-role.ts configure-platform",
     "db:roles:verify": "tsx scripts/runtime-role.ts verify",
+    "db:roles:verify-platform": "tsx scripts/runtime-role.ts verify-platform",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },

@@ -2,7 +2,21 @@
   "name": "@__TRESTLE_PROJECT_NAME__/billing",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
-  "scripts": { "build": "tsc --noEmit", "test": "vitest run --passWithNoTests", "typecheck": "tsc --noEmit" },
-  "dependencies": { "@__TRESTLE_PROJECT_NAME__/db": "workspace:*", "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*", "drizzle-orm": "0.45.3" }
+  "exports": {
+    ".": "./src/index.ts",
+    "./model": "./src/model.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*",
+    "drizzle-orm": "0.45.3"
+  },
+  "devDependencies": {
+    "postgres": "3.4.9"
+  }
 }

@@ -5,6 +5,7 @@ apps:
   site: apps/site
   app: apps/app
   worker: apps/worker
+  admin: apps/admin
 packages:
   contracts: packages/contracts
   auth: packages/auth
@@ -34,7 +35,42 @@ capabilities:
   queues: false
   workflows: false
   durableObjects: false
-  admin: false
+  admin: true
+integrations:
+  email: local
+  payments: local
+  # Usage metering: native (usage_aggregate), openmeter, or lago (with Lago payments).
+  metering: native
+  # Outbound webhook dispatch after the outbox commit: native or svix.
+  webhooks: native
+authentication:
+  # Better Auth owns the protocols; Trestle records assurance per session.
+  passkeys: better-auth
+  twoFactor: better-auth
+identity:
+  # Enterprise SSO: disabled, better-auth (OIDC/SAML), or workos.
+  sso: disabled
+  # Directory provisioning: disabled, better-auth-scim (needs postgres-js), or workos.
+  directory: disabled
+access:
+  customRoles: true
+  serviceAccounts: true
+  apiKeys: true
+  # Audited tenant-context support in apps/admin (docs/ADMIN_ADDITIONS_SPEC.md).
+  supportSessions: true
+  # User impersonation is a separate capability and stays disabled.
+  impersonation: false
+communications:
+  # Tenant outbound webhooks: Integrations -> Webhooks for organization admins.
+  webhooks: true
+  # In-app inbox, preferences, and email as a notification channel.
+  notifications: true
+commercial:
+  plans: true
+  usage: true
+artifacts:
+  storage: local
+  retentionDays: 30
 environments:
   - local
   - preview
@@ -43,20 +79,33 @@ environments:
 secrets:
   DATABASE_URL:
     target: worker
+    shareWith: [admin]
     required: [local, staging, production]
   DATABASE_DRIVER:
     target: worker
+    shareWith: [admin]
     required: [local, preview, staging, production]
   BETTER_AUTH_SECRET:
     target: worker
+    shareWith: [admin]
     required: [local, preview, staging, production]
     rotation: dual-value
+  # Distinct admin runtime login granted trestle_platform only (never trestle_app).
+  PLATFORM_DATABASE_URL:
+    target: admin
+    required: [local, staging, production]
   BETTER_AUTH_URL:
     target: worker
     required: [local, preview, staging, production]
   ARTIFACT_SIGNING_SECRET:
     target: worker
     required: []
+  # Encrypts tenant webhook signing secrets at rest. Shared with the admin Worker so
+  # operators can issue new secrets; existing secrets are never displayed anywhere.
+  WEBHOOK_SECRET_KEY:
+    target: worker
+    shareWith: [admin]
+    required: [staging, production]
   RESEND_API_KEY:
     target: worker
     required: [preview, staging, production]

@@ -12,8 +12,10 @@ edit` to inspect or change them in your editor; use `pnpm exec trestle secrets
 show` when you intentionally want to print their plaintext values.
 
 The Southwind Astro site runs on `http://localhost:42068`, the authenticated
-application runs on `http://localhost:42069`, and the Worker runs on
-`http://localhost:8787`. Southwind's authentication and pricing links use
+application runs on `http://localhost:42069`, the Worker runs on
+`http://localhost:8787`, and the optional platform admin runs on
+`http://localhost:42070` with its separate admin Worker on
+`http://localhost:8788`. Southwind's authentication and pricing links use
 `APP_URL` and default locally to `http://localhost:42069`.
 
 The project-local `trestle-setup` agent skill lives at
@@ -30,6 +32,7 @@ BETTER_AUTH_SECRET: <randomly generated>
 BETTER_AUTH_URL: http://localhost:42069
 DATABASE_DRIVER: postgres-js
 DATABASE_URL: postgres://trestle:trestle@localhost:55432/__TRESTLE_PROJECT_NAME__
+PLATFORM_DATABASE_URL: postgres://trestle:trestle@localhost:55432/__TRESTLE_PROJECT_NAME__
 ```
 
 Email is captured locally by default. Use `pnpm exec trestle email list`,
@@ -207,8 +210,8 @@ pnpm exec trestle generate resource Article \
   --field summary:text? \
   --field published:boolean? \
   --field authorId:relation?:Author:set-null \
-  --read-permission resource:read \
-  --write-permission resource:write
+  --read-permission resource.read \
+  --write-permission resource.write
 pnpm exec trestle resource add-field Article archived:boolean? --yes
 ```
 
@@ -217,13 +220,6 @@ unvalidated fetch helpers. List endpoints use bounded cursor pagination, and
 every generated operation declares its application permission before reaching
 the repository. `resource add-field` refuses required additions: add, backfill,
 verify, and only then tighten a database constraint deliberately.
-
-Organization membership and product-resource access are separate authority
-planes. A new member receives the application's starter `contributor` role
-(resource read/write); changing the organization role does not change that
-application role. Clearing `member.application_role` revokes resource access
-without removing membership. Applications should replace this starter policy
-with domain-specific roles before granting sensitive product actions.
 
 Project upgrades are dry-run first and preserve application-owned source and
 custom skill guidance:
@@ -239,3 +235,89 @@ Upgrade state and framework compatibility are versioned under `.trestle`.
 Static architecture checks detect direct provider leakage into application or
 domain code, missing declared resource source, missing forced RLS, and stale
 managed-guidance markers. CI runs those checks on every change.
+
+## Administration and access control
+
+Use `pnpm exec trestle setup` to configure capabilities and credentials in a
+local, loopback-only console. It edits `.trestle/setup.json`, encrypts
+credentials immediately, shows the plan diff, and applies only after approval.
+
+Authority lives in three independent planes, all declared in
+`packages/authz/src/permissions.ts`:
+
+- **Organization** roles (`owner`, `admin`, `billing_admin`, `member`) govern
+  the account: members, billing, and API-key administration.
+- **Application** roles (`app_admin`, `editor`, `publisher`, `reader`, plus
+  custom roles on plans with `roles.custom`) govern product actions. They are
+  assigned separately from organization roles.
+- **Platform** roles (`support`, `billing_operations`, `platform_operator`,
+  `security_admin`) govern operating the SaaS through `apps/admin`.
+
+An organization owner has no product authority without an application role.
+The only cross-plane relationship is the explicit bootstrap policy in
+`packages/authz/src/policies.ts`, which also makes an organization's creator
+its application administrator.
+
+Service accounts hold application roles; their API keys (`tr_live_…`,
+`tr_test_…`, `tr_dev_…`) are shown once, stored only as SHA-256 verifiers, and
+can only narrow the service account's authority. Every Worker route declares
+its authority in `packages/authz/src/routes.ts`.
+
+Plans are versioned and immutable once active. Authorization reads the local
+effective-entitlement projection with provenance, never a payment provider.
+Customers see their plan, limits, and contract terms at `/settings/plan`.
+
+## Events, webhooks, and notifications
+
+Application code emits registered events (`packages/events/src/catalog.ts`)
+through `ctx.events` into the transactional outbox. The Worker's cron trigger,
+which `trestle dev` fires every few seconds, publishes committed events:
+
+- **Webhooks.** Organization administrators manage endpoints at
+  `/settings/webhooks`. Only events with a public `webhook` projection are
+  delivered, signed with Standard Webhooks HMAC headers, and retried with
+  backoff. Signing secrets are shown once and stored encrypted under
+  `WEBHOOK_SECRET_KEY`. Locally, point an endpoint at
+  `http://localhost:8787/api/dev/webhook-receiver` (or `.../fail`).
+- **Notifications.** Definitions in
+  `packages/domain/src/notifications/definitions.ts` declare channels,
+  defaults, mandatory channels, grouping, deduplication, and the event that
+  triggers them. Members get a bell and inbox at `/notifications` and
+  preferences at `/settings/notifications`. Email goes through the
+  application's email boundary.
+- **Notification streams.** Operators can also define notification types as
+  data in the admin (Communications → Notifications → Streams) and publish
+  immutable versions. Send one from a route with
+  `await ctx.notifications.send({ type, recipient: { userId }, data })`. The
+  data is validated against the stream's declared inputs, and the notification
+  records the version it resolved. Archived and unknown types throw.
+  Code-defined types keep their keys; a stream cannot shadow them.
+
+## Platform admin
+
+The platform admin (`apps/admin`) is a separate SPA and Worker with its own
+origin, session, and database login (`PLATFORM_DATABASE_URL`, granted only the
+`trestle_platform` role). Grant the first operator a platform role directly in
+PostgreSQL:
+
+```sql
+insert into platform_role_assignment (user_id, role, granted_by, reason)
+values ('<user id>', 'security_admin', 'bootstrap', 'first platform operator');
+```
+
+Inspect and verify:
+
+```bash
+pnpm exec trestle capabilities --env staging
+pnpm exec trestle permissions --plane application
+pnpm exec trestle roles
+pnpm exec trestle entitlements
+pnpm exec trestle admin views
+pnpm exec trestle admin doctor
+pnpm exec trestle api-keys doctor
+```
+
+In production, grant `trestle_platform` to a dedicated admin runtime login with
+`DATABASE_ADMIN_RUNTIME_ROLE=<role> DATABASE_MIGRATION_URL=<url> pnpm --filter
+./packages/db db:roles:configure-platform`. It must be a different login from
+the tenant runtime role; both configuration scripts refuse to mix them.

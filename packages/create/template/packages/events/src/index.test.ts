@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { applicationEvents, defineEventCatalog } from "./catalog.js";
 import { CloudflareQueuePublisher, EventRegistry, InMemoryOutbox, InMemoryQueue, LocalWorkflowScheduler, dispatchOutbox, eventEnvelopeSchema, processQueueBatch, type OutboxStore, type QueueBatchMessage } from "./index.js";
 
 const now = new Date("2026-09-21T00:00:00.000Z");
@@ -43,5 +44,27 @@ describe("Alpha 8 asynchronous execution spine", () => {
       { body: { invalid: true }, ack: () => states.push("unexpected"), retry: ({ delaySeconds } = {}) => states.push(`retry:${delaySeconds}`) },
     ];
     expect(await processQueueBatch(batch, async () => undefined, 17)).toEqual({ acknowledged: 1, retried: 1 }); expect(states).toEqual(["ack", "retry:17"]);
+  });
+});
+
+describe("application event catalog", () => {
+  it("publishes only projected public fields to webhooks", () => {
+    const published = applicationEvents.forWebhook("api_key.created");
+    expect(published?.source).toBe("access.api_key.minted");
+    const body = published!.definition.project({ serviceAccountId: "sa", displayPrefix: "tr_live_ab", scopes: ["resource.read"], verifier: "never", token: "never" }, { type: "api_key", id: "k1" });
+    expect(body).toEqual({ apiKeyId: "k1", serviceAccountId: "sa", displayPrefix: "tr_live_ab", scopes: ["resource.read"], expiresAt: null });
+    expect(applicationEvents.webhookEvents().map((event) => event.name)).not.toContain("webhook.test");
+  });
+
+  it("accepts every registered event name in the outbox envelope", () => {
+    for (const name of ["access.api_key.minted", "access.organization_roles.changed", "webhooks.endpoint.failing", "platform.support_session.started"]) {
+      expect(eventEnvelopeSchema.safeParse({ id: crypto.randomUUID(), name, schemaVersion: 1, occurredAt: now.toISOString(), resource: { type: "t", id: "1" }, correlationId: "c", idempotencyKey: "k", payload: {} }).success, name).toBe(true);
+    }
+  });
+
+  it("rejects duplicate public names and the reserved test event", () => {
+    const project = () => ({});
+    expect(() => defineEventCatalog({ "a.one": { description: "a", webhook: { name: "x.y", version: 1, description: "x", project } }, "a.two": { description: "b", webhook: { name: "x.y", version: 1, description: "x", project } } })).toThrow(/more than one/u);
+    expect(() => defineEventCatalog({ "a.one": { description: "a", webhook: { name: "webhook.test", version: 1, description: "x", project } } })).toThrow(/reserved/u);
   });
 });

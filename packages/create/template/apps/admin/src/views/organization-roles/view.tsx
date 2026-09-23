@@ -1,0 +1,13 @@
+import { useState } from "react";
+
+import { useAdminCommands } from "../../shell/commands";
+import { useAdmin } from "../../shell/context";
+import { RoleManager } from "../../shell/role-manager";
+
+export default function OrganizationRolesView() {
+  const { can } = useAdmin();
+  const [createRequests, setCreateRequests] = useState(0);
+  useAdminCommands({ "organization-roles.new": { enabled: can("platform.access_catalog.manage"), run: () => setCreateRequests((count) => count + 1) } });
+  return <RoleManager plane="organization" title="Organization roles" createRequests={createRequests}
+    description="Account-administration roles available to every organization. Owner is not an application or platform administrator. Built-in roles are protected; clone one to customize it." />;
+}

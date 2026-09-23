@@ -1,0 +1,21 @@
+{
+  "name": "@__TRESTLE_PROJECT_NAME__/platform",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/billing": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
+    "drizzle-orm": "0.45.3",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "postgres": "3.4.9"
+  }
+}

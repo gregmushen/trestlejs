@@ -1,3 +1,9 @@
+export type CommandRunner = (
+  command: string,
+  arguments_: string[],
+  options: { cwd: string; env?: NodeJS.ProcessEnv; input?: string; stdio?: "inherit" | "pipe" },
+) => Promise<{ stdout: string; stderr: string }>;
+
 export type CliRuntime = {
   cwd: () => string;
   stdout: (text: string) => void;
@@ -5,6 +11,8 @@ export type CliRuntime = {
   environment?: (name: string) => string | undefined;
   stdin?: () => Promise<string>;
   isTTY?: () => boolean;
+  /** Overrides subprocess execution for read-only inspection commands (tests). */
+  run?: CommandRunner;
 };
 
 export const processRuntime: CliRuntime = {

@@ -2,8 +2,9 @@ import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { wranglerCapabilityBinding, wranglerEnvironmentBlock, wranglerStringVariable, type CloudflareBindingCapability } from "./wrangler-config.js";
 
-import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "@trestlejs/core";
+import { parseSetupPlan, structuredOutput, type CapabilityId, type EnvironmentName, type EvidenceDocument, type ProjectManifest } from "@trestlejs/core";
 
+import { inspectCapabilities, readEvidence } from "./capabilities.js";
 import { validateCi } from "./ci.js";
 import { inspectResources } from "./inspect.js";
 import { diffSetupPlan } from "./plan.js";
@@ -11,8 +12,8 @@ import { readSecrets, validateSecrets } from "./secrets.js";
 
 export type DoctorCheck = {
   id: string;
-  group: "project" | "architecture";
-  status: "pass" | "fail";
+  group: "project" | "architecture" | "capabilities";
+  status: "pass" | "warn" | "fail";
   message: string;
   evidence?: string;
   remediation?: string;
@@ -255,9 +256,11 @@ export async function runDoctor(
     }
   }
 
+  let secretValues: Record<string, string> | undefined;
   if (manifest.secrets && Object.keys(manifest.secrets).length > 0) {
     try {
       const values = await readSecrets(root, environment, masterKey);
+      secretValues = values;
       const problems = validateSecrets(values, manifest, environment);
       if (environment !== "local" && manifest.capabilities.r2) {
         const signingSecret = values.ARTIFACT_SIGNING_SECRET;
@@ -342,13 +345,76 @@ export async function runDoctor(
     }
   }
 
+  const capabilityReport = await inspectCapabilities(root, manifest, environment, { secrets: secretValues, evidence: await readEvidence(root, environment) });
+  for (const capability of capabilityReport.capabilities) {
+    if (capability.state === "disabled") continue;
+    checks.push(capability.healthy
+      ? { id: `capabilities.${capability.id}`, group: "capabilities", status: "pass", message: `${capability.label} is ${capability.state} for ${environment}` }
+      : {
+        id: `capabilities.${capability.id}`,
+        group: "capabilities",
+        status: "warn",
+        message: `${capability.label} is declared but not configured for ${environment}`,
+        evidence: capability.missing.join(", "),
+        ...(capability.repair ? { remediation: `Run: ${capability.repair}` } : {}),
+      });
+  }
+
+  checks.push(...providerChecks(manifest, environment, secretValues, await readEvidence(root, environment)));
+
   const passed = checks.filter((check) => check.status === "pass").length;
+  const warnings = checks.filter((check) => check.status === "warn").length;
   const failed = checks.filter((check) => check.status === "fail").length;
   return {
     environment,
     checks,
-    summary: { passed, warnings: 0, failed },
+    summary: { passed, warnings, failed },
   };
+}
+
+/**
+ * Enterprise identity and provider gates. Self-hosted SCIM (and Better Auth
+ * SSO user resolution) need interactive transactions; a recorded provisioning
+ * run on this environment's driver is the only acceptable evidence.
+ */
+export function providerChecks(manifest: ProjectManifest, environment: EnvironmentName, secrets: Record<string, string> | undefined, evidence: EvidenceDocument | undefined): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+  const driver = secrets?.DATABASE_DRIVER || undefined;
+  const sso = manifest.identity?.sso ?? "disabled";
+  const directory = manifest.identity?.directory ?? "disabled";
+  if (sso === "better-auth" && driver === "neon-http") {
+    checks.push({ id: "identity.sso.transactions", group: "capabilities", status: "fail", message: `Better Auth SSO needs interactive transactions, which neon-http cannot provide (${environment})`, remediation: `Set DATABASE_DRIVER=postgres-js for ${environment} (trestle secrets set DATABASE_DRIVER --env ${environment})` });
+  }
+  if (directory === "better-auth-scim") {
+    const recorded = evidence?.environment === environment ? evidence.scimTransactions : undefined;
+    const effectiveDriver = driver ?? "unknown";
+    const ok = Boolean(recorded?.passed && recorded.driver === effectiveDriver);
+    checks.push({
+      id: "identity.scim.transactions",
+      group: "capabilities",
+      status: ok ? "pass" : "fail",
+      message: ok ? `SCIM provisioning transactions verified on ${effectiveDriver} (${recorded!.checkedAt})`
+        : recorded && recorded.driver !== effectiveDriver ? `SCIM was verified on ${recorded.driver}, but ${environment} uses ${effectiveDriver}; it is not verified`
+          : recorded ? `SCIM provisioning transactions failed on ${recorded.driver}: ${recorded.failure ?? "unknown failure"}`
+            : `Self-hosted SCIM is not verified for ${environment}: no transaction test has run`,
+      ...(!ok ? { remediation: `Run: pnpm exec trestle identity verify-scim --env ${environment}` } : {}),
+    });
+  }
+  if (environment !== "local") {
+    const expected: Array<[CapabilityId, string, boolean]> = [
+      ["sso", "workos", sso === "workos"],
+      ["metering", "openmeter", manifest.integrations?.metering === "openmeter"],
+      ["webhooks", "svix", manifest.integrations?.webhooks === "svix"],
+    ];
+    for (const [capability, provider, enabled] of expected) {
+      if (!enabled) continue;
+      const check = evidence?.environment === environment ? evidence.providerChecks?.[capability] : undefined;
+      checks.push(check?.provider === provider && check.ok
+        ? { id: `providers.${provider}.connection`, group: "capabilities", status: "pass", message: `${provider} connection verified (${check.checkedAt})` }
+        : { id: `providers.${provider}.connection`, group: "capabilities", status: check?.provider === provider ? "fail" : "warn", message: check?.provider === provider ? `${provider} connection check failed: ${check.failure ?? "unknown failure"}` : `${provider} connection has not been checked for ${environment}`, remediation: `Run: pnpm exec trestle setup --env ${environment} and test the ${provider} connection` });
+    }
+  }
+  return checks;
 }
 
 export function formatDoctorHuman(report: DoctorReport): string {
@@ -363,8 +429,9 @@ export function formatDoctorHuman(report: DoctorReport): string {
   for (const [group, checks] of groups) {
     lines.push("", group[0]?.toUpperCase() + group.slice(1));
     for (const check of checks) {
-      lines.push(`${check.status === "pass" ? "✓" : "✗"} ${check.message}`);
-      if (check.status === "fail" && check.remediation) {
+      lines.push(`${check.status === "pass" ? "✓" : check.status === "warn" ? "!" : "✗"} ${check.message}`);
+      if (check.status === "warn" && check.evidence) lines.push(`  Missing: ${check.evidence}`);
+      if (check.status !== "pass" && check.remediation) {
         lines.push(`  Fix: ${check.remediation}`);
       }
     }

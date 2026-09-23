@@ -1,0 +1,17 @@
+/*
+ * Kumo requires this exact order: scan Kumo's compiled components, register its
+ * semantic @theme tokens, then load Tailwind. `trestle check`-time validation
+ * (scripts/check-admin-views.ts) fails the build if the order drifts.
+ */
+@source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+@import "@cloudflare/kumo/styles";
+@import "tailwindcss";
+
+/* Admin code uses Kumo semantic tokens only: no raw palette classes, no dark: variants. */
+html, body, #root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}

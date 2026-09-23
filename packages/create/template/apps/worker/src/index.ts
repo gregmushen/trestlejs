@@ -1,19 +1,25 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 
-import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
+import { loadAuthPolicy, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
+import { planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
-import { billingProviderEvent, createDatabase, emailDeliveryEvent, PostgresEventInbox, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
+import { billingProviderEvent, createDatabase, emailDeliveryEvent, PostgresEventInbox } from "@__TRESTLE_PROJECT_NAME__/db";
+import { resolvePriceMappings } from "@__TRESTLE_PROJECT_NAME__/data";
 import type { CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
-import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
+import { createQueueConsumer, createWorkflowQueueConsumer, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
 import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
+import { authCapabilities, workerAuth } from "./auth.js";
+import { reportCapabilityStatus } from "./capability-report.js";
+import { registerIdentityWebhooks } from "./identity-routes.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
-import { createBillingService } from "./services.js";
+import { assertQueueBinding, runOutbox } from "./outbox-runner.js";
+import { mappingRunner } from "./services.js";
+import { tenantRoutes } from "./tenant-routes.js";
 
 export const app = new Hono<{ Bindings: AuthEnvironment; Variables: AppVariables }>();
 export const eventConsumers = new EventConsumerRegistry<AuthEnvironment>();
@@ -75,6 +81,28 @@ app.post("/api/dev/emails/flush", async (context) => {
   return context.json({ flushed: await new LocalEmailAdapter().flushScheduledEmail() });
 });
 
+/**
+ * Local webhook receiver for developing against tenant webhooks. Point an
+ * endpoint at http://localhost:8787/api/dev/webhook-receiver (or .../fail to
+ * simulate a 500). It records headers and bodies in memory, local only.
+ */
+const receivedWebhooks: Array<{ receivedAt: string; mode: string; webhookId: string | null; timestamp: string | null; signature: string | null; body: unknown }> = [];
+async function receiveWebhook(context: Context<{ Bindings: AuthEnvironment; Variables: AppVariables }>, mode: string) {
+  if ((context.env.APP_ENV ?? "local") !== "local") return context.notFound();
+  const text = await context.req.text();
+  let body: unknown = text;
+  try { body = JSON.parse(text); } catch { /* keep text */ }
+  receivedWebhooks.unshift({ receivedAt: new Date().toISOString(), mode, // Svix dispatch signs with the same Standard Webhooks scheme under svix-* header names.
+    webhookId: context.req.header("webhook-id") ?? context.req.header("svix-id") ?? null, timestamp: context.req.header("webhook-timestamp") ?? context.req.header("svix-timestamp") ?? null,
+    signature: context.req.header("webhook-signature") ?? context.req.header("svix-signature") ?? null, body });
+  receivedWebhooks.splice(50);
+  return mode === "fail" ? context.json({ error: "simulated failure" }, 500) : context.json({ received: true });
+}
+app.post("/api/dev/webhook-receiver", (context) => receiveWebhook(context, "ok"));
+app.post("/api/dev/webhook-receiver/:mode", (context) => receiveWebhook(context, context.req.param("mode")));
+app.get("/api/dev/webhook-receiver", (context) => (context.env.APP_ENV ?? "local") === "local" ? context.json({ received: receivedWebhooks }) : context.notFound());
+app.delete("/api/dev/webhook-receiver", (context) => { if ((context.env.APP_ENV ?? "local") !== "local") return context.notFound(); receivedWebhooks.splice(0); return context.body(null, 204); });
+
 app.post("/api/webhooks/resend", async (context) => {
   const log = createLogger({ correlationId: context.get("correlationId"), provider: "resend" });
   if (!context.env.RESEND_API_KEY || !context.env.RESEND_WEBHOOK_SECRET) return context.json({ error: "Email webhook is not configured" }, 503);
@@ -109,8 +137,18 @@ app.post("/webhooks/stripe", async (context) => {
       const [existing] = await database.select().from(billingProviderEvent).where(and(eq(billingProviderEvent.provider, "stripe"), eq(billingProviderEvent.providerEventId, event.id))).limit(1);
       if (existing?.status === "processed") { log.info("billing.webhook.duplicate", { providerEventId: event.id, type: event.type }); return context.json({ duplicate: true }, 200); }
     }
-    if (event.organizationId && event.status && event.plan) {
-      await new PostgresBillingProjectionRepository(context.env.DATABASE_URL, context.env.DATABASE_DRIVER).put({ organizationId: event.organizationId, provider: "stripe", ...(event.providerCustomerId ? { providerCustomerId: event.providerCustomerId } : {}), ...(event.providerSubscriptionId ? { providerSubscriptionId: event.providerSubscriptionId } : {}), plan: event.plan, planVersion: getPlan(event.plan)?.version ?? 1, status: event.status, cancelAtPeriodEnd: event.status === "cancelled", entitlements: event.status === "active" || event.status === "trialing" ? [...(planEntitlements[event.plan as keyof typeof planEntitlements] ?? [])] : [] });
+    // Plans resolve from explicit price mappings; checkout metadata is only a fallback for unmapped prices.
+    const mapped = await resolvePriceMappings(mappingRunner(context.env), context.env.APP_ENV ?? "local", (event.items ?? []).map((item) => item.priceId));
+    const primary = event.items?.map((item) => mapped.get(item.priceId)).find(Boolean);
+    const plan = primary?.plan ?? event.plan;
+    if (event.organizationId && event.status && plan) {
+      await new PostgresBillingProjectionRepository(context.env.DATABASE_URL, context.env.DATABASE_DRIVER).put({
+        organizationId: event.organizationId, provider: "stripe", ...(event.providerCustomerId ? { providerCustomerId: event.providerCustomerId } : {}), ...(event.providerSubscriptionId ? { providerSubscriptionId: event.providerSubscriptionId } : {}),
+        plan, status: event.status, cancelAtPeriodEnd: event.cancelAtPeriodEnd ?? event.status === "cancelled",
+        ...(event.currentPeriodStart ? { currentPeriodStart: event.currentPeriodStart } : {}), ...(event.currentPeriodEnd ? { currentPeriodEnd: event.currentPeriodEnd } : {}),
+        entitlements: event.status === "active" || event.status === "trialing" ? [...(planEntitlements[plan as keyof typeof planEntitlements] ?? [])] : [],
+        ...(event.items ? { lines: event.items.map((item) => { const mapping = mapped.get(item.priceId); return { providerItemId: item.id, providerPriceId: item.priceId, planVersion: mapping ? `${mapping.plan}@${mapping.planVersion}` : null, offer: mapping?.offer ?? null, quantity: item.quantity }; }) } : {}),
+      });
     }
     await database.update(billingProviderEvent).set({ status: "processed", processedAt: new Date() }).where(and(eq(billingProviderEvent.provider, "stripe"), eq(billingProviderEvent.providerEventId, event.id)));
     log.info("billing.webhook.processed", { providerEventId: event.id, type: event.type, organizationId: event.organizationId });
@@ -124,10 +162,9 @@ app.post("/webhooks/stripe", async (context) => {
 
 app.post("/api/billing/checkout", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:manage" });
   const input = await context.req.json<{ plan: string; requestId: string }>();
   execution.log.info("billing.checkout.started", { plan: input.plan });
-  const checkout = await execution.services.billing.createCheckoutSession({ organizationId: execution.tenant.organizationId, plan: input.plan, requestId: input.requestId, ...(execution.principal.email ? { customerEmail: execution.principal.email } : {}) });
+  const checkout = await (await execution.services.billing()).createCheckoutSession({ organizationId: execution.tenant.organizationId, plan: input.plan, requestId: input.requestId, ...(execution.principal.email ? { customerEmail: execution.principal.email } : {}) });
   execution.log.info("billing.checkout.created", { plan: input.plan, checkoutSessionId: checkout.id });
   execution.metrics.increment("billing.checkout.created");
   return context.json(checkout);
@@ -135,49 +172,65 @@ app.post("/api/billing/checkout", requireExecutionContext, async (context) => {
 
 app.post("/api/billing/portal", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:manage" });
   const input = await context.req.json<{ requestId: string }>();
-  const portal = await execution.services.billing.createPortalSession({ organizationId: execution.tenant.organizationId, requestId: input.requestId });
+  const portal = await (await execution.services.billing()).createPortalSession({ organizationId: execution.tenant.organizationId, requestId: input.requestId });
   execution.log.info("billing.portal.created", { portalSessionId: portal.id });
   return context.json(portal);
 });
 
 app.get("/api/billing/subscription", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  return context.json({ subscription: await execution.services.billing.getSubscription(execution.tenant.organizationId), usage: [] as Array<{ meter: string; used: number; limit: number | null }> });
+  return context.json({ subscription: await (await execution.services.billing()).getSubscription(execution.tenant.organizationId) });
 });
 
 app.post("/api/dev/billing", requireExecutionContext, async (context) => {
   if ((context.env.STRIPE_MODE ?? "local") !== "local") return context.notFound();
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:manage" });
   const input = await context.req.json<{ action: "activate" | "fail-payment" | "cancel"; plan?: string }>();
-  const local = execution.services.billing as LocalBillingAdapter;
+  const local = await execution.services.billing() as LocalBillingAdapter;
   if (input.action === "activate") await local.activate({ organizationId: execution.tenant.organizationId, plan: input.plan ?? "starter" });
   else if (input.action === "fail-payment") await local.failPayment({ organizationId: execution.tenant.organizationId });
   else await local.cancel({ organizationId: execution.tenant.organizationId });
   return context.json({ subscription: await local.getSubscription(execution.tenant.organizationId) });
 });
 
-app.on(["GET", "POST"], "/api/auth/*", (context) =>
-  createAuth(context.env).handler(context.req.raw),
-);
+app.route("/", tenantRoutes);
+
+app.on(["GET", "POST", "PUT", "PATCH", "DELETE"], "/api/auth/*", async (context) => {
+  // The active authentication policy (System -> Authentication) shapes every Better Auth request.
+  await loadAuthPolicy(context.env);
+  return workerAuth(context.env).handler(context.req.raw);
+});
 
 app.get("/api/me", async (context) => {
-  const session = await createAuth(context.env).api.getSession({ headers: context.req.raw.headers });
+  await loadAuthPolicy(context.env);
+  const session = await workerAuth(context.env).api.getSession({ headers: context.req.raw.headers });
   if (!session) return context.json({ error: "Unauthorized" }, 401);
 
   return context.json({ user: session.user, session: session.session });
 });
 
-app.get("/api/health", (context) =>
-  context.json(
+/** Which sign-in methods the application offers; the sign-in page adapts without a session. */
+app.get("/api/auth-methods", (context) => context.json({
+  passkeys: authCapabilities.passkeys,
+  twoFactor: authCapabilities.twoFactor,
+  sso: authCapabilities.sso === "better-auth" ? "better-auth" : authCapabilities.sso === "workos" && context.env.WORKOS_API_KEY && context.env.WORKOS_CLIENT_ID ? "workos" : "disabled",
+  directory: authCapabilities.directory,
+}));
+
+registerIdentityWebhooks(app);
+
+app.get("/api/health", (context) => {
+  try {
+    context.executionCtx.waitUntil(reportCapabilityStatus(context.env).catch(() => false));
+  } catch { /* no execution context outside the Workers runtime */ }
+  return context.json(
     healthResponseSchema.parse({
       status: "ok",
       service: "__TRESTLE_PROJECT_NAME__-worker",
     }),
-  ),
-);
+  );
+});
 
 app.get("/api/health/operational", (context) => context.json({
   status: "ok",
@@ -193,14 +246,15 @@ app.get("/api/health/operational", (context) => context.json({
 
 const artifactIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-function canAccessArtifacts(execution: AppVariables["execution"], permission: "resource:read" | "resource:write"): boolean {
-  return execution.access.check({ plane: "organization", permission: "organization:manage" }).allowed
-    || execution.access.check({ plane: "application", permission }).allowed;
+// Artifacts are product resources: only application-plane authority grants them.
+// Organization roles (including Owner) never imply application actions.
+function canAccessArtifacts(execution: AppVariables["execution"], permission: "resource.read" | "resource.write"): boolean {
+  return execution.access.check({ permission });
 }
 
 app.post("/api/artifacts", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  if (!canAccessArtifacts(execution, "resource:write")) return context.json({ error: "Forbidden" }, 403);
+  if (!canAccessArtifacts(execution, "resource.write")) return context.json({ error: "Forbidden" }, 403);
   if (!artifactRuntimeReady(context.env)) return context.json({ error: "Artifact storage is not configured" }, 503);
   const declaredLength = Number(context.req.header("content-length") ?? 0);
   if (!Number.isSafeInteger(declaredLength) || declaredLength > 10 * 1024 * 1024) return context.json({ error: "Artifact exceeds 10 MiB" }, 413);
@@ -216,7 +270,7 @@ app.post("/api/artifacts", requireExecutionContext, async (context) => {
 
 app.get("/api/artifacts/:id/access", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  if (!canAccessArtifacts(execution, "resource:read")) return context.json({ error: "Forbidden" }, 403);
+  if (!canAccessArtifacts(execution, "resource.read")) return context.json({ error: "Forbidden" }, 403);
   if (!artifactRuntimeReady(context.env)) return context.json({ error: "Artifact storage is not configured" }, 503);
   const id = context.req.param("id");
   if (!artifactIdPattern.test(id)) return context.notFound();
@@ -228,7 +282,7 @@ app.get("/api/artifacts/:id/access", requireExecutionContext, async (context) =>
 
 app.delete("/api/artifacts/:id", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  if (!canAccessArtifacts(execution, "resource:write")) return context.json({ error: "Forbidden" }, 403);
+  if (!canAccessArtifacts(execution, "resource.write")) return context.json({ error: "Forbidden" }, 403);
   if (!artifactRuntimeReady(context.env)) return context.json({ error: "Artifact storage is not configured" }, 503);
   const id = context.req.param("id");
   if (!artifactIdPattern.test(id)) return context.notFound();
@@ -274,17 +328,10 @@ export default {
     try { return await createQueueConsumer(eventConsumers, inbox)(batch, environment); }
     finally { await inbox.close(); }
   },
-  scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
-    if (!environment.TRESTLE_EVENTS) {
-      if (!environment.APP_ENV || environment.APP_ENV === "local") return;
-      throw new Error("Remote outbox dispatch requires the TRESTLE_EVENTS Queue binding");
-    }
-    const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
-    try {
-      const result = await dispatchQueuedOutbox(store, environment.TRESTLE_EVENTS);
-      createLogger({ environment: environment.APP_ENV ?? "local" }).info("outbox.dispatch.completed", result);
-    } finally {
-      await store.close();
-    }
+  // Publishes committed outbox events to webhooks, notifications, and the queue, then delivers what is due.
+  scheduled: async (_controller: unknown, environment: WorkerEnvironment, context?: { waitUntil(promise: Promise<unknown>): void }) => {
+    assertQueueBinding(environment);
+    const run = runOutbox(environment);
+    if (context) context.waitUntil(run); else await run;
   },
 };

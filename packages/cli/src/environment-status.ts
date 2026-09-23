@@ -10,7 +10,7 @@ export type EnvironmentStatus = {
   declared: boolean;
   applications: Array<{ name: string; path: string; present: boolean }>;
   capabilities: Array<{ name: keyof ProjectManifest["capabilities"]; state: "declared" | "configured" | "unavailable" }>;
-  requiredSecrets: Array<{ name: string; target: "worker" | "ci" }>;
+  requiredSecrets: Array<{ name: string; target: "worker" | "ci" | "admin" }>;
   requiredVariables: string[];
 };
 

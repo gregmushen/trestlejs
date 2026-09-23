@@ -5,10 +5,31 @@ import path from "node:path";
 
 import {
   environmentNameSchema,
+  secretSurfaces,
   structuredOutput,
   TRESTLEJS_VERSION,
 } from "@trestlejs/core";
-import { Command, CommanderError, InvalidArgumentError } from "commander";
+import { Command, CommanderError, InvalidArgumentError, Option } from "commander";
+
+import {
+  adminViewSummaries,
+  authorityPlanes,
+  entitlementReport,
+  formatAccessDoctor,
+  formatAdminViews,
+  formatEntitlements,
+  formatPermissions,
+  formatRoles,
+  installAdmin,
+  loadAccessInspection,
+  permissionReport,
+  roleReport,
+  runAdminDoctor,
+  runApiKeysDoctor,
+  type AuthorityPlane,
+} from "./access-inspect.js";
+import { formatCapabilities, inspectCapabilities, readEvidence } from "./capabilities.js";
+import { generateAdminResource, generateAdminView, generatePermission } from "./generate-access.js";
 
 import { formatCiValidation, validateCi } from "./ci.js";
 import { checkArchitecture, formatArchitecture } from "./architecture.js";
@@ -25,13 +46,13 @@ import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
 import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readApplyState, readSetupPlan } from "./plan.js";
+import { formatScimResult, verifyScimTransactions } from "./identity.js";
 import { runCommand, runDevelopment } from "./processes.js";
 import { inspectResendSender } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
-import { loadSetupPlan, startSetupConsole } from "./setup.js";
 import {
   credentialsPaths,
   editSecrets,
@@ -43,6 +64,7 @@ import {
   validateSecrets,
   writeSecrets,
 } from "./secrets.js";
+import { runSetup } from "./setup/index.js";
 
 function environment(value: string) {
   const result = environmentNameSchema.safeParse(value);
@@ -201,37 +223,6 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(`Applied upgrade to ${report.targetVersion}\n${report.operations.filter(({ classification }) => classification === "update").map(({ id }) => `✓ ${id}`).join("\n")}\nApplication-owned source was preserved.\n`);
     });
 
-  program.command("setup")
-    .description("review and apply a guided local SetupPlan with encrypted credentials")
-    .option("--env <environment>", "credential and Doctor environment", environment, "local")
-    .option("--resume", "require an existing saved SetupPlan")
-    .option("--plan-only", "print the current SetupPlan diff without starting the console")
-    .option("--no-open", "print the local console URL without opening a browser")
-    .action(async (options: { env: ReturnType<typeof environment>; resume?: boolean; planOnly?: boolean; open: boolean }, command: Command) => {
-      const context = await projectContext(command, runtime);
-      if (!context.manifest.environments.includes(options.env)) throw new CliFailure(`${options.env} is not declared in this project`);
-      const loaded = await loadSetupPlan(context.root, context.manifest, options.resume);
-      if (options.planOnly) {
-        const diff = await diffSetupPlan(context.root, context.manifest, loaded.plan, loaded.input);
-        runtime.stdout(formatPlanDiff(diff));
-        return;
-      }
-      const console = await startSetupConsole(context.root, context.manifest, options.env, selectedMasterKey(runtime), options.resume);
-      runtime.stdout(`Trestle setup: ${console.url}\nOne-time access code: ${console.accessCode}\nPress Ctrl+C to close.\n`);
-      if (options.open) {
-        const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-        const arguments_ = process.platform === "win32" ? ["/c", "start", "", console.url] : [console.url];
-        const child = spawn(opener, arguments_, { stdio: "ignore", detached: true });
-        child.on("error", () => runtime.stderr(`Open ${console.url} in a browser to continue.\n`));
-        child.unref();
-      }
-      const stop = () => { void console.close(); };
-      process.once("SIGINT", stop);
-      process.once("SIGTERM", stop);
-      try { await console.closed; }
-      finally { process.off("SIGINT", stop); process.off("SIGTERM", stop); await console.close().catch(() => undefined); }
-    });
-
   program
     .command("doctor")
     .description("run read-only environment and architecture checks")
@@ -244,6 +235,117 @@ export function createProgram(runtime: CliRuntime): Command {
       if (report.summary.failed > 0) {
         throw new CliFailure("doctor found failures");
       }
+    });
+
+  program
+    .command("capabilities")
+    .description("report the lifecycle state of optional capabilities without contacting providers")
+    .option("--env <environment>", "environment to inspect", environment, "local")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      let secrets: Record<string, string> | undefined;
+      try { secrets = await readSecrets(context.root, options.env, selectedMasterKey(runtime)); }
+      catch { secrets = undefined; }
+      const presence = secrets ? Object.fromEntries(Object.entries(secrets).map(([name, value]) => [name, value ? "set" : ""])) : undefined;
+      const report = await inspectCapabilities(context.root, context.manifest, options.env, { secrets: presence, evidence: await readEvidence(context.root, options.env) });
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatCapabilities(report));
+    });
+
+  program
+    .command("setup")
+    .description("open the local guided setup console on a random loopback port")
+    .option("--no-open", "print the one-time link without opening a browser")
+    .option("--resume", "continue editing the saved .trestle/setup.json")
+    .option("--plan-only", "edit and save the SetupPlan without changing credentials or applying it")
+    .option("--env <environment>", "credential environment to edit first", environment, "local")
+    .addOption(new Option("--port <port>", "fixed loopback port (testing only)").hideHelp().argParser((value) => {
+      const port = Number(value);
+      if (!Number.isInteger(port) || port < 0 || port > 65535) throw new InvalidArgumentError("expected a port number");
+      return port;
+    }))
+    .action(async (options: { open: boolean; resume?: boolean; planOnly?: boolean; env: ReturnType<typeof environment>; port?: number }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      await runSetup(context, options, runtime, { masterKey: selectedMasterKey(runtime) });
+    });
+
+  const plane = (value: string): AuthorityPlane => {
+    if (!(authorityPlanes as readonly string[]).includes(value)) throw new InvalidArgumentError(`expected ${authorityPlanes.join(", ")}`);
+    return value as AuthorityPlane;
+  };
+  const json = (data: unknown) => `${JSON.stringify(structuredOutput(data), null, 2)}\n`;
+
+  program.command("permissions")
+    .description("inspect the three-plane permission registry and where each permission is enforced")
+    .option("--plane <plane>", "organization, application, or platform", plane)
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { plane?: AuthorityPlane; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = permissionReport(await loadAccessInspection(context.root, runtime), options.plane);
+      runtime.stdout(options.json ? json(report) : formatPermissions(report));
+      if (report.consistency.problems.length) throw new CliFailure("the access registries are inconsistent");
+    });
+
+  program.command("roles")
+    .description("inspect organization, application, and platform role definitions")
+    .option("--plane <plane>", "organization, application, or platform", plane)
+    .option("--role <key>", "expand one role's permissions")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { plane?: AuthorityPlane; role?: string; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = roleReport(await loadAccessInspection(context.root, runtime), { ...(options.plane ? { plane: options.plane } : {}), ...(options.role ? { key: options.role } : {}) });
+      runtime.stdout(options.json ? json(report) : formatRoles(report));
+    });
+
+  program.command("entitlements")
+    .description("inspect features, typed privileges, and the default plan comparison matrix")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = entitlementReport(await loadAccessInspection(context.root, runtime));
+      runtime.stdout(options.json ? json(report) : formatEntitlements(report));
+    });
+
+  const adminCommand = program.command("admin").description("install and inspect the optional platform admin application");
+  adminCommand.command("install")
+    .description("declare the admin capability and application in the project manifest")
+    .action(async (_options: object, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const result = await installAdmin(context.root, context.manifest);
+      runtime.stdout(`${result.changed ? "Declared" : "Already declared"} the platform admin at ${result.adminPath}\nNext:\n  pnpm exec trestle setup --env staging\n  pnpm exec trestle admin doctor\n`);
+    });
+  adminCommand.command("doctor")
+    .description("run read-only checks for the admin surface and platform authority")
+    .option("--env <environment>", "environment to diagnose", environment, "local")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = await runAdminDoctor(context.root, context.manifest, options.env, runtime);
+      runtime.stdout(options.json ? json(report) : formatAccessDoctor(report));
+      if (report.summary.failed > 0) throw new CliFailure("admin doctor found failures");
+    });
+  adminCommand.command("views")
+    .description("list admin views discovered by file convention")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const inspection = await loadAccessInspection(context.root, runtime);
+      if (!inspection.adminViews) throw new CliFailure("the admin application is not installed; run pnpm exec trestle admin install");
+      const views = adminViewSummaries(inspection.adminViews.views);
+      runtime.stdout(options.json ? json({ views, problems: inspection.adminViews.problems }) : formatAdminViews(views, inspection.adminViews.problems));
+      if (!inspection.adminViews.valid) throw new CliFailure("admin view registry is invalid");
+    });
+
+  const apiKeys = program.command("api-keys").description("inspect API-key safety");
+  apiKeys.command("doctor")
+    .description("run read-only checks for API-key storage, scopes, and logging")
+    .option("--env <environment>", "environment to diagnose", environment, "local")
+    .option("--json", "emit versioned structured output")
+    .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const report = await runApiKeysDoctor(context.root, context.manifest, options.env, runtime);
+      runtime.stdout(options.json ? json(report) : formatAccessDoctor(report));
+      if (report.summary.failed > 0) throw new CliFailure("api-keys doctor found failures");
     });
 
   const plan = program.command("plan").description("validate and inspect a versioned SetupPlan");
@@ -413,9 +515,19 @@ export function createProgram(runtime: CliRuntime): Command {
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
       const problems = validateSecrets(values, context.manifest, options.env);
       if (problems.length > 0) throw new CliFailure(`credentials check failed:\n${problems.join("\n")}`);
-      const workerValues = Object.fromEntries(Object.entries(values).filter(([name]) => context.manifest.secrets?.[name]?.target === "worker"));
+      const surfaceValues = (surface: "worker" | "admin") => Object.fromEntries(Object.entries(values).filter(([name]) => {
+        const declaration = context.manifest.secrets?.[name];
+        return declaration ? secretSurfaces(declaration).includes(surface) : false;
+      }));
+      const workerValues = surfaceValues("worker");
       await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", "secret", "bulk", "--env", options.env, ...(options.workerName ? ["--name", options.workerName] : [])], { cwd: context.root, env: process.env, input: JSON.stringify(workerValues) });
       runtime.stdout(`Pushed ${Object.keys(workerValues).length} Worker secrets to ${options.env}; local encrypted credentials remain authoritative\n`);
+      const adminValues = surfaceValues("admin");
+      if (context.manifest.apps.admin && !options.workerName && Object.keys(adminValues).length) {
+        // The platform admin Worker is a separate deployment with its own secret set.
+        await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/admin`, "exec", "wrangler", "secret", "bulk", "--env", options.env], { cwd: context.root, env: process.env, input: JSON.stringify(adminValues) });
+        runtime.stdout(`Pushed ${Object.keys(adminValues).length} admin Worker secrets to ${options.env}\n`);
+      }
     });
 
   secrets
@@ -711,6 +823,35 @@ export function createProgram(runtime: CliRuntime): Command {
       const files = await generateEmail(context.root, name);
       runtime.stdout(`Generated ${files.join(", ")}\n`);
     });
+  generate.command("permission")
+    .argument("<code>")
+    .requiredOption("--plane <plane>", "organization, application, or platform", plane)
+    .option("--description <text>", "human description")
+    .option("--principals <list>", "comma-separated principals: user, api_key", (value) => value.split(",").map((item) => item.trim()).filter(Boolean))
+    .option("--entitlement <feature>", "feature code required before the permission can be used")
+    .action(async (code: string, options: { plane: AuthorityPlane; description?: string; principals?: string[]; entitlement?: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const result = await generatePermission(context.root, context.manifest, { code, plane: options.plane, ...(options.description ? { description: options.description } : {}), ...(options.principals ? { principals: options.principals } : {}), ...(options.entitlement ? { entitlement: options.entitlement } : {}) });
+      runtime.stdout(`Registered ${result.plane} permission ${result.code} in ${result.file}\nNext: grant it to a ${result.plane} role in packages/authz/src/role-definitions.ts and require it in a route policy.\n`);
+    });
+  generate.command("admin-view")
+    .argument("<name>")
+    .option("--group <group>", "sidebar group")
+    .option("--permission <code>", "platform permission required to display the view")
+    .option("--path <path>", "route path")
+    .option("--icon <name>", "@phosphor-icons/react icon, e.g. FileTextIcon", "SquaresFourIcon")
+    .action(async (name: string, options: { group?: string; permission?: string; path?: string; icon?: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const files = await generateAdminView(context.root, context.manifest, { name, ...(options.group ? { group: options.group } : {}), ...(options.permission ? { permission: options.permission } : {}), ...(options.path ? { path: options.path } : {}), ...(options.icon ? { icon: options.icon } : {}) });
+      runtime.stdout(`Generated admin view ${name}\n${files.map((file) => `  ${file}`).join("\n")}\nValidate with: pnpm --filter ./apps/admin check:views\n`);
+    });
+  generate.command("admin-resource")
+    .argument("<name>")
+    .action(async (name: string, _options: object, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const result = await generateAdminResource(context.root, context.manifest, name);
+      runtime.stdout(`Generated admin view for ${name}\n${result.files.map((file) => `  ${file}`).join("\n")}\nAdd GET ${result.route} to the admin Worker requiring ${result.permission}.\n`);
+    });
   generate.command("resource")
     .argument("<name>")
     .option("--tenant", "generate organization ownership and forced RLS", true)
@@ -718,8 +859,8 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--crud", "generate CRUD contracts, routes, and UI", true)
     .option("--no-crud", "generate persistence without CRUD surfaces")
     .option("--field <definition...>", "additional field as name:type[?] or name:relation:Resource[:onDelete]")
-    .option("--read-permission <permission>", "application permission required to list/read", "resource:read")
-    .option("--write-permission <permission>", "application permission required to create/update/delete", "resource:write")
+    .option("--read-permission <permission>", "application permission required to list/read", "resource.read")
+    .option("--write-permission <permission>", "application permission required to create/update/delete", "resource.write")
     .option("--page-size <size>", "default cursor page size", Number, 25)
     .option("--max-page-size <size>", "maximum cursor page size", Number, 100)
     .action(async (name: string, options: { tenant: boolean; crud: boolean; field?: string[]; readPermission: string; writePermission: string; pageSize: number; maxPageSize: number }, command: Command) => {
@@ -732,6 +873,17 @@ export function createProgram(runtime: CliRuntime): Command {
       const files = await generateResource(context.root, context.manifest, resource);
       files.push(...await generateResourceMigration(context.root, context.manifest, [resource]));
       runtime.stdout(`Generated ${name}\n${files.map((file) => `  ${file}`).join("\n")}\n`);
+    });
+
+  const identity = program.command("identity").description("verify enterprise identity providers");
+  identity.command("verify-scim")
+    .description("run real SCIM create/update/deactivate transactions against the environment's database and record the result")
+    .option("--env <environment>", "environment whose database and driver to test", environment, "local")
+    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const result = await verifyScimTransactions(context.root, context.manifest, options.env, selectedMasterKey(runtime));
+      runtime.stdout(formatScimResult(options.env, result));
+      if (!result.passed) throw new CliFailure("SCIM transaction compatibility test failed");
     });
 
   const payments = program.command("payments").description("manage application payments integrations");
@@ -848,8 +1000,12 @@ export function createProgram(runtime: CliRuntime): Command {
       await runCommand("pnpm", ["db:migrate"], { cwd: context.root, env: { ...childEnvironment, DATABASE_URL: childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL } });
       runtime.stdout("Applying deterministic development seed…\n");
       await runCommand("pnpm", ["db:seed"], { cwd: context.root, env: { ...childEnvironment, DATABASE_URL: childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL } });
+      if (context.manifest.apps.admin) {
+        runtime.stdout("Seeding the local admin operator…\n");
+        await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/auth`, "run", "seed:local-admin"], { cwd: context.root, env: { ...childEnvironment, TRESTLE_ENV: "local" } });
+      }
       runtime.stdout(
-        `${context.manifest.apps.site ? "Site   http://localhost:42068\n" : ""}App    http://localhost:42069\nAPI    http://localhost:8787\n`,
+        `${context.manifest.apps.site ? "Site   http://localhost:42068\n" : ""}App    http://localhost:42069\nAPI    http://localhost:8787\n${context.manifest.apps.admin ? "Admin  http://localhost:42070 (username admin, password admin; platform API http://localhost:8788)\n" : ""}`,
       );
       const exitCode = await runDevelopment(context.root, childEnvironment);
       if (exitCode !== 0) throw new CliFailure(`development processes exited with status ${exitCode}`, exitCode);

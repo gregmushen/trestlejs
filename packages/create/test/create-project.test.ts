@@ -75,7 +75,7 @@ describe("createProject", () => {
     ).toContain("export const organization = pgTable(");
     expect(
       await readFile(path.join(result.directory, "apps", "worker", "src", "index.ts"), "utf8"),
-    ).toContain('app.on(["GET", "POST"], "/api/auth/*"');
+    ).toContain('app.on(["GET", "POST", "PUT", "PATCH", "DELETE"], "/api/auth/*"');
     expect(
       await readFile(path.join(result.directory, "apps", "app", "src", "main.tsx"), "utf8"),
     ).toContain('path: "/sign-up"');

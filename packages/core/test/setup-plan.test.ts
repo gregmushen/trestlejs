@@ -33,4 +33,31 @@ describe("SetupPlan", () => {
     const input = { ...validPlan, resources: [validPlan.resources[0], validPlan.resources[0]] };
     expect(() => parseSetupPlan(JSON.stringify(input))).toThrow("SetupPlan is invalid");
   });
+
+  it("accepts optional admin, provider, access, commercial, and artifact sections", () => {
+    const plan = parseSetupPlan(JSON.stringify({
+      ...validPlan,
+      apps: { ...validPlan.apps, admin: true },
+      capabilities: { ...validPlan.capabilities, admin: true },
+      providers: { email: "resend", payments: "stripe" },
+      access: { customRoles: true, serviceAccounts: true, apiKeys: true },
+      commercial: { plans: true, usage: true },
+      artifacts: { storage: "local", retentionDays: 30 },
+    }));
+    expect(plan.apps.admin).toBe(true);
+    expect(plan.providers?.payments).toBe("stripe");
+    expect(parseSetupPlan(JSON.stringify(validPlan)).providers).toBeUndefined();
+  });
+
+  it("enforces cross-field requirements", () => {
+    const issues = (input: object) => {
+      try { parseSetupPlan(JSON.stringify(input)); return []; }
+      catch (error) { return (error as SetupPlanError).issues.map((issue) => issue.path.join(".")); }
+    };
+    expect(issues({ ...validPlan, access: { customRoles: false, serviceAccounts: false, apiKeys: true } })).toContain("access.apiKeys");
+    expect(issues({ ...validPlan, providers: { email: "local", payments: "lago" } })).toContain("providers.payments");
+    expect(issues({ ...validPlan, providers: { email: "local", payments: "lago" }, commercial: { plans: true, usage: false } })).toEqual([]);
+    expect(issues({ ...validPlan, apps: { ...validPlan.apps, admin: true } })).toContain("apps.admin");
+    expect(issues({ ...validPlan, artifacts: { storage: "s3", retentionDays: 10 } })).toContain("artifacts.storage");
+  });
 });

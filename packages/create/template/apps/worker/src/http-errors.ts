@@ -1,10 +1,11 @@
-import { AccessDeniedError } from "@__TRESTLE_PROJECT_NAME__/context";
+import { AccessDeniedError } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { BillingAlreadyCancelled, BillingConfigurationError, BillingPlanUnavailable, BillingProviderUnavailable, BillingRateLimited, BillingSubscriptionNotFound, BillingValidationError } from "@__TRESTLE_PROJECT_NAME__/integrations";
 
-export type HttpError = Readonly<{ status: 400 | 403 | 404 | 409 | 429 | 500 | 503; code: string; message: string; retryable: boolean }>;
+export type HttpError = Readonly<{ status: 400 | 401 | 403 | 404 | 409 | 429 | 500 | 503; code: string; message: string; retryable: boolean }>;
 
 export function mapHttpError(error: unknown): HttpError {
-  if (error instanceof AccessDeniedError) return { status: 403, code: "access_denied", message: "The requested operation is not permitted", retryable: false };
+  // The status follows the decision (401 for inactive credentials); the body never names the missing permission.
+  if (error instanceof AccessDeniedError) return { status: error.status, code: "access_denied", message: "The requested operation is not permitted", retryable: false };
   if (error instanceof BillingValidationError) return { status: 400, code: "billing_validation", message: error.message, retryable: false };
   if (error instanceof BillingPlanUnavailable) return { status: 400, code: "billing_plan_unavailable", message: error.message, retryable: false };
   if (error instanceof BillingSubscriptionNotFound) return { status: 404, code: "billing_subscription_not_found", message: error.message, retryable: false };

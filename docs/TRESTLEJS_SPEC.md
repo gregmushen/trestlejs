@@ -188,13 +188,17 @@ service may serve customer web, admin web, internal tools, and future
 clients.
 
 Better Auth's organization and membership tables are the canonical source of
-identity membership. Application roles and permissions may reference that
-membership but must not silently duplicate it. Every request revalidates
-membership before tenant context is established; session caching must have a
-bounded revocation window. Organization lifecycle hooks coordinate creation
-and deletion with application-owned tenant records through idempotent domain
-operations. Better Auth schema changes participate in the same reviewed
-migration pipeline as application schema changes.
+identity membership. Organization roles govern generic account administration;
+application roles govern product-domain actions; platform roles govern
+operation of the SaaS. Application roles and permissions may reference a
+membership but must not silently duplicate it. Authority does not flow between
+these planes unless an application explicitly declares and tests that
+relationship. Every request revalidates membership before tenant context is
+established; session caching must have a bounded revocation window.
+Organization lifecycle hooks coordinate creation and deletion with
+application-owned tenant records through idempotent domain operations. Better
+Auth schema changes participate in the same reviewed migration pipeline as
+application schema changes.
 
 Verification, password reset, invitation, and security-notification flows use
 a narrow outbound email adapter with idempotency keys, delivery observability,
@@ -202,9 +206,21 @@ and a local capture sink. The core does not choose a commercial email
 provider, but a working email adapter is required before those auth features
 may be advertised as production-ready.
 
-Authentication answers **who are you?** Application authorization
-answers **what may you do?** PostgreSQL RLS answers **which tenant's
-rows may this execution context access?**
+Generated projects include one Trestle-owned **System -> Authentication** admin
+destination over Better Auth. It shows the complete effective posture and lets
+authorized platform operators manage versioned runtime registration,
+verification, MFA/step-up, session, recovery, organization, and enterprise
+identity policy. Better Auth owns the mechanisms and records; it does not supply
+a competing Trestle control plane. Secret-bearing provider/plugin construction,
+origins, callbacks, and cookie/domain settings remain owned by `trestle setup`
+and are shown read-only with their safe status and source. The operator's own
+factor enrollment is a separate Account Security page.
+
+Authentication answers **who are you?** Organization, application, and
+platform authorization independently answer **what may you do in this
+authority plane?** Entitlements answer **may this tenant use the capability?**
+PostgreSQL RLS answers **which tenant's rows may this execution context
+access?**
 
 ## 8. Context Model
 
@@ -216,7 +232,12 @@ domain/application services.
 type ExecutionContext = {
   principal: Principal
   tenant: TenantIdentity
-  permissions: Permissions
+  authority: {
+    organization: Permissions
+    application: Permissions
+    platform: Permissions
+  }
+  entitlements: Entitlements
   correlation: CorrelationContext
   data: TenantData
   log: Logger
@@ -226,11 +247,13 @@ type ExecutionContext = {
 }
 ```
 
-`Principal`, `TenantIdentity`, and `Permissions` are immutable values created
-by trusted context factories. Callers cannot construct an
+`Principal`, `TenantIdentity`, each plane's `Permissions`, and `Entitlements`
+are immutable values created by trusted context factories. A principal gains no
+authority merely by authenticating. Callers cannot construct an
 `ExecutionContext` directly. Authorization decisions that protect a write are
-rechecked inside the tenant transaction when concurrent membership or role
-changes could otherwise create a time-of-check/time-of-use gap.
+rechecked inside the tenant transaction when concurrent membership, role,
+subscription, or entitlement changes could otherwise create a
+time-of-check/time-of-use gap.
 
 Domain code should not depend on Hono.
 
@@ -352,9 +375,18 @@ normal application role must not casually bypass RLS.
 
 ## 13. Administrative Access and Admin Application
 
-Tenant admins remain RLS-bound with elevated in-tenant permissions.
-Platform administration uses an explicit, narrowly controlled privileged
-capability. "Admin" must not automatically mean global RLS bypass.
+The detailed contract for guided setup, organization, application, and
+platform administration, plans and entitlements, roles and permissions,
+service accounts, and API keys is defined in the
+[Administration and Access Control Specification](ADMIN_SPEC.md). This section
+summarizes the governing architecture.
+
+Organization administration, application authorization, and platform
+operations are independent authority planes. Organization and application
+administrators remain RLS-bound with plane-specific in-tenant permissions.
+Platform administration uses explicit, narrowly controlled platform
+capabilities. "Admin" has no meaning without its authority plane and must not
+automatically mean global RLS bypass.
 
 An application may install an Avo/ActiveAdmin-style administrative surface:
 
@@ -383,8 +415,8 @@ ordinary tenant operations construct the normal `ApiContext` and execute
 through `withTenant()` under forced PostgreSQL RLS. Cross-tenant and global
 operations use separately declared platform capabilities, dedicated endpoints,
 strong authorization, and auditable reasons; tenant switching alone never
-grants them. Better Auth application roles, tenant-admin permissions, and
-platform/database privileges remain distinct.
+grants them. Better Auth identity and membership, organization roles,
+application roles, platform roles, and database privileges remain distinct.
 
 The v1 admin surface includes users, organizations, authorized tenant-context
 switching, generated resource list/detail screens, relationships, search,
@@ -393,6 +425,12 @@ inspection, and audit records. Destructive and bulk actions preview scope,
 require confirmation where appropriate, use idempotency keys, and report
 partial failure. Rich workflow visualization and general operational
 dashboards are deferred until implementation demonstrates a need.
+
+Project and provider configuration belongs to the local `trestle setup`
+console, not the deployed admin application. Admin consumes sanitized
+capability health and directs operators to rerun setup when required
+configuration is missing; it never becomes a browser-based source generator or
+secret-recovery interface.
 
 ## 14. Resource-Hiding Semantics
 
@@ -983,10 +1021,21 @@ state, and update time. Normalized statuses include `active`, `trialing`,
 `past_due`, `cancelled`, and `incomplete`.
 
 Plans are version-controlled application configuration. They map commercial
-packages to application capabilities; environment-specific Stripe Price IDs are
-provider configuration. Domain authorization checks entitlements such as
-`ctx.entitlements.require("workflows.advanced")`, never plan-name conditionals or
-live Stripe responses.
+packages to application capabilities. Provider catalog linkage is an explicit,
+environment-specific local projection: a Trestle plan family maps to a Stripe
+Product, while each plan-version offer maps to a Stripe Price. An offer is a
+commercial variant such as monthly USD or annual USD, so one entitlement
+version may have several prices. The organization maps to a Stripe Customer,
+and the local subscription records its Stripe Subscription, Subscription Item,
+and selected Price identifiers. Domain authorization checks entitlements such
+as `ctx.entitlements.require("workflows.advanced")`, never plan-name
+conditionals or live Stripe responses.
+
+`STRIPE_PRICES` may be accepted temporarily as an import/bootstrap format, but
+it is not the canonical mapping. Synchronization persists and verifies safe
+provider identifiers in the local catalog mapping. Webhooks resolve Price and
+Subscription Item identifiers through that mapping and fail closed on missing
+or ambiguous linkage; they never infer a plan from a Stripe display name.
 
 Marketing and Southwind pricing links carry plan intent only. The normal flow is
 pricing intent, authentication, authenticated checkout creation, Stripe
@@ -2330,7 +2379,8 @@ TrestleJS v1 is successful when a developer can:
     resource, enter an authorized tenant context, and perform an
     application-backed action through normal validation, authorization,
     logging, audit, `withTenant()`, and forced RLS without receiving generic
-    database-editing authority.
+    database-editing authority, while proving organization, application, and
+    platform role assignments remain independent.
 
 ## 40. Product Positioning
 

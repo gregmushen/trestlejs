@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { assertRuntimeRole, bootstrapRuntimeRole, configureRuntimeRole, inspectRuntimeRole, verifyRuntimeRoleDataAccess } from "./roles.js";
+import { assertRuntimeRole, bootstrapRuntimeRole, configurePlatformRole, configureRuntimeRole, inspectRuntimeRole, verifyRuntimeRoleDataAccess } from "./roles.js";
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -27,7 +27,7 @@ suite("production PostgreSQL runtime role", () => {
     await expect(bootstrapRuntimeRole(connectionString!, runtimeRole, runtimePassword)).resolves.toEqual({ role: runtimeRole, created: true });
     await expect(bootstrapRuntimeRole(connectionString!, runtimeRole, runtimePassword)).resolves.toEqual({ role: runtimeRole, created: false });
     const configured = await configureRuntimeRole(connectionString!, runtimeRole);
-    expect(configured).toEqual({ role: runtimeRole, canLogin: true, superuser: false, bypassRls: false, memberOfApplicationRole: true });
+    expect(configured).toEqual({ role: runtimeRole, canLogin: true, superuser: false, bypassRls: false, memberOfApplicationRole: true, memberOfPlatformRole: false });
     const url = new URL(connectionString!);
     url.username = runtimeRole;
     url.password = runtimePassword;
@@ -35,6 +35,18 @@ suite("production PostgreSQL runtime role", () => {
     expect(inspected).toEqual(configured);
     expect(() => assertRuntimeRole(inspected, runtimeRole)).not.toThrow();
     await expect(verifyRuntimeRoleDataAccess(url.toString())).resolves.toBeUndefined();
+  });
+
+  it("never lets the tenant runtime role also assume the platform role", async () => {
+    await expect(configurePlatformRole(connectionString!, runtimeRole)).rejects.toThrow("tenant runtime role");
+    const platformLogin = `${runtimeRole}_admin`;
+    await admin!.unsafe(`create role ${platformLogin} login nosuperuser nobypassrls`);
+    try {
+      expect(await configurePlatformRole(connectionString!, platformLogin)).toMatchObject({ memberOfPlatformRole: true, memberOfApplicationRole: false });
+      await expect(configureRuntimeRole(connectionString!, platformLogin)).rejects.toThrow("can assume trestle_platform");
+    } finally {
+      await admin!.unsafe(`drop role if exists ${platformLogin}`);
+    }
   });
 
   it("rejects privileged or malformed runtime roles", async () => {

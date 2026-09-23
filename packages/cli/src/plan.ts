@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { parseSetupPlan, structuredOutput, type ProjectManifest, type SetupPlan, TRESTLEJS_VERSION } from "@trestlejs/core";
+import { parseSetupPlan, projectManifestSchema, structuredOutput, type ProjectManifest, type SetupPlan, TRESTLEJS_VERSION } from "@trestlejs/core";
+import { parseDocument } from "yaml";
 
 import { generateResource, generateResourceMigration } from "./generate-resource.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
@@ -19,7 +20,7 @@ function versionParts(version: string): ParsedVersion {
   return { release: [Number(match[1]), Number(match[2]), Number(match[3])], prerelease: match[4]?.split(".") ?? [] };
 }
 
-function versionAtLeast(actual: string, minimum: string): boolean {
+export function versionAtLeast(actual: string, minimum: string): boolean {
   const a = versionParts(actual);
   const b = versionParts(minimum);
   for (let index = 0; index < 3; index += 1) {
@@ -157,6 +158,13 @@ export async function diffSetupPlan(root: string, manifest: ProjectManifest, pla
   compare("database", { engine: manifest.database.engine, provider: manifest.database.defaultProvider }, plan.database, `${plan.database.provider} ${plan.database.engine} database`);
   compare("capabilities", manifest.capabilities, plan.capabilities, "declared Cloudflare capabilities match");
   compare("integrations", { email: Boolean(manifest.packages.integrations), billing: Boolean(manifest.packages.billing) }, plan.integrations, "declared application integrations match");
+  if (plan.providers) compare("providers", manifest.integrations, plan.providers, `email ${plan.providers.email}; payments ${plan.providers.payments}; metering ${plan.providers.metering ?? "native"}; webhooks ${plan.providers.webhooks ?? "native"}`);
+  if (plan.authentication) compare("authentication", manifest.authentication, plan.authentication, `passkeys ${plan.authentication.passkeys}; two-factor ${plan.authentication.twoFactor}`);
+  if (plan.identity) compare("identity", manifest.identity, plan.identity, `SSO ${plan.identity.sso}; directory ${plan.identity.directory}`);
+  if (plan.access) compare("access", manifest.access, plan.access, `custom roles ${plan.access.customRoles}; service accounts ${plan.access.serviceAccounts}; API keys ${plan.access.apiKeys}`);
+  if (plan.commercial) compare("commercial", manifest.commercial, plan.commercial, `plans ${plan.commercial.plans}; usage ${plan.commercial.usage}`);
+  if (plan.communications) compare("communications", manifest.communications, plan.communications, `webhooks ${plan.communications.webhooks}; notifications ${plan.communications.notifications}`);
+  if (plan.artifacts) compare("artifacts", manifest.artifacts, plan.artifacts, `${plan.artifacts.storage} artifact storage retained ${plan.artifacts.retentionDays} days`);
   compare("environments", manifest.environments, plan.environments, "declared environments match");
   for (const secret of plan.secrets) {
     const actual = manifest.secrets?.[secret.name];
@@ -194,12 +202,17 @@ type ApplyState = { schemaVersion: 1; planHash: string; updatedAt: string; opera
 export async function applySetupPlan(root: string, manifest: ProjectManifest, plan: SetupPlan, input: string): Promise<ApplyState> {
   const diff = await diffSetupPlan(root, manifest, plan, input);
   const operations: ApplyState["operations"] = [];
-  const unsafe = diff.items.filter((item) => !["already correct", "create"].includes(item.classification) || (item.classification === "create" && !item.id.startsWith("resources.")));
+  const declarations = diff.items.filter((item) => item.classification === "update" && MANIFEST_DECLARATIONS.has(item.id));
+  const unsafe = diff.items.filter((item) => !declarations.includes(item) && (!["already correct", "create"].includes(item.classification) || (item.classification === "create" && !item.id.startsWith("resources."))));
   if (unsafe.length) {
     for (const item of unsafe) operations.push({ id: item.id, status: "blocked", reason: `${item.classification}: ${item.summary}` });
     const state = { schemaVersion: 1 as const, planHash: diff.planHash, updatedAt: new Date().toISOString(), operations };
     await writeApplyState(root, state);
     throw new CliFailure(`apply is blocked:\n${unsafe.map((item) => `${item.classification} ${item.id}: ${item.summary}`).join("\n")}`);
+  }
+  if (declarations.length) {
+    await updateManifestDeclarations(root, plan, declarations.map(({ id }) => id));
+    for (const item of declarations) operations.push({ id: item.id, status: "completed", files: [path.join(".trestle", "project.yaml")] });
   }
   const migrations = new Map<string, SetupPlan["resources"][number]>();
   for (const resource of plan.resources) {
@@ -220,6 +233,57 @@ export async function applySetupPlan(root: string, manifest: ProjectManifest, pl
   const state = { schemaVersion: 1 as const, planHash: diff.planHash, updatedAt: new Date().toISOString(), operations };
   await writeApplyState(root, state);
   return state;
+}
+
+const MANIFEST_DECLARATIONS = new Set(["capabilities", "providers", "authentication", "identity", "access", "commercial", "communications", "artifacts"]);
+
+async function updateManifestDeclarations(root: string, plan: SetupPlan, ids: string[]): Promise<void> {
+  const manifestPath = path.join(root, ".trestle", "project.yaml");
+  const document = parseDocument(await readFile(manifestPath, "utf8"));
+  for (const id of ids) {
+    if (id === "capabilities") for (const [name, enabled] of Object.entries(plan.capabilities)) document.setIn(["capabilities", name], enabled);
+    else if (id === "providers" && plan.providers) document.set("integrations", { ...plan.providers });
+    else if (id === "authentication" && plan.authentication) document.set("authentication", { ...plan.authentication });
+    else if (id === "identity" && plan.identity) document.set("identity", { ...plan.identity });
+    else if (id === "communications" && plan.communications) document.set("communications", { ...plan.communications });
+    else if (id === "access" && plan.access) document.set("access", { ...plan.access });
+    else if (id === "commercial" && plan.commercial) document.set("commercial", { ...plan.commercial });
+    else if (id === "artifacts" && plan.artifacts) document.set("artifacts", { ...plan.artifacts });
+  }
+  const result = projectManifestSchema.safeParse(document.toJS());
+  if (!result.success) throw new CliFailure(`apply would produce an invalid manifest: ${result.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`);
+  await writeFile(manifestPath, document.toString(), "utf8");
+}
+
+export function planFromManifest(manifest: ProjectManifest, resources: SetupPlan["resources"] = []): SetupPlan {
+  return {
+    schemaVersion: 1,
+    minimumTrestleVersion: TRESTLEJS_VERSION,
+    project: { name: manifest.project.name },
+    apps: {
+      site: Boolean(manifest.apps.site),
+      app: Boolean(manifest.apps.app),
+      worker: Boolean(manifest.apps.worker),
+      ...(manifest.apps.admin || manifest.capabilities.admin ? { admin: Boolean(manifest.apps.admin) && manifest.capabilities.admin } : {}),
+    },
+    tenancy: { ...manifest.tenancy },
+    database: { engine: manifest.database.engine, provider: manifest.database.defaultProvider },
+    capabilities: { ...manifest.capabilities },
+    integrations: { email: Boolean(manifest.packages.integrations), billing: Boolean(manifest.packages.billing) },
+    ...(manifest.integrations ? { providers: { ...manifest.integrations } } : {}),
+    ...(manifest.authentication ? { authentication: { ...manifest.authentication } } : {}),
+    ...(manifest.identity ? { identity: { ...manifest.identity } } : {}),
+    ...(manifest.access ? { access: { ...manifest.access } } : {}),
+    ...(manifest.commercial ? { commercial: { ...manifest.commercial } } : {}),
+    ...(manifest.communications ? { communications: { ...manifest.communications } } : {}),
+    ...(manifest.artifacts ? { artifacts: { ...manifest.artifacts } } : {}),
+    environments: [...manifest.environments],
+    secrets: Object.entries(manifest.secrets ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([name, declaration]) => ({ name, target: declaration.target, required: [...declaration.required] })),
+    resources: resources.map((resource) => ({ ...resource })),
+    externalResources: [],
+    destructiveOperations: [],
+    verification: { commands: ["pnpm exec trestle doctor"] },
+  };
 }
 
 async function writeApplyState(root: string, state: ApplyState): Promise<void> {

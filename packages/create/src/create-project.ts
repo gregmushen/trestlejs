@@ -98,6 +98,8 @@ export async function createProject(options: CreateProjectOptions): Promise<Crea
       BETTER_AUTH_URL: "http://localhost:42069",
       DATABASE_DRIVER: "postgres-js",
       DATABASE_URL: `postgres://trestle:trestle@localhost:55432/${name}`,
+      // Locally the same login selects the trestle_platform role per connection.
+      PLATFORM_DATABASE_URL: `postgres://trestle:trestle@localhost:55432/${name}`,
     });
 
     const run = options.run ?? defaultRun;

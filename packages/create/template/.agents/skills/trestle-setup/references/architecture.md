@@ -49,3 +49,12 @@ Use these conventions as defaults, not as justification to enable unused compone
 - Cloudflare is the deployment golden path; GitHub Actions handles verification and environment-aware deployment.
 - Semantic structured logs carry correlation and causation identifiers and redact credentials, tokens, magic links, message bodies, and sensitive provider payloads.
 - Prefer production-shaped free-tier infrastructure until requirements or scale justify paid resources.
+
+## Capabilities and setup
+
+- Optional capabilities move through `disabled -> declared -> configured -> deployed -> verified`. Declared means the manifest requests it; configured means source, bindings, and secret names are present; deployed and verified come only from recorded, non-secret evidence.
+- Declare email and payments providers, access (custom roles, service accounts, API keys), commercial plans and usage, and artifact storage in `.trestle/project.yaml`. API keys require service accounts; Lago requires commercial plans.
+- Declare capability choices, not vendors: `authentication` (passkeys, twoFactor: disabled | better-auth), `identity` (sso: disabled | better-auth | workos; directory: disabled | better-auth-scim | workos), `integrations.metering` (native | openmeter | lago), and `integrations.webhooks` (native | svix). Setup rejects incompatible combinations: directory provisioning needs matching SSO, Lago metering needs Lago payments, provider metering needs `commercial.usage`, Svix needs `communications.webhooks`, and the admin needs passkeys or two-factor.
+- Self-hosted SCIM (and Better Auth SSO) need interactive transactions: `DATABASE_DRIVER=postgres-js`. `trestle doctor` fails SCIM until `pnpm exec trestle identity verify-scim --env <environment>` records a passing create/update/deactivate run on that environment's driver.
+- Providers supply identities, provisioning facts, usage figures, or delivery; Trestle keeps authority. Directory groups map only to organization or application roles, never platform roles, and removing a group removes only the roles that source granted. Request authorization never calls a metering provider.
+- Inspect with `trestle capabilities --env <environment>`; configure with `pnpm exec trestle setup --env <environment>`. The platform admin reports missing configuration and points to setup rather than collecting infrastructure credentials itself.

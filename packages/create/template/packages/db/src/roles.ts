@@ -1,16 +1,30 @@
 import postgres from "postgres";
 
+export const applicationDatabaseRole = "trestle_app" as const;
+export const platformDatabaseRole = "trestle_platform" as const;
+
 export type RuntimeRoleStatus = {
   role: string;
   canLogin: boolean;
   superuser: boolean;
   bypassRls: boolean;
   memberOfApplicationRole: boolean;
+  /** The tenant runtime role must never be able to assume trestle_platform. */
+  memberOfPlatformRole?: boolean;
+};
+
+export type PlatformRoleStatus = {
+  role: string;
+  canLogin: boolean;
+  superuser: boolean;
+  bypassRls: boolean;
+  memberOfPlatformRole: boolean;
+  memberOfApplicationRole: boolean;
 };
 
 function validateRoleName(role: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_-]{0,62}$/u.test(role)) throw new Error("Invalid PostgreSQL runtime role name");
-  if (role === "trestle_app") throw new Error("The runtime login role must be distinct from trestle_app");
+  if (role === applicationDatabaseRole || role === platformDatabaseRole) throw new Error(`The runtime login role must be distinct from ${applicationDatabaseRole} and ${platformDatabaseRole}`);
   return role;
 }
 
@@ -42,16 +56,27 @@ export async function bootstrapRuntimeRole(connectionString: string, runtimeRole
   }
 }
 
+type RoleRecord = { rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; app_member: boolean; platform_member: boolean };
+
+async function loginRole(sql: postgres.Sql, role: string): Promise<RoleRecord> {
+  const [record] = await sql<RoleRecord[]>`
+    select rolcanlogin, rolsuper, rolbypassrls,
+           pg_has_role(rolname, ${applicationDatabaseRole}, 'MEMBER') as app_member,
+           case when exists (select 1 from pg_roles where rolname = ${platformDatabaseRole}) then pg_has_role(rolname, ${platformDatabaseRole}, 'MEMBER') else false end as platform_member
+      from pg_roles where rolname = ${role}
+  `;
+  if (!record) throw new Error(`PostgreSQL runtime role ${role} does not exist`);
+  if (!record.rolcanlogin) throw new Error(`PostgreSQL runtime role ${role} cannot log in`);
+  if (record.rolsuper || record.rolbypassrls) throw new Error(`PostgreSQL runtime role ${role} can bypass row-level security`);
+  return record;
+}
+
 export async function configureRuntimeRole(connectionString: string, runtimeRole: string): Promise<RuntimeRoleStatus> {
   const role = validateRoleName(runtimeRole);
   const sql = postgres(connectionString, { max: 1, prepare: false });
   try {
-    const [record] = await sql<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }[]>`
-      select rolcanlogin, rolsuper, rolbypassrls from pg_roles where rolname = ${role}
-    `;
-    if (!record) throw new Error(`PostgreSQL runtime role ${role} does not exist`);
-    if (!record.rolcanlogin) throw new Error(`PostgreSQL runtime role ${role} cannot log in`);
-    if (record.rolsuper || record.rolbypassrls) throw new Error(`PostgreSQL runtime role ${role} can bypass row-level security`);
+    const record = await loginRole(sql, role);
+    if (record.platform_member) throw new Error(`PostgreSQL runtime role ${role} can assume ${platformDatabaseRole}; use a distinct admin runtime role`);
     await sql`grant trestle_app to ${sql(role)}`;
     await sql`grant usage on schema public to ${sql(role)}`;
     // The login role serves Better Auth and verified provider-event receipts
@@ -66,7 +91,22 @@ export async function configureRuntimeRole(connectionString: string, runtimeRole
       superuser: record.rolsuper,
       bypassRls: record.rolbypassrls,
       memberOfApplicationRole: true,
+      memberOfPlatformRole: false,
     };
+  } finally {
+    await sql.end();
+  }
+}
+
+/** Grants trestle_platform to a distinct admin runtime login role that is never used by tenant runtimes. */
+export async function configurePlatformRole(connectionString: string, loginRoleName: string): Promise<PlatformRoleStatus> {
+  const role = validateRoleName(loginRoleName);
+  const sql = postgres(connectionString, { max: 1, prepare: false });
+  try {
+    const record = await loginRole(sql, role);
+    if (record.app_member) throw new Error(`PostgreSQL role ${role} is a tenant runtime role; the platform role requires a distinct login`);
+    await sql`grant trestle_platform to ${sql(role)}`;
+    return { role, canLogin: record.rolcanlogin, superuser: record.rolsuper, bypassRls: record.rolbypassrls, memberOfPlatformRole: true, memberOfApplicationRole: false };
   } finally {
     await sql.end();
   }
@@ -75,12 +115,13 @@ export async function configureRuntimeRole(connectionString: string, runtimeRole
 export async function inspectRuntimeRole(connectionString: string): Promise<RuntimeRoleStatus> {
   const sql = postgres(connectionString, { max: 1, prepare: false });
   try {
-    const [record] = await sql<{ role: string; rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; app_member: boolean }[]>`
+    const [record] = await sql<{ role: string; rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; app_member: boolean; platform_member: boolean }[]>`
       select current_user as role,
              rolcanlogin,
              rolsuper,
              rolbypassrls,
-             pg_has_role(current_user, 'trestle_app', 'MEMBER') as app_member
+             pg_has_role(current_user, 'trestle_app', 'MEMBER') as app_member,
+             case when exists (select 1 from pg_roles where rolname = 'trestle_platform') then pg_has_role(current_user, 'trestle_platform', 'MEMBER') else false end as platform_member
         from pg_roles
        where rolname = current_user
     `;
@@ -91,10 +132,16 @@ export async function inspectRuntimeRole(connectionString: string): Promise<Runt
       superuser: record.rolsuper,
       bypassRls: record.rolbypassrls,
       memberOfApplicationRole: record.app_member,
+      memberOfPlatformRole: record.platform_member,
     };
   } finally {
     await sql.end();
   }
+}
+
+export async function inspectPlatformRole(connectionString: string): Promise<PlatformRoleStatus> {
+  const status = await inspectRuntimeRole(connectionString);
+  return { role: status.role, canLogin: status.canLogin, superuser: status.superuser, bypassRls: status.bypassRls, memberOfPlatformRole: status.memberOfPlatformRole === true, memberOfApplicationRole: status.memberOfApplicationRole };
 }
 
 export function assertRuntimeRole(status: RuntimeRoleStatus, expectedRole?: string): void {
@@ -102,6 +149,15 @@ export function assertRuntimeRole(status: RuntimeRoleStatus, expectedRole?: stri
   if (!status.canLogin) throw new Error(`PostgreSQL runtime role ${status.role} cannot log in`);
   if (status.superuser || status.bypassRls) throw new Error(`PostgreSQL runtime role ${status.role} can bypass row-level security`);
   if (!status.memberOfApplicationRole) throw new Error(`PostgreSQL runtime role ${status.role} cannot assume trestle_app`);
+  if (status.memberOfPlatformRole) throw new Error(`PostgreSQL runtime role ${status.role} can assume trestle_platform; tenant runtimes must not hold platform authority`);
+}
+
+export function assertPlatformRole(status: PlatformRoleStatus, expectedRole?: string): void {
+  if (expectedRole && status.role !== expectedRole) throw new Error(`Connected as ${status.role}; expected ${expectedRole}`);
+  if (!status.canLogin) throw new Error(`PostgreSQL platform role ${status.role} cannot log in`);
+  if (status.superuser || status.bypassRls) throw new Error(`PostgreSQL platform role ${status.role} can bypass row-level security`);
+  if (!status.memberOfPlatformRole) throw new Error(`PostgreSQL platform role ${status.role} cannot assume trestle_platform`);
+  if (status.memberOfApplicationRole) throw new Error(`PostgreSQL platform role ${status.role} is also a tenant runtime role`);
 }
 
 export async function verifyRuntimeRoleDataAccess(connectionString: string): Promise<void> {
@@ -114,7 +170,7 @@ export async function verifyRuntimeRoleDataAccess(connectionString: string): Pro
     `;
     if (!access?.auth_read || !access.receipt_write) throw new Error("Runtime login lacks required non-tenant table access");
     if (access.tenant_read) throw new Error("Runtime login can read tenant records without assuming the RLS role");
-    await sql`select id, application_role from member limit 0`;
+    await sql`select id, role from member limit 0`;
     const url = new URL(connectionString);
     const existingOptions = url.searchParams.get("options");
     url.searchParams.set("options", [existingOptions, "-c role=trestle_app", "-c app.organization_id=trestle_role_probe"].filter(Boolean).join(" "));

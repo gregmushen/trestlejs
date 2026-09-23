@@ -1,3 +1,3 @@
-export * from "./plans.js";
-export * from "./entitlements.js";
+export * from "./model.js";
+export * from "./metering.js";
 export * from "./repository.js";

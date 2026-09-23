@@ -6,14 +6,27 @@
   "scripts": {
     "build": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed:local-admin": "tsx scripts/seed-local-admin.ts"
   },
   "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/context": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/data": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/domain": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*",
-    "better-auth": "1.7.5"
+    "@better-auth/passkey": "1.7.5",
+    "@better-auth/scim": "1.7.5",
+    "@better-auth/sso": "1.7.5",
+    "better-auth": "1.7.5",
+    "drizzle-orm": "0.45.3",
+    "zod": "4.3.6"
   },
   "devDependencies": {
-    "@types/node": "26.6.2"
+    "@better-auth/api-key": "1.7.5",
+    "@types/node": "26.6.2",
+    "postgres": "3.4.9",
+    "tsx": "4.20.6"
   }
 }

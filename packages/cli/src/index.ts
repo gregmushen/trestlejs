@@ -8,3 +8,7 @@ export * from "./local.js";
 export * from "./plan.js";
 export * from "./inspect.js";
 export * from "./generate-resource.js";
+export * from "./capabilities.js";
+export * from "./setup/index.js";
+export * from "./access-inspect.js";
+export * from "./generate-access.js";

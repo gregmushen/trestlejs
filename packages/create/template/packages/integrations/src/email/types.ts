@@ -16,7 +16,7 @@ export interface EmailService {
   reschedule(scheduledEmailId: string, sendAt: Date): Promise<ScheduledEmail>;
 }
 
-export type EmailLogEvent = "email.send.started" | "email.send.accepted" | "email.send.failed" | "email.schedule.created" | "email.schedule.cancelled" | "email.schedule.rescheduled" | "email.schedule.failed";
+export type EmailLogEvent = "email.send.started" | "email.send.accepted" | "email.send.failed" | "email.schedule.created" | "email.schedule.cancelled" | "email.schedule.rescheduled" | "email.schedule.failed" | "email.delivery.record_failed";
 export type EmailLogFields = { emailDeliveryId?: string; template?: string; provider: "local" | "resend"; correlationId?: string; causationId?: string; organizationId?: string; durationMs?: number; failureCategory?: string };
 export type EmailLogger = (event: EmailLogEvent, fields: EmailLogFields) => void;
 

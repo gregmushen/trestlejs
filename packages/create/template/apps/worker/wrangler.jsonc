@@ -4,6 +4,8 @@
   "main": "src/worker-entry.ts",
   "compatibility_date": "2026-09-21",
   "compatibility_flags": ["nodejs_compat"],
+  "rules": [{ "type": "Text", "globs": ["**/*.yaml"], "fallthrough": true }],
+  "triggers": { "crons": ["* * * * *"] },
   "vars": {
     "WEB_ORIGIN": "http://localhost:42069",
     "APP_ENV": "local",

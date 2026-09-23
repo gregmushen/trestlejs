@@ -20,6 +20,8 @@ describe("resource field definitions", () => {
     const snapshotPath = path.join(metadata, `${String(latest!.idx).padStart(4, "0")}_snapshot.json`);
     await expect(access(snapshotPath)).resolves.toBeUndefined();
     const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as { tables: Record<string, unknown> };
-    expect(snapshot.tables).toHaveProperty("public.organization_entitlement_override");
+    expect(snapshot.tables).toHaveProperty("public.subscription_override");
+    expect(snapshot.tables).toHaveProperty("public.event_inbox");
+    expect(snapshot.tables).not.toHaveProperty("public.organization_entitlement_override");
   });
 });
