@@ -48,8 +48,20 @@ function retryDelayMs(attemptNumber: number): number {
   return Math.min(60 * 60 * 1_000, 1_000 * 2 ** Math.min(attemptNumber - 1, 12));
 }
 
-async function sign(id: string, timestamp: number, body: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+function decodeSigningSecret(secret: string): Uint8Array<ArrayBuffer> {
+  if (!secret.startsWith("whsec_")) throw new LocalWebhookError("Local signing secret must use the whsec_ format");
+  try {
+    const encoded = secret.slice(6);
+    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    if (bytes.length < 16 || btoa(String.fromCharCode(...bytes)) !== encoded) throw new Error("Invalid key material");
+    return bytes;
+  } catch {
+    throw new LocalWebhookError("Local signing secret has invalid base64 key material");
+  }
+}
+
+async function sign(id: string, timestamp: number, body: string, keyBytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${id}.${timestamp}.${body}`)));
   return `v1,${btoa(String.fromCharCode(...bytes))}`;
 }
@@ -64,7 +76,7 @@ export async function captureLocalWebhookDelivery(input: {
   clock: { now(): Date };
   maxAttempts?: number;
 }): Promise<LocalWebhookResult> {
-  if (!input.signingSecret || input.signingSecret.length < 16) throw new LocalWebhookError("Local signing secret must contain at least 16 characters");
+  const keyBytes = decodeSigningSecret(input.signingSecret);
   const maxAttempts = input.maxAttempts ?? 5;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) throw new LocalWebhookError("Invalid maximum attempt count");
   const now = input.clock.now();
@@ -101,7 +113,7 @@ export async function captureLocalWebhookDelivery(input: {
       "content-type": "application/json",
       "webhook-id": record.delivery.messageId,
       "webhook-timestamp": String(timestamp),
-      "webhook-signature": await sign(record.delivery.messageId, timestamp, body, input.signingSecret),
+      "webhook-signature": await sign(record.delivery.messageId, timestamp, body, keyBytes),
     };
     const [claimed] = await transaction.update(webhookDelivery).set({
       state, attemptCount: attemptNumber, nextAttemptAt: nextRetryAt,

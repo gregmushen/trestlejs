@@ -11,7 +11,7 @@ const endpointIds: string[] = [];
 const messageIds: string[] = [];
 const deliveryIds: string[] = [];
 const tenantDatabase = (organizationId: string) => createTenantDatabase(databaseUrl!, "postgres-js", organizationId);
-const secret = "local-webhook-signing-secret-123";
+const secret = `whsec_${btoa("local-webhook-signing-secret-123")}`;
 
 async function fixture(organizationId: string, environment = "local") {
   const [endpoint] = await sql!<{ id: string }[]>`insert into webhook_endpoint (organization_id, environment, name, destination_url, state, provider, created_by, updated_by) values (${organizationId}, ${environment}, 'Local capture', 'https://example.test/hook', 'active', 'local', 'test-user', 'test-user') returning id`;
@@ -53,7 +53,7 @@ suite("deterministic local outbound webhook capture", () => {
       const header = attempt!.request_headers["webhook-signature"];
       if (!header) throw new Error("Missing captured webhook signature");
       const signature = header.replace(/^v1,/, "");
-      const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+      const key = await crypto.subtle.importKey("raw", Uint8Array.from(atob(secret.slice(6)), (character) => character.charCodeAt(0)), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
       const signed = `${messageId}.${attempt!.request_headers["webhook-timestamp"]}.${attempt!.request_body}`;
       expect(await crypto.subtle.verify("HMAC", key, Uint8Array.from(atob(signature), (character) => character.charCodeAt(0)), new TextEncoder().encode(signed))).toBe(true);
     } finally {
