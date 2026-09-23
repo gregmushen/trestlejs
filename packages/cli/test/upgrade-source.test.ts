@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 
-import { TRESTLEJS_VERSION } from "@trestlejs/core";
+import { applyManifestCapabilities, TRESTLEJS_VERSION } from "@trestlejs/core";
 import { describe, expect, it } from "vitest";
 
 import { applySourceUpgrade, finalizeSourceUpgrade, planSourceDiff } from "../src/upgrade-source.js";
@@ -45,6 +45,32 @@ describe("read-only template source inventory", () => {
       expect(unverified.baselineTrusted).toBe(false);
       expect(unverified.entries.find((entry) => entry.path === "changed.txt")?.classification).toBe("unverified");
       expect(unverified.entries.find((entry) => entry.path === "unsafe.txt")?.classification).toBe("unsafe");
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("optional capability source inventory", () => {
+  it("includes the admin app only when enabled and treats the enabled manifest as the target", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "trestle-source-optional-"));
+    const template = path.join(parent, "template");
+    try {
+      const manifest = (await readFile(path.join(import.meta.dirname, "..", "..", "create", "template", ".trestle", "project.yaml"), "utf8")).replaceAll("__TRESTLE_PROJECT_NAME__", "sample-app");
+      await mkdir(path.join(template, ".trestle"), { recursive: true });
+      await mkdir(path.join(template, "apps", "admin"), { recursive: true });
+      await writeFile(path.join(template, ".trestle", "project.yaml"), manifest);
+      await writeFile(path.join(template, "apps", "admin", "index.ts"), "export {};\n");
+      for (const [name, adminEnabled] of [["plain", false], ["operated", true]] as const) {
+        const root = path.join(parent, name, "sample-app");
+        await mkdir(path.join(root, ".trestle"), { recursive: true });
+        await writeFile(path.join(root, ".trestle", "project.yaml"), adminEnabled ? applyManifestCapabilities(manifest, new Set(["admin"])) : manifest);
+        if (adminEnabled) { await mkdir(path.join(root, "apps", "admin"), { recursive: true }); await writeFile(path.join(root, "apps", "admin", "index.ts"), "export {};\n"); }
+        const report = await planSourceDiff(root, "sample-app", template);
+        const classifications = Object.fromEntries(report.entries.map((entry) => [entry.path, entry.classification]));
+        expect(classifications[".trestle/project.yaml"]).toBe("same");
+        expect(classifications["apps/admin/index.ts"]).toBe(adminEnabled ? "same" : undefined);
+      }
     } finally {
       await rm(parent, { recursive: true, force: true });
     }

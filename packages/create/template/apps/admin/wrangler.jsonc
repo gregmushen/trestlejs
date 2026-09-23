@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // The optional platform admin API: a separately deployed Worker with its own
+  // origin, cookies, and database login (granted trestle_platform only).
+  "name": "__TRESTLE_PROJECT_NAME__-admin",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "APP_ENV": "local", "ADMIN_ORIGIN": "http://localhost:42070", "API_URL": "http://localhost:8787" },
+  "secrets": { "required": ["DATABASE_URL", "DATABASE_DRIVER", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"] },
+  "env": {
+    "preview": {
+      "name": "__TRESTLE_PROJECT_NAME__-admin-preview",
+      "vars": { "APP_ENV": "preview", "ADMIN_ORIGIN": "CHANGE_ME", "API_URL": "CHANGE_ME" },
+      "secrets": { "required": ["DATABASE_URL", "DATABASE_DRIVER", "DATABASE_ADMIN_URL", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"] }
+    },
+    "staging": {
+      "name": "__TRESTLE_PROJECT_NAME__-admin-staging",
+      "vars": { "APP_ENV": "staging", "ADMIN_ORIGIN": "CHANGE_ME", "API_URL": "CHANGE_ME" },
+      "secrets": { "required": ["DATABASE_URL", "DATABASE_DRIVER", "DATABASE_ADMIN_URL", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"] }
+    },
+    "production": {
+      "name": "__TRESTLE_PROJECT_NAME__-admin",
+      "vars": { "APP_ENV": "production", "ADMIN_ORIGIN": "CHANGE_ME", "API_URL": "CHANGE_ME" },
+      "secrets": { "required": ["DATABASE_URL", "DATABASE_DRIVER", "DATABASE_ADMIN_URL", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"] }
+    }
+  }
+}

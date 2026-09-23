@@ -1,0 +1,39 @@
+{
+  "name": "@__TRESTLE_PROJECT_NAME__/admin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build && wrangler deploy --dry-run --outdir dist-worker",
+    "dev": "wrangler dev --port 8788",
+    "dev:spa": "vite --port 42070 --strictPort",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/auth": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/context": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/theme": "workspace:*",
+    "@tanstack/react-query": "5.103.2",
+    "@tanstack/react-router": "1.170.38",
+    "better-auth": "1.7.5",
+    "drizzle-orm": "0.45.3",
+    "hono": "4.13.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.6.2",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "6.1.1",
+    "postgres": "3.4.9",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "5.0.1",
+    "wrangler": "4.135.0"
+  }
+}

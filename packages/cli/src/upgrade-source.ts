@@ -4,7 +4,7 @@ import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { TRESTLEJS_VERSION } from "@trestlejs/core";
+import { applyManifestCapabilities, parseProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "@trestlejs/core";
 import { planUpgrade } from "./upgrade.js";
 
 export type SourceDiffClassification = "same" | "unchanged" | "modified" | "new" | "missing" | "unverified" | "unsafe"
@@ -119,6 +119,24 @@ async function expectedPackageManifest(root: string, projectName: string, templa
   } catch { return false; }
 }
 
+/** Target template files for this project: optional capabilities are included only when enabled. */
+async function targetTemplateFiles(templateRoot: string, enabled: ReadonlySet<OptionalTemplateCapability>): Promise<string[]> {
+  return (await templateFiles(templateRoot)).filter((relative) => { const capability = templatePathCapability(relative); return !capability || enabled.has(capability); });
+}
+
+/** Rendered target content, with the project manifest reflecting enabled optional capabilities. */
+async function targetContent(templateRoot: string, relative: string, projectName: string, enabled: ReadonlySet<OptionalTemplateCapability>): Promise<string> {
+  const sourceRelative = relative === ".gitignore" ? "_gitignore" : relative;
+  const rendered = render(await readFile(path.join(templateRoot, sourceRelative), "utf8"), projectName);
+  return relative === ".trestle/project.yaml" ? applyManifestCapabilities(rendered, enabled) : rendered;
+}
+
+async function enabledCapabilities(root: string): Promise<ReadonlySet<OptionalTemplateCapability>> {
+  const source = await safeApplicationPath(root, ".trestle/project.yaml") ? await optionalText(path.join(root, ".trestle", "project.yaml")) : undefined;
+  try { return new Set<OptionalTemplateCapability>(source && parseProjectManifest(source).capabilities.admin ? ["admin"] : []); }
+  catch { return new Set(); }
+}
+
 /** Read-only inventory of paths owned by the target template. It never reads
  * through an application symlink and never assumes a missing baseline means
  * that application source is safe to replace. */
@@ -138,10 +156,11 @@ export async function planSourceDiff(root: string, projectName: string, template
     && baseline.templateVersion === framework?.templateVersion && validBaselineFiles(baseline.files);
   const summary: Record<SourceDiffClassification, number> = { same: 0, unchanged: 0, modified: 0, new: 0, missing: 0, unverified: 0, unsafe: 0, retired: 0, "retired-modified": 0, "retired-missing": 0 };
   const entries: SourceDiffEntry[] = [];
-  const targetFiles = await templateFiles(templateRoot);
+  // Optional capabilities (for example the platform admin) are part of the target only when the project enables them.
+  const enabled = await enabledCapabilities(root);
+  const targetFiles = await targetTemplateFiles(templateRoot, enabled);
   for (const relative of targetFiles) {
-    const sourceRelative = relative === ".gitignore" ? "_gitignore" : relative;
-    const targetHash = digest(render(await readFile(path.join(templateRoot, sourceRelative), "utf8"), projectName));
+    const targetHash = digest(await targetContent(templateRoot, relative, projectName, enabled));
     const { hash: currentHash, unsafe } = await applicationHash(root, relative);
     let classification: SourceDiffClassification;
     if (unsafe) classification = "unsafe";
@@ -187,6 +206,7 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
   });
   if (conflicts.length) throw new Error(`Source apply requires manual review: ${conflicts.map(({ path: relative }) => relative).join(", ")}`);
 
+  const enabled = await enabledCapabilities(root);
   const changed: string[] = [];
   for (const entry of report.entries) {
     if (entry.path === ".trestle/framework.json") continue;
@@ -200,8 +220,7 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
       || (current !== undefined && (entry.classification !== "unchanged" || digest(current) !== baseline.files[entry.path]))) {
       throw new Error(`Application file changed during source apply: ${entry.path}`);
     }
-    const sourceRelative = entry.path === ".gitignore" ? "_gitignore" : entry.path;
-    const target = render(await readFile(path.join(templateRoot, sourceRelative), "utf8"), projectName);
+    const target = await targetContent(templateRoot, entry.path, projectName, enabled);
     const destination = path.join(root, entry.path);
     await mkdir(path.dirname(destination), { recursive: true });
     if (!(await safeApplicationPath(root, entry.path))) throw new Error(`Unsafe application path: ${entry.path}`);
@@ -245,12 +264,12 @@ export async function finalizeSourceUpgrade(
   const marker = JSON.parse(await readFile(markerPath, "utf8")) as Record<string, unknown>;
   const updatedMarker = `${JSON.stringify({ ...marker, schemaVersion: 1, templateVersion: TRESTLEJS_VERSION }, null, 2)}\n`;
   const files: Record<string, string> = {};
-  for (const relative of await templateFiles(templateRoot)) {
+  const enabled = await enabledCapabilities(root);
+  for (const relative of await targetTemplateFiles(templateRoot, enabled)) {
     if (!(await safeApplicationPath(root, relative))) throw new Error(`Unsafe application path: ${relative}`);
     if (relative === ".trestle/framework.json") { files[relative] = digest(updatedMarker); continue; }
     const current = await readFile(path.join(root, relative), "utf8");
-    const sourceRelative = relative === ".gitignore" ? "_gitignore" : relative;
-    const target = render(await readFile(path.join(templateRoot, sourceRelative), "utf8"), projectName);
+    const target = await targetContent(templateRoot, relative, projectName, enabled);
     if (relative === "package.json") {
       if (canonicalJson(JSON.parse(current)) !== canonicalJson(JSON.parse(target))) throw new Error("package.json changed during source finalization");
     } else if (current !== target) throw new Error(`Application file changed during source finalization: ${relative}`);
