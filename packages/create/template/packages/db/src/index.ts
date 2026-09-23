@@ -5,6 +5,7 @@ import postgres from "postgres";
 
 import * as authSchema from "./auth-schema.js";
 import * as artifactSchema from "./artifact-schema.js";
+import * as artifactMaintenanceSchema from "./artifact-maintenance-schema.js";
 import * as billingSchema from "./billing-schema.js";
 import * as emailSchema from "./email-schema.js";
 import * as tenantSchema from "./tenant-schema.js";
@@ -12,6 +13,8 @@ import * as outboxSchema from "./outbox-schema.js";
 
 export * from "./auth-schema.js";
 export * from "./artifact-schema.js";
+export * from "./artifact-maintenance-schema.js";
+export * from "./artifact-maintenance.js";
 export * from "./artifacts.js";
 export * from "./billing-schema.js";
 export * from "./email-schema.js";
@@ -22,7 +25,7 @@ export * from "./outbox.js";
 export * from "./inbox.js";
 export * from "./tenancy.js";
 
-const schema = { ...authSchema, ...artifactSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema };
+const schema = { ...authSchema, ...artifactSchema, ...artifactMaintenanceSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema };
 
 export type DatabaseDriver = "neon-http" | "neon-serverless" | "postgres-js";
 

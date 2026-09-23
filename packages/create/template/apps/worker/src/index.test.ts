@@ -33,7 +33,7 @@ describe("worker routes", () => {
   });
 
   it("fails remote scheduled dispatch without its Queue binding", async () => {
-    await expect(worker.scheduled(undefined, { ...environment, APP_ENV: "preview" })).rejects.toThrow("TRESTLE_EVENTS Queue binding");
+    await expect(worker.scheduled(undefined, { ...environment, APP_ENV: "preview" })).rejects.toThrow("Queue or R2 binding");
     await expect(worker.scheduled(undefined, environment)).resolves.toBeUndefined();
   });
 

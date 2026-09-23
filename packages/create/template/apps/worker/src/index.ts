@@ -10,6 +10,7 @@ import type { CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
+import { maintainArtifacts } from "./artifact-maintenance.js";
 import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
@@ -275,16 +276,23 @@ export default {
     finally { await inbox.close(); }
   },
   scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
-    if (!environment.TRESTLE_EVENTS) {
+    if (!environment.TRESTLE_EVENTS && !environment.TRESTLE_ARTIFACTS) {
       if (!environment.APP_ENV || environment.APP_ENV === "local") return;
-      throw new Error("Remote outbox dispatch requires the TRESTLE_EVENTS Queue binding");
+      throw new Error("Remote scheduled work requires a Queue or R2 binding");
     }
-    const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
-    try {
-      const result = await dispatchQueuedOutbox(store, environment.TRESTLE_EVENTS);
-      createLogger({ environment: environment.APP_ENV ?? "local" }).info("outbox.dispatch.completed", result);
-    } finally {
-      await store.close();
+    if (environment.TRESTLE_EVENTS) {
+      const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
+      try {
+        const result = await dispatchQueuedOutbox(store, environment.TRESTLE_EVENTS);
+        createLogger({ environment: environment.APP_ENV ?? "local" }).info("outbox.dispatch.completed", result);
+      } finally {
+        await store.close();
+      }
+    }
+    if (environment.TRESTLE_ARTIFACTS) {
+      const result = await maintainArtifacts(environment);
+      createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.maintenance.completed", result);
+      if (result.failed > 0) throw new Error("Artifact maintenance left incomplete cleanup work");
     }
   },
 };

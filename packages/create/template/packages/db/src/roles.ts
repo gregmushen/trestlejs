@@ -60,6 +60,7 @@ export async function configureRuntimeRole(connectionString: string, runtimeRole
     for (const table of ["user", "session", "account", "verification", "organization", "member", "invitation", "billing_provider_event", "email_delivery_event"]) {
       await sql`grant select, insert, update, delete on ${sql(table)} to ${sql(role)}`;
     }
+    await sql`grant select, insert, update on artifact_maintenance_cursor to ${sql(role)}`;
     return {
       role,
       canLogin: record.rolcanlogin,
