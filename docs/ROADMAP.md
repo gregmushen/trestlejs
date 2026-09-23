@@ -616,6 +616,13 @@ revision. Unselected events stay private. The generated application tests the
 public catalog and its projection fixtures. Existing application-owned
 resource catalogs are not silently rewritten. This is a contract and local
 projection path, not proof of deployed endpoint delivery.
+Alpha 84 exercises that path from a clean generated application: an owner
+registers and activates a local endpoint, creates an opted-in Article, and
+the committed event traverses Queue and Workflow processing into one signed
+local attempt without network delivery. The test verifies customer inspection
+redaction, duplicate processing, update projection idempotency, and that an
+unselected delete event remains private. This is deterministic local proof;
+deployed Cloudflare delivery still requires provider-backed evidence.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

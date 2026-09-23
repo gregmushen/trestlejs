@@ -1,6 +1,6 @@
 import { createAuth } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
-import { activeApplicationRoles, grantApplicationRoles, replaceApplicationRoles, artifactMetadata, createDatabase, createTenantDatabase, eventInbox, hasArtifactStorageKey, organization, organizationEntitlement, organizationSubscription, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { activeApplicationRoles, grantApplicationRoles, replaceApplicationRoles, artifactMetadata, createDatabase, createSignedWebhookHeaders, createTenantDatabase, eventInbox, hasArtifactStorageKey, organization, organizationEntitlement, organizationSubscription, outboxMessage, PostgresArtifactMetadataRepository, PostgresOutboxStore, user, webhookAttempt, webhookDelivery, webhookEndpoint, webhookMessage, webhookSecretVersion, webhookSubscription } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq, sql } from "drizzle-orm";
@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { TrestleWorkflow } from "./cloudflare-workflow.js";
 import { runArtifactReferenceAudit } from "./artifact-reference-audit.js";
 import { runArtifactOrphanAudit } from "./artifact-orphan-audit.js";
+import { projectWebhookForEvent } from "./webhook-runtime.js";
 import worker, { app } from "./index.js";
 
 const databaseUrl = process.env.TRESTLE_SYSTEM_TEST_DATABASE_URL;
@@ -35,6 +36,7 @@ suite("local product path", () => {
     let joinerId: string | undefined;
     let articleId: string | undefined;
     let secondArticleId: string | undefined;
+    let webhookEndpointId: string | undefined;
     let artifactId: string | undefined;
     let r2ArtifactId: string | undefined;
     clearCapturedEmails();
@@ -167,6 +169,31 @@ suite("local product path", () => {
       expect((await app.request(r2Url, undefined, r2Environment)).status).toBe(404);
       if (process.env.TRESTLE_SYSTEM_TEST_ARTICLES === "1") {
         const headers = { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": organizationId!, "content-type": "application/json" };
+        const localWebhookEnabled = process.env.TRESTLE_SYSTEM_TEST_WEBHOOKS === "1";
+        const webhookEnvironment = { ...environment, WEBHOOK_DELIVERY_MODE: "local" as const, WEBHOOK_SECRET_KEY: "system-test-webhook-key-with-at-least-32-bytes" };
+        let webhookSecret: string | undefined;
+        if (localWebhookEnabled) {
+          const catalogResponse = await app.request("http://localhost:8787/api/developer/webhooks/events", { headers }, webhookEnvironment);
+          expect(catalogResponse.status).toBe(200);
+          const catalogEvents = (await catalogResponse.json() as { events: Array<{ type: string; version: number }> }).events
+            .filter((event) => event.type.startsWith("resource.article."))
+            .map((event) => `${event.type}@${event.version}`).sort();
+          expect(catalogEvents).toEqual(["resource.article.created@1", "resource.article.updated@1"]);
+          const registered = await app.request("http://localhost:8787/api/developer/webhooks/endpoints", {
+            method: "POST", headers, body: JSON.stringify({ name: "System test local receiver", destinationUrl: "https://example.com/hooks", subscriptions: [
+              { type: "resource.article.created", version: 1 }, { type: "resource.article.updated", version: 1 },
+            ] }),
+          }, webhookEnvironment);
+          expect(registered.status).toBe(201);
+          const registration = await registered.json() as { endpoint: { id: string }; signingSecret: string };
+          webhookEndpointId = registration.endpoint.id;
+          webhookSecret = registration.signingSecret;
+          expect(webhookSecret).toMatch(/^whsec_/u);
+          const activated = await app.request(`http://localhost:8787/api/developer/webhooks/endpoints/${webhookEndpointId}/state`, {
+            method: "PATCH", headers, body: JSON.stringify({ state: "active" }),
+          }, webhookEnvironment);
+          expect(activated.status).toBe(200);
+        }
         const createdArticle = await app.request("http://localhost:8787/api/articles", {
           method: "POST", headers, body: JSON.stringify({ name: "System Article", summary: "Draft", published: false }),
         }, environment);
@@ -194,7 +221,7 @@ suite("local product path", () => {
         expect(await worker.queue({ messages: [{ body: queuedEvent, ack: () => delivery.push("ack"), retry: () => delivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 1, retried: 0 });
         expect(delivery).toEqual(["ack"]);
         expect(workflowInstances.get(outbox!.id)).toMatchObject({ id: outbox!.id, idempotencyKey: outbox!.idempotencyKey });
-        const workflow = Object.assign(new TrestleWorkflow(), { env: environment });
+        const workflow = Object.assign(new TrestleWorkflow(), { env: localWebhookEnabled ? webhookEnvironment : environment });
         const workflowEvent = { payload: workflowInstances.get(outbox!.id)!, instanceId: outbox!.id, timestamp: new Date(), workflowName: "test-workflow" };
         const stepNames: string[] = [];
         const stepConfigs: unknown[] = [];
@@ -203,6 +230,26 @@ suite("local product path", () => {
         await workflow.run(workflowEvent, step);
         expect(stepNames).toEqual(["consume-event-v1", "consume-event-v1"]);
         expect(stepConfigs[0]).toMatchObject({ retries: { limit: 5, backoff: "exponential" }, timeout: "2 minutes" });
+        if (localWebhookEnabled) {
+          const [message] = await database.select().from(webhookMessage).where(eq(webhookMessage.sourceEventId, outbox!.id));
+          expect(message).toMatchObject({ organizationId, publicEventType: "resource.article.created", publicVersion: 1, resourceId: article.id, status: "ready" });
+          expect(message?.envelope).toMatchObject({ data: { resourceId: article.id } });
+          const [delivery] = await database.select().from(webhookDelivery).where(eq(webhookDelivery.messageId, message!.id));
+          expect(delivery).toMatchObject({ endpointId: webhookEndpointId, organizationId, state: "succeeded", attemptCount: 1 });
+          const [attempt] = await database.select().from(webhookAttempt).where(eq(webhookAttempt.deliveryId, delivery!.id));
+          expect(attempt).toMatchObject({ kind: "local", outcome: "succeeded", attemptNumber: 1, requestUrl: "https://example.com/hooks" });
+          expect(attempt?.requestBody).toContain(article.id);
+          expect(attempt?.requestBody).not.toContain("System Article");
+          expect(attempt?.requestHeaders).toMatchObject(await createSignedWebhookHeaders({
+            secret: webhookSecret!, messageId: message!.id, body: attempt!.requestBody!, now: attempt!.attemptedAt,
+          }));
+          const inspection = await app.request(`http://localhost:8787/api/developer/webhooks/endpoints/${webhookEndpointId}/deliveries`, { headers }, webhookEnvironment);
+          expect(inspection.status).toBe(200);
+          const inspectionBody = await inspection.text();
+          expect(inspectionBody).toContain(delivery!.id);
+          expect(inspectionBody).not.toContain(webhookSecret);
+          expect(inspectionBody).not.toContain("example.com/hooks");
+        }
         const duplicateDelivery: string[] = [];
         expect(await worker.queue({ messages: [{ body: queuedEvent, ack: () => duplicateDelivery.push("ack"), retry: () => duplicateDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 1, retried: 0 });
         expect(duplicateDelivery).toEqual(["ack"]);
@@ -270,6 +317,23 @@ suite("local product path", () => {
           organizationId, payload: { resourceId: article.id, revision: 2 },
           idempotencyKey: `${organizationId}:resource.article.updated:${article.id}:2`,
         });
+        if (localWebhookEnabled) {
+          const updatedOutbox = beforeDelete.find((event) => event.eventName === "resource.article.updated")!;
+          const store = new PostgresOutboxStore(databaseUrl!, { assumeApplicationRole: true });
+          try {
+            const committed = await store.findCommitted(updatedOutbox.id);
+            expect(committed).toBeTruthy();
+            expect(await projectWebhookForEvent({ envelope: committed!.message, environment: webhookEnvironment, outbox: store })).toMatchObject({ state: "ready", deliveries: 1 });
+            expect(await projectWebhookForEvent({ envelope: committed!.message, environment: webhookEnvironment, outbox: store })).toMatchObject({ state: "ready", deliveries: 1, created: false });
+          } finally { await store.close(); }
+          const messages = await database.select().from(webhookMessage).where(eq(webhookMessage.resourceId, article.id));
+          expect(messages.map((message) => message.publicEventType).sort()).toEqual(["resource.article.created", "resource.article.updated"]);
+          expect(messages.find((message) => message.publicEventType === "resource.article.updated")?.envelope).toMatchObject({ data: { resourceId: article.id, revision: 2 } });
+          const deliveries = await database.select().from(webhookDelivery).where(eq(webhookDelivery.organizationId, organizationId!));
+          expect(deliveries.filter((delivery) => messages.some((message) => message.id === delivery.messageId))).toHaveLength(2);
+          const attempts = await database.select().from(webhookAttempt).where(eq(webhookAttempt.organizationId, organizationId!));
+          expect(attempts).toHaveLength(2);
+        }
         const removed = await app.request(`http://localhost:8787/api/articles/${article.id}`, { method: "DELETE", headers }, environment);
         expect(removed.status).toBe(204);
         const repeatedDelete = await app.request(`http://localhost:8787/api/articles/${article.id}`, { method: "DELETE", headers }, environment);
@@ -280,6 +344,17 @@ suite("local product path", () => {
           organizationId, payload: { resourceId: article.id, revision: 2 },
           idempotencyKey: `${organizationId}:resource.article.deleted:${article.id}`,
         });
+        if (localWebhookEnabled) {
+          const deletedOutbox = afterDelete.find((event) => event.eventName === "resource.article.deleted")!;
+          const store = new PostgresOutboxStore(databaseUrl!, { assumeApplicationRole: true });
+          try {
+            const committed = await store.findCommitted(deletedOutbox.id);
+            expect(committed).toBeTruthy();
+            expect(await projectWebhookForEvent({ envelope: committed!.message, environment: webhookEnvironment, outbox: store })).toMatchObject({ state: "private" });
+          } finally { await store.close(); }
+          expect((await database.select().from(webhookMessage).where(eq(webhookMessage.resourceId, article.id))).map((message) => message.publicEventType).sort())
+            .toEqual(["resource.article.created", "resource.article.updated"]);
+        }
         const missing = await app.request(`http://localhost:8787/api/articles/${article.id}`, { headers }, environment);
         expect(missing.status).toBe(404);
         expect((await app.request(`http://localhost:8787/api/articles/${secondArticleId}`, { method: "DELETE", headers: secondHeaders }, environment)).status).toBe(204);
@@ -290,6 +365,14 @@ suite("local product path", () => {
       expect(unjoined.status).toBe(404);
     } finally {
       if (r2ArtifactId) await database.delete(artifactMetadata).where(eq(artifactMetadata.id, r2ArtifactId));
+      if (organizationId && webhookEndpointId) {
+        await database.delete(webhookAttempt).where(eq(webhookAttempt.organizationId, organizationId));
+        await database.delete(webhookDelivery).where(eq(webhookDelivery.organizationId, organizationId));
+        await database.delete(webhookMessage).where(eq(webhookMessage.organizationId, organizationId));
+        await database.delete(webhookSecretVersion).where(eq(webhookSecretVersion.endpointId, webhookEndpointId));
+        await database.delete(webhookSubscription).where(eq(webhookSubscription.endpointId, webhookEndpointId));
+        await database.delete(webhookEndpoint).where(eq(webhookEndpoint.id, webhookEndpointId));
+      }
       if (articleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${articleId}`));
       if (secondArticleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${secondArticleId}`));
       if (articleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, articleId));
