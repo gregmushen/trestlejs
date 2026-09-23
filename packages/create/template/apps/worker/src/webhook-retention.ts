@@ -29,8 +29,10 @@ export async function runWebhookRetentionMaintenance(
 }
 
 export async function maintainWebhookPayloads(environment: AuthEnvironment, now = new Date()): Promise<WebhookRetentionMaintenanceResult> {
-  if (environment.WEBHOOK_DELIVERY_MODE !== "local" || environment.APP_ENV !== "local") {
-    throw new Error("Local webhook retention requires local delivery mode and environment");
+  const local = environment.WEBHOOK_DELIVERY_MODE === "local" && environment.APP_ENV === "local";
+  const native = environment.WEBHOOK_DELIVERY_MODE === "native" && environment.APP_ENV && environment.APP_ENV !== "local";
+  if (!local && !native) {
+    throw new Error("Webhook retention requires matching local or remote native delivery mode and environment");
   }
   const database = createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER);
   return runWebhookRetentionMaintenance(

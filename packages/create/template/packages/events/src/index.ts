@@ -125,7 +125,7 @@ export async function dispatchOutbox(store: OutboxStore, publisher: QueuePublish
   return { sent, failed };
 }
 
-export type CloudflareQueueBinding = { send(body: EventEnvelope, options?: { contentType?: "json" }): Promise<void> };
+export type CloudflareQueueBinding<Message = EventEnvelope> = { send(body: Message, options?: { contentType?: "json" }): Promise<void> };
 export class CloudflareQueuePublisher implements QueuePublisher {
   constructor(private readonly binding: CloudflareQueueBinding) {}
   async send(message: EventEnvelope): Promise<void> { await this.binding.send(eventEnvelopeSchema.parse(message), { contentType: "json" }); }

@@ -56,7 +56,7 @@ test("rendered Worker config binds producer, consumer, DLQ, and cron only to tar
   const rendered = JSON.parse(renderQueueConfig(wrangler, "preview", "example-worker-pr-12"));
   assert.deepEqual(rendered.env.preview.queues, {
     producers: [{ binding: "TRESTLE_EVENTS", queue: "example-worker-pr-12-events" }],
-    consumers: [{ queue: "example-worker-pr-12-events", max_batch_size: 10, max_retries: 5, dead_letter_queue: "example-worker-pr-12-events-dlq" }],
+    consumers: [{ queue: "example-worker-pr-12-events", max_batch_size: 10, max_retries: 10, dead_letter_queue: "example-worker-pr-12-events-dlq" }],
   });
   assert.deepEqual(rendered.env.preview.triggers.crons, ["* * * * *"]);
   assert.equal(rendered.env.preview.name, "example-worker-pr-12");

@@ -6,7 +6,7 @@ import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository }
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
 import { billingProviderEvent, createDatabase, emailDeliveryEvent, PostgresEventInbox, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
-import { applicationEventCatalog, type CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
+import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
@@ -17,6 +17,9 @@ import { mapHttpError } from "./http-errors.js";
 import { createBillingService } from "./services.js";
 import { projectWebhookForEvent } from "./webhook-runtime.js";
 import { maintainWebhookPayloads } from "./webhook-retention.js";
+import { maintainNativeWebhookDeliveries } from "./webhook-recovery.js";
+import { consumeNativeWebhookQueueMessages, looksLikeNativeWebhookWakeup } from "./webhook-native-queue.js";
+import type { NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
 
 export const app = new Hono<{ Bindings: AuthEnvironment; Variables: AppVariables }>();
 export const eventConsumers = new EventConsumerRegistry<AuthEnvironment>(applicationEventCatalog);
@@ -265,20 +268,34 @@ app.onError((error, context) => {
   return context.json({ error: mapped.code, message: mapped.message, retryable: mapped.retryable }, mapped.status);
 });
 
-type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBinding; TRESTLE_WORKFLOW?: CloudflareWorkflowBinding; TRESTLE_WORKFLOWS_ENABLED?: string };
+type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBinding<EventEnvelope | NativeWebhookWakeup>; TRESTLE_WORKFLOW?: CloudflareWorkflowBinding; TRESTLE_WORKFLOWS_ENABLED?: string };
 export default {
   fetch: app.fetch.bind(app),
   queue: async (batch: QueueBatch, environment: WorkerEnvironment) => {
+    if (environment.TRESTLE_WORKFLOWS_ENABLED === "true" && !environment.TRESTLE_WORKFLOW) {
+      throw new Error("Enabled Workflows require the TRESTLE_WORKFLOW binding");
+    }
+    const nativeMessages = batch.messages.filter((message) => looksLikeNativeWebhookWakeup(message.body));
+    const eventMessages = batch.messages.filter((message) => !looksLikeNativeWebhookWakeup(message.body));
+    let native = { acknowledged: 0, retried: 0 };
+    if (nativeMessages.length > 0) {
+      const outbox = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
+      try { native = await consumeNativeWebhookQueueMessages({ messages: nativeMessages, environment, outbox }); }
+      finally { await outbox.close(); }
+    }
+    if (eventMessages.length === 0) return native;
     if (environment.TRESTLE_WORKFLOWS_ENABLED === "true") {
       if (!environment.TRESTLE_WORKFLOW) throw new Error("Enabled Workflows require the TRESTLE_WORKFLOW binding");
-      return await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW)(batch);
+      const events = await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW)({ messages: eventMessages });
+      return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     }
     const inbox = new PostgresEventInbox(environment.DATABASE_URL, { assumeApplicationRole: true });
     const outbox = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
     try {
-      return await createQueueConsumer(eventConsumers, inbox, async (envelope, currentEnvironment) => {
-        await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox });
-      })(batch, environment);
+      const events = await createQueueConsumer(eventConsumers, inbox, async (envelope, currentEnvironment) => {
+        await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox, ...(environment.TRESTLE_EVENTS ? { queue: environment.TRESTLE_EVENTS } : {}) });
+      })({ messages: eventMessages }, environment);
+      return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     } finally { await Promise.all([inbox.close(), outbox.close()]); }
   },
   scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
@@ -295,12 +312,18 @@ export default {
         await store.close();
       }
     }
+    if (environment.WEBHOOK_DELIVERY_MODE === "native") {
+      if (!environment.TRESTLE_EVENTS) throw new Error("Native webhook recovery requires the TRESTLE_EVENTS Queue binding");
+      const result = await maintainNativeWebhookDeliveries({ environment, queue: environment.TRESTLE_EVENTS });
+      createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.native.recovery.completed", result);
+      if (result.failed > 0) throw new Error("Native webhook recovery left incomplete work");
+    }
     if (environment.TRESTLE_ARTIFACTS) {
       const result = await maintainArtifacts(environment);
       createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.maintenance.completed", result);
       if (result.failed > 0) throw new Error("Artifact maintenance left incomplete cleanup work");
     }
-    if (environment.WEBHOOK_DELIVERY_MODE === "local") {
+    if (environment.WEBHOOK_DELIVERY_MODE === "local" || environment.WEBHOOK_DELIVERY_MODE === "native") {
       const result = await maintainWebhookPayloads(environment);
       createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.retention.completed", result);
       if (result.failed > 0) throw new Error("Webhook retention left incomplete cleanup work");
