@@ -34,6 +34,12 @@ test("a customer verifies email and switches isolated organizations", async ({ p
   await expect(page.getByText(`Created ${second}`)).toBeVisible();
 
   const selector = page.getByRole("combobox", { name: "Active organization" });
+  const switchOrganization = async (organizationId: string) => {
+    const changed = page.waitForResponse((response) => response.url().includes("/api/auth/organization/set-active") && response.request().method() === "POST");
+    await page.getByRole("combobox", { name: "Active organization" }).selectOption(organizationId);
+    expect((await changed).status()).toBe(200);
+    await expect(page.getByRole("combobox", { name: "Active organization" })).toHaveValue(organizationId);
+  };
   await expect(selector.locator("option")).toHaveCount(3);
   const firstId = await selector.locator("option", { hasText: first }).getAttribute("value");
   const secondId = await selector.locator("option", { hasText: second }).getAttribute("value");
@@ -59,12 +65,15 @@ test("a customer verifies email and switches isolated organizations", async ({ p
   await activate(firstId!, "starter");
   await activate(secondId!, "pro");
 
-  await selector.selectOption(firstId!);
+  await switchOrganization(firstId!);
   await expect(selector).toHaveValue(firstId!);
   await page.getByRole("link", { name: "Webhooks" }).click();
   await expect(page.getByRole("heading", { name: "Outbound webhooks" })).toBeVisible();
   await expect(page.getByText("No webhook endpoints for this organization.")).toBeVisible();
-  await page.getByRole("combobox", { name: "Active organization" }).selectOption(secondId!);
+  await switchOrganization(secondId!);
+  await page.goto("/settings/billing");
+  await expect(page.getByText("Current plan:")).toContainText("pro");
+  await page.goto("/settings/webhooks");
   await expect(page.getByText("No webhook endpoints for this organization.")).toBeVisible();
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByText("No webhook endpoints for this organization.")).toBeVisible();
@@ -83,6 +92,7 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     });
     await page.getByRole("button", { name: "Refresh" }).click();
     await page.getByRole("button", { name: /Product events/u }).click();
+    await expect(page.getByRole("button", { name: /Product events/u })).toHaveAttribute("aria-pressed", "true");
     await page.getByRole("button", { name: /article.published v1/u }).click();
     await expect(page.getByText("Attempt 1: retry")).toBeVisible();
     await expect(page.getByText(sensitive)).toHaveCount(0);
@@ -93,7 +103,7 @@ test("a customer verifies email and switches isolated organizations", async ({ p
   }
   await page.goto("/settings/billing");
   await expect(page.getByText("Current plan:")).toContainText("pro");
-  await page.getByRole("combobox", { name: "Active organization" }).selectOption(firstId!);
+  await switchOrganization(firstId!);
   await expect(page.getByText("Current plan:")).toContainText("starter");
 
   if (process.env.TRESTLE_BROWSER_ARTICLES === "1") {
@@ -109,7 +119,7 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     expect(articles.status()).toBe(200);
     const articleId = ((await articles.json()) as { articles: Array<{ id: string }> }).articles[0]?.id;
     expect(articleId).toBeTruthy();
-    await page.getByRole("combobox", { name: "Active organization" }).selectOption(secondId!);
+    await switchOrganization(secondId!);
     await expect(page.getByText(`Edited ${nonce}`)).not.toBeVisible();
     const headers = { "x-trestle-tenant": secondId! };
     expect((await page.context().request.get(`http://localhost:42069/api/articles/${articleId}`, { headers })).status()).toBe(404);
@@ -118,12 +128,12 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     await page.getByRole("textbox", { name: "New Article name" }).fill(`Second ${nonce}`);
     await page.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page.getByRole("listitem").getByText(`Second ${nonce}`)).toBeVisible();
-    await page.getByRole("combobox", { name: "Active organization" }).selectOption(firstId!);
+    await switchOrganization(firstId!);
     await expect(page.getByText(`Edited ${nonce}`)).toBeVisible();
     await expect(page.getByRole("listitem").getByText(`Second ${nonce}`)).not.toBeVisible();
     await page.getByRole("button", { name: "Delete" }).click();
     await expect(page.getByText(`Edited ${nonce}`)).not.toBeVisible();
-    await page.getByRole("combobox", { name: "Active organization" }).selectOption(secondId!);
+    await switchOrganization(secondId!);
     await expect(page.getByRole("listitem").getByText(`Second ${nonce}`)).toBeVisible();
   }
 });

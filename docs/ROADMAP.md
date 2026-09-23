@@ -414,6 +414,12 @@ native delivery proof, and the optional Svix adapter remain.
 Alpha 57 also shortens the local PostgreSQL socket idle period after the hosted
 generated system test exposed connection exhaustion. Worker request I/O remains
 isolated: database sockets are never cached across Cloudflare requests.
+The Alpha 57 tag was not published to npm: the publish workflow stopped at an
+intermittent generated-browser tenant-switch test before package upload. Alpha
+58 makes that test wait for the actual organization-change response and the
+second tenant's distinct billing state before drilling into webhook history.
+It is the next publishable release; the Alpha 57 tag is preserved as historical
+evidence rather than rewritten.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
