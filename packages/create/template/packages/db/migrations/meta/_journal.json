@@ -120,6 +120,13 @@
       "when": 1790294400008,
       "tag": "0016_fantastic_red_skull",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790294400009,
+      "tag": "0017_oval_pepper_potts",
+      "breakpoints": true
     }
   ]
 }

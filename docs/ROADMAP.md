@@ -300,6 +300,11 @@ and fresh DNS resolution on every attempt. It deliberately does not enable
 native sending: Cloudflare Workers cannot pin an arbitrary `fetch` request to
 the address it just approved. A transport with that guarantee (or a trusted
 egress gateway) is required before native mode can be activated.
+Alpha 43 adds tenant-scoped native delivery leases, a database-enforced lease
+invariant, and atomic duplicate-claim and expired-lease recovery. PostgreSQL
+tests cover competing workers, tenant isolation, inactive endpoints, and
+reclamation. The Queue consumer, attempt settlement, and pinned-address
+transport remain unimplemented, so native mode still fails closed.
 Trestle does not yet deliver projected webhooks automatically or provide
 customer inspection UI. The next slices are native Queue-backed delivery and
 recovery, then the optional Svix adapter. A committed domain event remains authoritative;
