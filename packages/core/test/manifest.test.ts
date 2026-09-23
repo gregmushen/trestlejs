@@ -58,4 +58,9 @@ describe("project manifest", () => {
       ManifestError,
     );
   });
+
+  it("permits a declared secret that is optional until a capability is enabled", () => {
+    const manifest = parseProjectManifest(`${validManifest}\nsecrets:\n  ARTIFACT_SIGNING_SECRET:\n    target: worker\n    required: []\n`);
+    expect(manifest.secrets?.ARTIFACT_SIGNING_SECRET.required).toEqual([]);
+  });
 });

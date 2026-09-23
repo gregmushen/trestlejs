@@ -23,7 +23,7 @@ export const environmentNameSchema = z.enum([
 export const secretDeclarationSchema = z
   .object({
     target: z.enum(["worker", "ci"]),
-    required: z.array(environmentNameSchema).min(1),
+    required: z.array(environmentNameSchema),
     rotation: z.enum(["single-value", "dual-value"]).optional(),
   })
   .strict();

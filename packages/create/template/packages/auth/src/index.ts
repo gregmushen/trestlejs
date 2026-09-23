@@ -1,6 +1,6 @@
 import { createDatabase, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import * as schema from "@__TRESTLE_PROJECT_NAME__/db";
-import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate } from "@__TRESTLE_PROJECT_NAME__/integrations";
+import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate, type R2BucketBinding } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization } from "better-auth/plugins";
@@ -24,6 +24,8 @@ export interface AuthEnvironment {
   STRIPE_PUBLISHABLE_KEY?: string;
   BILLING_RETURN_URL?: string;
   WEB_ORIGIN?: string;
+  TRESTLE_ARTIFACTS?: R2BucketBinding;
+  ARTIFACT_SIGNING_SECRET?: string;
 }
 
 export function createAuth(environment: AuthEnvironment) {
