@@ -420,6 +420,17 @@ intermittent generated-browser tenant-switch test before package upload. Alpha
 second tenant's distinct billing state before drilling into webhook history.
 It is the next publishable release; the Alpha 57 tag is preserved as historical
 evidence rather than rewritten.
+Alpha 59 adds the first customer endpoint-management path: owner/admin users
+can inspect the application-owned public event catalog, register an HTTPS
+destination with normalized subscriptions, receive its signing secret exactly
+once, and activate or disable it when the configured delivery capability is
+ready. Endpoint, subscriptions, and encrypted secret are committed atomically
+under tenant RLS; activation requires both a current secret and a subscription.
+Generated PostgreSQL and browser tests cover registration, rejected destinations,
+unknown/duplicate subscriptions, tenant isolation, one-time display, and
+redaction. New endpoints are disabled by default. Editing subscriptions,
+rotation with step-up, replay, durable audit, pagination, admin controls, live Cloudflare
+delivery proof, and Svix remain subsequent work.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

@@ -158,13 +158,22 @@ address families anew for each attempt. It rejects the entire response if any
 address is non-public. A future transport must connect only to an approved
 address while using the original hostname for TLS verification. The included
 pinned HTTPS transport has bounded timeouts and headers and never follows
-redirects. It is not yet connected to Queue dispatch, so native mode remains
-disabled until the full delivery path is verified.
+redirects. Native Queue dispatch is wired but remains opt-in; live Cloudflare
+egress and deployed delivery still require separate verification.
 When enabling outbound delivery, set the optional encrypted Worker credential
 `WEBHOOK_SECRET_KEY` to at least 32 random bytes per environment through
 `trestle secrets edit`; it encrypts endpoint secrets at rest. Endpoint secrets
 are disclosed once at issuance or rotation. Do not expose the internal
 `activeForDelivery` method through customer or admin routes.
+Organization owners and admins can register destinations at
+`/settings/webhooks` after the application declares at least one public event
+projection. Registration requires the signing key, an HTTPS public destination,
+and an eligible event subscription; it returns the signing secret once. New
+endpoints start disabled. Activation is offered only when the corresponding
+local or native delivery mode is configured. The catalog, registration, and
+state APIs require an authenticated selected organization, and the mutation
+routes verify the browser origin. Do not put signing keys into application logs
+or endpoint URLs.
 If `capabilities.workflows` is enabled, the deployment config binds the
 application-owned `TrestleWorkflow` class. Queue delivery starts a Workflow
 using the event ID as its stable instance ID; a repeated Queue delivery

@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { createTenantDatabase } from "./index.js";
-import { createWebhookSecretCipher, loadCurrentWebhookSigningSecret, WebhookSecretService } from "./webhook-secrets.js";
+import { createWebhookSecretCipher, loadCurrentWebhookSigningSecret, setWebhookEndpointState, WebhookSecretService } from "./webhook-secrets.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -54,6 +54,73 @@ suite("encrypted outbound webhook signing secrets", () => {
     expect(JSON.stringify(await service.list("secrets-create-org", endpointId))).not.toContain(stored!.ciphertext);
     expect(await service.activeForDelivery("secrets-create-org", endpointId)).toEqual([issued.secret]);
     await expect(service.issue("secrets-create-org", endpointId)).rejects.toThrow("already has");
+  });
+
+  it("registers an inert customer endpoint, subscriptions, and encrypted secret atomically", async () => {
+    const organizationId = "webhook-register-org";
+    const service = harness().service;
+    const input = {
+      name: "  Customer receiver  ", destinationUrl: "https://hooks.example.com/receive",
+      provider: "local" as const,
+      subscriptions: [{ type: "article.published", version: 1 }],
+      availableEvents: [{ type: "article.published", version: 1 }],
+    };
+    const created = await service.registerEndpoint(organizationId, input);
+    endpointIds.push(created.endpointId);
+    expect(created.secret).toMatch(/^whsec_/u);
+    const [stored] = await sql!<{ name: string; state: string; destination_url: string }[]>`select name, state, destination_url from webhook_endpoint where id=${created.endpointId}`;
+    expect(stored).toEqual({ name: "Customer receiver", state: "disabled", destination_url: "https://hooks.example.com/receive" });
+    const subscriptions = await sql!<{ public_event_type: string; public_version: number }[]>`select public_event_type, public_version from webhook_subscription where endpoint_id=${created.endpointId}`;
+    expect(subscriptions).toEqual([{ public_event_type: "article.published", public_version: 1 }]);
+    const [secretRow] = await sql!<{ ciphertext: string }[]>`select ciphertext from webhook_secret_version where endpoint_id=${created.endpointId}`;
+    expect(secretRow?.ciphertext).toMatch(/^v1:/u);
+    expect(secretRow?.ciphertext).not.toContain(created.secret);
+    expect(await service.activeForDelivery(organizationId, created.endpointId)).toEqual([created.secret]);
+    expect(await service.activeForDelivery("another-org", created.endpointId)).toEqual([]);
+    const change = (tenant: string, state: "active" | "disabled") => setWebhookEndpointState({
+      organizationId: tenant, endpointId: created.endpointId, environment: "local", state,
+      ...(state === "active" ? { activeProvider: "local" as const } : {}),
+      authority: { authorize: async () => ({ actorId: "test-user" }) }, tenantDatabase, clock: { now: () => new Date("2026-09-22T12:05:00.000Z") },
+    });
+    expect(await change("another-org", "active")).toBe(false);
+    await expect(setWebhookEndpointState({ organizationId, endpointId: created.endpointId, environment: "local", state: "active", activeProvider: "local", authority: { authorize: async () => { throw new Error("not authorized"); } }, tenantDatabase, clock: { now: () => new Date() } })).rejects.toThrow("not authorized");
+    expect(await change(organizationId, "active")).toBe(true);
+    expect((await sql!`select state from webhook_endpoint where id=${created.endpointId}`)[0]?.state).toBe("active");
+    expect(await change(organizationId, "disabled")).toBe(true);
+    expect((await sql!`select state from webhook_endpoint where id=${created.endpointId}`)[0]?.state).toBe("disabled");
+    await expect(setWebhookEndpointState({ organizationId, endpointId: created.endpointId, environment: "local", state: "active", activeProvider: "native", authority: { authorize: async () => ({ actorId: "test-user" }) }, tenantDatabase, clock: { now: () => new Date() } })).rejects.toThrow("provider does not match");
+    expect(await setWebhookEndpointState({ organizationId, endpointId: created.endpointId, environment: "staging", state: "active", activeProvider: "native", authority: { authorize: async () => ({ actorId: "test-user" }) }, tenantDatabase, clock: { now: () => new Date() } })).toBe(false);
+  });
+
+  it("rejects unsafe destinations, unknown events, duplicate subscriptions, and leaves no partial rows", async () => {
+    const service = harness().service;
+    const organizationId = "webhook-register-reject-org";
+    const original = {
+      name: "Receiver", destinationUrl: "https://hooks.example.com/receive", provider: "native" as const,
+      subscriptions: [{ type: "article.published", version: 1 }],
+      availableEvents: [{ type: "article.published", version: 1 }],
+    };
+    for (const destinationUrl of ["http://hooks.example.com/receive", "https://localhost/receive", "https://127.0.0.1/receive", "https://user:pass@hooks.example.com/receive"]) {
+      await expect(service.registerEndpoint(organizationId, { ...original, destinationUrl })).rejects.toThrow();
+    }
+    await expect(service.registerEndpoint(organizationId, { ...original, subscriptions: [{ type: "private.event", version: 1 }] })).rejects.toThrow("unavailable");
+    await expect(service.registerEndpoint(organizationId, { ...original, subscriptions: [...original.subscriptions, ...original.subscriptions] })).rejects.toThrow("duplicated");
+    await expect(service.registerEndpoint(organizationId, { ...original, subscriptions: [] })).rejects.toThrow("Select");
+    expect(await sql!`select id from webhook_endpoint where organization_id=${organizationId}`).toHaveLength(0);
+    expect(await sql!`select id from webhook_secret_version where organization_id=${organizationId}`).toHaveLength(0);
+  });
+
+  it("refuses activation without a subscription and signing secret, but permits disablement", async () => {
+    const organizationId = "webhook-inert-org";
+    const endpointId = await endpoint(organizationId);
+    const change = (state: "active" | "disabled") => setWebhookEndpointState({
+      organizationId, endpointId, environment: "local", state, authority: { authorize: async () => ({ actorId: "test-user" }) }, tenantDatabase,
+      ...(state === "active" ? { activeProvider: "local" as const } : {}),
+      clock: { now: () => new Date("2026-09-22T12:05:00.000Z") },
+    });
+    await expect(change("active")).rejects.toThrow("subscription and current signing secret");
+    expect(await change("disabled")).toBe(true);
+    expect((await sql!`select state from webhook_endpoint where id=${endpointId}`)[0]?.state).toBe("disabled");
   });
 
   it("rotates with bounded overlap, expires the previous key, and never reveals it through list", async () => {
