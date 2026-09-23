@@ -5,7 +5,7 @@
   "exports": "./src/index.ts",
   "scripts": {
     "build": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:generate": "node scripts/generate-migration.mjs",
     "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
     "db:roles:bootstrap": "tsx scripts/runtime-role.ts bootstrap",
     "db:roles:configure": "tsx scripts/runtime-role.ts configure",

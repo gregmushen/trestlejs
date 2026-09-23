@@ -64,6 +64,13 @@
       "when": 1790294400000,
       "tag": "0008_event_inbox",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790294400001,
+      "tag": "0009_lowly_sentinels",
+      "breakpoints": true
     }
   ]
 }
