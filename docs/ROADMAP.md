@@ -284,10 +284,13 @@ post-commit projector that reloads trusted outbox provenance, validates the
 public contract, enforces payload limits and entitlements, and snapshots active
 subscriptions idempotently. Alpha 39 adds durable, tenant-isolated local attempt
 capture with signed request snapshots, scripted responses, bounded retry, and
-an advanceable clock; local capture makes no network requests. It does not yet
-store signing secrets, invoke the projector or local capture automatically, or
-provide customer inspection UI. The next slices are secret lifecycle and
-runtime wiring, native Queue-backed delivery and recovery, and then the optional
+an advanceable clock; local capture makes no network requests. Alpha 40 adds
+encrypted tenant-owned signing-secret versions, one-time issuance, bounded
+rotation overlap, immediate previous-key revocation, and metadata-only
+management reads. The key is an optional encrypted runtime credential until
+the capability is enabled. Trestle does not yet invoke projection or delivery
+automatically or provide customer inspection UI. The next slices are runtime
+wiring, native Queue-backed delivery and recovery, and then the optional
 Svix adapter. A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

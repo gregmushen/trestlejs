@@ -113,6 +113,13 @@
       "when": 1790294400007,
       "tag": "0015_nice_bloodaxe",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790294400008,
+      "tag": "0016_fantastic_red_skull",
+      "breakpoints": true
     }
   ]
 }

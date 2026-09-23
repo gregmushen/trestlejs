@@ -57,6 +57,9 @@ secrets:
   ARTIFACT_SIGNING_SECRET:
     target: worker
     required: []
+  WEBHOOK_SECRET_KEY:
+    target: worker
+    required: []
   RESEND_API_KEY:
     target: worker
     required: [preview, staging, production]
