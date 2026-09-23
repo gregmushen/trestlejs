@@ -35,6 +35,8 @@ export const permissions = definePermissions({
   "platform.operations.read": { plane: "platform", description: "Read async, webhook, and artifact operational metadata across organizations" },
   "platform.outbox.redrive": { plane: "platform", description: "Return dead-lettered outbox events to delivery" },
   "platform.webhooks.manage": { plane: "platform", description: "Disable webhook endpoints and replay failed deliveries" },
+  "platform.subscriptions.read": { plane: "platform", description: "Read organizations' plans, subscriptions, and entitlement overrides with internal reasons" },
+  "platform.entitlements.manage": { plane: "platform", description: "Grant and revoke entitlement overrides" },
 });
 
 export type PermissionCode = (typeof permissions.codes)[number];

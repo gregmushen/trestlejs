@@ -1,9 +1,11 @@
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { AccessDeniedError, platformAccess, publicDenial, type AccessEvaluator } from "@__TRESTLE_PROJECT_NAME__/authz";
+import { featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
-  artifactOperations, createPlatformDatabase, disableWebhookEndpoint, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformWebhookEndpoints,
-  PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, type DatabaseDriver, type PlatformChangeContext,
+  artifactOperations, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
+  listPlatformWebhookEndpoints, platformCommercialDetail, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
+  type DatabaseDriver, type PlatformChangeContext,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
@@ -128,8 +130,8 @@ admin.get("/api/admin/overview", async (context) => context.json(await overview(
 type AdminContext = Context<{ Bindings: AdminEnvironment; Variables: Variables }>;
 
 /** Every platform action names its operator, reason, environment, and correlation ID for audit_event. */
-async function actionContext(context: AdminContext): Promise<PlatformChangeContext> {
-  const body = await context.req.json().catch(() => ({})) as { reason?: unknown };
+async function actionContext(context: AdminContext, body?: { reason?: unknown }): Promise<PlatformChangeContext> {
+  body ??= await context.req.json().catch(() => ({})) as { reason?: unknown };
   if (typeof body.reason !== "string") throw new PlatformOperationError("invalid", "A reason is required");
   return { actor: { type: "platform_operator", id: context.get("operator").id }, reason: body.reason, environment: context.env.APP_ENV ?? "local", correlationId: context.get("correlationId") };
 }
@@ -163,6 +165,37 @@ admin.post("/api/admin/operations/webhooks/:organizationId/endpoints/:endpointId
 admin.post("/api/admin/operations/webhooks/:organizationId/deliveries/:deliveryId/replay", async (context) => {
   await replayWebhookDelivery(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), deliveryId: context.req.param("deliveryId") }, await actionContext(context));
   return context.json({ replayed: true, correlationId: context.get("correlationId") });
+});
+
+admin.get("/api/admin/commercial/subscriptions", async (context) => {
+  const rows = await listPlatformSubscriptions(platformDatabase(context.env));
+  return context.json({ subscriptions: rows.map((row) => ({ ...row, currentPeriodEnd: iso(row.currentPeriodEnd) })) });
+});
+
+admin.get("/api/admin/commercial/subscriptions/:organizationId", async (context) => {
+  const detail = await platformCommercialDetail(platformDatabase(context.env), context.req.param("organizationId"));
+  return context.json({
+    subscription: detail.subscription && { ...detail.subscription, currentPeriodStart: iso(detail.subscription.currentPeriodStart), currentPeriodEnd: iso(detail.subscription.currentPeriodEnd) },
+    planEntitlements: detail.planEntitlements,
+    overrides: detail.overrides.map((override) => ({ ...override, effectiveAt: override.effectiveAt.toISOString(), expiresAt: iso(override.expiresAt), removedAt: iso(override.removedAt) })),
+    entitlementCatalog: Object.entries(featureDefinitions).map(([code, definition]) => ({ code, description: definition.description })),
+  });
+});
+
+admin.post("/api/admin/commercial/subscriptions/:organizationId/overrides", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { entitlement?: unknown; enabled?: unknown; expiresAt?: unknown; reason?: unknown };
+  // Only entitlements the application defines can be overridden.
+  if (typeof body.entitlement !== "string" || !Object.hasOwn(featureDefinitions, body.entitlement)) throw new PlatformOperationError("invalid", "Choose an entitlement the application defines");
+  if (typeof body.enabled !== "boolean") throw new PlatformOperationError("invalid", "Choose whether the override grants or denies the entitlement");
+  const expiresAt = body.expiresAt === undefined || body.expiresAt === null ? undefined : new Date(String(body.expiresAt));
+  if (expiresAt && !Number.isFinite(expiresAt.getTime())) throw new PlatformOperationError("invalid", "The expiry is not a valid date");
+  const result = await grantEntitlementOverride(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), entitlement: body.entitlement, enabled: body.enabled, ...(expiresAt ? { expiresAt } : {}) }, await actionContext(context, body));
+  return context.json({ granted: true, effectiveAt: result.effectiveAt.toISOString(), correlationId: context.get("correlationId") });
+});
+
+admin.post("/api/admin/commercial/subscriptions/:organizationId/overrides/:entitlement/revoke", async (context) => {
+  await revokeEntitlementOverride(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), entitlement: context.req.param("entitlement") }, await actionContext(context));
+  return context.json({ revoked: true, correlationId: context.get("correlationId") });
 });
 
 admin.get("/api/admin/operations/artifacts", async (context) => {

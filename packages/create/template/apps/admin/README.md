@@ -23,6 +23,14 @@ Reads need `platform.operations.read`. The `trestle_platform` database role is g
 
 Every action requires a reason and must come from the admin origin. It writes an `audit_event` with the request's correlation ID in the same transaction. The affected organization sees the event in its audit log, without the operator's identity or reason.
 
+## Commercial controls
+
+The Subscriptions view reads each organization's plan and subscription from the billing projection, and lists its entitlement overrides with their internal reasons (`platform.subscriptions.read`).
+
+An override grants or denies one entitlement the application defines in `packages/billing/src/plans.ts`, with an optional expiry (`platform.entitlements.manage`, held by `commercial_admin`). A new override supersedes the active one for that entitlement, and revoking restores the plan's decision.
+
+Overrides are never deleted; removal is a tombstone with its own reason. Tenant runtimes can read overrides but never write them. Customers see only that an entitlement comes from their contract, never the reason or author.
+
 Bootstrap the first operator after they sign up in the customer app:
 
 ```bash

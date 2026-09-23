@@ -10,6 +10,8 @@ export const organizationEntitlement = pgTable("organization_entitlement", {
 
 export const organizationEntitlementOverride = pgTable("organization_entitlement_override", {
   organizationId: text("organization_id").notNull(), entitlement: text("entitlement").notNull(), enabled: boolean("enabled").notNull(), reason: text("reason").notNull(), authorId: text("author_id").notNull(), effectiveAt: timestamp("effective_at", { withTimezone: true }).defaultNow().notNull(), expiresAt: timestamp("expires_at", { withTimezone: true }), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  // Overrides are platform-authored and never deleted: removal is a tombstone with its own reason.
+  removedAt: timestamp("removed_at", { withTimezone: true }), removedBy: text("removed_by"), removalReason: text("removal_reason"),
 }, (table) => [primaryKey({ columns: [table.organizationId, table.entitlement, table.effectiveAt] })]);
 
 export const billingProviderEvent = pgTable("billing_provider_event", {
