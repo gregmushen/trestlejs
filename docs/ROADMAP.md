@@ -501,6 +501,13 @@ distinguishes matching files, untouched generated files, application edits,
 missing paths, and unsafe symlinks. The Alpha 37 canary has no baseline, so
 its 105 differing target-template paths remain unverified. Safe source apply,
 migration ordering, and a reviewed canary migration remain beta work.
+Alpha 70 adds `trestle upgrade source-apply --yes` for a matching-baseline
+project from the immediately preceding alpha with the target CLI and lockfile
+installed. It refuses edited, missing, unverified, symlinked, deployment,
+configuration, and migration paths before writing, and only applies pristine
+target-template files. It deliberately leaves the framework version marker
+unchanged: source copying is not migration verification or beta certification.
+The older Alpha 37 canary still requires a reviewed manual migration.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

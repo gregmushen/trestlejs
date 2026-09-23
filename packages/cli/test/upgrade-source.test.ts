@@ -6,7 +6,7 @@ import path from "node:path";
 import { TRESTLEJS_VERSION } from "@trestlejs/core";
 import { describe, expect, it } from "vitest";
 
-import { planSourceDiff } from "../src/upgrade-source.js";
+import { applySourceUpgrade, planSourceDiff } from "../src/upgrade-source.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -48,5 +48,100 @@ describe("read-only template source inventory", () => {
     } finally {
       await rm(parent, { recursive: true, force: true });
     }
+  });
+});
+
+describe("adjacent-alpha source apply", () => {
+  async function fixture() {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "trestle-source-apply-"));
+    const root = path.join(parent, "sample-app");
+    const template = path.join(parent, "template");
+    const alpha = Number(TRESTLEJS_VERSION.split(".").at(-1));
+    await mkdir(path.join(root, ".trestle"), { recursive: true });
+    await mkdir(template);
+    await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}` }));
+    await writeFile(path.join(root, "package.json"), JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } }));
+    await writeFile(path.join(root, "pnpm-lock.yaml"), `importers:\n  .:\n    devDependencies:\n      trestlejs:\n        specifier: ${TRESTLEJS_VERSION}\n        version: ${TRESTLEJS_VERSION}\n`);
+    await writeFile(path.join(template, "changed.txt"), "new sample-app\n");
+    await writeFile(path.join(template, "added.txt"), "added\n");
+    await writeFile(path.join(root, "changed.txt"), "old sample-app\n");
+    await writeFile(path.join(root, "custom.txt"), "my application data\n");
+    await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}`, files: { "changed.txt": hash("old sample-app\n") } }));
+    return { parent, root, template };
+  }
+
+  it("updates pristine files but keeps custom files and old certification marker", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      expect(await applySourceUpgrade(root, "sample-app", template)).toEqual(["added.txt", "changed.txt"]);
+      expect(await readFile(path.join(root, "changed.txt"), "utf8")).toBe("new sample-app\n");
+      expect(await readFile(path.join(root, "custom.txt"), "utf8")).toBe("my application data\n");
+      expect(JSON.parse(await readFile(path.join(root, ".trestle", "framework.json"), "utf8")).templateVersion).not.toBe(TRESTLEJS_VERSION);
+      expect(await applySourceUpgrade(root, "sample-app", template)).toEqual([]);
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("fails before writing when an application edit or protected configuration would change", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      await writeFile(path.join(root, "changed.txt"), "my edit\n");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("manual review");
+      await expect(readFile(path.join(root, "added.txt"))).rejects.toThrow();
+      await writeFile(path.join(root, "changed.txt"), "old sample-app\n");
+      await mkdir(path.join(template, ".github", "workflows"), { recursive: true });
+      await writeFile(path.join(template, ".github", "workflows", "deploy.yml"), "new deployment\n");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("deploy.yml");
+      await expect(readFile(path.join(root, "added.txt"))).rejects.toThrow();
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("refuses symlinked parent directories", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      await mkdir(path.join(template, "nested"));
+      await writeFile(path.join(template, "nested", "thing.txt"), "target\n");
+      await symlink(parent, path.join(root, "nested"));
+      expect((await planSourceDiff(root, "sample-app", template)).entries.find(({ path: relative }) => relative === "nested/thing.txt")?.classification).toBe("unsafe");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("manual review");
+      await expect(readFile(path.join(root, "added.txt"))).rejects.toThrow();
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("does not trust a symlinked framework marker or generation baseline", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      const marker = path.join(root, ".trestle", "framework.json");
+      const markerContent = await readFile(marker);
+      await writeFile(path.join(parent, "marker.json"), markerContent);
+      await rm(marker);
+      await symlink(path.join(parent, "marker.json"), marker);
+      expect((await planSourceDiff(root, "sample-app", template)).baselineTrusted).toBe(false);
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("matching baseline");
+      await rm(marker);
+      await writeFile(marker, markerContent);
+      const baseline = path.join(root, ".trestle", "template-baseline.json");
+      const baselineContent = await readFile(baseline);
+      await writeFile(path.join(parent, "baseline.json"), baselineContent);
+      await rm(baseline);
+      await symlink(path.join(parent, "baseline.json"), baseline);
+      expect((await planSourceDiff(root, "sample-app", template)).baselineTrusted).toBe(false);
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("matching baseline");
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("rejects a missing baseline, non-adjacent version, or stale lockfile", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      await rm(path.join(root, ".trestle", "template-baseline.json"));
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("matching baseline");
+      const alpha = Number(TRESTLEJS_VERSION.split(".").at(-1));
+      await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ templateVersion: `0.1.0-alpha.${alpha - 2}` }));
+      await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 2}`, files: { "changed.txt": hash("old sample-app\n") } }));
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("immediately preceding alpha");
+      await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ templateVersion: `0.1.0-alpha.${alpha - 1}` }));
+      await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}`, files: { "changed.txt": hash("old sample-app\n") } }));
+      await writeFile(path.join(root, "pnpm-lock.yaml"), "importers: {}\n");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("pnpm-lock.yaml");
+    } finally { await rm(parent, { recursive: true, force: true }); }
   });
 });
