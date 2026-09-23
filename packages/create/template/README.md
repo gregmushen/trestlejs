@@ -131,8 +131,11 @@ retire recovered IDs. It also audits bounded pages of ready PostgreSQL reference
 using metadata-only R2 HEAD requests under tenant-scoped database access.
 Missing or mismatched objects fail the scheduled run and are logged by artifact
 ID and organization ID without object keys or contents; the audit never deletes
-anything. It does not detect orphaned R2 objects or verify that an isolated
-database restore can reach the provider bucket. Ready-artifact retention remains
+anything. A second bounded audit lists old R2 objects by tenant prefix, checks
+for any live PostgreSQL reservation under tenant RLS, and reports unreferenced
+objects by key fingerprint only. It never deletes an orphan automatically.
+This does not verify that an isolated database restore can reach the provider
+bucket. Ready-artifact retention remains
 an application policy.
 Queue delivery is at least once. The PostgreSQL event inbox prevents a completed
 logical event from running its handler again and leases in-progress work for

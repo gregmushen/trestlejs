@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
 import { maintainArtifacts } from "./artifact-maintenance.js";
 import { auditArtifactReferences } from "./artifact-reference-audit.js";
+import { auditArtifactOrphans } from "./artifact-orphan-audit.js";
 import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
@@ -504,7 +505,11 @@ export default {
           createLogger({ environment: environment.APP_ENV ?? "local" }).error(`artifact.reference.${item.reason}`, item);
         });
         createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.reference.audit.completed", audit);
-        artifactUnresolved = result.failed > 0 || audit.missing > 0 || audit.mismatched > 0 || audit.failed > 0;
+        const orphans = await auditArtifactOrphans(environment, (item) => {
+          createLogger({ environment: environment.APP_ENV ?? "local" }).error(`artifact.orphan.${item.reason}`, item);
+        });
+        createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.orphan.audit.completed", orphans);
+        artifactUnresolved = result.failed > 0 || audit.missing > 0 || audit.mismatched > 0 || audit.failed > 0 || orphans.orphaned > 0 || orphans.failed > 0;
       } catch {
         artifactUnresolved = true;
         createLogger({ environment: environment.APP_ENV ?? "local" }).error("artifact.maintenance.unavailable");
@@ -515,6 +520,6 @@ export default {
       createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.retention.completed", result);
       if (result.failed > 0) throw new Error("Webhook retention left incomplete cleanup work");
     }
-    if (artifactUnresolved) throw new Error("Artifact maintenance or reference audit found unresolved work");
+    if (artifactUnresolved) throw new Error("Artifact maintenance or storage audit found unresolved work");
   },
 };

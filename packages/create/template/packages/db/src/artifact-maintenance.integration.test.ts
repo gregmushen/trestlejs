@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { artifactReferenceCursorName, createDatabase, createTenantDatabase, nextArtifactMaintenanceOrganizations, nextArtifactReferenceAuditCandidates, nextMaintenanceOrganizations } from "./index.js";
+import { advanceArtifactOrphanCursor, artifactOrphanCursorName, artifactReferenceCursorName, createDatabase, createTenantDatabase, getArtifactOrphanCursor, hasArtifactStorageKey, nextArtifactMaintenanceOrganizations, nextArtifactReferenceAuditCandidates, nextMaintenanceOrganizations } from "./index.js";
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -11,7 +11,7 @@ const ids = [`${prefix}a`, `${prefix}b`, `${prefix}c`] as const;
 
 suite("bounded artifact maintenance cursor", () => {
   beforeAll(async () => {
-    await sql!`delete from artifact_maintenance_cursor where name in ('incomplete-artifacts', 'webhook-payloads', 'artifact-reference-organizations', ${await artifactReferenceCursorName(ids[0])}, ${await artifactReferenceCursorName(ids[1])})`;
+    await sql!`delete from artifact_maintenance_cursor where name in ('incomplete-artifacts', 'webhook-payloads', 'artifact-reference-organizations', 'artifact-orphan-organizations', ${await artifactReferenceCursorName(ids[0])}, ${await artifactReferenceCursorName(ids[1])}, ${await artifactOrphanCursorName(ids[0])})`;
     for (const id of ids) {
       await sql!`insert into organization (id, name, slug, created_at) values (${id}, ${id}, ${id}, now())`;
     }
@@ -20,7 +20,7 @@ suite("bounded artifact maintenance cursor", () => {
   afterAll(async () => {
     await sql!`delete from artifact_maintenance_cursor where name = 'incomplete-artifacts'`;
     await sql!`delete from artifact_maintenance_cursor where name = 'webhook-payloads'`;
-    await sql!`delete from artifact_maintenance_cursor where name in ('artifact-reference-organizations', ${await artifactReferenceCursorName(ids[0])}, ${await artifactReferenceCursorName(ids[1])})`;
+    await sql!`delete from artifact_maintenance_cursor where name in ('artifact-reference-organizations', 'artifact-orphan-organizations', ${await artifactReferenceCursorName(ids[0])}, ${await artifactReferenceCursorName(ids[1])}, ${await artifactOrphanCursorName(ids[0])})`;
     await sql!`delete from artifact_metadata where id like ${`${prefix}%`}`;
     await sql!`delete from organization where id in (${ids[0]}, ${ids[1]}, ${ids[2]})`;
     await sql!.end();
@@ -73,5 +73,34 @@ suite("bounded artifact maintenance cursor", () => {
     await expect(nextArtifactReferenceAuditCandidates(database, tenantDatabase, ids[0], 0)).rejects.toThrow("Invalid artifact reference audit page size");
     await expect(nextArtifactReferenceAuditCandidates(database, tenantDatabase, ids[0], 101)).rejects.toThrow("Invalid artifact reference audit page size");
     await expect(artifactReferenceCursorName("invalid tenant")).rejects.toThrow("Invalid artifact audit organization");
+  });
+
+  it("checks physical keys under forced tenant RLS and CAS-advances opaque R2 cursors", async () => {
+    const database = createDatabase(connectionString!, "postgres-js");
+    const ownId = `${prefix}orphan-pending`;
+    const foreignId = `${prefix}orphan-foreign`;
+    const retiredId = `${prefix}orphan-retired`;
+    const own = `${ids[0]}/${ownId}`;
+    const foreign = `${ids[1]}/${foreignId}`;
+    const retired = `${ids[0]}/${retiredId}`;
+    await sql!`insert into artifact_metadata (id, organization_id, storage_key, content_type, size, upload_state) values
+      (${ownId}, ${ids[0]}, ${own}, 'text/plain', 1, 'pending'),
+      (${foreignId}, ${ids[1]}, ${foreign}, 'text/plain', 1, 'ready')`;
+    await sql!`insert into artifact_metadata (id, organization_id, storage_key, content_type, size, upload_state, deleted_at) values
+      (${retiredId}, ${ids[0]}, ${retired}, 'text/plain', 1, 'deleted', now())`;
+    const ownTenant = createTenantDatabase(connectionString!, "postgres-js", ids[0], { readOnly: true });
+    const foreignTenant = createTenantDatabase(connectionString!, "postgres-js", ids[1], { readOnly: true });
+    // A pending reservation protects a write that has reached R2 but has not
+    // yet finalized in PostgreSQL.
+    expect(await hasArtifactStorageKey(ownTenant, ids[0], own)).toBe(true);
+    expect(await hasArtifactStorageKey(ownTenant, ids[0], retired)).toBe(false);
+    expect(await hasArtifactStorageKey(ownTenant, ids[0], `${ids[0]}/missing`)).toBe(false);
+    expect(await hasArtifactStorageKey(foreignTenant, ids[1], foreign)).toBe(true);
+    await expect(hasArtifactStorageKey(ownTenant, ids[0], foreign)).rejects.toThrow("outside the tenant prefix");
+    expect(await getArtifactOrphanCursor(database, ids[0])).toBe("");
+    expect(await advanceArtifactOrphanCursor(database, ids[0], "", "opaque-r2-token")).toBe(true);
+    expect(await advanceArtifactOrphanCursor(database, ids[0], "", "stale-token")).toBe(false);
+    expect(await getArtifactOrphanCursor(database, ids[0])).toBe("opaque-r2-token");
+    expect(await advanceArtifactOrphanCursor(database, ids[0], "opaque-r2-token", "")).toBe(true);
   });
 });
