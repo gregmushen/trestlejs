@@ -45,6 +45,7 @@ export const webhookDelivery = pgTable("webhook_delivery", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
 }, (table) => [
+  uniqueIndex("webhook_delivery_id_organization_uidx").on(table.id, table.organizationId),
   uniqueIndex("webhook_delivery_message_endpoint_uidx").on(table.messageId, table.endpointId),
   index("webhook_delivery_organization_state_idx").on(table.organizationId, table.state, table.nextAttemptAt),
   foreignKey({ columns: [table.messageId, table.organizationId], foreignColumns: [webhookMessage.id, webhookMessage.organizationId], name: "webhook_delivery_message_tenant_fk" }),
