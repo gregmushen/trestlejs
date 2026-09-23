@@ -137,7 +137,14 @@ objects by key fingerprint only. It never deletes an orphan automatically.
 The protected restore drill also checks every ready reference in its isolated
 PostgreSQL branch against the declared production bucket using read-only S3
 HEAD requests. Missing objects, metadata drift, or provider errors fail the
-drill. Ready-artifact retention remains an application policy.
+drill. Ready-object retention is opt-in: set the non-secret Worker variable
+`ARTIFACT_READY_RETENTION_DAYS` to an integer from 1 to 3650 in each desired
+R2-enabled Worker environment. Without it, ready objects are retained indefinitely. Once set,
+objects older than that many 24-hour days become unreadable immediately; a
+bounded tenant-scoped scheduled sweep claims and deletes them from R2. Failed
+R2 deletes remain inaccessible and are retried by incomplete-object recovery.
+Choose the period deliberately: enabling it also applies to existing ready
+objects older than the cutoff. The value is a duration, not a calendar-day rule.
 Queue delivery is at least once. The PostgreSQL event inbox prevents a completed
 logical event from running its handler again and leases in-progress work for
 recovery. Handlers that call external services must still pass the event's

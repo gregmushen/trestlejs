@@ -19,6 +19,7 @@ import { mapHttpError } from "./http-errors.js";
 import { createBillingService } from "./services.js";
 import { projectWebhookForEvent } from "./webhook-runtime.js";
 import { maintainWebhookPayloads } from "./webhook-retention.js";
+import { maintainReadyArtifacts } from "./artifact-retention.js";
 import { maintainNativeWebhookDeliveries } from "./webhook-recovery.js";
 import { consumeNativeWebhookQueueMessages, looksLikeNativeWebhookWakeup } from "./webhook-native-queue.js";
 import type { NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
@@ -501,6 +502,8 @@ export default {
       try {
         const result = await maintainArtifacts(environment);
         createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.maintenance.completed", result);
+        const retention = await maintainReadyArtifacts(environment);
+        if (retention) createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.retention.completed", retention);
         const audit = await auditArtifactReferences(environment, (item) => {
           createLogger({ environment: environment.APP_ENV ?? "local" }).error(`artifact.reference.${item.reason}`, item);
         });
@@ -509,7 +512,7 @@ export default {
           createLogger({ environment: environment.APP_ENV ?? "local" }).error(`artifact.orphan.${item.reason}`, item);
         });
         createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.orphan.audit.completed", orphans);
-        artifactUnresolved = result.failed > 0 || audit.missing > 0 || audit.mismatched > 0 || audit.failed > 0 || orphans.orphaned > 0 || orphans.failed > 0;
+        artifactUnresolved = result.failed > 0 || (retention?.failed ?? 0) > 0 || audit.missing > 0 || audit.mismatched > 0 || audit.failed > 0 || orphans.orphaned > 0 || orphans.failed > 0;
       } catch {
         artifactUnresolved = true;
         createLogger({ environment: environment.APP_ENV ?? "local" }).error("artifact.maintenance.unavailable");

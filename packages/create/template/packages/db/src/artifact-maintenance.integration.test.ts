@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { advanceArtifactOrphanCursor, artifactOrphanCursorName, artifactReferenceCursorName, createDatabase, createTenantDatabase, getArtifactOrphanCursor, hasArtifactStorageKey, nextArtifactMaintenanceOrganizations, nextArtifactReferenceAuditCandidates, nextMaintenanceOrganizations } from "./index.js";
+import { advanceArtifactOrphanCursor, artifactOrphanCursorName, artifactReferenceCursorName, createDatabase, createTenantDatabase, getArtifactOrphanCursor, hasArtifactStorageKey, nextArtifactMaintenanceOrganizations, nextArtifactReferenceAuditCandidates, nextMaintenanceOrganizations, PostgresArtifactMetadataRepository } from "./index.js";
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -102,5 +102,24 @@ suite("bounded artifact maintenance cursor", () => {
     expect(await advanceArtifactOrphanCursor(database, ids[0], "", "stale-token")).toBe(false);
     expect(await getArtifactOrphanCursor(database, ids[0])).toBe("opaque-r2-token");
     expect(await advanceArtifactOrphanCursor(database, ids[0], "opaque-r2-token", "")).toBe(true);
+  });
+
+  it("claims only expired ready objects through forced tenant RLS", async () => {
+    const oldId = `${prefix}retention-old`;
+    const recentId = `${prefix}retention-recent`;
+    const foreignId = `${prefix}retention-foreign`;
+    const cutoff = new Date("2026-02-01T00:00:00Z");
+    await sql!`insert into artifact_metadata (id, organization_id, storage_key, content_type, size, upload_state, created_at) values
+      (${oldId}, ${ids[0]}, ${`${ids[0]}/${oldId}`}, 'text/plain', 1, 'ready', '2026-01-01T00:00:00Z'),
+      (${recentId}, ${ids[0]}, ${`${ids[0]}/${recentId}`}, 'text/plain', 1, 'ready', '2026-02-02T00:00:00Z'),
+      (${foreignId}, ${ids[1]}, ${`${ids[1]}/${foreignId}`}, 'text/plain', 1, 'ready', '2026-01-01T00:00:00Z')`;
+    const repository = new PostgresArtifactMetadataRepository(createTenantDatabase(connectionString!, "postgres-js", ids[0]));
+    expect((await repository.listExpiredReady(ids[0], cutoff, 25)).map(({ id }) => id)).toEqual([oldId]);
+    expect(await repository.claimExpiredReady(ids[0], foreignId, `${ids[1]}/${foreignId}`, cutoff)).toBe(false);
+    expect(await repository.claimExpiredReady(ids[0], recentId, `${ids[0]}/${recentId}`, cutoff)).toBe(false);
+    expect(await repository.claimExpiredReady(ids[0], oldId, `${ids[0]}/${oldId}`, cutoff)).toBe(true);
+    expect(await repository.get(ids[0], oldId)).toBeNull();
+    expect(await repository.claimExpiredReady(ids[0], oldId, `${ids[0]}/${oldId}`, cutoff)).toBe(false);
+    expect((await repository.listIncomplete(ids[0], cutoff, 25)).map(({ id }) => id)).toContain(oldId);
   });
 });

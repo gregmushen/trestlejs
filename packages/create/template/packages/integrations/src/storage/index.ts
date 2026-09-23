@@ -17,6 +17,8 @@ export interface ArtifactMetadataRepository {
   retire(organizationId: string, id: string, key: string): Promise<boolean>;
   listIncomplete(organizationId: string, before: Date, limit: number): Promise<ArtifactMetadata[]>;
   claimIncomplete(organizationId: string, id: string, key: string, before: Date): Promise<boolean>;
+  listExpiredReady(organizationId: string, before: Date, limit: number): Promise<ArtifactMetadata[]>;
+  claimExpiredReady(organizationId: string, id: string, key: string, before: Date): Promise<boolean>;
 }
 
 function validateRecovery(before: Date, limit: number): void {
@@ -45,6 +47,17 @@ export class InMemoryArtifactMetadataRepository implements ArtifactMetadataRepos
     const metadata = this.records.get(id);
     if (metadata?.organizationId !== organizationId || metadata.key !== key || metadata.createdAt >= before || (!this.pendingIds.has(id) && !this.cleaningIds.has(id))) return false;
     this.pendingIds.delete(id); this.cleaningIds.add(id); return true;
+  }
+  async listExpiredReady(organizationId: string, before: Date, limit: number): Promise<ArtifactMetadata[]> {
+    validateRecovery(before, limit);
+    return [...this.records.values()].filter((metadata) => metadata.organizationId === organizationId && metadata.createdAt < before && !this.pendingIds.has(metadata.id) && !this.cleaningIds.has(metadata.id))
+      .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id)).slice(0, limit).map((metadata) => ({ ...metadata }));
+  }
+  async claimExpiredReady(organizationId: string, id: string, key: string, before: Date): Promise<boolean> {
+    if (!Number.isFinite(before.getTime())) throw new Error("Invalid artifact retention cutoff");
+    const metadata = this.records.get(id);
+    if (metadata?.organizationId !== organizationId || metadata.key !== key || metadata.createdAt >= before || this.pendingIds.has(id) || this.cleaningIds.has(id)) return false;
+    this.cleaningIds.add(id); return true;
   }
 }
 
@@ -95,7 +108,7 @@ export type R2ListPage = { objects: R2ListedObject[]; truncated: boolean; cursor
 export type R2BucketBinding = { put(key: string, body: Uint8Array, options: { httpMetadata: { contentType: string }; customMetadata: Record<string, string> }): Promise<unknown>; get(key: string): Promise<R2ObjectBody | null>; head?(key: string): Promise<R2ObjectMetadata | null>; list?(options: { prefix: string; limit: number; cursor?: string }): Promise<R2ListPage>; delete(key: string): Promise<void> };
 
 export class CloudflareR2ArtifactStore implements ArtifactStore {
-  constructor(private readonly bucket: R2BucketBinding, private readonly metadata: ArtifactMetadataRepository) {}
+  constructor(private readonly bucket: R2BucketBinding, private readonly metadata: ArtifactMetadataRepository, private readonly retention?: { maxAgeDays: number; now: () => Date }) {}
   async put(input: { id: string; organizationId: string; key: string; contentType: string; body: Uint8Array }): Promise<ArtifactMetadata> {
     if (!input.organizationId || !input.id || !input.key || !input.contentType) throw new Error("artifact identity, owner, key, and content type are required");
     const storageKey = `${input.organizationId}/${input.id}/${crypto.randomUUID()}/${input.key}`;
@@ -120,7 +133,7 @@ export class CloudflareR2ArtifactStore implements ArtifactStore {
       throw new Error("Artifact upload could not be finalized");
     }
   }
-  async get(organizationId: string, id: string): Promise<Artifact | null> { const metadata = await this.metadata.get(organizationId, id); if (!metadata) return null; const object = await this.bucket.get(metadata.key); return object ? { ...metadata, body: new Uint8Array(await object.arrayBuffer()) } : null; }
+  async get(organizationId: string, id: string): Promise<Artifact | null> { const metadata = await this.metadata.get(organizationId, id); if (!metadata || (this.retention && metadata.createdAt.getTime() < this.retention.now().getTime() - this.retention.maxAgeDays * 86_400_000)) return null; const object = await this.bucket.get(metadata.key); return object ? { ...metadata, body: new Uint8Array(await object.arrayBuffer()) } : null; }
   async delete(organizationId: string, id: string): Promise<boolean> {
     const metadata = await this.metadata.beginDeletion(organizationId, id);
     if (!metadata) return false;
@@ -137,6 +150,23 @@ export class CloudflareR2ArtifactStore implements ArtifactStore {
     let claimed = 0; let retired = 0; let failed = 0;
     for (const artifact of candidates) {
       if (!await this.metadata.claimIncomplete(organizationId, artifact.id, artifact.key, before)) continue;
+      claimed += 1;
+      try { await this.bucket.delete(artifact.key); }
+      catch { failed += 1; continue; }
+      try { if (await this.metadata.retire(organizationId, artifact.id, artifact.key)) retired += 1; else failed += 1; }
+      catch { failed += 1; }
+    }
+    return { claimed, retired, failed };
+  }
+  /** Expiry claims hide objects before external deletion. Failed deletes remain
+   * cleaning rows and are retried by recoverIncomplete after its grace period. */
+  async expireReady(organizationId: string, before: Date, limit = 25): Promise<{ claimed: number; retired: number; failed: number }> {
+    validateRecovery(before, limit);
+    if (!organizationId) throw new Error("Artifact owner is required for retention");
+    const candidates = await this.metadata.listExpiredReady(organizationId, before, limit);
+    let claimed = 0; let retired = 0; let failed = 0;
+    for (const artifact of candidates) {
+      if (!await this.metadata.claimExpiredReady(organizationId, artifact.id, artifact.key, before)) continue;
       claimed += 1;
       try { await this.bucket.delete(artifact.key); }
       catch { failed += 1; continue; }
