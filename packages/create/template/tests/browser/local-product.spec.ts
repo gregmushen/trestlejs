@@ -170,11 +170,15 @@ test("a customer verifies email and switches isolated organizations", async ({ p
       try {
         const committed = await database`select organization_id, event_name, schema_version, resource_type, resource_id, correlation_id, idempotency_key, payload
           from outbox_message where resource_id=${articleId}`;
-        expect(committed).toHaveLength(1);
-        expect(committed[0]).toMatchObject({ organization_id: firstId, event_name: "resource.article.created",
+        expect(committed).toHaveLength(2);
+        expect(committed.find((event) => event.event_name === "resource.article.created")).toMatchObject({ organization_id: firstId, event_name: "resource.article.created",
           schema_version: 1, resource_type: "article", resource_id: articleId,
           idempotency_key: `${firstId}:resource.article.created:${articleId}`, payload: { resourceId: articleId } });
-        expect(committed[0]?.correlation_id).toEqual(expect.any(String));
+        expect(committed.find((event) => event.event_name === "resource.article.updated")).toMatchObject({
+          organization_id: firstId, event_name: "resource.article.updated", resource_id: articleId,
+          idempotency_key: `${firstId}:resource.article.updated:${articleId}:2`, payload: { resourceId: articleId, revision: 2 },
+        });
+        expect(committed.every((event) => typeof event.correlation_id === "string")).toBe(true);
       } finally { await database.end(); }
     }
     await switchOrganization(secondId!);
@@ -191,6 +195,17 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     await expect(page.getByRole("listitem").getByText(`Second ${nonce}`)).not.toBeVisible();
     await page.getByRole("button", { name: "Delete" }).click();
     await expect(page.getByText(`Edited ${nonce}`)).not.toBeVisible();
+    if (process.env.TRESTLE_BROWSER_DATABASE_URL) {
+      const database = postgres(process.env.TRESTLE_BROWSER_DATABASE_URL, { max: 1, prepare: false });
+      try {
+        const deleted = await database`select organization_id, event_name, resource_id, idempotency_key, payload
+          from outbox_message where resource_id=${articleId} and event_name='resource.article.deleted'`;
+        expect(deleted).toHaveLength(1);
+        expect(deleted[0]).toMatchObject({ organization_id: firstId, event_name: "resource.article.deleted",
+          resource_id: articleId, idempotency_key: `${firstId}:resource.article.deleted:${articleId}`,
+          payload: { resourceId: articleId, revision: 2 } });
+      } finally { await database.end(); }
+    }
     await switchOrganization(secondId!);
     await expect(page.getByRole("listitem").getByText(`Second ${nonce}`)).toBeVisible();
   }

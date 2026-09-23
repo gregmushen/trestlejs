@@ -85,7 +85,8 @@ try {
   await assertMonotonicJournal();
   const workerEntry = await readFile(path.join(project, "apps", "worker", "src", "index.ts"), "utf8");
   for (const resource of ["author", "article"]) {
-    if (!workerEntry.includes(`app.route("/", ${resource}Routes);`) || !workerEntry.includes(`eventConsumers.register(${resource}CreatedEvent, handle${resource[0].toUpperCase()}${resource.slice(1)}Created);`)) {
+    if (!workerEntry.includes(`app.route("/", ${resource}Routes);`) || ["Created", "Updated", "Deleted"].some((kind) =>
+      !workerEntry.includes(`eventConsumers.register(${resource}${kind}Event, handle${resource[0].toUpperCase()}${resource.slice(1)}${kind});`))) {
       throw new Error(`Generated ${resource} Worker route or event handler was not registered`);
     }
   }
@@ -102,6 +103,7 @@ try {
   if (process.env.TRESTLE_GENERATED_DATABASE_URL) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    await run("pnpm", ["--filter", "./packages/data", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1" });
     await run("pnpm", ["test:browser"], project, { ...browserSiteEnvironment, TRESTLE_BROWSER_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_BROWSER_ARTICLES: "1" });

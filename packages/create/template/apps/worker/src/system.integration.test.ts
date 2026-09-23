@@ -258,9 +258,28 @@ suite("local product path", () => {
           method: "PATCH", headers, body: JSON.stringify({ summary: "Published", published: true }),
         }, environment);
         expect(updated.status).toBe(200);
-        await expect(updated.json()).resolves.toMatchObject({ article: { id: article.id, published: true } });
+        await expect(updated.json()).resolves.toMatchObject({ article: { id: article.id, published: true, revision: 2 } });
+        const repeated = await app.request(`http://localhost:8787/api/articles/${article.id}`, {
+          method: "PATCH", headers, body: JSON.stringify({ summary: "Published", published: true }),
+        }, environment);
+        expect(repeated.status).toBe(200);
+        await expect(repeated.json()).resolves.toMatchObject({ article: { id: article.id, revision: 2 } });
+        const beforeDelete = await database.select().from(outboxMessage).where(eq(outboxMessage.resourceId, article.id));
+        expect(beforeDelete.map((event) => event.eventName).sort()).toEqual(["resource.article.created", "resource.article.updated"]);
+        expect(beforeDelete.find((event) => event.eventName === "resource.article.updated")).toMatchObject({
+          organizationId, payload: { resourceId: article.id, revision: 2 },
+          idempotencyKey: `${organizationId}:resource.article.updated:${article.id}:2`,
+        });
         const removed = await app.request(`http://localhost:8787/api/articles/${article.id}`, { method: "DELETE", headers }, environment);
         expect(removed.status).toBe(204);
+        const repeatedDelete = await app.request(`http://localhost:8787/api/articles/${article.id}`, { method: "DELETE", headers }, environment);
+        expect(repeatedDelete.status).toBe(404);
+        const afterDelete = await database.select().from(outboxMessage).where(eq(outboxMessage.resourceId, article.id));
+        expect(afterDelete.map((event) => event.eventName).sort()).toEqual(["resource.article.created", "resource.article.deleted", "resource.article.updated"]);
+        expect(afterDelete.find((event) => event.eventName === "resource.article.deleted")).toMatchObject({
+          organizationId, payload: { resourceId: article.id, revision: 2 },
+          idempotencyKey: `${organizationId}:resource.article.deleted:${article.id}`,
+        });
         const missing = await app.request(`http://localhost:8787/api/articles/${article.id}`, { headers }, environment);
         expect(missing.status).toBe(404);
         expect((await app.request(`http://localhost:8787/api/articles/${secondArticleId}`, { method: "DELETE", headers: secondHeaders }, environment)).status).toBe(204);

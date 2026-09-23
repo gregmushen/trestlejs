@@ -33,4 +33,12 @@ describe("SetupPlan", () => {
     const input = { ...validPlan, resources: [validPlan.resources[0], validPlan.resources[0]] };
     expect(() => parseSetupPlan(JSON.stringify(input))).toThrow("SetupPlan is invalid");
   });
+
+  it("reserves generated identity and revision fields", () => {
+    const input = { ...validPlan, resources: [{ name: "Article", tenant: true, crud: true, fields: [
+      { name: "name", type: "string", required: true },
+      { name: "revision", type: "integer", required: false },
+    ] }] };
+    expect(() => parseSetupPlan(JSON.stringify(input))).toThrow(SetupPlanError);
+  });
 });
