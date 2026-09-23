@@ -488,6 +488,13 @@ artifacts. A bounded scheduled sweep claims expired ready rows under tenant RLS,
 then deletes exact R2 keys; failures remain inaccessible and retry through the
 existing cleanup path. No ready objects are deleted unless an application
 explicitly configures a period. Hosted R2 retention remains unverified.
+Alpha 68 prevents `trestle upgrade apply` from stamping an older application
+template as current merely because its CLI package was updated. The planner
+requires a reviewed application-source migration and a matching pnpm lockfile;
+it never edits `package.json` without updating that lockfile. The existing
+canary still records Alpha 37 application source, so its upgrade remains a
+manual-review item rather than a false success. Automated source migrations
+and adjacent-version rehearsals remain beta work.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

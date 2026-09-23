@@ -1,5 +1,6 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import YAML from "yaml";
 
 import { TRESTLEJS_VERSION } from "@trestlejs/core";
 
@@ -7,7 +8,7 @@ export const FRAMEWORK_METADATA_VERSION = 1;
 export const MANAGED_GUIDANCE_VERSION = 1;
 
 export type UpgradeOperation = Readonly<{
-  id: "framework-metadata" | "managed-guidance" | "cli-version" | "authority-model" | "database-runtime";
+  id: "template-source" | "framework-metadata" | "managed-guidance" | "cli-version" | "authority-model" | "database-runtime";
   classification: "already-correct" | "update" | "manual-review";
   description: string;
 }>;
@@ -26,6 +27,14 @@ export async function planUpgrade(root: string): Promise<UpgradePlan> {
   const packagePath = path.join(root, "package.json");
   const manifest = JSON.parse(await readFile(packagePath, "utf8")) as { devDependencies?: Record<string, string> };
   const installedVersion = manifest.devDependencies?.trestlejs ?? "unknown";
+  const lockfileSource = await optionalText(path.join(root, "pnpm-lock.yaml"));
+  let lockedVersion: string | undefined;
+  let lockedSpecifier: string | undefined;
+  try {
+    const lockfile = lockfileSource ? YAML.parse(lockfileSource) as { importers?: { "."?: { devDependencies?: { trestlejs?: { specifier?: string; version?: string } } } } } : undefined;
+    lockedVersion = lockfile?.importers?.["."]?.devDependencies?.trestlejs?.version;
+    lockedSpecifier = lockfile?.importers?.["."]?.devDependencies?.trestlejs?.specifier;
+  } catch { /* An unreadable lockfile is a review gate, never evidence of compatibility. */ }
   const frameworkSource = await optionalText(path.join(root, ".trestle", "framework.json"));
   const framework = frameworkSource ? JSON.parse(frameworkSource) as { schemaVersion?: number; templateVersion?: string; managedGuidanceVersion?: number } : undefined;
   const skill = await optionalText(path.join(root, ".agents", "skills", "trestle-setup", "SKILL.md"));
@@ -46,9 +55,10 @@ export async function planUpgrade(root: string): Promise<UpgradePlan> {
     installedVersion,
     targetVersion: TRESTLEJS_VERSION,
     operations: [
+      { id: "template-source", classification: framework?.schemaVersion === FRAMEWORK_METADATA_VERSION && framework.templateVersion === TRESTLEJS_VERSION ? "already-correct" : "manual-review", description: framework?.templateVersion ? `application-owned source is recorded at ${framework.templateVersion}; review and migrate it before recording ${TRESTLEJS_VERSION}` : "application-owned source has no reviewed template version; review and migrate it before recording the current version" },
       { id: "framework-metadata", classification: framework?.schemaVersion === FRAMEWORK_METADATA_VERSION && framework.templateVersion === TRESTLEJS_VERSION ? "already-correct" : "update", description: "record the versioned template and managed-guidance contract" },
       { id: "managed-guidance", classification: framework?.managedGuidanceVersion === MANAGED_GUIDANCE_VERSION && skill?.includes(marker) ? "already-correct" : "update", description: "refresh only the managed setup-skill marker while preserving application-owned guidance" },
-      { id: "cli-version", classification: installedVersion === TRESTLEJS_VERSION ? "already-correct" : "update", description: `pin the project CLI to ${TRESTLEJS_VERSION}` },
+      { id: "cli-version", classification: installedVersion === TRESTLEJS_VERSION && lockedSpecifier === TRESTLEJS_VERSION && lockedVersion === TRESTLEJS_VERSION ? "already-correct" : "manual-review", description: `install trestlejs@${TRESTLEJS_VERSION} with pnpm so package.json and pnpm-lock.yaml agree` },
       { id: "authority-model", classification: authorityCurrent ? "already-correct" : "manual-review", description: "review application/organization authority separation and its database migration" },
       { id: "database-runtime", classification: runtimeCurrent ? "already-correct" : "manual-review", description: "review Neon transactional transport, restricted grants, tenant billing, and unpooled preview URLs" },
     ],
@@ -58,14 +68,8 @@ export async function planUpgrade(root: string): Promise<UpgradePlan> {
 export async function applyUpgrade(root: string): Promise<UpgradePlan> {
   const before = await planUpgrade(root);
   if (before.operations.some(({ classification }) => classification === "manual-review")) {
-    throw new Error("Application-owned source requires manual review before this upgrade can be recorded; run trestle upgrade plan");
+    throw new Error("Upgrade requires manual review of application source or the package lockfile; run trestle upgrade plan");
   }
-  const packagePath = path.join(root, "package.json");
-  const manifest = JSON.parse(await readFile(packagePath, "utf8")) as { devDependencies?: Record<string, string> };
-  manifest.devDependencies ??= {};
-  manifest.devDependencies.trestlejs = TRESTLEJS_VERSION;
-  await writeFile(packagePath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-
   const skillPath = path.join(root, ".agents", "skills", "trestle-setup", "SKILL.md");
   const skill = await readFile(skillPath, "utf8");
   const marker = `<!-- trestle-managed-guidance:${MANAGED_GUIDANCE_VERSION} -->`;
@@ -78,5 +82,5 @@ export async function applyUpgrade(root: string): Promise<UpgradePlan> {
 
 export function formatUpgradePlan(plan: UpgradePlan): string {
   const hasManualReview = plan.operations.some(({ classification }) => classification === "manual-review");
-  return [`Upgrade ${plan.installedVersion} → ${plan.targetVersion}`, ...plan.operations.map((operation) => `${operation.classification.padEnd(17)} ${operation.id} — ${operation.description}`), hasManualReview ? "Application-owned source needs a reviewed migration; upgrade apply will not mark this project current." : plan.operations.every(({ classification }) => classification === "already-correct") ? "Project is current." : "Review the plan, then run trestle upgrade apply --yes.", ""].join("\n");
+  return [`Upgrade ${plan.installedVersion} → ${plan.targetVersion}`, ...plan.operations.map((operation) => `${operation.classification.padEnd(17)} ${operation.id} — ${operation.description}`), hasManualReview ? "Review application-owned source and install the target CLI with its lockfile before upgrade apply can record this project as current." : plan.operations.every(({ classification }) => classification === "already-correct") ? "Project is current." : "Review the plan, then run trestle upgrade apply --yes.", ""].join("\n");
 }

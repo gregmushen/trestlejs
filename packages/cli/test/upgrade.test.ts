@@ -16,9 +16,9 @@ describe("versioned project upgrades", () => {
     await writeFile(path.join(root, "package.json"), '{"devDependencies":{"trestlejs":"0.1.0-alpha.8"}}\n');
     await writeFile(path.join(root, ".agents", "skills", "trestle-setup", "SKILL.md"), "---\nname: trestle-setup\n---\n\n# Custom guidance\n");
     const initial = await planUpgrade(root);
-    expect(initial.operations.filter(({ classification }) => classification === "manual-review")).toHaveLength(2);
+    expect(initial.operations.filter(({ classification }) => classification === "manual-review")).toHaveLength(4);
     expect(await readFile(path.join(root, "package.json"), "utf8")).toContain("alpha.8");
-    await expect(applyUpgrade(root)).rejects.toThrow("Application-owned source requires manual review");
+    await expect(applyUpgrade(root)).rejects.toThrow("Upgrade requires manual review");
     expect(await readFile(path.join(root, "package.json"), "utf8")).toContain("alpha.8");
     for (const directory of ["packages/context/src", "apps/worker/src", "packages/db/src", "packages/db/migrations", "packages/billing/src", "scripts"]) await mkdir(path.join(root, directory), { recursive: true });
     await writeFile(path.join(root, "packages/context/src/index.ts"), "export const AUTHORITY_MODEL_VERSION = 2;\n");
@@ -29,6 +29,9 @@ describe("versioned project upgrades", () => {
     await writeFile(path.join(root, "packages/db/src/roles.ts"), "export function verifyRuntimeRoleDataAccess() {}\n");
     await writeFile(path.join(root, "packages/billing/src/repository.ts"), "import { createTenantDatabase } from '@project/db';\n");
     await writeFile(path.join(root, "scripts/neon-preview.mjs"), "const runtimeUrl = await connectionUri(runtimeRole, false);\n");
+    await writeFile(path.join(root, ".trestle", "framework.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, managedGuidanceVersion: 1 })}\n`);
+    await writeFile(path.join(root, "package.json"), `${JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } })}\n`);
+    await writeFile(path.join(root, "pnpm-lock.yaml"), `importers:\n  .:\n    devDependencies:\n      trestlejs:\n        specifier: ${TRESTLEJS_VERSION}\n        version: ${TRESTLEJS_VERSION}\n`);
     await applyUpgrade(root);
     await applyUpgrade(root);
     expect(JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).devDependencies.trestlejs).toBe(TRESTLEJS_VERSION);
@@ -36,5 +39,31 @@ describe("versioned project upgrades", () => {
     expect(skill).toContain("# Custom guidance");
     expect(skill.match(/trestle-managed-guidance/g)).toHaveLength(1);
     expect((await planUpgrade(root)).operations.every(({ classification }) => classification === "already-correct")).toBe(true);
+  });
+
+  it("does not stamp old application-owned source as current when only the CLI is upgraded", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-stale-template-")); roots.push(root);
+    await mkdir(path.join(root, ".trestle"));
+    await writeFile(path.join(root, "package.json"), `${JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } })}\n`);
+    await writeFile(path.join(root, "pnpm-lock.yaml"), `importers:\n  .:\n    devDependencies:\n      trestlejs:\n        specifier: ${TRESTLEJS_VERSION}\n        version: ${TRESTLEJS_VERSION}\n`);
+    const old = { schemaVersion: 1, templateVersion: "0.1.0-alpha.37", managedGuidanceVersion: 1 };
+    await writeFile(path.join(root, ".trestle", "framework.json"), `${JSON.stringify(old)}\n`);
+    const plan = await planUpgrade(root);
+    expect(plan.operations).toContainEqual(expect.objectContaining({ id: "cli-version", classification: "already-correct" }));
+    expect(plan.operations).toContainEqual(expect.objectContaining({ id: "template-source", classification: "manual-review", description: expect.stringContaining("alpha.37") }));
+    await expect(applyUpgrade(root)).rejects.toThrow("Upgrade requires manual review");
+    expect(JSON.parse(await readFile(path.join(root, ".trestle", "framework.json"), "utf8"))).toEqual(old);
+  });
+
+  it("refuses to record an upgrade when package.json and pnpm-lock.yaml disagree", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-stale-lockfile-")); roots.push(root);
+    await mkdir(path.join(root, ".trestle"));
+    await writeFile(path.join(root, "package.json"), `${JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } })}\n`);
+    await writeFile(path.join(root, "pnpm-lock.yaml"), "importers:\n  .:\n    devDependencies:\n      trestlejs:\n        specifier: 0.1.0-alpha.37\n        version: 0.1.0-alpha.37\n");
+    await writeFile(path.join(root, ".trestle", "framework.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, managedGuidanceVersion: 1 })}\n`);
+    const plan = await planUpgrade(root);
+    expect(plan.operations).toContainEqual(expect.objectContaining({ id: "cli-version", classification: "manual-review" }));
+    await expect(applyUpgrade(root)).rejects.toThrow("Upgrade requires manual review");
+    expect((await readFile(path.join(root, "pnpm-lock.yaml"), "utf8"))).toContain("alpha.37");
   });
 });
