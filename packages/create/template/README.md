@@ -118,8 +118,15 @@ Define application events in `packages/events/src/application-catalog.ts` with
 `defineEvent(...)` and `defineEventCatalog(...)`. Internal event payloads have
 runtime schemas and are private by default. An explicit `webhook` projection
 adds a separately versioned, validated public contract with examples and
-projection fixtures. This catalog is a contract only: outbound webhook
-messages, endpoint management, and delivery are not yet generated.
+projection fixtures. The generated database now includes tenant-owned endpoint,
+subscription, message, delivery, attempt, and encrypted signing-secret tables.
+The post-commit projector and deterministic local capture are callable, but
+neither is dispatched automatically and no remote webhook request is sent yet.
+When enabling outbound delivery, set the optional encrypted Worker credential
+`WEBHOOK_SECRET_KEY` to at least 32 random bytes per environment through
+`trestle secrets edit`; it encrypts endpoint secrets at rest. Endpoint secrets
+are disclosed once at issuance or rotation. Do not expose the internal
+`activeForDelivery` method through customer or admin routes.
 If `capabilities.workflows` is enabled, the deployment config binds the
 application-owned `TrestleWorkflow` class. Queue delivery starts a Workflow
 using the event ID as its stable instance ID; a repeated Queue delivery
