@@ -81,6 +81,20 @@ describe("adjacent-alpha source apply", () => {
     } finally { await rm(parent, { recursive: true, force: true }); }
   });
 
+  it("accepts pnpm's package.json key reordering but rejects semantic application edits", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      await writeFile(path.join(template, "package.json"), JSON.stringify({ name: "sample-app", devDependencies: { foo: "1", trestlejs: TRESTLEJS_VERSION } }));
+      await writeFile(path.join(root, "package.json"), JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION, foo: "1" }, name: "sample-app" }));
+      expect((await planSourceDiff(root, "sample-app", template)).entries.find(({ path: relative }) => relative === "package.json")?.classification).toBe("modified");
+      expect(await applySourceUpgrade(root, "sample-app", template)).toEqual(["added.txt", "changed.txt"]);
+      const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+      manifest.scripts = { unsafe: "changed by application" };
+      await writeFile(path.join(root, "package.json"), JSON.stringify(manifest));
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("package.json");
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
   it("fails before writing when an application edit or protected configuration would change", async () => {
     const { parent, root, template } = await fixture();
     try {

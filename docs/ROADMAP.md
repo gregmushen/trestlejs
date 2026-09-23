@@ -508,6 +508,11 @@ configuration, and migration paths before writing, and only applies pristine
 target-template files. It deliberately leaves the framework version marker
 unchanged: source copying is not migration verification or beta certification.
 The older Alpha 37 canary still requires a reviewed manual migration.
+Alpha 71 fixes an upgrade rehearsal finding: pnpm reorders root
+`package.json` entries when pinning the target CLI. Source apply now accepts
+that manifest only when its parsed content exactly matches the rendered
+target manifest, ignoring object key order; changed scripts, dependencies, or
+other application semantics still require manual review.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
