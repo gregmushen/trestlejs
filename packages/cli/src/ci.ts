@@ -124,6 +124,14 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.deploy.queues", deploy.includes("queue-config.mjs render staging") && deploy.includes("queue-config.mjs render production") && (deploy.match(/cloudflare-queues\.mjs ensure/gu) ?? []).length >= 2 && (deploy.match(/deploy --config \.trestle-queues\.wrangler\.jsonc/gu) ?? []).length >= 2, "staging and production prepare and provision opt-in Queues"));
   checks.push(check("ci.deploy.r2", (deploy.match(/cloudflare-r2\.mjs ensure/gu) ?? []).length >= 2 && occursInOrder(deploy, "Prepare staging Queue bindings", "Provision staging R2 bucket") && occursInOrder(deploy, "Prepare production Queue bindings", "Provision production R2 bucket"), "staging and production provision opt-in R2 buckets"));
   checks.push(check("ci.deploy.runtime-role", (deploy.match(/db:roles:bootstrap/gu) ?? []).length >= 2 && (deploy.match(/db:roles:configure/gu) ?? []).length >= 2 && (deploy.match(/db:roles:verify/gu) ?? []).length >= 2, "staging and production bootstrap, configure, and verify restricted database runtime roles"));
+  // Every platform admin step runs only when capabilities.admin is true, so a project without the admin deploys no admin resources.
+  const adminStepsGuarded = [stagingDeploy, productionDeploy].every((source) => {
+    const steps = source.split(/\n {6}- /u);
+    const adminSteps = steps.filter((step) => /apps\/admin|\/admin build|db:platform:|admin-capability\.mjs smoke|-admin(?:-staging)?\b/u.test(step));
+    return source.includes("id: admin") && source.includes("admin-capability.mjs status") && source.includes("admin-capability.mjs smoke") && source.includes("db:platform:verify")
+      && adminSteps.length >= 5 && adminSteps.every((step) => step.includes("if: steps.admin.outputs.enabled == 'true'"));
+  });
+  checks.push(check("ci.deploy.admin", adminStepsGuarded && occursInOrder(stagingDeploy, "Migrate staging", "db:platform:configure") && occursInOrder(productionDeploy, "Migrate production", "db:platform:configure"), "staging and production deploy, verify, and smoke the platform admin only when capabilities.admin is true"));
   checks.push(check(
     "ci.deploy.migrate-before-role",
     occursInOrder(deploy, "Bootstrap staging runtime role", "Migrate staging")

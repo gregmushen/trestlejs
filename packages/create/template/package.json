@@ -15,7 +15,7 @@
     "dev": "trestle dev",
     "test:browser": "playwright test",
     "test:deployed": "TRESTLE_BROWSER_MODE=deployed playwright test tests/browser/site-handoff.spec.ts",
-    "test": "node --test scripts/provider-preflight.test.mjs scripts/queue-config.test.mjs scripts/cloudflare-queues.test.mjs scripts/cloudflare-r2.test.mjs scripts/serve-site.test.mjs scripts/smoke-operational.test.mjs && vitest run scripts/recovery-evidence.test.ts && pnpm -r test",
+    "test": "node --test scripts/admin-capability.test.mjs scripts/provider-preflight.test.mjs scripts/queue-config.test.mjs scripts/cloudflare-queues.test.mjs scripts/cloudflare-r2.test.mjs scripts/serve-site.test.mjs scripts/smoke-operational.test.mjs && vitest run scripts/recovery-evidence.test.ts && pnpm -r test",
     "typecheck": "tsc --noEmit -p tsconfig.tools.json && pnpm -r typecheck"
   },
   "devDependencies": {

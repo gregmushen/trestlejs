@@ -290,3 +290,58 @@ export function formatSourceDiff(report: SourceDiffReport): string {
     "",
   ].join("\n");
 }
+
+/**
+ * Adds the optional platform admin to an existing project: renders apps/admin
+ * from this CLI's template, enables it in the project manifest, and records
+ * the new files in the generation baseline so later upgrades treat them as
+ * template-owned. The project must already be on this CLI's template version
+ * so the admin sources match its packages. Disabling is never automatic.
+ */
+export async function enableAdminCapability(root: string, projectName: string, templateRoot = defaultTemplateRoot): Promise<readonly string[]> {
+  const manifestPath = path.join(root, ".trestle", "project.yaml");
+  if (!(await safeApplicationPath(root, ".trestle/project.yaml"))) throw new Error("Unsafe application path: .trestle/project.yaml");
+  const manifestSource = await readFile(manifestPath, "utf8");
+  const manifest = parseProjectManifest(manifestSource);
+  if (manifest.capabilities.admin) return [];
+  const framework = JSON.parse(await readFile(path.join(root, ".trestle", "framework.json"), "utf8")) as { templateVersion?: string };
+  if (framework.templateVersion !== TRESTLEJS_VERSION) {
+    throw new Error(`Enabling the platform admin requires template ${TRESTLEJS_VERSION}; this project is on ${framework.templateVersion ?? "an unknown version"}. Run trestle upgrade first.`);
+  }
+  if (!manifest.secrets?.DATABASE_ADMIN_URL || manifest.secrets.DATABASE_ADMIN_URL.target !== "admin") {
+    throw new Error("Declare DATABASE_ADMIN_URL with target: admin in .trestle/project.yaml before enabling the platform admin");
+  }
+  const enabled = new Set<OptionalTemplateCapability>(["admin"]);
+  const files = (await targetTemplateFiles(templateRoot, enabled)).filter((relative) => templatePathCapability(relative) === "admin");
+  for (const relative of files) {
+    if (!(await safeApplicationPath(root, relative))) throw new Error(`Unsafe application path: ${relative}`);
+    if (await optionalText(path.join(root, relative)) !== undefined) throw new Error(`${relative} already exists; move it aside before enabling the platform admin`);
+  }
+  const updatedManifest = applyManifestCapabilities(manifestSource, enabled);
+  parseProjectManifest(updatedManifest);
+
+  const written: string[] = [];
+  for (const relative of files) {
+    const destination = path.join(root, relative);
+    await mkdir(path.dirname(destination), { recursive: true });
+    if (!(await safeApplicationPath(root, relative))) throw new Error(`Unsafe application path: ${relative}`);
+    await writeFile(destination, await targetContent(templateRoot, relative, projectName, enabled), { encoding: "utf8", flag: "wx" });
+    written.push(relative);
+  }
+  await writeFile(manifestPath, updatedManifest, "utf8");
+
+  const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+  const baselineSource = await safeApplicationPath(root, ".trestle/template-baseline.json") ? await optionalText(baselinePath) : undefined;
+  if (baselineSource) {
+    const baseline = JSON.parse(baselineSource) as { schemaVersion?: number; templateVersion?: string; files?: Record<string, string> };
+    if (baseline.schemaVersion === 1 && baseline.templateVersion === TRESTLEJS_VERSION && validBaselineFiles(baseline.files)) {
+      const baselineFiles: Record<string, string> = { ...baseline.files };
+      for (const relative of written) baselineFiles[relative] = digest(await readFile(path.join(root, relative), "utf8"));
+      // An unedited manifest stays template-owned; an edited one keeps its recorded hash and remains application-owned.
+      if (baselineFiles[".trestle/project.yaml"] === digest(manifestSource)) baselineFiles[".trestle/project.yaml"] = digest(updatedManifest);
+      const sorted = Object.fromEntries(Object.entries(baselineFiles).sort(([left], [right]) => left.localeCompare(right)));
+      await writeFile(baselinePath, `${JSON.stringify({ ...baseline, files: sorted }, null, 2)}\n`, "utf8");
+    }
+  }
+  return [...written, ".trestle/project.yaml"];
+}

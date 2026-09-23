@@ -117,6 +117,18 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.worker.preview.secrets", status: "fail" }));
   });
 
+  it("rejects a platform admin deploy step that runs without the admin capability", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "pass" }));
+    const workflowPath = path.join(root, ".github", "workflows", "deploy.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replace("      - name: Verify the deployed production platform admin\n        if: steps.admin.outputs.enabled == 'true'\n", "      - name: Verify the deployed production platform admin\n"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "fail" }));
+  });
+
   it("rejects a workflow that downloads whatever CLI is currently latest", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);

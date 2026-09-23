@@ -25,6 +25,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Prepare staging Queue bindings
         run: node scripts/queue-config.mjs render staging __TRESTLE_PROJECT_NAME__-worker-staging
+      - name: Detect the optional platform admin
+        id: admin
+        run: node scripts/admin-capability.mjs status
       - name: Verify staging configuration and Cloudflare access
         run: |
           pnpm exec trestle doctor --env staging
@@ -80,6 +83,16 @@ jobs:
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
+      - name: Configure and verify the staging platform admin database role
+        if: steps.admin.outputs.enabled == 'true'
+        run: |
+          database_migration_url="$(pnpm exec trestle secrets get DATABASE_MIGRATION_URL --env staging --raw)"
+          database_admin_url="$(pnpm exec trestle secrets get DATABASE_ADMIN_URL --env staging --raw)"
+          DATABASE_MIGRATION_URL="$database_migration_url" pnpm --filter ./packages/db db:platform:configure
+          DATABASE_ADMIN_URL="$database_admin_url" pnpm --filter ./packages/db db:platform:verify
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          DATABASE_ADMIN_RUNTIME_ROLE: "${{ vars.DATABASE_ADMIN_RUNTIME_ROLE }}"
       - run: pnpm exec trestle secrets push --env staging
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
@@ -114,8 +127,37 @@ jobs:
           packageManager: pnpm
           workingDirectory: apps/site
           command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-site-staging --branch main
+      # The platform admin deploys only when capabilities.admin is true, to its own Worker and Pages origin.
+      - name: Provision the staging platform admin Pages project
+        if: steps.admin.outputs.enabled == 'true'
+        run: node scripts/cloudflare-pages.mjs ensure __TRESTLE_PROJECT_NAME__-admin-staging
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+      - if: steps.admin.outputs.enabled == 'true'
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
+        with:
+          apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+          packageManager: pnpm
+          workingDirectory: apps/admin
+          command: deploy --env staging --var ADMIN_ORIGIN:${{ vars.ADMIN_URL }} --var ADMIN_API_URL:${{ vars.ADMIN_API_URL }} --var API_URL:${{ vars.API_URL }}
+      - if: steps.admin.outputs.enabled == 'true'
+        run: VITE_ADMIN_API_ORIGIN="${{ vars.ADMIN_API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/admin build
+      - if: steps.admin.outputs.enabled == 'true'
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
+        with:
+          apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+          packageManager: pnpm
+          workingDirectory: apps/admin
+          command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-admin-staging --branch main
       - run: node scripts/smoke.mjs
         env: { TRESTLE_DEPLOY_ENV: staging, SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
+      - name: Verify the deployed staging platform admin
+        if: steps.admin.outputs.enabled == 'true'
+        run: node scripts/admin-capability.mjs smoke
+        env: { ADMIN_URL: "${{ vars.ADMIN_URL }}", ADMIN_API_URL: "${{ vars.ADMIN_API_URL }}" }
       - name: Verify staging Queue and R2 resources
         run: |
           node scripts/cloudflare-queues.mjs verify __TRESTLE_PROJECT_NAME__-worker-staging
@@ -145,6 +187,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Prepare production Queue bindings
         run: node scripts/queue-config.mjs render production __TRESTLE_PROJECT_NAME__-worker
+      - name: Detect the optional platform admin
+        id: admin
+        run: node scripts/admin-capability.mjs status
       - name: Verify production configuration and Cloudflare access
         run: |
           pnpm exec trestle doctor --env production
@@ -200,6 +245,16 @@ jobs:
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
+      - name: Configure and verify the production platform admin database role
+        if: steps.admin.outputs.enabled == 'true'
+        run: |
+          database_migration_url="$(pnpm exec trestle secrets get DATABASE_MIGRATION_URL --env production --raw)"
+          database_admin_url="$(pnpm exec trestle secrets get DATABASE_ADMIN_URL --env production --raw)"
+          DATABASE_MIGRATION_URL="$database_migration_url" pnpm --filter ./packages/db db:platform:configure
+          DATABASE_ADMIN_URL="$database_admin_url" pnpm --filter ./packages/db db:platform:verify
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          DATABASE_ADMIN_RUNTIME_ROLE: "${{ vars.DATABASE_ADMIN_RUNTIME_ROLE }}"
       - run: pnpm exec trestle secrets push --env production
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
@@ -234,8 +289,37 @@ jobs:
           packageManager: pnpm
           workingDirectory: apps/site
           command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-site --branch main
+      # The platform admin deploys only when capabilities.admin is true, to its own Worker and Pages origin.
+      - name: Provision the production platform admin Pages project
+        if: steps.admin.outputs.enabled == 'true'
+        run: node scripts/cloudflare-pages.mjs ensure __TRESTLE_PROJECT_NAME__-admin
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+      - if: steps.admin.outputs.enabled == 'true'
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
+        with:
+          apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+          packageManager: pnpm
+          workingDirectory: apps/admin
+          command: deploy --env production --var ADMIN_ORIGIN:${{ vars.ADMIN_URL }} --var ADMIN_API_URL:${{ vars.ADMIN_API_URL }} --var API_URL:${{ vars.API_URL }}
+      - if: steps.admin.outputs.enabled == 'true'
+        run: VITE_ADMIN_API_ORIGIN="${{ vars.ADMIN_API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/admin build
+      - if: steps.admin.outputs.enabled == 'true'
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
+        with:
+          apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+          packageManager: pnpm
+          workingDirectory: apps/admin
+          command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-admin --branch main
       - run: node scripts/smoke.mjs
         env: { TRESTLE_DEPLOY_ENV: production, SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
+      - name: Verify the deployed production platform admin
+        if: steps.admin.outputs.enabled == 'true'
+        run: node scripts/admin-capability.mjs smoke
+        env: { ADMIN_URL: "${{ vars.ADMIN_URL }}", ADMIN_API_URL: "${{ vars.ADMIN_API_URL }}" }
       - name: Verify production Queue and R2 resources
         run: |
           node scripts/cloudflare-queues.mjs verify __TRESTLE_PROJECT_NAME__-worker

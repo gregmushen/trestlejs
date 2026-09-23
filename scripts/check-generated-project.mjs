@@ -149,8 +149,50 @@ try {
     throw new Error("Fresh admin-enabled project did not match its bundled target template");
   }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], adminProject);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], adminProject);
   await run("pnpm", ["--filter", "./apps/admin", "build"], adminProject);
+  await run("pnpm", ["--filter", "./apps/admin", "exec", "wrangler", "deploy", "--dry-run", "--env", "production"], adminProject);
   await run("pnpm", ["--filter", "./apps/admin", "exec", "vitest", "run"], adminProject, process.env.TRESTLE_GENERATED_DATABASE_URL ? { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL } : {});
+  const adminStatus = (projectRoot) => execFileSync(process.execPath, ["scripts/admin-capability.mjs", "status"], { cwd: projectRoot, encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: "" } }).trim();
+  if (adminStatus(project) !== "enabled=false" || adminStatus(adminProject) !== "enabled=true") throw new Error("Deploy workflow admin detection does not match capabilities.admin");
+
+  // Admin enabled later: `trestle apply` on a fresh default project scaffolds exactly the template's admin app.
+  const applyProject = path.join(temporaryRoot, "apply-canary");
+  await run(process.execPath, [path.join(root, "packages/create/dist/bin.js"), applyProject, "--no-git", "--no-install"], root);
+  const applyManifestPath = path.join(applyProject, "package.json");
+  const applyManifest = JSON.parse(await readFile(applyManifestPath, "utf8"));
+  applyManifest.devDependencies.trestlejs = `file:${cliArchive}`;
+  applyManifest.pnpm = { ...(applyManifest.pnpm ?? {}), overrides: { ...(applyManifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
+  await writeFile(applyManifestPath, `${JSON.stringify(applyManifest, null, 2)}\n`);
+  await run("pnpm", ["install"], applyProject);
+  const described = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "project", "--json"], { cwd: applyProject, encoding: "utf8" })).data.manifest;
+  const { version: trestleVersion } = JSON.parse(await readFile(path.join(root, "packages", "cli", "package.json"), "utf8"));
+  const setupPlan = {
+    schemaVersion: 1,
+    minimumTrestleVersion: trestleVersion,
+    project: { name: described.project.name },
+    apps: { site: Boolean(described.apps.site), app: Boolean(described.apps.app), worker: Boolean(described.apps.worker) },
+    tenancy: described.tenancy,
+    database: { engine: described.database.engine, provider: described.database.defaultProvider },
+    capabilities: { ...described.capabilities, admin: true },
+    integrations: { email: Boolean(described.packages.integrations), billing: Boolean(described.packages.billing) },
+    environments: described.environments,
+    secrets: [],
+    resources: [],
+    externalResources: [],
+    destructiveOperations: [],
+    verification: { commands: ["pnpm check"] },
+  };
+  await writeFile(path.join(applyProject, ".trestle", "setup.json"), `${JSON.stringify(setupPlan, null, 2)}\n`);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "apply", ".trestle/setup.json", "--yes"], applyProject);
+  await run("pnpm", ["install", "--frozen-lockfile"], applyProject);
+  const appliedDiff = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "diff", "--json"], { cwd: applyProject, encoding: "utf8" }));
+  const appliedAdminFiles = appliedDiff.data.entries.filter((entry) => entry.path.startsWith("apps/admin/"));
+  if (!appliedDiff.data.baselineTrusted || appliedAdminFiles.length === 0 || appliedDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
+    throw new Error("trestle apply did not scaffold the platform admin exactly as the bundled template");
+  }
+  if (adminStatus(applyProject) !== "enabled=true") throw new Error("trestle apply did not enable capabilities.admin");
+  await run("pnpm", ["--filter", "./apps/admin", "build"], applyProject);
   console.log(`Generated release canary passed at ${project}`);
 } finally {
   if (process.env.TRESTLE_KEEP_GENERATED === "1") {

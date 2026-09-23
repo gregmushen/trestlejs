@@ -230,6 +230,48 @@ describe("TrestleJS CLI", () => {
     expect(unsafeFinalize.stderr()).toContain("matching baseline");
   });
 
+  it("plans the platform admin as a scaffold, and never disables it automatically", async () => {
+    const root = await fixture();
+    await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ schemaVersion: 1, templateVersion: "0.1.0-alpha.1" }));
+    const plan = {
+      schemaVersion: 1,
+      minimumTrestleVersion: TRESTLEJS_VERSION,
+      project: { name: "fixture" },
+      apps: { site: false, app: true, worker: true },
+      tenancy: { model: "organization", enforcement: "postgres-rls" },
+      database: { engine: "postgresql", provider: "neon" },
+      capabilities: { r2: true, queues: true, workflows: true, durableObjects: true, admin: true },
+      integrations: { email: false, billing: false },
+      environments: ["local", "preview", "staging", "production"],
+      secrets: [],
+      resources: [],
+      externalResources: [],
+      destructiveOperations: [],
+      verification: { commands: ["pnpm check"] },
+    };
+    await writeFile(path.join(root, ".trestle", "setup.json"), JSON.stringify(plan));
+    const diff = capture(root);
+    expect(await executeCli(["plan", "diff", ".trestle/setup.json", "--json"], diff.runtime)).toBe(0);
+    const items = JSON.parse(diff.stdout()).data.items as Array<{ id: string; classification: string }>;
+    expect(items).toContainEqual(expect.objectContaining({ id: "capabilities.admin", classification: "create" }));
+    expect(items).toContainEqual(expect.objectContaining({ id: "capabilities", classification: "already correct" }));
+    const manifest = await readFile(path.join(root, ".trestle", "project.yaml"), "utf8");
+    const stale = capture(root);
+    expect(await executeCli(["apply", ".trestle/setup.json", "--yes"], stale.runtime)).toBe(1);
+    expect(stale.stderr()).toContain("Run trestle upgrade first");
+    expect(await readFile(path.join(root, ".trestle", "project.yaml"), "utf8")).toBe(manifest);
+
+    await writeFile(path.join(root, ".trestle", "project.yaml"), manifest.replace("  worker: apps/worker\n", "  worker: apps/worker\n  admin: apps/admin\n").replace("  admin: false", "  admin: true"));
+    await writeFile(path.join(root, ".trestle", "setup.json"), JSON.stringify({ ...plan, capabilities: { ...plan.capabilities, admin: false } }));
+    const disable = capture(root);
+    expect(await executeCli(["apply", ".trestle/setup.json", "--yes"], disable.runtime)).toBe(1);
+    expect(disable.stderr()).toContain("delete capabilities.admin");
+    await mkdir(path.join(root, "apps", "admin"), { recursive: true });
+    const status = capture(root);
+    expect(await executeCli(["env", "status", "--env", "staging", "--json"], status.runtime), status.stderr()).toBe(0);
+    expect(JSON.parse(status.stdout()).data.requiredVariables).toEqual(["ADMIN_API_URL", "ADMIN_URL", "API_URL", "APP_URL", "DATABASE_ADMIN_RUNTIME_ROLE", "DATABASE_RUNTIME_ROLE", "SITE_URL"]);
+  });
+
   it("rejects runtime-role bootstrap for local and preview environments", async () => {
     const root = await fixture();
     const output = capture(root);

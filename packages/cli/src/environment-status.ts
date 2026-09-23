@@ -10,7 +10,7 @@ export type EnvironmentStatus = {
   declared: boolean;
   applications: Array<{ name: string; path: string; present: boolean }>;
   capabilities: Array<{ name: keyof ProjectManifest["capabilities"]; state: "declared" | "configured" | "unavailable" }>;
-  requiredSecrets: Array<{ name: string; target: "worker" | "ci" }>;
+  requiredSecrets: Array<{ name: string; target: "worker" | "ci" | "admin" }>;
   requiredVariables: string[];
 };
 
@@ -30,7 +30,7 @@ export async function inspectEnvironmentStatus(root: string, manifest: ProjectMa
       : "declared" as const,
   }));
   const requiredSecrets = Object.entries(manifest.secrets ?? {})
-    .filter(([, declaration]) => declaration.required.includes(environment))
+    .filter(([, declaration]) => declaration.required.includes(environment) && (declaration.target !== "admin" || manifest.capabilities.admin))
     .map(([name, declaration]) => ({ name, target: declaration.target }))
     .sort((left, right) => left.name.localeCompare(right.name));
   return {
@@ -41,7 +41,13 @@ export async function inspectEnvironmentStatus(root: string, manifest: ProjectMa
     requiredSecrets,
     requiredVariables: environment === "local"
       ? []
-      : ["API_URL", "APP_URL", ...(environment === "preview" ? ["CLOUDFLARE_WORKERS_SUBDOMAIN", "NEON_DATABASE", "NEON_MIGRATION_ROLE", "NEON_PROJECT_ID"] : []), "DATABASE_RUNTIME_ROLE", "SITE_URL"],
+      : [
+        // The platform admin deploys to staging and production only, on its own origin.
+        ...(manifest.capabilities.admin && environment !== "preview" ? ["ADMIN_API_URL", "ADMIN_URL"] : []),
+        "API_URL", "APP_URL", ...(environment === "preview" ? ["CLOUDFLARE_WORKERS_SUBDOMAIN", "NEON_DATABASE", "NEON_MIGRATION_ROLE", "NEON_PROJECT_ID"] : []),
+        ...(manifest.capabilities.admin && environment !== "preview" ? ["DATABASE_ADMIN_RUNTIME_ROLE"] : []),
+        "DATABASE_RUNTIME_ROLE", "SITE_URL",
+      ],
   };
 }
 

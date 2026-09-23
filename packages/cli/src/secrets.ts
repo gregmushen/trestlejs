@@ -189,9 +189,19 @@ export function validateSecrets(values: SecretValues, manifest: ProjectManifest,
     if (!declarations[name]) problems.push(`${name} is not declared in .trestle/project.yaml`);
   }
   for (const [name, declaration] of Object.entries(declarations)) {
+    // Admin-only secrets are required only when the optional platform admin is enabled.
+    if (declaration.target === "admin" && !manifest.capabilities.admin) continue;
     if (declaration.required.includes(environment) && !values[name]) problems.push(`${name} is required for ${environment}`);
   }
   return problems;
+}
+
+/** Values the platform admin Worker receives: admin-targeted secrets and Worker secrets explicitly shared with it. */
+export function adminSecretValues(values: SecretValues, manifest: ProjectManifest): SecretValues {
+  return Object.fromEntries(Object.entries(values).filter(([name]) => {
+    const declaration = manifest.secrets?.[name];
+    return declaration?.target === "admin" || declaration?.shareWith?.includes("admin");
+  }));
 }
 
 export async function editSecrets(root: string, environment: EnvironmentName, environmentKey?: string, manifest?: ProjectManifest): Promise<void> {

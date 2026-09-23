@@ -6,7 +6,7 @@ import path from "node:path";
 import { applyManifestCapabilities, TRESTLEJS_VERSION } from "@trestlejs/core";
 import { describe, expect, it } from "vitest";
 
-import { applySourceUpgrade, finalizeSourceUpgrade, planSourceDiff } from "../src/upgrade-source.js";
+import { applySourceUpgrade, enableAdminCapability, finalizeSourceUpgrade, planSourceDiff } from "../src/upgrade-source.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -270,5 +270,63 @@ describe("adjacent-alpha source apply", () => {
       expect((await planSourceDiff(root, "sample-app", template)).baselineTrusted).toBe(false);
       await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("matching baseline");
     } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+});
+
+describe("enabling the platform admin in an existing project", () => {
+  async function project(templateVersion = TRESTLEJS_VERSION) {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "trestle-admin-enable-"));
+    const root = path.join(parent, "sample-app");
+    const template = path.join(parent, "template");
+    const templateManifest = await readFile(path.join(import.meta.dirname, "..", "..", "create", "template", ".trestle", "project.yaml"), "utf8");
+    const manifest = templateManifest.replaceAll("__TRESTLE_PROJECT_NAME__", "sample-app");
+    await mkdir(path.join(template, ".trestle"), { recursive: true });
+    await mkdir(path.join(template, "apps", "admin", "worker"), { recursive: true });
+    await writeFile(path.join(template, ".trestle", "project.yaml"), templateManifest);
+    await writeFile(path.join(template, "apps", "admin", "worker", "index.ts"), "export const project = \"__TRESTLE_PROJECT_NAME__\";\n");
+    await writeFile(path.join(template, "README.md"), "readme\n");
+    await mkdir(path.join(root, ".trestle"), { recursive: true });
+    await writeFile(path.join(root, ".trestle", "project.yaml"), manifest);
+    await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ schemaVersion: 1, templateVersion }));
+    await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion, files: { ".trestle/project.yaml": hash(manifest), "README.md": hash("readme\n") } }));
+    return { parent, root, template, manifest };
+  }
+
+  it("renders apps/admin, enables the manifest, and records template ownership", async () => {
+    const { parent, root, template, manifest } = await project();
+    try {
+      expect(await enableAdminCapability(root, "sample-app", template)).toEqual(["apps/admin/worker/index.ts", ".trestle/project.yaml"]);
+      expect(await readFile(path.join(root, "apps", "admin", "worker", "index.ts"), "utf8")).toBe("export const project = \"sample-app\";\n");
+      const enabled = await readFile(path.join(root, ".trestle", "project.yaml"), "utf8");
+      expect(enabled).toBe(applyManifestCapabilities(manifest, new Set(["admin"])));
+      const baseline = JSON.parse(await readFile(path.join(root, ".trestle", "template-baseline.json"), "utf8")) as { files: Record<string, string> };
+      expect(baseline.files["apps/admin/worker/index.ts"]).toBe(hash("export const project = \"sample-app\";\n"));
+      expect(baseline.files[".trestle/project.yaml"]).toBe(hash(enabled));
+      const report = await planSourceDiff(root, "sample-app", template);
+      expect(report.entries.find((entry) => entry.path === "apps/admin/worker/index.ts")?.classification).toBe("same");
+      expect(report.entries.find((entry) => entry.path === ".trestle/project.yaml")?.classification).toBe("same");
+      expect(await enableAdminCapability(root, "sample-app", template)).toEqual([]);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses an older template version and never overwrites existing admin files", async () => {
+    const older = await project("0.1.0-alpha.1");
+    try {
+      await expect(enableAdminCapability(older.root, "sample-app", older.template)).rejects.toThrow(/Run trestle upgrade first/u);
+    } finally {
+      await rm(older.parent, { recursive: true, force: true });
+    }
+    const existing = await project();
+    try {
+      await mkdir(path.join(existing.root, "apps", "admin", "worker"), { recursive: true });
+      await writeFile(path.join(existing.root, "apps", "admin", "worker", "index.ts"), "application code\n");
+      await expect(enableAdminCapability(existing.root, "sample-app", existing.template)).rejects.toThrow(/already exists/u);
+      expect(await readFile(path.join(existing.root, "apps", "admin", "worker", "index.ts"), "utf8")).toBe("application code\n");
+      expect(await readFile(path.join(existing.root, ".trestle", "project.yaml"), "utf8")).toBe(existing.manifest);
+    } finally {
+      await rm(existing.parent, { recursive: true, force: true });
+    }
   });
 });

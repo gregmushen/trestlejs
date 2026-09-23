@@ -35,6 +35,7 @@ import { applySourceUpgrade, finalizeSourceUpgrade, formatSourceDiff, planSource
 import { auditMigrations, formatMigrationAudit } from "./upgrade-migrations.js";
 import { loadSetupPlan, startSetupConsole } from "./setup.js";
 import {
+  adminSecretValues,
   credentialsPaths,
   editSecrets,
   formatSecretDocument,
@@ -328,6 +329,8 @@ export function createProgram(runtime: CliRuntime): Command {
       const context = await projectContext(command, runtime);
       const loaded = await readSetupPlan(context.root, file, runtime);
       const state = await applySetupPlan(context.root, context.manifest, loaded.plan, loaded.input);
+      // A newly enabled platform admin adds a workspace package; refresh the lockfile so installs stay frozen.
+      if (state.operations.some(({ id, status }) => id === "capabilities.admin" && status === "completed")) await runCommand("pnpm", ["install", "--lockfile-only"], { cwd: context.root, env: process.env });
       runtime.stdout(`Applied SetupPlan ${state.planHash.slice(0, 12)}\n${state.operations.map((operation) => `✓ ${operation.id}${operation.files?.length ? ` (${operation.files.length} files)` : ""}`).join("\n")}\n`);
     });
 
@@ -460,6 +463,12 @@ export function createProgram(runtime: CliRuntime): Command {
       const workerValues = Object.fromEntries(Object.entries(values).filter(([name]) => context.manifest.secrets?.[name]?.target === "worker"));
       await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", "secret", "bulk", "--env", options.env, ...(options.workerName ? ["--name", options.workerName] : [])], { cwd: context.root, env: process.env, input: JSON.stringify(workerValues) });
       runtime.stdout(`Pushed ${Object.keys(workerValues).length} Worker secrets to ${options.env}; local encrypted credentials remain authoritative\n`);
+      if (context.manifest.capabilities.admin && !options.workerName) {
+        // The platform admin Worker receives only admin-targeted and explicitly shared values.
+        const adminValues = adminSecretValues(values, context.manifest);
+        await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/admin`, "exec", "wrangler", "secret", "bulk", "--env", options.env], { cwd: context.root, env: process.env, input: JSON.stringify(adminValues) });
+        runtime.stdout(`Pushed ${Object.keys(adminValues).length} platform admin Worker secrets to ${options.env}\n`);
+      }
     });
 
   secrets
