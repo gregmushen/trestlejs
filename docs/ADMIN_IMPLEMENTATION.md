@@ -38,7 +38,7 @@ not exist yet.
 | Additions §3 support sessions | `support_session` stores the reason, ticket, profile, frozen permission snapshot, expiry, and how the session ended. Profiles and the preview are in `packages/authz/src/support-profiles.ts`. The admin support routes, which check the active session on every request, are in `apps/admin/worker/support.ts`. The views are Support Sessions and Support Workspace. `audit_event.support_session_id` and outbox payloads record the session. |
 | Outbox runner | `apps/worker/src/outbox-runner.ts` runs on the Worker cron trigger. It leases with SKIP LOCKED, fans out to webhooks and notifications, forwards to the queue when bound, and delivers due work found by the SECURITY DEFINER due-work functions, processing each item on its tenant's RLS connection. `trestle dev` fires the trigger every 3 seconds. |
 | §12 customer transparency | `/settings/plan`, `/settings/members`, and `/settings/api-keys` in `apps/app`, backed by `GET /api/tenant/plan-usage` and `/api/tenant/access`. |
-| §13 persistence | Migrations `0009_access_control` (forced RLS on every tenant table, `trestle_platform` role, column grants that exclude verifiers, session tokens, and passwords, the resolver function, and the plan seed) and `0010_operational_projections`. Tenant repositories are in `packages/data`, platform repositories in `packages/platform`. Every mutation commits with its audit row and outbox event, including on Neon HTTP, through `createSqlRunner().atomic`. |
+| §13 persistence | Migrations `0012_access_control` (forced RLS on every tenant table, `trestle_platform` role, column grants that exclude verifiers, session tokens, and passwords, the resolver function, and the plan seed) and `0013_operational_projections`. Tenant repositories are in `packages/data`, platform repositories in `packages/platform`. Every mutation commits with its audit row and outbox event, including on Neon HTTP, through `createSqlRunner().atomic`. |
 | Email operations | `RecordingEmailService` records each send (template, masked recipient, provider, correlation, failure category) in `email_delivery`. Provider webhooks update its status. Content is never stored. |
 | §14 audit | Semantic, versioned `audit_event` rows are append-only and grant only SELECT and INSERT. Tenants never see platform rows. |
 | §16 CLI | The access commands are `trestle permissions/roles/entitlements`, `trestle admin install/doctor/views`, `trestle api-keys doctor`, and `trestle generate permission --plane / admin-view / admin-resource`. Inspection runs the project's `scripts/inspect-access.ts`. |
@@ -202,20 +202,20 @@ Evidence for these changes:
   plus the §19 deployed acceptance run, remain for the beta-hardening slice.
 - **Existing projects.** `trestle admin install` declares the surface but does
   not copy the scaffold. Projects generated before this milestone must copy
-  `apps/admin`, `packages/platform`, and migrations 0009 through 0015 from a
+  `apps/admin`, `packages/platform`, and migrations 0012 through 0018 from a
   fresh project.
 
 ## Port onto alpha 31
 
 This work began on alpha 8 and was ported onto alpha 31. What changed in the port:
 
-- **Migrations moved after `main`'s.** The admin migrations are now `0009` through `0014`,
-  following `main`'s `0006_commercial_control_plane`, `0007_thin_gravity`, and
-  `0008_event_inbox`, with journal timestamps after `0008`.
-- **The `plan_version` column is converted in place.** `0009_access_control` turns
+- **Migrations moved after `main`'s.** The admin migrations are now `0012` through `0017`,
+  following `main`'s `0006` through `0011` (commercial control plane, application role,
+  event inbox, and artifact lifecycle), with journal timestamps after `0011`.
+- **The `plan_version` column is converted in place.** `0012_access_control` turns
   `organization_subscription.plan_version` from `main`'s integer into the
   `plan@version` text reference.
-- **`0015_reconcile_authority` carries forward alpha data.**
+- **`0018_reconcile_authority` carries forward alpha data.**
   - `member.application_role` becomes `application_role_assignment` rows:
     `contributor` becomes `editor` and `viewer` becomes `reader`.
   - `organization_entitlement_override` rows move into `subscription_override`.
@@ -262,7 +262,7 @@ This section maps [REGIONAL_SETTINGS_ADMIN_SPEC.md](REGIONAL_SETTINGS_ADMIN_SPEC
 | §12 schedules | `ScheduleDefinition` with an `organization` or `zoned` zone (`packages/regional/src/schedules.ts`). The application registry is `packages/domain/src/regional/schedules.ts`, empty by default. DST gaps move forward, and repeated local times resolve to the first occurrence. |
 | §15 permissions | `organization.settings.regional.read`/`.manage` go to members and billing admins (read) and owners and admins (both). `platform.organizations.regional.read` goes to support, billing operations, and platform operators; `.recover` goes to platform operators. |
 | §18 Needs attention | Organizations whose stored zone, locale, or currency no longer validate appear in the overview (`PostgresPlatformRepository.overviewExceptions`). |
-| Persistence | Migration `0016_regional_settings`. `organization_regional_settings` has forced tenant RLS. `user_regional_preference` has forced RLS on `app.user_id`, which is set only inside the reading or writing transaction. The platform role gets SELECT only. |
+| Persistence | Migration `0019_regional_settings`. `organization_regional_settings` has forced tenant RLS. `user_regional_preference` has forced RLS on `app.user_id`, which is set only inside the reading or writing transaction. The platform role gets SELECT only. |
 
 Evidence:
 - `packages/regional/src/regional.test.ts`: identifiers, resolution, preview, money, zone search, schedules, and DST.

@@ -36,7 +36,7 @@ test("R2-only Worker config binds the bucket without enabling Queues", () => {
   const rendered = JSON.parse(renderQueueConfig(wrangler, "preview", "example-worker-pr-12", { queues: false, r2: true }));
   assert.deepEqual(rendered.env.preview.r2_buckets, [{ binding: "TRESTLE_ARTIFACTS", bucket_name: "example-worker-pr-12-artifacts" }]);
   assert.equal(rendered.env.preview.queues, undefined);
-  assert.equal(rendered.env.preview.triggers, undefined);
+  assert.deepEqual(rendered.env.preview.triggers.crons, ["* * * * *"]);
   assert.equal(rendered.env.staging.r2_buckets, undefined);
 });
 

@@ -11,6 +11,7 @@ import type { CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
+import { maintainArtifacts } from "./artifact-maintenance.js";
 import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
 import { authCapabilities, workerAuth } from "./auth.js";
 import { reportCapabilityStatus } from "./capability-report.js";
@@ -328,10 +329,20 @@ export default {
     try { return await createQueueConsumer(eventConsumers, inbox)(batch, environment); }
     finally { await inbox.close(); }
   },
-  // Publishes committed outbox events to webhooks, notifications, and the queue, then delivers what is due.
+  // Each tick publishes the outbox (webhooks, notifications, queue forwarding) and, with R2 bound,
+  // maintains artifacts. The jobs run independently so one failure never starves the other.
   scheduled: async (_controller: unknown, environment: WorkerEnvironment, context?: { waitUntil(promise: Promise<unknown>): void }) => {
     assertQueueBinding(environment);
-    const run = runOutbox(environment);
+    const maintenance = async () => {
+      if (!environment.TRESTLE_ARTIFACTS) return;
+      const result = await maintainArtifacts(environment);
+      createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.maintenance.completed", result);
+      if (result.failed > 0) throw new Error("Artifact maintenance left incomplete cleanup work");
+    };
+    const run = Promise.allSettled([runOutbox(environment), maintenance()]).then((results) => {
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failure) throw failure.reason;
+    });
     if (context) context.waitUntil(run); else await run;
   },
 };

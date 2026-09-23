@@ -51,14 +51,69 @@ suite("forced PostgreSQL tenant isolation", () => {
     const repository = new PostgresArtifactMetadataRepository(createDatabase(connectionString!, "postgres-js"));
     try {
       await repository.put({ id, organizationId: "org-a", key: "org-a/original", contentType: "text/plain", size: 1, createdAt: new Date() });
+      expect(await repository.get("org-a", id)).toBeNull();
       await expect(repository.put({ id, organizationId: "org-b", key: "org-b/replacement", contentType: "text/plain", size: 2, createdAt: new Date() })).rejects.toThrow("unavailable");
       await expect(repository.put({ id, organizationId: "org-a", key: "org-a/replacement", contentType: "text/plain", size: 2, createdAt: new Date() })).rejects.toThrow("unavailable");
+      expect(await repository.complete("org-b", id, "org-a/original")).toBe(false);
+      expect(await repository.complete("org-a", id, "org-a/replacement")).toBe(false);
+      expect(await repository.complete("org-a", id, "org-a/original")).toBe(true);
       expect(await repository.get("org-a", id)).toMatchObject({ key: "org-a/original", size: 1 });
       expect(await repository.discard("org-b", id, "org-a/original")).toBe(false);
       expect(await repository.discard("org-a", id, "org-a/replacement")).toBe(false);
       expect(await repository.get("org-a", id)).not.toBeNull();
+      expect(await repository.retire("org-b", id, "org-a/original")).toBe(false);
+      expect(await repository.remove("org-a", id)).toBe(true);
+      expect(await repository.get("org-a", id)).toBeNull();
+      await expect(repository.put({ id, organizationId: "org-a", key: "org-a/reuse", contentType: "text/plain", size: 2, createdAt: new Date() })).rejects.toThrow("unavailable");
     } finally {
       await sql!`delete from artifact_metadata where id = ${id}`;
+    }
+  });
+
+  it("releases only a pending reservation and retains a retired identifier", async () => {
+    const pendingId = `${prefix}artifact-pending`;
+    const retiredId = `${prefix}artifact-retired`;
+    const repository = new PostgresArtifactMetadataRepository(createDatabase(connectionString!, "postgres-js"));
+    try {
+      await repository.put({ id: pendingId, organizationId: "org-a", key: "org-a/pending", contentType: "text/plain", size: 1, createdAt: new Date() });
+      expect(await repository.get("org-a", pendingId)).toBeNull();
+      expect(await repository.discard("org-b", pendingId, "org-a/pending")).toBe(false);
+      expect(await repository.discard("org-a", pendingId, "org-a/wrong")).toBe(false);
+      expect(await repository.discard("org-a", pendingId, "org-a/pending")).toBe(true);
+      await repository.put({ id: pendingId, organizationId: "org-a", key: "org-a/retry", contentType: "text/plain", size: 1, createdAt: new Date() });
+      await repository.put({ id: retiredId, organizationId: "org-a", key: "org-a/retired", contentType: "text/plain", size: 1, createdAt: new Date() });
+      expect(await repository.retire("org-a", retiredId, "org-a/retired")).toBe(true);
+      expect(await repository.complete("org-a", retiredId, "org-a/retired")).toBe(false);
+      await expect(repository.put({ id: retiredId, organizationId: "org-a", key: "org-a/reuse", contentType: "text/plain", size: 1, createdAt: new Date() })).rejects.toThrow("unavailable");
+    } finally {
+      await sql!`delete from artifact_metadata where id in (${pendingId}, ${retiredId})`;
+    }
+  });
+
+  it("claims stale incomplete metadata with exact tenant, key, and cutoff", async () => {
+    const staleId = `${prefix}stale-artifact`;
+    const recentId = `${prefix}recent-artifact`;
+    const repository = new PostgresArtifactMetadataRepository(createDatabase(connectionString!, "postgres-js"));
+    const old = new Date("2026-01-01T00:00:00Z");
+    const recent = new Date("2026-01-03T00:00:00Z");
+    const cutoff = new Date("2026-01-02T00:00:00Z");
+    try {
+      await repository.put({ id: staleId, organizationId: "org-a", key: "org-a/stale", contentType: "text/plain", size: 1, createdAt: old });
+      await repository.put({ id: recentId, organizationId: "org-a", key: "org-a/recent", contentType: "text/plain", size: 1, createdAt: recent });
+      expect((await repository.listIncomplete("org-a", cutoff, 10)).map(({ id }) => id)).toEqual([staleId]);
+      expect(await repository.listIncomplete("org-b", cutoff, 10)).toEqual([]);
+      expect(await repository.claimIncomplete("org-b", staleId, "org-a/stale", cutoff)).toBe(false);
+      expect(await repository.claimIncomplete("org-a", staleId, "org-a/wrong", cutoff)).toBe(false);
+      expect(await repository.claimIncomplete("org-a", recentId, "org-a/recent", cutoff)).toBe(false);
+      expect(await repository.claimIncomplete("org-a", staleId, "org-a/stale", cutoff)).toBe(true);
+      expect(await repository.complete("org-a", staleId, "org-a/stale")).toBe(false);
+      expect(await repository.get("org-a", staleId)).toBeNull();
+      expect(await repository.retire("org-a", staleId, "org-a/stale")).toBe(true);
+      expect(await repository.listIncomplete("org-a", cutoff, 10)).toEqual([]);
+      await expect(repository.put({ id: staleId, organizationId: "org-a", key: "org-a/reuse", contentType: "text/plain", size: 1, createdAt: recent })).rejects.toThrow("unavailable");
+      await expect(repository.listIncomplete("org-a", cutoff, 101)).rejects.toThrow("Invalid artifact recovery");
+    } finally {
+      await sql!`delete from artifact_metadata where id in (${staleId}, ${recentId})`;
     }
   });
 
