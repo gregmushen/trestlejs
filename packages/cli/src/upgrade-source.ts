@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +19,9 @@ export type SourceDiffReport = Readonly<{
 }>;
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-const defaultTemplateRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "template");
+const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+const bundledTemplateRoot = path.join(moduleDirectory, "template");
+const defaultTemplateRoot = existsSync(bundledTemplateRoot) ? bundledTemplateRoot : path.join(moduleDirectory, "..", "..", "create", "template");
 
 function render(source: string, projectName: string): string {
   const bucketSource = `${projectName}-worker-artifacts`;
@@ -206,6 +209,56 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
     changed.push(entry.path);
   }
   return changed;
+}
+
+async function assertSourceReadyToFinalize(root: string, projectName: string, templateRoot: string): Promise<void> {
+  const report = await planSourceDiff(root, projectName, templateRoot);
+  if (!report.baselineTrusted || !adjacentAlpha(report.sourceTemplateVersion, report.targetTemplateVersion)) {
+    throw new Error("Source finalization requires a matching baseline from the immediately preceding alpha");
+  }
+  const upgrade = await planUpgrade(root);
+  if (upgrade.operations.find(({ id }) => id === "cli-version")?.classification !== "already-correct") {
+    throw new Error("Source finalization requires the target CLI version in package.json and pnpm-lock.yaml");
+  }
+  const packageManifestMatches = await expectedPackageManifest(root, projectName, templateRoot);
+  const conflicts = report.entries.filter(({ path: relative, classification }) => {
+    if (relative === ".trestle/framework.json") return classification !== "unchanged" && classification !== "same";
+    if (relative === "package.json") return !packageManifestMatches;
+    return classification !== "same" && classification !== "retired-missing";
+  });
+  if (conflicts.length) throw new Error(`Source finalization requires target parity and review of retired files: ${conflicts.map(({ path: relative }) => relative).join(", ")}`);
+}
+
+/** Certifies only local source parity, after the caller runs the project's
+ * full check command. It does not claim deployed/provider readiness. */
+export async function finalizeSourceUpgrade(
+  root: string,
+  projectName: string,
+  verify: () => Promise<void>,
+  templateRoot = defaultTemplateRoot,
+): Promise<void> {
+  await assertSourceReadyToFinalize(root, projectName, templateRoot);
+  await verify();
+  await assertSourceReadyToFinalize(root, projectName, templateRoot);
+
+  const markerPath = path.join(root, ".trestle", "framework.json");
+  const marker = JSON.parse(await readFile(markerPath, "utf8")) as Record<string, unknown>;
+  const updatedMarker = `${JSON.stringify({ ...marker, schemaVersion: 1, templateVersion: TRESTLEJS_VERSION }, null, 2)}\n`;
+  const files: Record<string, string> = {};
+  for (const relative of await templateFiles(templateRoot)) {
+    if (!(await safeApplicationPath(root, relative))) throw new Error(`Unsafe application path: ${relative}`);
+    if (relative === ".trestle/framework.json") { files[relative] = digest(updatedMarker); continue; }
+    const current = await readFile(path.join(root, relative), "utf8");
+    const sourceRelative = relative === ".gitignore" ? "_gitignore" : relative;
+    const target = render(await readFile(path.join(templateRoot, sourceRelative), "utf8"), projectName);
+    if (relative === "package.json") {
+      if (canonicalJson(JSON.parse(current)) !== canonicalJson(JSON.parse(target))) throw new Error("package.json changed during source finalization");
+    } else if (current !== target) throw new Error(`Application file changed during source finalization: ${relative}`);
+    files[relative] = digest(current);
+  }
+  await assertSourceReadyToFinalize(root, projectName, templateRoot);
+  await writeFile(path.join(root, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files }, null, 2)}\n`, "utf8");
+  await writeFile(markerPath, updatedMarker, "utf8");
 }
 
 export function formatSourceDiff(report: SourceDiffReport): string {

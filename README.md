@@ -285,6 +285,7 @@ trestle upgrade plan                preview an application-preserving upgrade
 trestle upgrade apply --yes         update metadata only after source-version review
 trestle upgrade diff                inventory target-template source changes
 trestle upgrade source-apply --yes  apply pristine adjacent-alpha source only
+trestle upgrade source-finalize --yes  run local checks and certify source parity
 trestle resource add-field ...      add an optional field and tracked migration
 ```
 
@@ -301,7 +302,11 @@ alpha when a matching generation baseline exists. It refuses application edits,
 missing files, symlinks, and configuration or migration changes. It also
 reports generated files retired by the new template and refuses to proceed
 until any still-present retired paths are reviewed. Neither source apply nor
-package installation relabels the application source as current.
+package installation relabels the application source as current. Once source
+parity is exact, `upgrade source-finalize --yes` runs the project's `pnpm check`,
+rechecks source, and advances its version marker and checksum baseline. It does
+not certify deployed providers; follow with `trestle upgrade plan` and the
+remaining deployment and recovery gates.
 Freshly generated projects record checksums of their generated files in
 `.trestle/template-baseline.json`. `trestle upgrade diff` compares those files
 with the target template without changing them. Older projects without a

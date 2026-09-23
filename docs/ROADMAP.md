@@ -519,6 +519,12 @@ blocks source apply for deliberate review; a path already removed is reported
 without blocking. Malformed baseline paths or checksums are untrusted and
 cannot direct reads outside the project. This closes a stale-source gap but
 does not yet certify migrations or advance the application template marker.
+Alpha 73 adds source finalization for a pristine adjacent-alpha project. It
+requires target parity, no present retired paths, an exact CLI/lockfile pin,
+and a passing project `pnpm check`; it rechecks parity afterward, then advances
+the source marker and checksum baseline. `upgrade apply` keeps that baseline
+aligned when it records the final managed metadata. This certifies local source
+parity only, not hosted deployment, external providers, or recovery readiness.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

@@ -31,7 +31,7 @@ import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js"
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
-import { applySourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
+import { applySourceUpgrade, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { loadSetupPlan, startSetupConsole } from "./setup.js";
 import {
   credentialsPaths,
@@ -196,6 +196,16 @@ export function createProgram(runtime: CliRuntime): Command {
       const context = await projectContext(command, runtime);
       const changed = await applySourceUpgrade(context.root, context.manifest.project.name);
       runtime.stdout(`Applied ${changed.length} pristine source paths. Application edits were preserved. The framework version was not advanced; review migrations and run all checks before certification.\n`);
+    });
+  upgrade.command("source-finalize")
+    .description("verify pristine adjacent-alpha source and run local checks before advancing its version")
+    .option("--yes", "confirm local source finalization")
+    .action(async (options: { yes?: boolean }, command: Command) => {
+      if (!options.yes) throw new CliFailure("upgrade source-finalize requires --yes after reviewing trestle upgrade diff");
+      const context = await projectContext(command, runtime);
+      await finalizeSourceUpgrade(context.root, context.manifest.project.name,
+        async () => { await runCommand("pnpm", ["check"], { cwd: context.root, env: process.env }); });
+      runtime.stdout("Local checks passed and application source matches the target template. The source version and baseline were advanced; deployed provider readiness remains unverified.\n");
     });
   upgrade.command("plan")
     .option("--json", "emit versioned structured output")

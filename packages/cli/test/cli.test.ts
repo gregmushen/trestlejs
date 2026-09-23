@@ -194,6 +194,12 @@ describe("TrestleJS CLI", () => {
     const apply = capture(root);
     expect(await executeCli(["upgrade", "apply"], apply.runtime)).toBe(1);
     expect(apply.stderr()).toContain("requires --yes");
+    const finalize = capture(root);
+    expect(await executeCli(["upgrade", "source-finalize"], finalize.runtime)).toBe(1);
+    expect(finalize.stderr()).toContain("requires --yes");
+    const unsafeFinalize = capture(root);
+    expect(await executeCli(["upgrade", "source-finalize", "--yes"], unsafeFinalize.runtime)).toBe(1);
+    expect(unsafeFinalize.stderr()).toContain("matching baseline");
   });
 
   it("rejects runtime-role bootstrap for local and preview environments", async () => {
