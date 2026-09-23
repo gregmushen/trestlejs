@@ -10,6 +10,8 @@ export interface ArtifactMetadataRepository {
   put(metadata: ArtifactMetadata): Promise<ArtifactMetadata>;
   complete(organizationId: string, id: string, key: string): Promise<boolean>;
   get(organizationId: string, id: string): Promise<ArtifactMetadata | null>;
+  /** Make a ready object inaccessible before attempting an external delete. */
+  beginDeletion(organizationId: string, id: string): Promise<ArtifactMetadata | null>;
   remove(organizationId: string, id: string): Promise<boolean>;
   discard(organizationId: string, id: string, key: string): Promise<boolean>;
   retire(organizationId: string, id: string, key: string): Promise<boolean>;
@@ -29,6 +31,7 @@ export class InMemoryArtifactMetadataRepository implements ArtifactMetadataRepos
   async put(metadata: ArtifactMetadata): Promise<ArtifactMetadata> { if (this.reservedIds.has(metadata.id)) throw new Error("artifact identifier is unavailable"); this.records.set(metadata.id, metadata); this.reservedIds.add(metadata.id); this.pendingIds.add(metadata.id); return metadata; }
   async complete(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key || !this.pendingIds.has(id)) return false; this.pendingIds.delete(id); return true; }
   async get(organizationId: string, id: string): Promise<ArtifactMetadata | null> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId && !this.pendingIds.has(id) && !this.cleaningIds.has(id) ? { ...metadata } : null; }
+  async beginDeletion(organizationId: string, id: string): Promise<ArtifactMetadata | null> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || this.pendingIds.has(id)) return null; this.cleaningIds.add(id); return { ...metadata }; }
   async remove(organizationId: string, id: string): Promise<boolean> { const metadata = this.records.get(id); return metadata?.organizationId === organizationId && !this.pendingIds.has(id) && !this.cleaningIds.has(id) ? this.records.delete(id) : false; }
   async discard(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key || !this.pendingIds.has(id)) return false; this.pendingIds.delete(id); this.reservedIds.delete(id); return this.records.delete(id); }
   async retire(organizationId: string, id: string, key: string): Promise<boolean> { const metadata = this.records.get(id); if (metadata?.organizationId !== organizationId || metadata.key !== key) return false; this.pendingIds.delete(id); this.cleaningIds.delete(id); return this.records.delete(id); }
@@ -115,7 +118,15 @@ export class CloudflareR2ArtifactStore implements ArtifactStore {
     }
   }
   async get(organizationId: string, id: string): Promise<Artifact | null> { const metadata = await this.metadata.get(organizationId, id); if (!metadata) return null; const object = await this.bucket.get(metadata.key); return object ? { ...metadata, body: new Uint8Array(await object.arrayBuffer()) } : null; }
-  async delete(organizationId: string, id: string): Promise<boolean> { const metadata = await this.metadata.get(organizationId, id); if (!metadata) return false; await this.bucket.delete(metadata.key); return await this.metadata.remove(organizationId, id); }
+  async delete(organizationId: string, id: string): Promise<boolean> {
+    const metadata = await this.metadata.beginDeletion(organizationId, id);
+    if (!metadata) return false;
+    // A failed external delete leaves a durable, inaccessible "cleaning" row.
+    // The scheduled recovery sweep retries it after the bounded grace period.
+    await this.bucket.delete(metadata.key);
+    await this.metadata.retire(organizationId, id, metadata.key);
+    return true;
+  }
   async recoverIncomplete(organizationId: string, before: Date, limit = 25): Promise<{ claimed: number; retired: number; failed: number }> {
     validateRecovery(before, limit);
     if (!organizationId) throw new Error("Artifact owner is required for recovery");

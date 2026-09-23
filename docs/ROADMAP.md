@@ -57,8 +57,10 @@ beta is complete before the evidence gates pass.
 - [ ] Connect the Worker mutation path to the transactional outbox and wire
   the Queue consumer to the event registry.
 - [ ] Add PostgreSQL-backed artifact metadata, retention, and cleanup. Alpha 34
-  adds bounded scheduled cleanup for incomplete R2 uploads; ready-object
-  retention policy and deleted-object audit/reconciliation remain.
+  adds bounded scheduled cleanup for incomplete R2 uploads. Alpha 61 makes
+  requested deletion fail closed and durably retries failed R2 cleanup;
+  ready-object retention policy and independent deleted-object
+  audit/reconciliation remain.
 - [ ] Align Drizzle snapshots and make migration generation idempotent.
 - [ ] Add protected Resend/Stripe test-mode integration tests and staging
   recipient protection.
@@ -439,6 +441,12 @@ sets, and commits the full selection atomically under endpoint locking and
 forced RLS. PostgreSQL and browser tests cover cross-tenant denial, removed
 events, rejected edits, and the customer edit flow. Endpoint URL/name editing,
 secret rotation UI, replay, durable audit, and pagination remain.
+Alpha 61 hardens tenant-owned R2 artifact deletion. The PostgreSQL metadata
+row becomes unreadable before the external delete starts; a failed R2 delete
+or metadata finalization leaves a durable cleanup candidate for the existing
+bounded scheduled sweep. PostgreSQL and integration tests cover cross-tenant
+denial, fail-closed reads, retry, and identifier non-reuse. This is not a
+ready-object retention policy or a full bucket-to-metadata reconciliation job.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

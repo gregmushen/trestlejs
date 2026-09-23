@@ -74,6 +74,48 @@ describe("tenant-owned artifact storage", () => {
     expect(await store.recoverIncomplete("org-a", cutoff)).toEqual({ claimed: 1, retired: 1, failed: 0 });
     expect(attempts).toBe(2);
   });
+  it("hides a ready object before R2 deletion and retries a failed delete durably", async () => {
+    const metadata = new InMemoryArtifactMetadataRepository();
+    const bytes = new Uint8Array([4, 5]);
+    let attempts = 0;
+    const store = new CloudflareR2ArtifactStore({
+      put: async () => undefined,
+      get: async () => ({ size: bytes.length, arrayBuffer: async () => bytes.buffer }),
+      delete: async () => { expect(await metadata.get("org-a", "customer-delete")).toBeNull(); attempts += 1; if (attempts === 1) throw new Error("R2 unavailable"); },
+    }, metadata);
+    const createdAt = new Date("2026-01-01T00:00:00Z");
+    await metadata.put({ id: "customer-delete", organizationId: "org-a", key: "org-a/customer-delete", contentType: "text/plain", size: 2, createdAt });
+    expect(await metadata.complete("org-a", "customer-delete", "org-a/customer-delete")).toBe(true);
+    expect(await store.get("org-a", "customer-delete")).not.toBeNull();
+    expect(await store.delete("org-b", "customer-delete")).toBe(false);
+    await expect(store.delete("org-a", "customer-delete")).rejects.toThrow("R2 unavailable");
+    expect(await store.get("org-a", "customer-delete")).toBeNull();
+    expect(await metadata.get("org-a", "customer-delete")).toBeNull();
+    expect(await store.recoverIncomplete("org-a", new Date("2026-01-02T00:00:00Z"))).toEqual({ claimed: 1, retired: 1, failed: 0 });
+    expect(attempts).toBe(2);
+    expect(await store.delete("org-a", "customer-delete")).toBe(false);
+    await expect(metadata.put({ id: "customer-delete", organizationId: "org-a", key: "reuse", contentType: "text/plain", size: 0, createdAt })).rejects.toThrow("unavailable");
+  });
+
+  it("retries metadata finalization after R2 deletion was accepted", async () => {
+    class FlakyMetadata extends InMemoryArtifactMetadataRepository {
+      attempts = 0;
+      override async retire(organizationId: string, id: string, key: string): Promise<boolean> {
+        this.attempts += 1;
+        if (this.attempts === 1) throw new Error("PostgreSQL unavailable");
+        return super.retire(organizationId, id, key);
+      }
+    }
+    const metadata = new FlakyMetadata();
+    let deletes = 0;
+    const store = new CloudflareR2ArtifactStore({ put: async () => undefined, get: async () => null, delete: async () => { deletes += 1; } }, metadata);
+    await metadata.put({ id: "finalize-delete", organizationId: "org-a", key: "org-a/finalize-delete", contentType: "text/plain", size: 0, createdAt: new Date("2026-01-01T00:00:00Z") });
+    await metadata.complete("org-a", "finalize-delete", "org-a/finalize-delete");
+    await expect(store.delete("org-a", "finalize-delete")).rejects.toThrow("PostgreSQL unavailable");
+    expect(await store.get("org-a", "finalize-delete")).toBeNull();
+    expect(await store.recoverIncomplete("org-a", new Date("2026-01-02T00:00:00Z"))).toEqual({ claimed: 1, retired: 1, failed: 0 });
+    expect(deletes).toBe(2);
+  });
   it("signs artifact access with tenant scope, expiry, and a cryptographic MAC", async () => {
     let now = new Date("2026-01-01T00:00:00Z");
     const signer = createArtifactSigner("a-32-byte-minimum-secret-for-tests", () => now);

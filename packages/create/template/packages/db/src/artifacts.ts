@@ -22,6 +22,14 @@ export class PostgresArtifactMetadataRepository implements ArtifactMetadataRepos
     return record ? { id: record.id, organizationId: record.organizationId, key: record.storageKey, contentType: record.contentType, size: record.size, createdAt: record.createdAt } : null;
   }
 
+  async beginDeletion(organizationId: string, id: string): Promise<ArtifactMetadata | null> {
+    const [record] = await this.database.update(artifactMetadata).set({ uploadState: "cleaning" }).where(and(
+      eq(artifactMetadata.id, id), eq(artifactMetadata.organizationId, organizationId),
+      inArray(artifactMetadata.uploadState, ["ready", "cleaning"]), isNull(artifactMetadata.deletedAt),
+    )).returning();
+    return record ? { id: record.id, organizationId: record.organizationId, key: record.storageKey, contentType: record.contentType, size: record.size, createdAt: record.createdAt } : null;
+  }
+
   async remove(organizationId: string, id: string): Promise<boolean> {
     return (await this.database.update(artifactMetadata).set({ deletedAt: new Date(), uploadState: "deleted" }).where(and(eq(artifactMetadata.id, id), eq(artifactMetadata.organizationId, organizationId), eq(artifactMetadata.uploadState, "ready"), isNull(artifactMetadata.deletedAt))).returning()).length > 0;
   }
