@@ -5,7 +5,7 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
-import { billingProviderEvent, createDatabase, emailDeliveryEvent, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
+import { billingProviderEvent, createDatabase, emailDeliveryEvent, PostgresEventInbox, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -194,11 +194,14 @@ app.onError((error, context) => {
   return context.json({ error: mapped.code, message: mapped.message, retryable: mapped.retryable }, mapped.status);
 });
 
-const consumeQueue = createQueueConsumer(eventConsumers);
 type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBinding };
 export default {
   fetch: app.fetch.bind(app),
-  queue: async (batch: QueueBatch, environment: AuthEnvironment) => await consumeQueue(batch, environment),
+  queue: async (batch: QueueBatch, environment: AuthEnvironment) => {
+    const inbox = new PostgresEventInbox(environment.DATABASE_URL, { assumeApplicationRole: true });
+    try { return await createQueueConsumer(eventConsumers, inbox)(batch, environment); }
+    finally { await inbox.close(); }
+  },
   scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
     if (!environment.TRESTLE_EVENTS) {
       if (!environment.APP_ENV || environment.APP_ENV === "local") return;

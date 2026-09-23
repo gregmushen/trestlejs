@@ -19,6 +19,7 @@ export * from "./roles.js";
 export * from "./tenant-schema.js";
 export * from "./outbox-schema.js";
 export * from "./outbox.js";
+export * from "./inbox.js";
 export * from "./tenancy.js";
 
 const schema = { ...authSchema, ...artifactSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema };

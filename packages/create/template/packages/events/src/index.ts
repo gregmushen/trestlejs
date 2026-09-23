@@ -95,6 +95,38 @@ export class CloudflareQueuePublisher implements QueuePublisher {
   async send(message: EventEnvelope): Promise<void> { await this.binding.send(eventEnvelopeSchema.parse(message), { contentType: "json" }); }
 }
 
+export type InboxClaim = { state: "claimed"; token: string } | { state: "completed" } | { state: "busy" };
+export interface EventInboxStore {
+  claim(message: EventEnvelope, leaseMs?: number): Promise<InboxClaim>;
+  complete(idempotencyKey: string, token: string): Promise<void>;
+  release(idempotencyKey: string, token: string, error: unknown): Promise<void>;
+}
+
+export class InMemoryEventInbox implements EventInboxStore {
+  private readonly entries = new Map<string, { name: string; state: "processing" | "completed"; token?: string; leasedUntil?: Date }>();
+  constructor(private readonly clock: OutboxClock = { now: () => new Date() }) {}
+  async claim(message: EventEnvelope, leaseMs = 120_000): Promise<InboxClaim> {
+    if (!Number.isInteger(leaseMs) || leaseMs < 1 || leaseMs > 300_000) throw new Error("Inbox lease must be between 1 and 300000 milliseconds");
+    const existing = this.entries.get(message.idempotencyKey);
+    if (existing?.name && existing.name !== message.name) throw new Error("Inbox idempotency key belongs to a different event");
+    if (existing?.state === "completed") return { state: "completed" };
+    if (existing?.token && existing.leasedUntil && existing.leasedUntil > this.clock.now()) return { state: "busy" };
+    const token = crypto.randomUUID();
+    this.entries.set(message.idempotencyKey, { name: message.name, state: "processing", token, leasedUntil: new Date(this.clock.now().getTime() + leaseMs) });
+    return { state: "claimed", token };
+  }
+  async complete(idempotencyKey: string, token: string): Promise<void> {
+    const entry = this.entries.get(idempotencyKey);
+    if (!entry || entry.state !== "processing" || entry.token !== token) throw new Error("Inbox claim is no longer active");
+    this.entries.set(idempotencyKey, { name: entry.name, state: "completed" });
+  }
+  async release(idempotencyKey: string, token: string, _error: unknown): Promise<void> {
+    const entry = this.entries.get(idempotencyKey);
+    if (!entry || entry.state !== "processing" || entry.token !== token) throw new Error("Inbox claim is no longer active");
+    this.entries.set(idempotencyKey, { name: entry.name, state: "processing" });
+  }
+}
+
 export type QueueBatchMessage = { body: unknown; ack(): void; retry(options?: { delaySeconds?: number }): void };
 export async function processQueueBatch(messages: QueueBatchMessage[], handler: (message: EventEnvelope) => Promise<void>, retryDelaySeconds = 30): Promise<{ acknowledged: number; retried: number }> {
   let acknowledged = 0; let retried = 0;
