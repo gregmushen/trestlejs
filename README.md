@@ -284,6 +284,7 @@ trestle architecture check          enforce static application boundaries
 trestle upgrade plan                preview an application-preserving upgrade
 trestle upgrade apply --yes         update metadata only after source-version review
 trestle upgrade diff                inventory target-template source changes
+trestle upgrade source-apply --yes  apply pristine adjacent-alpha source only
 trestle resource add-field ...      add an optional field and tracked migration
 ```
 
@@ -292,11 +293,15 @@ surface in your installed release. The architecture specification describes
 the v1 target as well as shipped behavior; it is not a claim that every future
 command is already implemented.
 
-`trestle upgrade` does not copy newer application-owned source into an existing
-project. Updating the CLI with pnpm updates the package and lockfile, but a
-project whose `.trestle/framework.json` records an older template version
-remains a manual-review upgrade until its source migration is reviewed. The
-upgrade command will not relabel that source as current.
+Updating the CLI with pnpm updates the package and lockfile, but a project
+whose `.trestle/framework.json` records an older template version remains a
+manual-review upgrade until its source migration is reviewed. `upgrade
+source-apply` can copy pristine source only from the immediately preceding
+alpha when a matching generation baseline exists. It refuses application edits,
+missing files, symlinks, and configuration or migration changes. It also
+reports generated files retired by the new template and refuses to proceed
+until any still-present retired paths are reviewed. Neither source apply nor
+package installation relabels the application source as current.
 Freshly generated projects record checksums of their generated files in
 `.trestle/template-baseline.json`. `trestle upgrade diff` compares those files
 with the target template without changing them. Older projects without a
