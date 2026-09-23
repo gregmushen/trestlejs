@@ -18,6 +18,19 @@ if (!/^[0-9]+$/u.test(browserSitePort) || Number(browserSitePort) < 1024 || Numb
 }
 const browserSiteEnvironment = { TRESTLE_BROWSER_SITE_PORT: browserSitePort, SITE_URL: `http://localhost:${browserSitePort}` };
 
+/**
+ * Runs vitest files and requires each named scenario to have passed, so a
+ * database-gated suite cannot silently skip. Used only when a database is set.
+ */
+async function requireScenarios(projectRoot, filter, files, environment, titles) {
+  const report = path.join(temporaryRoot, `scenarios-${path.basename(projectRoot)}-${filter.replaceAll(/[^a-z]/gu, "")}.json`);
+  await run("pnpm", ["--filter", filter, "exec", "vitest", "run", ...files, "--reporter=default", "--reporter=json", `--outputFile.json=${report}`], projectRoot, environment);
+  const results = JSON.parse(await readFile(report, "utf8")).testResults.flatMap((file) => file.assertionResults);
+  const missing = titles.filter((title) => !results.some((result) => result.title === title && result.status === "passed"));
+  if (missing.length) throw new Error(`Required ${filter} scenarios did not pass: ${missing.join("; ")}`);
+  console.log(`Verified ${titles.length} ${filter} scenarios in ${path.basename(projectRoot)}`);
+}
+
 async function run(command, arguments_, cwd, extraEnvironment = {}) {
   await new Promise((resolve, reject) => {
     const child = spawn(command, arguments_, { cwd, stdio: "inherit", env: { ...process.env, ...extraEnvironment } });
@@ -127,6 +140,12 @@ try {
     await run("pnpm", ["--filter", "./packages/data", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" });
+    // Tenant-side admin-capability scenarios: cross-plane denial and a scoped API key before and after revocation.
+    await requireScenarios(project, "./apps/worker", ["src/machine-access.integration.test.ts", "src/execution-context.test.ts", "src/access-routes.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "never lets organization ownership reach artifacts without an application role",
+      "keeps service-account management in the application plane",
+      "mints a scoped key that works before revocation and fails after, with audited changes",
+    ]);
     await run("pnpm", ["test:browser"], project, { ...browserSiteEnvironment, TRESTLE_BROWSER_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_BROWSER_ARTICLES: "1" });
     await run("pnpm", ["exec", "playwright", "test", "tests/browser/site-handoff.spec.ts", "--list"], project, {
       TRESTLE_BROWSER_MODE: "deployed",
@@ -176,6 +195,16 @@ try {
   await run("pnpm", ["--filter", "./apps/admin", "build"], adminProject);
   await run("pnpm", ["--filter", "./apps/admin", "exec", "wrangler", "deploy", "--dry-run", "--env", "production"], adminProject);
   await run("pnpm", ["--filter", "./apps/admin", "exec", "vitest", "run"], adminProject, process.env.TRESTLE_GENERATED_DATABASE_URL ? { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL } : {});
+  if (process.env.TRESTLE_GENERATED_DATABASE_URL) {
+    // Platform sign-in, cross-plane denial, and support-session entry and exit against PostgreSQL.
+    await requireScenarios(adminProject, "./apps/admin", ["worker/index.integration.test.ts", "worker/index.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "signs a real account in on the admin origin and requires a platform role",
+      "denies a tenant Owner with no platform role",
+      "requires platform sign-in and a platform role; tenant authority grants nothing",
+      "enters and exits a support session over HTTP; tenant reads require the open session",
+      "redrives a dead outbox event over HTTP and audits it with the request's correlation ID",
+    ]);
+  }
   const adminStatus = (projectRoot) => execFileSync(process.execPath, ["scripts/admin-capability.mjs", "status"], { cwd: projectRoot, encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: "" } }).trim();
   if (adminStatus(project) !== "enabled=false" || adminStatus(adminProject) !== "enabled=true") throw new Error("Deploy workflow admin detection does not match capabilities.admin");
 

@@ -24,7 +24,18 @@ This plan lands the optional platform admin on `main` in small slices, next to t
 | 7a | Support sessions: time-boxed (at most 4 hours), reasoned, read-only access to one organization, with entry, each view, and exit audited on it (0026). No impersonation | In review |
 | 7b | Regional settings, re-targeted from #57: organization defaults for language, locale, time zone, and currency, resolved per setting with its source; tenant read and audited change; shown in support sessions (0027). User preferences, i18n configuration, and the #57 setup wizard steps are deferred | In review |
 | 7c | Identity and SSO (SAML/OIDC connections, domain verification, enforced sign-in) | Deferred: spec only |
-| 8 | Generated canary with admin enabled and disabled, platform sign-in, cross-plane denial, support session, and an API key before and after revocation; then an admin path in the deployed staging gate once its resources are isolated | Planned |
+| 8 | Generated canary requires named admin scenarios to pass rather than be skipped when a database is set: admin enabled and disabled, `trestle apply` parity, platform sign-in, cross-plane denial, support-session entry and exit, and a scoped API key before and after revocation. The deployed staging path ships in `deploy.yml` (#113) but has not run: it needs isolated resources (see below) | In review |
 | 9 | `ADMIN_SPEC.md` and `ADMIN_ADDITIONS_SPEC.md` on `main`, corrected against the implementation, with unbuilt features marked deferred; roadmap updated | Planned |
 
 Out of scope: merging #57 wholesale, the 12-step setup wizard, Lago and OpenMeter adapters, and user impersonation.
+
+## Deployed admin gate: resources required before the first run
+
+The staging job deploys and smoke-checks the admin only when `capabilities.admin` is true. Admin development never uses the release loop's shared staging, so the first deployed run needs a separate admin-enabled staging project with its own:
+
+- Cloudflare Pages project `<project>-admin-staging` and admin Worker `<project>-admin-staging`;
+- PostgreSQL login granted only `trestle_platform`, stored as the encrypted `DATABASE_ADMIN_URL` staging secret;
+- GitHub `staging` environment variables `ADMIN_URL`, `ADMIN_API_URL`, and `DATABASE_ADMIN_RUNTIME_ROLE`.
+
+With those in place, the existing steps run `db:platform:configure`/`verify`, deploy both halves, and run `scripts/admin-capability.mjs smoke`.
+
