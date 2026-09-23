@@ -8,6 +8,25 @@ const databaseUrl = process.env.TRESTLE_INBOX_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
 
 suite("outbox retention and failure redaction", () => {
+  it("retrieves tenant provenance only from the committed record", async () => {
+    const sql = postgres(databaseUrl!, { max: 1, prepare: false });
+    const store = new PostgresOutboxStore(databaseUrl!);
+    const id = crypto.randomUUID();
+    const message = eventEnvelopeSchema.parse({ id, name: "article.published", schemaVersion: 1, occurredAt: new Date().toISOString(), resource: { type: "article", id }, correlationId: id, idempotencyKey: id, payload: { resourceId: id } });
+    try {
+      const inserted = await store.append(message, { organizationId: "org-trusted" });
+      expect(inserted.organizationId).toBe("org-trusted");
+      expect(inserted.message).not.toHaveProperty("organizationId");
+      expect((await store.findCommitted(id))?.organizationId).toBe("org-trusted");
+      await expect(store.append({ ...message, id: crypto.randomUUID() }, { organizationId: "org-other" })).rejects.toThrow("different organization");
+      expect((await sql`select organization_id, payload from outbox_message where id=${id}`)[0]).toEqual({ organization_id: "org-trusted", payload: { resourceId: id } });
+      expect(await store.findCommitted(crypto.randomUUID())).toBeNull();
+    } finally {
+      await sql`delete from outbox_message where id=${id}`;
+      await store.close();
+      await sql.end();
+    }
+  });
   it("prunes only old succeeded records in bounded batches while preserving dead and pending work", async () => {
     const sql = postgres(databaseUrl!, { max: 1, prepare: false });
     const store = new PostgresOutboxStore(databaseUrl!);

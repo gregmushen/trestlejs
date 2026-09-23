@@ -323,10 +323,13 @@ describe("TrestleJS CLI", () => {
     const eventSource = await readFile(path.join(root, "apps/worker/src/resources/article-events.ts"), "utf8");
     expect(eventSource).toContain('name: "resource.article.created"');
     expect(eventSource).toContain("Invalid Article created event payload");
+    expect(eventSource).toContain("{ resourceId: string }");
+    expect(eventSource).not.toContain("payload.organizationId");
     const workerSource = await readFile(path.join(root, "apps/worker/src/index.ts"), "utf8");
     expect(workerSource).toContain("eventConsumers.register(articleCreatedEvent, handleArticleCreated);");
     const repositorySource = await readFile(path.join(root, "packages/data/src/resources/article-repository.ts"), "utf8");
     expect(repositorySource).toContain("eq(article.organizationId, this.organizationId)");
+    expect(repositorySource).toContain("organizationId: this.organizationId,\n        payload: { resourceId: record.id }");
     const screenSource = await readFile(path.join(root, "apps/app/src/resources/article.tsx"), "utf8");
     expect(screenSource).toContain('const key = ["articles", organizationId] as const');
     expect(screenSource).toContain("createArticleApi");

@@ -274,6 +274,9 @@ Outbound webhooks are an additional phased track. Alpha 35 provides
 only the event-definition contract: runtime schemas, safe public projection
 metadata, example and fixture validation, and independent internal/public
 versions. It does not yet persist webhook messages or deliver to endpoints.
+Alpha 36 adds committed tenant provenance to outbox rows and generated resource
+mutations. Queue envelopes remain tenant-authority-free; webhook projection
+must reload the committed outbox row before selecting a tenant subscription.
 The next slices are normalized tenant-owned persistence and subscriptions,
 deterministic local capture, native Queue-backed delivery and recovery, and
 then the optional Svix adapter. A committed domain event remains authoritative;

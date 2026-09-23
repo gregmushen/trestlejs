@@ -124,7 +124,7 @@ suite("local product path", () => {
         const { article } = await createdArticle.json() as { article: { id: string } };
         articleId = article.id;
         const [outbox] = await database.select().from(outboxMessage).where(eq(outboxMessage.resourceId, article.id)).limit(1);
-        expect(outbox).toMatchObject({ eventName: "resource.article.created", resourceType: "article", resourceId: article.id, status: "pending", payload: { organizationId, resourceId: article.id } });
+        expect(outbox).toMatchObject({ eventName: "resource.article.created", resourceType: "article", resourceId: article.id, organizationId, status: "pending", payload: { resourceId: article.id } });
         expect(outbox?.correlationId).toBeTruthy();
         const queued: unknown[] = [];
         await worker.scheduled(undefined, {
@@ -133,6 +133,8 @@ suite("local product path", () => {
         });
         const queuedEvent = queued.find((event) => (event as { id?: string }).id === outbox!.id);
         expect(queuedEvent).toMatchObject({ id: outbox!.id, name: "resource.article.created", resource: { type: "article", id: article.id } });
+        expect(queuedEvent).not.toHaveProperty("organizationId");
+        expect(queuedEvent).not.toHaveProperty("payload.organizationId");
         const workflowInstances = new Map<string, EventEnvelope>();
         const workflowEnvironment = { ...environment, TRESTLE_WORKFLOWS_ENABLED: "true", TRESTLE_WORKFLOW: {
           create: async ({ id, params }: { id: string; params: EventEnvelope }) => { if (workflowInstances.has(id)) throw new Error("duplicate instance"); workflowInstances.set(id, params); return { id }; },
@@ -157,7 +159,7 @@ suite("local product path", () => {
         const [inbox] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, outbox!.idempotencyKey)).limit(1);
         expect(inbox).toMatchObject({ status: "completed", attempts: 1 });
         const invalidDelivery: string[] = [];
-        expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: article.id } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 0, retried: 1 });
+        expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: 42 } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 0, retried: 1 });
         expect(invalidDelivery).toEqual(["retry"]);
         const [dispatched] = await database.select().from(outboxMessage).where(eq(outboxMessage.id, outbox!.id)).limit(1);
         expect(dispatched?.status).toBe("succeeded");
