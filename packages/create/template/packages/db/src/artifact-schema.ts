@@ -11,4 +11,6 @@ export const artifactMetadata = pgTable("artifact_metadata", {
   index("artifact_metadata_upload_state_idx").on(table.uploadState, table.createdAt),
   check("artifact_metadata_upload_state_check", sql`${table.uploadState} IN ('pending', 'ready', 'cleaning', 'deleted')`),
   pgPolicy("artifact_metadata_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
+  // Platform reads are limited by column grants; storage keys are never granted.
+  pgPolicy("artifact_metadata_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
 ]).enableRLS();

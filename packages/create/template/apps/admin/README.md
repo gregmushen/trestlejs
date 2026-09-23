@@ -7,6 +7,22 @@ The optional platform admin for operating this application. It exists only when 
 - **Its own database login.** Outside local development the Worker reads through `DATABASE_ADMIN_URL`, a distinct login granted only `trestle_platform` (`pnpm --filter ./packages/db db:platform:configure`).
 - **Central view registry.** `src/registry.ts` declares each view's sidebar entry, required platform permission, dependent capability, and API routes. The Worker derives its route policies from it, and a drift test keeps views, routes, and permissions aligned. Add a view by adding an entry and a component in `src/views/`.
 
+## Operations
+
+The Operations views work on the application's own subsystems, not copies of them:
+
+- **Async events:** dead-lettered outbox events. Redrive returns one to delivery (`platform.outbox.redrive`).
+- **Webhooks:** endpoint state and dead or exhausted deliveries across organizations. An operator can disable an endpoint or replay a delivery whose payload is still retained (`platform.webhooks.manage`).
+- **Artifacts:** upload lifecycle totals and stale pending uploads.
+
+Reads need `platform.operations.read`. The `trestle_platform` database role is granted metadata columns only. It can never read event payloads, webhook envelopes or destinations, lease tokens, or storage keys, and row-level security allows it only three transitions:
+
+- a dead outbox event back to pending;
+- an endpoint to disabled;
+- a dead or exhausted delivery back to retry.
+
+Every action requires a reason and must come from the admin origin. It writes an `audit_event` with the request's correlation ID in the same transaction. The affected organization sees the event in its audit log, without the operator's identity or reason.
+
 Bootstrap the first operator after they sign up in the customer app:
 
 ```bash

@@ -16,7 +16,7 @@ const basePolicies: RoutePolicy[] = [
   { method: "GET", path: "/api/admin/health/live", public: true, audience: "public" },
   { method: "GET", path: "/api/admin/session", audience: "session" },
 ];
-const viewPolicies = adminViews.flatMap((view) => view.api.map((route): RoutePolicy => ({ method: route.method, path: route.path, audience: "platform", permission: view.permission })));
+const viewPolicies = adminViews.flatMap((view) => view.api.map((route): RoutePolicy => ({ method: route.method, path: route.path, audience: "platform", permission: route.permission ?? view.permission })));
 
 export const adminRoutePolicies = defineRoutePolicies(permissions, [...basePolicies, ...viewPolicies]
   .filter((policy, index, all) => all.findIndex((other) => other.method === policy.method && other.path === policy.path) === index));

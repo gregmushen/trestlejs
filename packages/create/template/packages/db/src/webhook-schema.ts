@@ -23,6 +23,9 @@ export const webhookEndpoint = pgTable("webhook_endpoint", {
   check("webhook_endpoint_health_check", sql`${table.health} IN ('unknown', 'healthy', 'degraded', 'failed')`),
   check("webhook_endpoint_provider_check", sql`${table.provider} IN ('local', 'native', 'svix')`),
   pgPolicy("webhook_endpoint_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
+  // The platform admin reads endpoint metadata (never destinations) and may only disable an endpoint.
+  pgPolicy("webhook_endpoint_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
+  pgPolicy("webhook_endpoint_platform_disable", { for: "update", to: "trestle_platform", using: sql`true`, withCheck: sql`${table.state} = 'disabled'` }),
 ]).enableRLS();
 
 /** One row per accepted public event version; provider filters are never authoritative. */

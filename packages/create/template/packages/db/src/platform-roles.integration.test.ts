@@ -55,7 +55,7 @@ suite("platform roles", () => {
     expect(await failure(as("trestle_app", async (transaction) => await transaction`select id from platform_role_assignment limit 1`))).toMatch(/permission denied/u);
     expect(await failure(as("trestle_app", async (transaction) => await transaction`select id from audit_event where organization_id is null limit 1`))).toBe("resolved");
     expect((await as("trestle_app", async (transaction) => await transaction`select id from audit_event where correlation_id = ${`${run}-corr`}`)).length).toBe(0);
-    for (const table of ["application_role_assignment", "webhook_endpoint", "tenant_record", "session", "account"]) {
+    for (const table of ["application_role_assignment", "webhook_secret_version", "webhook_attempt", "event_inbox", "tenant_record", "session", "account"]) {
       expect(await failure(as("trestle_platform", async (transaction) => await transaction.unsafe(`select 1 from "${table}" limit 1`)))).toMatch(/permission denied/u);
     }
     expect(await failure(as("trestle_platform", async (transaction) => await transaction`select email from "user" limit 1`))).toBe("resolved");
