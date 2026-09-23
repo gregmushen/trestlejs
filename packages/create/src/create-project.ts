@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +33,11 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 function render(input: string, projectName: string): string {
+  const bucketSource = `${projectName}-worker-artifacts`;
+  const artifactBucket = bucketSource.length <= 63 ? bucketSource
+    : `${bucketSource.slice(0, 54).replace(/-+$/u, "")}-${createHash("sha256").update(bucketSource).digest("hex").slice(0, 8)}`;
   return input
+    .replaceAll("__TRESTLE_ARTIFACT_BUCKET__", artifactBucket)
     .replaceAll("__TRESTLE_PROJECT_NAME__", projectName)
     .replaceAll("__TRESTLEJS_VERSION__", TRESTLEJS_VERSION);
 }

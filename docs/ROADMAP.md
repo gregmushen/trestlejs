@@ -61,7 +61,8 @@ beta is complete before the evidence gates pass.
   requested deletion fail closed and durably retries failed R2 cleanup;
   Alpha 63 audits ready PostgreSQL references against R2 metadata in bounded,
   tenant-scoped pages. Alpha 64 adds the inverse bounded, read-only R2 orphan
-  audit. Ready-object retention and restore-time provider verification remain.
+  audit. Alpha 65 adds provider-backed verification of every restored ready
+  reference. Ready-object retention remains.
 - [ ] Align Drizzle snapshots and make migration generation idempotent.
 - [ ] Add protected Resend/Stripe test-mode integration tests and staging
   recipient protection.
@@ -470,6 +471,14 @@ unreferenced objects before reporting them. It logs only a key fingerprint and
 tenant ID, never the raw storage key or object body. Findings fail the scheduled
 run; the audit never deletes an object. Ready-object retention and provider
 reachability during restore remain unverified.
+Alpha 65 makes isolated restore verification use the configured production R2
+bucket through a separate read-only S3 credential. It pages every ready
+PostgreSQL artifact reference from the restored branch and performs metadata-
+only HEAD checks for existence, size, content type, and tenant/artifact identity.
+Provider errors, missing credentials, missing objects, drift, or incomplete
+pagination fail the recovery evidence without leaking keys. A protected
+production restore drill and a ready-object retention policy remain necessary
+before claiming the storage recovery gate is met.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

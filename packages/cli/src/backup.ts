@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
-export type RecoveryPolicy = Readonly<{ schemaVersion: 1; provider: "neon"; sourceBranch: string; restoreTargets: readonly string[]; recoveryPointObjectiveHours: number; recoveryTimeObjectiveMinutes: number; artifactPolicy: "metadata-reference-verification" | "none" }>;
+export type RecoveryPolicy = Readonly<{ schemaVersion: 1; provider: "neon"; sourceBranch: string; restoreTargets: readonly string[]; recoveryPointObjectiveHours: number; recoveryTimeObjectiveMinutes: number; artifactPolicy: "metadata-reference-verification" | "none"; artifactBucket?: string }>;
 export type RecoveryConnectionOutput = Readonly<{ branchId: string; migrationUrl: string; runtimeUrl: string }>;
 
 const requiredRecoveryChecks = ["database.reachable", "schema.migrations", "auth.integrity", "role.application", "rls.forced", "rls.runtime", "artifacts.references"];
@@ -23,8 +24,20 @@ export function recoveryStatusLabel(latest: unknown): string {
 
 export async function readRecoveryPolicy(root: string): Promise<RecoveryPolicy> {
   const value = JSON.parse(await readFile(path.join(root, ".trestle", "recovery.json"), "utf8")) as Partial<RecoveryPolicy>;
-  if (value.schemaVersion !== 1 || value.provider !== "neon" || !validName(value.sourceBranch) || !Array.isArray(value.restoreTargets) || value.restoreTargets.length === 0 || value.restoreTargets.some((target) => !validName(target) || target === value.sourceBranch) || !positive(value.recoveryPointObjectiveHours) || !positive(value.recoveryTimeObjectiveMinutes) || !["metadata-reference-verification", "none"].includes(value.artifactPolicy ?? "")) throw new Error("invalid .trestle/recovery.json policy");
+  if (value.schemaVersion !== 1 || value.provider !== "neon" || !validName(value.sourceBranch) || !Array.isArray(value.restoreTargets) || value.restoreTargets.length === 0 || value.restoreTargets.some((target) => !validName(target) || target === value.sourceBranch) || !positive(value.recoveryPointObjectiveHours) || !positive(value.recoveryTimeObjectiveMinutes) || !["metadata-reference-verification", "none"].includes(value.artifactPolicy ?? "") || (value.artifactBucket !== undefined && (typeof value.artifactBucket !== "string" || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u.test(value.artifactBucket)))) throw new Error("invalid .trestle/recovery.json policy");
   return value as RecoveryPolicy;
+}
+
+/** The recovery target must be the bucket the generated production Worker
+ * actually binds; an arbitrary bucket with copied objects is not evidence. */
+export async function validateRecoveryArtifactBucket(root: string, workerPath: string, policy: RecoveryPolicy): Promise<void> {
+  if (!policy.artifactBucket) return;
+  const config = JSON.parse(await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8")) as { env?: { production?: { name?: unknown } } };
+  const workerName = config.env?.production?.name;
+  if (!validName(workerName)) throw new Error("production Worker name is invalid for R2 recovery");
+  const source = `${workerName}-artifacts`;
+  const expected = source.length <= 63 ? source : `${source.slice(0, 54).replace(/-+$/u, "")}-${createHash("sha256").update(source).digest("hex").slice(0, 8)}`;
+  if (policy.artifactBucket !== expected) throw new Error("recovery artifact bucket does not match the production Worker binding");
 }
 
 export function validateRecoveryTarget(policy: RecoveryPolicy, target: string): string {

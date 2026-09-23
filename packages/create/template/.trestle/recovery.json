@@ -5,5 +5,6 @@
   "restoreTargets": ["restore-test"],
   "recoveryPointObjectiveHours": 24,
   "recoveryTimeObjectiveMinutes": 30,
-  "artifactPolicy": "metadata-reference-verification"
+  "artifactPolicy": "metadata-reference-verification",
+  "artifactBucket": "__TRESTLE_ARTIFACT_BUCKET__"
 }

@@ -1,6 +1,6 @@
 {
   "name": "trestlejs",
-  "version": "0.1.0-alpha.64",
+  "version": "0.1.0-alpha.65",
   "description": "The command-line interface for building and operating TrestleJS applications.",
   "license": "MIT",
   "author": {

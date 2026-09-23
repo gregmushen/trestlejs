@@ -12,7 +12,7 @@ import { Command, CommanderError, InvalidArgumentError } from "commander";
 
 import { formatCiValidation, validateCi } from "./ci.js";
 import { checkArchitecture, formatArchitecture } from "./architecture.js";
-import { parseRecoveryConnectionOutput, readRecoveryPolicy, recoveryEvidencePassed, recoveryStatusLabel, validateRecoveryPoint, validateRecoveryTarget } from "./backup.js";
+import { parseRecoveryConnectionOutput, readRecoveryPolicy, recoveryEvidencePassed, recoveryStatusLabel, validateRecoveryArtifactBucket, validateRecoveryPoint, validateRecoveryTarget } from "./backup.js";
 import { projectContext } from "./context.js";
 import { formatDoctorHuman, formatDoctorJson, runDoctor } from "./doctor.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
@@ -70,7 +70,11 @@ async function recoveryEnvironment(root: string, targetEnvironment: ReturnType<t
   };
   const missing = Object.entries(required).filter(([, value]) => !value).map(([name]) => name);
   if (missing.length) throw new CliFailure(`Neon recovery configuration is missing: ${missing.join(", ")}`);
-  return { ...process.env, ...required };
+  return { ...process.env, ...required,
+    CLOUDFLARE_ACCOUNT_ID: runtimeValue(runtime, "CLOUDFLARE_ACCOUNT_ID") ?? "",
+    R2_RECOVERY_ACCESS_KEY_ID: values.R2_RECOVERY_ACCESS_KEY_ID ?? "",
+    R2_RECOVERY_SECRET_ACCESS_KEY: values.R2_RECOVERY_SECRET_ACCESS_KEY ?? "",
+  };
 }
 
 function dotenv(values: Record<string, string>): string {
@@ -634,6 +638,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const policy = await readRecoveryPolicy(context.root);
       const target = validateRecoveryTarget(policy, options.to);
       const point = validateRecoveryPoint(options.at);
+      await validateRecoveryArtifactBucket(context.root, context.manifest.apps.worker!, policy);
       const childEnvironment = await recoveryEnvironment(context.root, options.env, runtime);
       const temporary = await mkdtemp(path.join(os.tmpdir(), "trestle-recovery-"));
       const protectedOutput = path.join(temporary, "connections.env");
@@ -646,7 +651,7 @@ export function createProgram(runtime: CliRuntime): Command {
         await runCommand("node", ["scripts/neon-recovery.mjs", "restore", policy.sourceBranch, target, point ?? "latest"], { cwd: context.root, env: { ...childEnvironment, TRESTLE_RECOVERY_OUTPUT: protectedOutput }, stdio: "pipe" });
         created = true;
         const connections = parseRecoveryConnectionOutput(await readFile(protectedOutput, "utf8"));
-        const result = await runCommand("pnpm", ["exec", "tsx", "scripts/verify-recovery.ts"], { cwd: context.root, env: { ...childEnvironment, DATABASE_MIGRATION_URL: connections.migrationUrl, DATABASE_URL: connections.runtimeUrl, TRESTLE_VERIFY_STARTED_AT: startedAt, TRESTLE_ARTIFACT_POLICY: policy.artifactPolicy }, stdio: "pipe" });
+        const result = await runCommand("pnpm", ["exec", "tsx", "scripts/verify-recovery.ts"], { cwd: context.root, env: { ...childEnvironment, DATABASE_MIGRATION_URL: connections.migrationUrl, DATABASE_URL: connections.runtimeUrl, TRESTLE_VERIFY_STARTED_AT: startedAt, TRESTLE_ARTIFACT_POLICY: policy.artifactPolicy, TRESTLE_ARTIFACT_BUCKET: policy.artifactBucket ?? "" }, stdio: "pipe" });
         report = JSON.parse(result.stdout) as typeof report;
       } finally {
         try {

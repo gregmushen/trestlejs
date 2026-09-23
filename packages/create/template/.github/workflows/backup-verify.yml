@@ -31,6 +31,7 @@ jobs:
           NEON_DATABASE: "${{ vars.NEON_DATABASE }}"
           NEON_MIGRATION_ROLE: "${{ vars.NEON_MIGRATION_ROLE }}"
           DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Record non-secret recovery evidence
         if: always()
         run: |

@@ -50,6 +50,7 @@ describe("createProject", () => {
     expect(await readFile(path.join(result.directory, ".trestle", "project.yaml"), "utf8")).toContain(
       "queues: false",
     );
+    expect(JSON.parse(await readFile(path.join(result.directory, ".trestle", "recovery.json"), "utf8")).artifactBucket).toBe("hello-worker-artifacts");
     expect(await readFile(path.join(result.directory, "package.json"), "utf8")).toContain(
       '"name": "hello"',
     );
