@@ -21,6 +21,7 @@ export const permissions = definePermissions({
   "organization.webhooks.read": { plane: "organization", description: "List webhook endpoints, subscriptions, and public event types" },
   "organization.webhooks.manage": { plane: "organization", description: "Create, pause, and change webhook endpoints and subscriptions" },
   "organization.webhooks.deliveries.read": { plane: "organization", description: "Inspect webhook deliveries and attempts" },
+  "organization.settings.manage": { plane: "organization", description: "Change organization settings such as regional defaults" },
 
   "resource.read": { plane: "application", description: "Read tenant-owned application resources", principals: ["user", "api_key"] },
   "resource.write": { plane: "application", description: "Create, update, and delete tenant-owned application resources", principals: ["user", "api_key"] },

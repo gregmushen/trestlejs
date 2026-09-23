@@ -22,7 +22,8 @@ This plan lands the optional platform admin on `main` in small slices, next to t
 | 6a | Commercial controls: subscription reads and audited entitlement override grant and revoke, with tombstones (0024). Tenant runtimes lose override write access | In review |
 | 6b | Machine access: service accounts and scoped API keys (mint, rotate, revoke) with a SECURITY DEFINER resolver (0025), bearer-key execution context, and platform revocation, all audited. Per-key rate limits, CIDR allowlists, and usage metering are deferred | In review |
 | 7a | Support sessions: time-boxed (at most 4 hours), reasoned, read-only access to one organization, with entry, each view, and exit audited on it (0026). No impersonation | In review |
-| 7b | Regional settings (re-targeted from #57), identity, and SSO | Planned |
+| 7b | Regional settings, re-targeted from #57: organization defaults for language, locale, time zone, and currency, resolved per setting with its source; tenant read and audited change; shown in support sessions (0027). User preferences, i18n configuration, and the #57 setup wizard steps are deferred | In review |
+| 7c | Identity and SSO (SAML/OIDC connections, domain verification, enforced sign-in) | Deferred: spec only |
 | 8 | Generated canary with admin enabled and disabled, platform sign-in, cross-plane denial, support session, and an API key before and after revocation; then an admin path in the deployed staging gate once its resources are isolated | Planned |
 | 9 | `ADMIN_SPEC.md` and `ADMIN_ADDITIONS_SPEC.md` on `main`, corrected against the implementation, with unbuilt features marked deferred; roadmap updated | Planned |
 
