@@ -69,4 +69,15 @@ describe("execution context", () => {
     })).rejects.toMatchObject({ code: "not_found" });
     expect(selected).toEqual(["org-b"]);
   });
+
+  it("never lets organization ownership reach artifacts without an application role", async () => {
+    const { canAccessArtifacts } = await import("./index.js");
+    const owner = await resolveExecutionContext(new Headers(), environment, { getSession: async () => session, findMembership: async () => ({ role: "owner", applicationRole: null }), findSubscription: async () => null });
+    expect(canAccessArtifacts(owner, "resource:read")).toBe(false);
+    expect(canAccessArtifacts(owner, "resource:write")).toBe(false);
+    const viewer = await resolveExecutionContext(new Headers(), environment, { getSession: async () => session, findMembership: async () => ({ role: "member", applicationRole: "viewer" }), findSubscription: async () => null });
+    expect(canAccessArtifacts(viewer, "resource:read")).toBe(true);
+    expect(canAccessArtifacts(viewer, "resource:write")).toBe(false);
+  });
 });
+

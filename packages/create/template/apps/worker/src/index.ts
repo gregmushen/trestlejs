@@ -379,9 +379,10 @@ app.get("/api/health/operational", (context) => context.json({
 
 const artifactIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-function canAccessArtifacts(execution: AppVariables["execution"], permission: "resource:read" | "resource:write"): boolean {
-  return execution.access.check({ plane: "organization", permission: "organization:manage" }).allowed
-    || execution.access.check({ plane: "application", permission }).allowed;
+// Artifacts are product resources: only application-plane authority grants them.
+// Organization roles, including Owner, never imply application actions.
+export function canAccessArtifacts(execution: Pick<AppVariables["execution"], "access">, permission: "resource:read" | "resource:write"): boolean {
+  return execution.access.check({ plane: "application", permission }).allowed;
 }
 
 app.post("/api/artifacts", requireExecutionContext, async (context) => {

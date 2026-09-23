@@ -105,7 +105,9 @@ export const member = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     role: text("role").default("member").notNull(),
-    applicationRole: text("application_role").default("contributor"),
+    /** Product authority, separate from organization `role`. Null means no application role:
+     *  members start without one; only the organization creator is bootstrapped (packages/auth). */
+    applicationRole: text("application_role"),
     createdAt: timestamp("created_at").notNull(),
   },
   (table) => [

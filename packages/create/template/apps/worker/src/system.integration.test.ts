@@ -1,8 +1,9 @@
+import { createAuth } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
-import { artifactMetadata, createDatabase, createTenantDatabase, eventInbox, hasArtifactStorageKey, organization, organizationEntitlement, organizationSubscription, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { artifactMetadata, createDatabase, createTenantDatabase, eventInbox, hasArtifactStorageKey, organization, organizationEntitlement, organizationSubscription, member, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { TrestleWorkflow } from "./cloudflare-workflow.js";
 import { runArtifactReferenceAudit } from "./artifact-reference-audit.js";
@@ -31,6 +32,7 @@ suite("local product path", () => {
     const billingRepository = new PostgresBillingProjectionRepository(databaseUrl!, "postgres-js");
     let organizationId: string | undefined;
     let secondOrganizationId: string | undefined;
+    let joinerId: string | undefined;
     let articleId: string | undefined;
     let secondArticleId: string | undefined;
     let artifactId: string | undefined;
@@ -65,6 +67,21 @@ suite("local product path", () => {
       const created = await create.json() as { id: string };
       organizationId = created.id;
       expect(organizationId).toBeTruthy();
+
+      // Only the creator is bootstrapped with product access; members added later start with none.
+      const [creatorMembership] = await database.select({ userId: member.userId, applicationRole: member.applicationRole }).from(member).where(eq(member.organizationId, organizationId!));
+      expect(creatorMembership?.applicationRole).toBe("contributor");
+      joinerId = `system-joiner-${crypto.randomUUID()}`;
+      await database.insert(user).values({ id: joinerId, name: "Joiner", email: `${joinerId}@example.test`, emailVerified: true, createdAt: new Date(), updatedAt: new Date() });
+      await createAuth(environment).api.addMember({ body: { userId: joinerId, organizationId: organizationId!, role: "admin" } });
+      const [joinerMembership] = await database.select({ applicationRole: member.applicationRole }).from(member).where(eq(member.userId, joinerId));
+      expect(joinerMembership).toEqual({ applicationRole: null });
+
+      // Organization ownership alone never reaches product resources such as artifacts.
+      await database.update(member).set({ applicationRole: null }).where(and(eq(member.organizationId, organizationId!), eq(member.userId, creatorMembership!.userId)));
+      const ownerOnlyUpload = await app.request("http://localhost:8787/api/artifacts", { method: "POST", headers: { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": organizationId!, "content-type": "text/plain" }, body: "owner only" }, environment);
+      expect(ownerOnlyUpload.status).toBe(403);
+      await database.update(member).set({ applicationRole: "contributor" }).where(and(eq(member.organizationId, organizationId!), eq(member.userId, creatorMembership!.userId)));
 
       await billingRepository.put({ organizationId: organizationId!, provider: "local", plan: "starter", planVersion: 1, status: "active", cancelAtPeriodEnd: false, entitlements: ["article.basic"] });
 
@@ -262,6 +279,7 @@ suite("local product path", () => {
       if (organizationId) await database.delete(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId));
       if (secondOrganizationId) await database.delete(organization).where(eq(organization.id, secondOrganizationId));
       if (organizationId) await database.delete(organization).where(eq(organization.id, organizationId));
+      if (joinerId) await database.delete(user).where(eq(user.id, joinerId));
       await database.delete(user).where(eq(user.email, email));
       clearCapturedEmails();
     }

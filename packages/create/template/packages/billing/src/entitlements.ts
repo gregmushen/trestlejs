@@ -10,7 +10,9 @@ export class Entitlements {
     this.decisions = new Map([...values].map((code) => [code, { code, enabled: true, source: "plan" as const, ...(inheritedFrom ? { inheritedFrom } : {}), effectiveAt: now }]));
     for (const override of options.overrides ?? []) {
       if (override.effectiveAt > now || (override.expiresAt && override.expiresAt <= now)) continue;
-      this.decisions.set(override.code, { code: override.code, enabled: override.enabled, source: "override", inheritedFrom: override.reason, effectiveAt: override.effectiveAt });
+      // Customer-visible provenance names the source only. The operator's reason and author are
+      // internal audit data and never leave the override record.
+      this.decisions.set(override.code, { code: override.code, enabled: override.enabled, source: "override", inheritedFrom: "contract", effectiveAt: override.effectiveAt });
     }
   }
   resolve(code: string): EffectiveEntitlement { return this.decisions.get(code) ?? { code, enabled: false, source: "default", effectiveAt: new Date(0) }; }
