@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
-import { adminApi, adminPost, type AdminSession, type SubscriptionRow, type SupportOrganization, type SupportSessionRecord } from "../api";
+import { adminApi, adminPost, type AdminSession, type SupportOrganization, type SupportSessionRecord } from "../api";
 
-function StartSession({ organizations }: { organizations: SubscriptionRow[] }) {
+type SupportableOrganization = { organizationId: string; organizationName: string };
+
+function StartSession({ organizations }: { organizations: SupportableOrganization[] }) {
   const client = useQueryClient();
   const [organizationId, setOrganizationId] = useState(organizations[0]?.organizationId ?? "");
   const [durationMinutes, setDuration] = useState(30);
@@ -26,7 +28,8 @@ function StartSession({ organizations }: { organizations: SubscriptionRow[] }) {
 
 function ActiveSession({ session }: { session: SupportSessionRecord }) {
   const client = useQueryClient();
-  const view = useQuery({ queryKey: ["admin-support-view", session.id], retry: false, queryFn: () => adminApi<SupportOrganization>(`/api/admin/support/sessions/${session.id}/organization`) });
+  // Each read is audited on the organization, so fetch once per session rather than on focus or retry.
+  const view = useQuery({ queryKey: ["admin-support-view", session.id], retry: false, staleTime: Infinity, refetchOnWindowFocus: false, queryFn: () => adminApi<SupportOrganization>(`/api/admin/support/sessions/${session.id}/organization`) });
   const end = useMutation({ mutationFn: () => adminPost(`/api/admin/support/sessions/${session.id}/end`, { reason: "" }), onSuccess: async () => { await client.invalidateQueries({ queryKey: ["admin-support"] }); } });
   return <div className="mt-6 rounded-xl border border-border bg-surface p-4">
     <div className="flex items-center justify-between">
@@ -47,7 +50,7 @@ function ActiveSession({ session }: { session: SupportSessionRecord }) {
 
 export function SupportView() {
   const session = useQuery({ queryKey: ["admin-session"], queryFn: () => adminApi<AdminSession>("/api/admin/session") });
-  const sessions = useQuery({ queryKey: ["admin-support"], queryFn: () => adminApi<{ sessions: SupportSessionRecord[]; organizations: SubscriptionRow[] }>("/api/admin/support/sessions") });
+  const sessions = useQuery({ queryKey: ["admin-support"], queryFn: () => adminApi<{ sessions: SupportSessionRecord[]; organizations: SupportableOrganization[] }>("/api/admin/support/sessions") });
   if (sessions.error) return <p role="alert" className="text-destructive">{sessions.error.message}</p>;
   if (!sessions.data) return <p>Loading…</p>;
   const now = Date.now();

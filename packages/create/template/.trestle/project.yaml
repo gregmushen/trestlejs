@@ -28,8 +28,9 @@ database:
   engine: postgresql
   defaultProvider: neon
 capabilities:
-  # Alpha 7 reports only implemented application capabilities. Enable these
-  # as their generated bindings, local adapters, and verification ship.
+  # Optional capabilities. Enable r2, queues, and workflows as their bindings
+  # are provisioned; admin adds the platform admin (create-trestlejs --admin,
+  # or trestle apply with a SetupPlan that enables it).
   r2: false
   queues: false
   workflows: false

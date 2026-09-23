@@ -18,7 +18,7 @@ release.
 | Alpha 9 | Production integrations and end-to-end observability | Planned |
 | Alpha 10 | Recovery, operational tooling, deterministic data, and safe remote access | Planned |
 | Alpha 11 | Resource evolution and framework upgrade lifecycle | Planned |
-| Alpha 12 | Optional admin, enforcement, full-system hardening, and beta preparation | Planned |
+| Alpha 12 | Optional admin, enforcement, full-system hardening, and beta preparation | Admin and access control shipped (see [ADMIN_SPEC.md](ADMIN_SPEC.md)); deployed admin evidence and beta hardening remain |
 | Beta | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
 | v1 | Supported end-to-end product-development and deployment path with documented compatibility guarantees | Planned |
 
@@ -654,7 +654,32 @@ deployed Cloudflare delivery still requires provider-backed evidence.
 
 ### Alpha 12: beta hardening
 
-- Optional admin application and application-backed admin resources.
+- Optional platform admin (`capabilities.admin`), shipped: `create-trestlejs
+  --admin` or `trestle apply` scaffolds `apps/admin` as a separate-origin SPA
+  and admin Worker, with sign-in only and its own `trestle_platform` database
+  login (`DATABASE_ADMIN_URL`). One permission registry spans the
+  organization, application, and platform planes, with central route
+  enforcement and drift tests. Platform roles are `platform_operator`,
+  `commercial_admin`, and `security_admin`, managed with
+  `trestle admin grant|revoke|list`. The admin has Overview, Health, Async
+  events (redrive), Webhooks (disable and replay), Artifacts, Subscriptions
+  (audited entitlement overrides with tombstones), Machine access (API-key
+  revocation), and Support sessions (read-only, at most four hours). Every
+  action writes a redacted, correlated `audit_event`. Service accounts,
+  scoped API keys, tenant audit history, and organization regional defaults
+  ship through the tenant API. The generated canary requires the admin
+  scenarios to pass with the admin enabled and disabled. Staging and
+  production deploy the admin only when it is enabled, with a smoke check.
+- Admin work remaining: the first deployed run of the admin staging path,
+  once an admin-enabled staging project has isolated resources (see
+  [ADMIN_INTEGRATION_PLAN.md](ADMIN_INTEGRATION_PLAN.md)).
+- Deferred admin scope (see [ADMIN_SPEC.md](ADMIN_SPEC.md) and
+  [ADMIN_ADDITIONS_SPEC.md](ADMIN_ADDITIONS_SPEC.md)): the setup wizard steps,
+  identity and SSO, notifications, the Effective Access Explorer UI,
+  Organizations, Users, Plans, and Audit admin views, customer UI for roles,
+  service accounts, audit, and regional settings, API-key rate limits, CIDR
+  allowlists, and usage metering, plan versioning and quotas, and Lago and
+  OpenMeter adapters. User impersonation is out of scope.
 - Full browser, deployment, authorization, idempotency, upgrade, recovery,
   and adjacent-version migration suites.
 - Complete machine-readable inspection for routes, resources, events,
@@ -677,7 +702,8 @@ The largest gaps between Alpha 6 and the current v1 specification are:
   locale/time/money document is an overview and the full normative draft is
   still needed before these contracts can be marked implemented;
 - framework upgrade/sync tooling and compatibility guarantees;
-- optional admin installation and admin-resource generation;
+- deployed evidence for the optional admin, admin-view and admin-resource
+  generation, and the deferred admin scope listed under Alpha 12;
 - static architectural enforcement and complete machine-readable discovery;
   and
 - full browser and deployed-system tests from a clean generated application.

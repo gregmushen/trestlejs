@@ -6,7 +6,8 @@ import { permissions } from "@__TRESTLE_PROJECT_NAME__/authz";
  * admin API routes it calls. The SPA renders its navigation from this list and
  * the admin Worker derives its route policies from it, so a view's visibility,
  * capability status, and server-enforced permission cannot drift apart.
- * Add application views here; `trestle upgrade` preserves this file.
+ * Add application views here. This file is template-owned: once edited,
+ * `trestle upgrade` reports it for manual review instead of replacing it.
  */
 export type AdminCapability = "database" | "email" | "billing" | "queues" | "artifacts" | "workflows";
 

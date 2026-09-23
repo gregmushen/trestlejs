@@ -17,7 +17,7 @@ import type { PlatformChangeContext } from "./platform-roles.js";
 export type PlatformSubscriptionRow = Readonly<{ organizationId: string; organizationName: string; plan: string | null; planVersion: number | null; status: string | null; currentPeriodEnd: Date | null; cancelAtPeriodEnd: boolean | null }>;
 
 export async function listPlatformSubscriptions(database: Database, options: Readonly<{ limit?: number }> = {}): Promise<PlatformSubscriptionRow[]> {
-  const limit = Math.min(Math.max(Math.trunc(options.limit ?? 100), 1), 200);
+  const limit = Math.min(Math.max(Math.trunc(Number.isFinite(options.limit) ? options.limit! : 100), 1), 200);
   return await database.select({
     organizationId: organization.id, organizationName: organization.name, plan: organizationSubscription.plan, planVersion: organizationSubscription.planVersion,
     status: organizationSubscription.status, currentPeriodEnd: organizationSubscription.currentPeriodEnd, cancelAtPeriodEnd: organizationSubscription.cancelAtPeriodEnd,
@@ -62,6 +62,9 @@ export async function grantEntitlementOverride(database: Database, input: Readon
   return await database.transaction(async (transaction) => {
     const [target] = await transaction.select({ id: organization.id }).from(organization).where(eq(organization.id, input.organizationId)).limit(1);
     if (!target) throw new PlatformOperationError("not_found", "The organization does not exist");
+    // Overrides adjust a subscription's entitlements; without one they would silently do nothing.
+    const [subscribed] = await transaction.select({ organizationId: organizationSubscription.organizationId }).from(organizationSubscription).where(eq(organizationSubscription.organizationId, input.organizationId)).limit(1);
+    if (!subscribed) throw new PlatformOperationError("conflict", "The organization has no subscription, so an override would have no effect");
     const active = and(eq(organizationEntitlementOverride.organizationId, input.organizationId), eq(organizationEntitlementOverride.entitlement, input.entitlement), isNull(organizationEntitlementOverride.removedAt));
     const superseded = await transaction.select({ enabled: organizationEntitlementOverride.enabled }).from(organizationEntitlementOverride).where(active).for("update");
     if (superseded.length) await transaction.update(organizationEntitlementOverride).set({ removedAt: now, removedBy: author(context), removalReason: "superseded by a newer override" }).where(active);

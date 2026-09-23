@@ -5,7 +5,14 @@ The optional platform admin for operating this application. It exists only when 
 - **Separate origin and sign-in.** The SPA (`src/`) and API Worker (`worker/`) deploy separately from the customer app. Operators sign in with their normal account on the admin origin. The admin exposes only sign-in, session, and sign-out, so it has no sign-up.
 - **Platform authority only.** A request needs an active platform role (`packages/authz/src/role-definitions.ts`). Tenant membership or ownership grants nothing here, and platform roles grant nothing inside a tenant.
 - **Its own database login.** Outside local development the Worker reads through `DATABASE_ADMIN_URL`, a distinct login granted only `trestle_platform` (`pnpm --filter ./packages/db db:platform:configure`).
-- **Central view registry.** `src/registry.ts` declares each view's sidebar entry, required platform permission, dependent capability, and API routes. The Worker derives its route policies from it, and a drift test keeps views, routes, and permissions aligned. Add a view by adding an entry and a component in `src/views/`.
+- **Central view registry.** `src/registry.ts` declares each view's sidebar entry, required platform permission, dependent capability, and API routes. The Worker derives its route policies from it, and a drift test keeps views, routes, and permissions aligned. To add a view:
+
+1. add an entry to `src/registry.ts`;
+2. add a component in `src/views/`;
+3. map the view's ID to that component in `viewComponents` (`src/main.tsx`);
+4. add the Worker handlers for the view's API routes in `worker/index.ts`.
+
+The route-drift test fails until the registry, handlers, and policies agree.
 
 ## Operations
 
@@ -21,7 +28,7 @@ Reads need `platform.operations.read`. The `trestle_platform` database role is g
 - an endpoint to disabled;
 - a dead or exhausted delivery back to retry.
 
-Every action requires a reason and must come from the admin origin. It writes an `audit_event` with the request's correlation ID in the same transaction. The affected organization sees the event in its audit log, without the operator's identity or reason.
+Every action requires a reason (ending a support session is the exception) and must come from the admin origin. It writes an `audit_event` with the request's correlation ID in the same transaction. The affected organization sees the event in its audit log, without the operator's identity or reason.
 
 ## Commercial controls
 
@@ -59,6 +66,10 @@ Local development:
 pnpm --filter ./apps/admin dev       # API Worker on :8788
 pnpm --filter ./apps/admin dev:spa   # SPA on :42070
 ```
+
+## Credentials
+
+The admin Worker reads platform data through `DATABASE_ADMIN_URL`, a login granted only `trestle_platform`. It also receives the application's `DATABASE_URL`, because Better Auth's session tables live there. So a compromised admin Worker would hold both logins. A narrower sign-in login for the admin is deferred.
 
 ## Deployment
 
