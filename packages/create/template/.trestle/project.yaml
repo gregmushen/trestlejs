@@ -78,3 +78,9 @@ secrets:
   NEON_API_KEY:
     target: ci
     required: [preview, staging, production]
+  R2_RECOVERY_ACCESS_KEY_ID:
+    target: ci
+    required: []
+  R2_RECOVERY_SECRET_ACCESS_KEY:
+    target: ci
+    required: []

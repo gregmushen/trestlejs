@@ -134,9 +134,10 @@ ID and organization ID without object keys or contents; the audit never deletes
 anything. A second bounded audit lists old R2 objects by tenant prefix, checks
 for any live PostgreSQL reservation under tenant RLS, and reports unreferenced
 objects by key fingerprint only. It never deletes an orphan automatically.
-This does not verify that an isolated database restore can reach the provider
-bucket. Ready-artifact retention remains
-an application policy.
+The protected restore drill also checks every ready reference in its isolated
+PostgreSQL branch against the declared production bucket using read-only S3
+HEAD requests. Missing objects, metadata drift, or provider errors fail the
+drill. Ready-artifact retention remains an application policy.
 Queue delivery is at least once. The PostgreSQL event inbox prevents a completed
 logical event from running its handler again and leases in-progress work for
 recovery. Handlers that call external services must still pass the event's
@@ -259,7 +260,8 @@ Neon recovery policy lives in `.trestle/recovery.json`. Provider history alone
 is not accepted as proof of recovery. `backup verify` creates an isolated
 point-in-time branch, verifies migration history, Better Auth integrity,
 forced RLS, the restricted runtime role, and adversarial tenant isolation,
-writes non-secret evidence, and deletes the drill branch:
+then verifies every ready artifact against the declared R2 bucket, writes
+non-secret evidence, and deletes the drill branch:
 
 ```bash
 pnpm exec trestle backup status --env production
@@ -273,6 +275,14 @@ and records evidence in the GitHub Actions summary. Configure `NEON_PROJECT_ID`,
 `NEON_DATABASE`, `NEON_MIGRATION_ROLE`, and `DATABASE_RUNTIME_ROLE` as protected
 environment variables; keep `NEON_API_KEY` in Trestle encrypted credentials and
 provide `TRESTLE_MASTER_KEY` only to the protected GitHub environment.
+If the restored database has ready artifacts, also configure a bucket-scoped,
+read-only R2 S3 key pair as `R2_RECOVERY_ACCESS_KEY_ID` and
+`R2_RECOVERY_SECRET_ACCESS_KEY` in the production Trestle encrypted credentials,
+and provide `CLOUDFLARE_ACCOUNT_ID` to the protected GitHub environment. Review
+`artifactBucket` in `.trestle/recovery.json` against the actual production R2
+binding before relying on the result. Neither key nor object names are written
+to recovery evidence. A historical restore may fail if the application has
+deleted an object since that point; a retention policy is still required.
 
 ## Evolving a Trestle project
 

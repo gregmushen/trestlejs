@@ -14,7 +14,7 @@ const artifactId = `recovery-${suffix}`;
 suite("isolated restore evidence", () => {
   afterAll(async () => { await sql!.end(); });
 
-  it("reports a failed restore when PostgreSQL still references an unverified R2 object", async () => {
+  it("fails closed when a restored R2 reference has no recovery credentials", async () => {
     try {
       await sql!`insert into artifact_metadata (id, organization_id, storage_key, content_type, size, upload_state) values (${artifactId}, 'recovery-org', ${`recovery-org/${artifactId}`}, 'text/plain', 1, 'ready')`;
       const stdout = execFileSync("pnpm", ["exec", "tsx", script], {
@@ -23,8 +23,9 @@ suite("isolated restore evidence", () => {
       });
       const report = JSON.parse(stdout) as { status: string; checks: Array<{ id: string; status: string; evidence: string }> };
       expect(report.status).toBe("failed");
-      expect(report.checks.find((check) => check.id === "artifacts.references")).toMatchObject({ status: "unverifiable" });
+      expect(report.checks.find((check) => check.id === "artifacts.references")).toMatchObject({ status: "fail" });
       expect(stdout).not.toContain(connectionString!);
+      expect(stdout).not.toContain(artifactId);
     } finally {
       await sql!`delete from artifact_metadata where id = ${artifactId}`;
     }

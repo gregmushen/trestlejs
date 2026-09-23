@@ -1,11 +1,16 @@
 export type RecoveryCheck = { id: string; status: "pass" | "fail" | "unverifiable"; evidence: string };
+import type { ArtifactVerificationResult } from "./recovery-r2.js";
 
-export function artifactReferenceCheck(policy: string | undefined, readyReferences: number): RecoveryCheck {
+export function artifactReferenceCheck(policy: string | undefined, readyReferences: number, result?: ArtifactVerificationResult): RecoveryCheck {
   if (!Number.isSafeInteger(readyReferences) || readyReferences < 0) return { id: "artifacts.references", status: "fail", evidence: "ready artifact reference count is invalid" };
   if (policy !== "metadata-reference-verification" && policy !== "none") return { id: "artifacts.references", status: "fail", evidence: "artifact recovery policy is not declared" };
   if (readyReferences === 0) return { id: "artifacts.references", status: "pass", evidence: "no ready artifact references require external object verification" };
   if (policy === "none") return { id: "artifacts.references", status: "fail", evidence: `${readyReferences} ready artifact references exist, but the recovery policy excludes artifact verification` };
-  return { id: "artifacts.references", status: "unverifiable", evidence: `${readyReferences} ready artifact references require provider-specific R2 object verification` };
+  if (!result) return { id: "artifacts.references", status: "unverifiable", evidence: `${readyReferences} ready artifact references require provider-specific R2 object verification` };
+  if (result.expected !== readyReferences || result.checked !== readyReferences || result.missing || result.mismatched || result.unavailable) {
+    return { id: "artifacts.references", status: "fail", evidence: `R2 verification checked ${result.checked}/${readyReferences} references; ${result.missing} missing, ${result.mismatched} mismatched, ${result.unavailable} unavailable` };
+  }
+  return { id: "artifacts.references", status: "pass", evidence: `${readyReferences} ready artifact references verified against R2 object metadata` };
 }
 
 export function recoveryCheckStatus(checks: readonly RecoveryCheck[]): "passed" | "failed" {

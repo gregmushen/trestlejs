@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { tenantConnectionString } from "../packages/db/src/index.js";
 import { artifactReferenceCheck, recoveryCheckStatus, type RecoveryCheck } from "./recovery-evidence.js";
+import { createR2RecoveryHead, verifyArtifactObjects, type ReadyArtifactReference } from "./recovery-r2.js";
 
 const migrationUrl = process.env.DATABASE_MIGRATION_URL;
 const runtimeUrl = process.env.DATABASE_URL;
@@ -39,7 +40,29 @@ try {
   try {
     const [row] = await migration<{ count: number }[]>`select count(*)::int as count from artifact_metadata where upload_state='ready' and deleted_at is null`;
     if (!row || !Number.isSafeInteger(row.count)) throw new Error("could not count ready artifact references");
-    checks.push(artifactReferenceCheck(process.env.TRESTLE_ARTIFACT_POLICY, row.count));
+    const policy = process.env.TRESTLE_ARTIFACT_POLICY;
+    if (row.count === 0 || policy !== "metadata-reference-verification") {
+      checks.push(artifactReferenceCheck(policy, row.count));
+    } else {
+      try {
+        const provider = createR2RecoveryHead({
+          accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? "",
+          accessKeyId: process.env.R2_RECOVERY_ACCESS_KEY_ID ?? "",
+          secretAccessKey: process.env.R2_RECOVERY_SECRET_ACCESS_KEY ?? "",
+          bucket: process.env.TRESTLE_ARTIFACT_BUCKET ?? "",
+        });
+        try {
+          const result = await verifyArtifactObjects(row.count, async (afterId, limit) => {
+            const records = await migration<ReadyArtifactReference[]>`select id, organization_id as "organizationId", storage_key as key, content_type as "contentType", size::float8 as size
+              from artifact_metadata where upload_state='ready' and deleted_at is null and id > ${afterId} order by id limit ${limit}`;
+            return records;
+          }, provider.head);
+          checks.push(artifactReferenceCheck(policy, row.count, result));
+        } finally { provider.close(); }
+      } catch {
+        checks.push({ id: "artifacts.references", status: "fail", evidence: "R2 reference verification was unavailable or incomplete" });
+      }
+    }
   } catch { checks.push({ id: "artifacts.references", status: "fail", evidence: "ready artifact references could not be enumerated" }); }
 } finally { await migration.end(); }
 

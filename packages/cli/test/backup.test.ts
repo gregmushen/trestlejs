@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseRecoveryConnectionOutput, recoveryEvidencePassed, recoveryStatusLabel, validateRecoveryPoint, validateRecoveryTarget, type RecoveryPolicy } from "../src/backup.js";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { parseRecoveryConnectionOutput, recoveryEvidencePassed, recoveryStatusLabel, validateRecoveryArtifactBucket, validateRecoveryPoint, validateRecoveryTarget, type RecoveryPolicy } from "../src/backup.js";
 
 const policy: RecoveryPolicy = { schemaVersion: 1, provider: "neon", sourceBranch: "main", restoreTargets: ["restore-test"], recoveryPointObjectiveHours: 24, recoveryTimeObjectiveMinutes: 30, artifactPolicy: "metadata-reference-verification" };
 
@@ -20,6 +23,15 @@ describe("backup and restore safety", () => {
       runtimeUrl: "postgresql://runtime:secret@db.test/app",
     });
     expect(() => parseRecoveryConnectionOutput("branch_id=br-restored\nmigration_url=https://db.test\nruntime_url=postgres://db.test/app\n")).toThrow("incomplete");
+  });
+  it("requires recovery R2 bucket identity to match the production Worker", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-recovery-bucket-"));
+    try {
+      await mkdir(path.join(root, "apps", "worker"), { recursive: true });
+      await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ env: { production: { name: "example-worker" } } }));
+      await expect(validateRecoveryArtifactBucket(root, "apps/worker", { ...policy, artifactBucket: "example-worker-artifacts" })).resolves.toBeUndefined();
+      await expect(validateRecoveryArtifactBucket(root, "apps/worker", { ...policy, artifactBucket: "other-bucket" })).rejects.toThrow("does not match");
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
   it("never labels missing, partial, or unverifiable restore evidence as verified", () => {
     const checks = ["database.reachable", "schema.migrations", "auth.integrity", "role.application", "rls.forced", "rls.runtime", "artifacts.references"]
