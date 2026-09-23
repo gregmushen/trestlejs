@@ -58,7 +58,9 @@ export function createDatabase(connectionString: string, driver: DatabaseDriver 
 
   const client = postgres(connectionString, {
     max: 1,
-    idle_timeout: 1,
+    // Wrangler may not reuse I/O across requests. Release an idle socket
+    // promptly instead of retaining one pool per request for a full second.
+    idle_timeout: 0.05,
     prepare: false,
   });
   return drizzle(client, { schema });

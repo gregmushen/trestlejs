@@ -411,6 +411,9 @@ permission failures without exposing provider responses or secrets. Generated
 browser coverage exercises both organizations, the record hierarchy, redaction,
 and denied access. Cursor pagination, deeper operational controls, deployed
 native delivery proof, and the optional Svix adapter remain.
+Alpha 57 also shortens the local PostgreSQL socket idle period after the hosted
+generated system test exposed connection exhaustion. Worker request I/O remains
+isolated: database sockets are never cached across Cloudflare requests.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
