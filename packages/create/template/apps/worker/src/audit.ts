@@ -8,7 +8,7 @@ type TenantAuditInput = Pick<AuditEventInput, "name" | "target" | "summary" | "r
 export function tenantAuditEvent(execution: AppExecutionContext, environment: string | undefined, event: TenantAuditInput): AuditEventInput {
   return {
     ...event,
-    actor: { type: execution.principal.kind === "system" ? "system" : "user", id: execution.principal.id },
+    actor: { type: execution.principal.kind, id: execution.principal.id },
     organizationId: execution.tenant.organizationId,
     environment: environment ?? "local",
     correlationId: execution.correlation.correlationId,

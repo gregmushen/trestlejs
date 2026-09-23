@@ -28,6 +28,11 @@ export const customerRoutePolicies = defineRoutePolicies(permissions, [
   { method: "GET", path: "/api/tenant/application-role-assignments", audience: "tenant", permission: "application.roles.read" },
   { method: "GET", path: "/api/tenant/audit", audience: "tenant", permission: "organization.audit.read" },
   { method: "PUT", path: "/api/tenant/users/:userId/application-roles", audience: "tenant", permission: "application.roles.assign" },
+  { method: "GET", path: "/api/tenant/service-accounts", audience: "tenant", permission: "application.service_accounts.read" },
+  { method: "POST", path: "/api/tenant/service-accounts", audience: "tenant", permission: "application.service_accounts.manage" },
+  { method: "POST", path: "/api/tenant/service-accounts/:id/api-keys", audience: "tenant", permission: "application.service_accounts.manage" },
+  { method: "POST", path: "/api/tenant/api-keys/:id/rotate", audience: "tenant", permission: "application.service_accounts.manage" },
+  { method: "POST", path: "/api/tenant/api-keys/:id/revoke", audience: "tenant", permission: "application.service_accounts.manage" },
 
   { method: "POST", path: "/api/billing/checkout", audience: "tenant", permission: "organization.billing.manage" },
   { method: "POST", path: "/api/billing/portal", audience: "tenant", permission: "organization.billing.manage" },

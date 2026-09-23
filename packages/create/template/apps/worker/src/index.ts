@@ -15,6 +15,7 @@ import { auditArtifactReferences } from "./artifact-reference-audit.js";
 import { auditArtifactOrphans } from "./artifact-orphan-audit.js";
 import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
 import { accessRoutes } from "./access-routes.js";
+import { machineAccessRoutes } from "./machine-access-routes.js";
 import { auditTenantAction } from "./audit.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
@@ -355,6 +356,7 @@ app.on(["GET", "POST"], "/api/auth/*", (context) =>
 );
 
 app.route("/", accessRoutes);
+app.route("/", machineAccessRoutes);
 
 app.get("/api/me", async (context) => {
   const session = await createAuth(context.env).api.getSession({ headers: context.req.raw.headers });

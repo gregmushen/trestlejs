@@ -32,7 +32,7 @@ export const applicationRoles = defineRoles(permissions, "application", {
 export const platformRoles = defineRoles(permissions, "platform", {
   platform_operator: { name: "Platform operator", description: "Reads platform health, organizations, operations, and audit history; redrives events and recovers webhooks", permissions: ["platform.overview.read", "platform.organizations.read", "platform.audit.read", "platform.operations.read", "platform.outbox.redrive", "platform.webhooks.manage"] },
   commercial_admin: { name: "Commercial administrator", description: "Reads subscriptions and grants or revokes entitlement overrides", permissions: ["platform.overview.read", "platform.organizations.read", "platform.subscriptions.read", "platform.entitlements.manage"] },
-  security_admin: { name: "Security administrator", description: "Manages platform roles and reads audit history", permissions: ["platform.overview.read", "platform.audit.read", "platform.roles.read", "platform.roles.manage"] },
+  security_admin: { name: "Security administrator", description: "Manages platform roles, reads audit history, and revokes compromised API keys", permissions: ["platform.overview.read", "platform.audit.read", "platform.roles.read", "platform.roles.manage", "platform.machine_access.read", "platform.api_keys.revoke"] },
 });
 
 export const roleCatalogs = { organization: organizationRoles, application: applicationRoles, platform: platformRoles } as const;

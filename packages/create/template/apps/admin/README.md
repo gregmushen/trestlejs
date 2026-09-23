@@ -31,6 +31,14 @@ An override grants or denies one entitlement the application defines in `package
 
 Overrides are never deleted; removal is a tombstone with its own reason. Tenant runtimes can read overrides but never write them. Customers see only that an entitlement comes from their contract, never the reason or author.
 
+## Machine access
+
+Organizations create service accounts and mint, rotate, and revoke scoped API keys through `/api/tenant/service-accounts` and `/api/tenant/api-keys/:id/*`. This requires `application.service_accounts.manage`, an application-plane permission, because a service account holds application roles; organization roles grant none of it.
+
+A key's scopes are application permissions that admit API keys, and never exceed its account's roles. Tokens are shown once and stored only as SHA-256 verifiers. A key works only in the environment that minted it.
+
+The Machine access view lists key metadata across organizations (`platform.machine_access.read`). A security administrator can revoke a compromised key (`platform.api_keys.revoke`), and the revocation is audited on the owning organization.
+
 Bootstrap the first operator after they sign up in the customer app:
 
 ```bash
