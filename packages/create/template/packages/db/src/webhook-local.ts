@@ -1,4 +1,4 @@
-import { and, eq, inArray, lte } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm";
 
 import type { Database } from "./index.js";
 import { webhookAttempt } from "./webhook-attempt-schema.js";
@@ -129,4 +129,46 @@ export async function captureLocalWebhookDelivery(input: {
     });
     return { state, attemptId, attemptNumber, nextRetryAt };
   });
+}
+
+/** Bounded local retry sweep. The injected clock makes scheduled attempts
+ * deterministic; this never performs an HTTP request. */
+export async function flushDueLocalWebhookDeliveries(input: {
+  organizationId: string;
+  tenantDatabase: (organizationId: string) => Database;
+  signingSecretForEndpoint: (endpointId: string) => Promise<string | null>;
+  scenario: LocalWebhookScenario;
+  clock: { now(): Date };
+  limit?: number;
+}): Promise<{ captured: number; skipped: number }> {
+  const limit = input.limit ?? 100;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new LocalWebhookError("Invalid local webhook flush limit");
+  const now = input.clock.now();
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new LocalWebhookError("Invalid local webhook clock");
+  const rows = await input.tenantDatabase(input.organizationId).select({
+    deliveryId: webhookDelivery.id, endpointId: webhookDelivery.endpointId,
+  }).from(webhookDelivery)
+    .innerJoin(webhookEndpoint, and(eq(webhookEndpoint.id, webhookDelivery.endpointId), eq(webhookEndpoint.organizationId, webhookDelivery.organizationId)))
+    .where(and(
+      eq(webhookDelivery.organizationId, input.organizationId),
+      inArray(webhookDelivery.state, ["pending", "retry"]),
+      lte(webhookDelivery.nextAttemptAt, now),
+      eq(webhookEndpoint.provider, "local"),
+      eq(webhookEndpoint.environment, "local"),
+      eq(webhookEndpoint.state, "active"),
+      isNull(webhookEndpoint.deletedAt),
+    )).orderBy(asc(webhookDelivery.nextAttemptAt), asc(webhookDelivery.id)).limit(limit);
+  let captured = 0;
+  let skipped = 0;
+  for (const row of rows) {
+    const signingSecret = await input.signingSecretForEndpoint(row.endpointId);
+    if (!signingSecret) throw new LocalWebhookError("Local webhook endpoint has no current signing secret");
+    const result = await captureLocalWebhookDelivery({
+      organizationId: input.organizationId, deliveryId: row.deliveryId, tenantDatabase: input.tenantDatabase,
+      signingSecret, scenario: input.scenario, clock: input.clock,
+    });
+    if (["succeeded", "retry", "dead"].includes(result.state)) captured++;
+    else skipped++;
+  }
+  return { captured, skipped };
 }
