@@ -253,6 +253,18 @@ export async function runDoctor(
         ...(!configured ? { remediation: `Declare the ${capability} binding in ${workerPath ?? "apps/worker"}/wrangler.jsonc for ${environment}, or disable the capability in .trestle/project.yaml` } : {}),
       });
     }
+    if (wranglerStringVariable(block, "WEBHOOK_DELIVERY_MODE") === "native") {
+      const declaration = manifest.secrets?.WEBHOOK_SECRET_KEY;
+      const queueReady = manifest.capabilities.queues && wranglerCapabilityBinding(block, "queues");
+      const secretDeclared = declaration?.target === "worker" && declaration.required.includes(environment);
+      checks.push({
+        id: "webhook.native.configuration",
+        group: "architecture",
+        status: queueReady && secretDeclared ? "pass" : "fail",
+        message: queueReady && secretDeclared ? `native webhook Queue and signing secret are declared for ${environment}` : `native webhooks require a ${environment} Queue and required Worker signing secret`,
+        ...(!queueReady || !secretDeclared ? { remediation: `Enable the queues capability and binding, and require WEBHOOK_SECRET_KEY for ${environment} in .trestle/project.yaml` } : {}),
+      });
+    }
   }
 
   if (manifest.secrets && Object.keys(manifest.secrets).length > 0) {
@@ -268,6 +280,19 @@ export async function runDoctor(
           message: signingSecret && Buffer.byteLength(signingSecret, "utf8") >= 32 ? "artifact signing secret is configured" : "R2 artifact access requires an encrypted signing secret of at least 32 bytes",
           ...(!signingSecret || Buffer.byteLength(signingSecret, "utf8") < 32 ? { remediation: `Set ARTIFACT_SIGNING_SECRET with trestle secrets edit --env ${environment}` } : {}),
         });
+      }
+      if (environment !== "local" && manifest.apps.worker) {
+        const workerConfig = await readFile(path.join(root, process.env.TRESTLE_WRANGLER_CONFIG ?? path.join(manifest.apps.worker, "wrangler.jsonc")), "utf8").catch(() => "");
+        const block = wranglerEnvironmentBlock(workerConfig, environment);
+        if (wranglerStringVariable(block, "WEBHOOK_DELIVERY_MODE") === "native") {
+          const signingSecret = values.WEBHOOK_SECRET_KEY;
+          const valid = Boolean(signingSecret && Buffer.byteLength(signingSecret, "utf8") >= 32);
+          checks.push({
+            id: "webhook.native.signing_secret.configured", group: "architecture", status: valid ? "pass" : "fail",
+            message: valid ? "native webhook signing key is configured" : "native webhook signing key must be at least 32 bytes",
+            ...(!valid ? { remediation: `Set WEBHOOK_SECRET_KEY with trestle secrets edit --env ${environment}` } : {}),
+          });
+        }
       }
       checks.push({
         id: "configuration.secrets.valid",

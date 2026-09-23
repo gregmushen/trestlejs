@@ -49,4 +49,34 @@ describe("remote provider preflight", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("fails closed when native webhook mode lacks its Queue or encrypted signing key", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-native-webhook-doctor-"));
+    const key = randomBytes(32).toString("hex");
+    try {
+      await mkdir(path.join(root, "apps", "worker"), { recursive: true });
+      await mkdir(path.join(root, "config", "credentials"), { recursive: true });
+      await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ env: { preview: { vars: { WEBHOOK_DELIVERY_MODE: "native" } } } }));
+      await writeFile(path.join(root, "config", "credentials", "preview.yml.enc"), encryptSecrets({}, "preview", key));
+      const missing = await runDoctor(root, manifest, "preview", key);
+      expect(missing.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.configuration", status: "fail" }));
+      expect(missing.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.signing_secret.configured", status: "fail" }));
+
+      const enabled = { ...manifest, capabilities: { ...manifest.capabilities, queues: true }, secrets: {
+        ...manifest.secrets, WEBHOOK_SECRET_KEY: { target: "worker" as const, required: ["preview" as const] },
+      } };
+      await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ env: { preview: {
+        vars: { WEBHOOK_DELIVERY_MODE: "native" },
+        queues: { producers: [{ binding: "TRESTLE_EVENTS", queue: "example" }], consumers: [{ queue: "example", dead_letter_queue: "example-dlq" }] },
+      } } }));
+      await writeFile(path.join(root, "config", "credentials", "preview.yml.enc"), encryptSecrets({ WEBHOOK_SECRET_KEY: "a".repeat(32) }, "preview", key));
+      const ready = await runDoctor(root, enabled, "preview", key);
+      expect(ready.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.configuration", status: "pass" }));
+      expect(ready.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.signing_secret.configured", status: "pass" }));
+      expect(JSON.stringify(ready)).not.toContain("a".repeat(32));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -48,7 +48,7 @@ export function renderQueueConfig(source, environment, workerName, capabilities 
     const { primary, deadLetter } = queueNames(workerName);
     target.queues = {
       producers: [{ binding: "TRESTLE_EVENTS", queue: primary }],
-      consumers: [{ queue: primary, max_batch_size: 10, max_retries: 5, dead_letter_queue: deadLetter }],
+      consumers: [{ queue: primary, max_batch_size: 10, max_retries: 10, dead_letter_queue: deadLetter }],
     };
   }
   if (capabilities.r2) target.r2_buckets = [{ binding: "TRESTLE_ARTIFACTS", bucket_name: artifactBucketName(workerName) }];

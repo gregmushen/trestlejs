@@ -377,9 +377,20 @@ connection identity, 2xx/redirect responses, interim and malformed responses,
 unauthorized TLS, DNS-policy rejection, and late-handshake races. The Queue
 dispatcher and live Cloudflare transport proof remain required before native
 mode can be enabled.
-Trestle does not yet deliver projected webhooks externally or provide
-customer inspection UI. The next slices are native Queue-backed delivery and
-recovery, then the optional Svix adapter. A committed domain event remains authoritative;
+Alpha 54 wires the post-commit projection to ID-only Queue wake-ups, reloads
+tenant provenance from the committed outbox row, leases and signs each native
+attempt, settles provider responses, and schedules bounded retries. A cron
+recovery scan re-enqueues due deliveries and expired leases after lost Queue
+handoffs. Scheduled retention applies to native payloads as well as local
+capture. Doctor requires a Queue binding and encrypted signing key before
+native mode is enabled. PostgreSQL tests cover tenant isolation, duplicate
+wake-ups, retry, lease recovery, and metadata-only native attempt storage;
+generated browser and Worker dry-run checks pass. Live Cloudflare egress and
+end-to-end deployed delivery remain unproven, so the starter still defaults to
+disabled mode.
+Trestle does not yet provide customer webhook inspection UI. The next slices
+are deployed native delivery proof and the optional Svix adapter. A committed
+domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging

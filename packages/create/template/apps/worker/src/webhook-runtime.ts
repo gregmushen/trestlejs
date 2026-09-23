@@ -1,8 +1,8 @@
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
-import { captureLocalWebhookDelivery, createTenantDatabase, loadCurrentWebhookSigningSecret, projectCommittedWebhook, webhookDelivery, webhookEndpoint, type Database, type LocalWebhookScenario, type WebhookProjectionResult } from "@__TRESTLE_PROJECT_NAME__/db";
-import { applicationEventCatalog, type EventEnvelope, type OutboxEntry, type defineEventCatalog } from "@__TRESTLE_PROJECT_NAME__/events";
+import { captureLocalWebhookDelivery, createTenantDatabase, loadCurrentWebhookSigningSecret, projectCommittedWebhook, webhookDelivery, webhookEndpoint, type Database, type LocalWebhookScenario, type NativeWebhookWakeup, type WebhookProjectionResult } from "@__TRESTLE_PROJECT_NAME__/db";
+import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type OutboxEntry, type defineEventCatalog } from "@__TRESTLE_PROJECT_NAME__/events";
 import { and, eq, isNull } from "drizzle-orm";
 
 type Catalog = ReturnType<typeof defineEventCatalog>;
@@ -26,13 +26,15 @@ export async function projectWebhookForEvent(input: {
   hasEntitlement?: (organizationId: string, entitlement: string) => Promise<boolean>;
   now?: () => Date;
   localScenario?: LocalWebhookScenario;
+  queue?: CloudflareQueueBinding<NativeWebhookWakeup>;
 }): Promise<WebhookProjectionResult | null> {
   const catalog = input.catalog ?? applicationEventCatalog;
   const queued = input.envelope;
   const mode = input.environment.WEBHOOK_DELIVERY_MODE ?? "disabled";
   if (mode === "disabled") return null;
-  if (mode !== "local") throw new Error(`Outbound webhook mode ${mode} is not implemented`);
-  if (input.environment.APP_ENV && input.environment.APP_ENV !== "local") throw new Error("Local outbound webhook mode requires a local environment");
+  if (mode === "svix") throw new Error("Outbound webhook mode svix is not implemented");
+  if (mode === "local" && input.environment.APP_ENV && input.environment.APP_ENV !== "local") throw new Error("Local outbound webhook mode requires a local environment");
+  if (mode === "native" && (!input.environment.APP_ENV || input.environment.APP_ENV === "local" || !input.queue || !input.environment.WEBHOOK_SECRET_KEY)) throw new Error("Native outbound webhooks require a remote environment, Queue binding, and signing key");
   if (!catalog.has(queued.name, queued.schemaVersion)) return null;
   const committed = await input.outbox.findCommitted(queued.id);
   if (!committed) throw new Error("Committed event was not found");
@@ -66,10 +68,14 @@ export async function projectWebhookForEvent(input: {
       .innerJoin(webhookEndpoint, and(eq(webhookEndpoint.id, webhookDelivery.endpointId), eq(webhookEndpoint.organizationId, webhookDelivery.organizationId)))
       .where(and(
       eq(webhookDelivery.organizationId, organizationId), eq(webhookDelivery.messageId, result.messageId),
-      eq(webhookEndpoint.provider, "local"), eq(webhookEndpoint.environment, "local"),
+      eq(webhookEndpoint.provider, mode), eq(webhookEndpoint.environment, input.environment.APP_ENV ?? "local"),
       eq(webhookEndpoint.state, "active"), isNull(webhookEndpoint.deletedAt),
     ));
     for (const delivery of deliveries) {
+      if (mode === "native") {
+        await input.queue!.send({ sourceEventId: actual.id, deliveryId: delivery.id }, { contentType: "json" });
+        continue;
+      }
       const masterKey = input.environment.WEBHOOK_SECRET_KEY;
       if (!masterKey) throw new Error("Local outbound webhook signing key is not configured");
       const signingSecret = await loadCurrentWebhookSigningSecret({

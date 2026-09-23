@@ -4,6 +4,7 @@ import type { Database } from "./index.js";
 import { webhookAttempt } from "./webhook-attempt-schema.js";
 import { webhookDelivery, webhookMessage } from "./webhook-projection-schema.js";
 import { webhookEndpoint } from "./webhook-schema.js";
+import { decodeWebhookSigningSecret, signWebhookPayload } from "./webhook-signing.js";
 
 export type LocalWebhookScenario =
   | { kind: "succeed"; status?: number; latencyMs?: number }
@@ -48,24 +49,6 @@ function retryDelayMs(attemptNumber: number): number {
   return Math.min(60 * 60 * 1_000, 1_000 * 2 ** Math.min(attemptNumber - 1, 12));
 }
 
-function decodeSigningSecret(secret: string): Uint8Array<ArrayBuffer> {
-  if (!secret.startsWith("whsec_")) throw new LocalWebhookError("Local signing secret must use the whsec_ format");
-  try {
-    const encoded = secret.slice(6);
-    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
-    if (bytes.length < 16 || btoa(String.fromCharCode(...bytes)) !== encoded) throw new Error("Invalid key material");
-    return bytes;
-  } catch {
-    throw new LocalWebhookError("Local signing secret has invalid base64 key material");
-  }
-}
-
-async function sign(id: string, timestamp: number, body: string, keyBytes: Uint8Array<ArrayBuffer>): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${id}.${timestamp}.${body}`)));
-  return `v1,${btoa(String.fromCharCode(...bytes))}`;
-}
-
 /** Local-only transport. It persists the signed request and scripted result but never calls fetch. */
 export async function captureLocalWebhookDelivery(input: {
   organizationId: string;
@@ -76,7 +59,7 @@ export async function captureLocalWebhookDelivery(input: {
   clock: { now(): Date };
   maxAttempts?: number;
 }): Promise<LocalWebhookResult> {
-  const keyBytes = decodeSigningSecret(input.signingSecret);
+  const keyBytes = decodeWebhookSigningSecret(input.signingSecret);
   const maxAttempts = input.maxAttempts ?? 5;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) throw new LocalWebhookError("Invalid maximum attempt count");
   const now = input.clock.now();
@@ -113,7 +96,7 @@ export async function captureLocalWebhookDelivery(input: {
       "content-type": "application/json",
       "webhook-id": record.delivery.messageId,
       "webhook-timestamp": String(timestamp),
-      "webhook-signature": await sign(record.delivery.messageId, timestamp, body, keyBytes),
+      "webhook-signature": await signWebhookPayload(record.delivery.messageId, timestamp, body, keyBytes),
     };
     const [claimed] = await transaction.update(webhookDelivery).set({
       state, attemptCount: attemptNumber, nextAttemptAt: nextRetryAt,

@@ -3,6 +3,8 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { createTenantDatabase } from "./index.js";
 import { claimNativeWebhookDelivery } from "./webhook-claims.js";
+import { loadNativeWebhookAttempt } from "./webhook-native.js";
+import { dueNativeWebhookWakeups } from "./webhook-recovery.js";
 import { settleNativeWebhookAttempt } from "./webhook-settlement.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
@@ -22,9 +24,10 @@ async function fixture(organizationId: string, options: { provider?: "native" | 
   endpointIds.push(endpoint.id);
   messageIds.push(messageId);
   deliveryIds.push(deliveryId);
-  await sql!`insert into webhook_message (id, organization_id, source_event_id, public_event_type, public_version, occurred_at, resource_type, resource_id, envelope, payload_size, retention_class, entitlement_decision, status, correlation_id) values (${messageId}, ${organizationId}, ${crypto.randomUUID()}, 'article.published', 1, ${initialTime}, 'article', 'article-1', ${sql!.json({ id: messageId })}, 2, 'standard', 'not_required', 'ready', ${crypto.randomUUID()})`;
+  const sourceEventId = crypto.randomUUID();
+  await sql!`insert into webhook_message (id, organization_id, source_event_id, public_event_type, public_version, occurred_at, resource_type, resource_id, envelope, payload_size, retention_class, entitlement_decision, status, correlation_id) values (${messageId}, ${organizationId}, ${sourceEventId}, 'article.published', 1, ${initialTime}, 'article', 'article-1', ${sql!.json({ id: messageId })}, 2, 'standard', 'not_required', 'ready', ${crypto.randomUUID()})`;
   await sql!`insert into webhook_delivery (id, organization_id, message_id, endpoint_id, next_attempt_at) values (${deliveryId}, ${organizationId}, ${messageId}, ${endpoint.id}, ${options.dueAt ?? initialTime})`;
-  return { endpointId: endpoint.id, deliveryId };
+  return { endpointId: endpoint.id, deliveryId, sourceEventId };
 }
 
 suite("native webhook delivery leases", () => {
@@ -45,6 +48,28 @@ suite("native webhook delivery leases", () => {
     expect(leased).toMatchObject({ attemptNumber: 1, leasedUntil: new Date(initialTime.getTime() + 30_000) });
     const [row] = await sql!`select state, lease_token, leased_until, attempt_count from webhook_delivery where id=${deliveryId}`;
     expect(row).toMatchObject({ state: "leased", lease_token: leased?.state === "leased" ? leased.leaseToken : undefined, attempt_count: 0 });
+  });
+
+  it("recovers due work and expired leases without crossing tenant or environment", async () => {
+    const organizationId = "claim-recovery";
+    const due = await fixture(organizationId);
+    const future = await fixture(organizationId, { dueAt: new Date(initialTime.getTime() + 60_000) });
+    const local = await fixture(organizationId, { provider: "local" });
+    const paused = await fixture(organizationId, { state: "paused" });
+    const scan = (tenant: string, now: Date) => dueNativeWebhookWakeups({ organizationId: tenant, environment: "preview", tenantDatabase, now });
+    expect(await scan("another-tenant", initialTime)).toEqual([]);
+    expect(await dueNativeWebhookWakeups({ organizationId, environment: "staging", tenantDatabase, now: initialTime })).toEqual([]);
+    expect(await scan(organizationId, initialTime)).toEqual([{ sourceEventId: due.sourceEventId, deliveryId: due.deliveryId }]);
+    const first = await claimNativeWebhookDelivery({ organizationId, deliveryId: due.deliveryId, tenantDatabase, clock: { now: () => initialTime }, leaseMs: 1_000 });
+    expect(first.state).toBe("leased");
+    expect(await scan(organizationId, new Date(initialTime.getTime() + 999))).toEqual([]);
+    expect(await scan(organizationId, new Date(initialTime.getTime() + 1_000))).toEqual([{ sourceEventId: due.sourceEventId, deliveryId: due.deliveryId }]);
+    await sql!`update webhook_message set payload_deleted_at=${new Date(initialTime.getTime() + 1_000)}, envelope=null where source_event_id=${due.sourceEventId}`;
+    expect(await scan(organizationId, new Date(initialTime.getTime() + 1_000))).toEqual([]);
+    await expect(dueNativeWebhookWakeups({ organizationId, environment: "preview", tenantDatabase, now: initialTime, limit: 0 })).rejects.toThrow("page size");
+    expect(future.deliveryId).not.toBe(due.deliveryId);
+    expect(local.deliveryId).not.toBe(due.deliveryId);
+    expect(paused.deliveryId).not.toBe(due.deliveryId);
   });
 
   it("reclaims an expired lease with a new token, never a live one", async () => {
@@ -144,5 +169,19 @@ suite("native webhook delivery leases", () => {
     await sql!`insert into webhook_attempt (id, organization_id, delivery_id, attempt_number, kind, attempted_at, completed_at, request_headers, outcome, duration_ms) values (${`${deliveryId}.1`}, 'settle-invalid', ${deliveryId}, 1, 'native', ${initialTime}, ${initialTime}, ${sql!.json({})}, 'retry', 0)`;
     await expect(settleNativeWebhookAttempt({ ...base, result: { kind: "response", status: 200 } })).rejects.toThrow();
     expect((await sql!`select state, attempt_count from webhook_delivery where id=${deliveryId}`)[0]).toEqual({ state: "leased", attempt_count: 0 });
+  });
+
+  it("loads a payload only for the current tenant-bound live lease", async () => {
+    const { endpointId, deliveryId } = await fixture("load-native");
+    const claimed = await claimNativeWebhookDelivery({ organizationId: "load-native", deliveryId, tenantDatabase, clock: { now: () => initialTime }, leaseMs: 1_000 });
+    if (claimed.state !== "leased") throw new Error("Expected lease");
+    const base = { organizationId: "load-native", deliveryId, leaseToken: claimed.leaseToken, environment: "preview" as const, tenantDatabase, clock: { now: () => initialTime } };
+    expect(await loadNativeWebhookAttempt(base)).toMatchObject({ endpointId, destinationUrl: "https://example.com/hook", body: expect.stringContaining("whm_claim_") });
+    expect(await loadNativeWebhookAttempt({ ...base, organizationId: "another-tenant" })).toBeNull();
+    expect(await loadNativeWebhookAttempt({ ...base, leaseToken: crypto.randomUUID() })).toBeNull();
+    expect(await loadNativeWebhookAttempt({ ...base, environment: "staging" })).toBeNull();
+    expect(await loadNativeWebhookAttempt({ ...base, clock: { now: () => new Date(initialTime.getTime() + 1_000) } })).toBeNull();
+    await sql!`update webhook_message set envelope=null, payload_deleted_at=${initialTime} where id=(select message_id from webhook_delivery where id=${deliveryId})`;
+    expect(await loadNativeWebhookAttempt(base)).toBeNull();
   });
 });
