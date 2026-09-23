@@ -45,3 +45,18 @@ export type WebhookOperations = {
   failedDeliveries: Array<{ id: string; organizationId: string; endpointId: string; eventType: string; state: string; attemptCount: number; terminalReason: string | null; completedAt: string | null; replayable: boolean }>;
 };
 export type ArtifactOperations = { states: Record<"pending" | "ready" | "cleaning" | "deleted", { count: number; bytes: number }>; stalePending: number };
+export type SubscriptionRow = { organizationId: string; organizationName: string; plan: string | null; planVersion: number | null; status: string | null; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean | null };
+export type CommercialDetail = {
+  subscription: { provider: string; plan: string; planVersion: number; status: string; currentPeriodStart: string | null; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean } | null;
+  planEntitlements: string[];
+  overrides: Array<{ entitlement: string; enabled: boolean; reason: string; authorId: string; effectiveAt: string; expiresAt: string | null; removedAt: string | null; removedBy: string | null; removalReason: string | null }>;
+  entitlementCatalog: Array<{ code: string; description: string }>;
+};
+
+/** A platform action with fields beyond the audited reason. */
+export async function adminPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const response = await fetch(`${adminApiOrigin}${path}`, { method: "POST", credentials: "include", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body) });
+  const payload = await response.json().catch(() => ({})) as { error?: string; reason?: string; message?: string; repair?: string };
+  if (!response.ok) throw new AdminApiError(response.status, payload.reason ?? payload.error ?? "request_failed", payload.message ?? "The action failed", payload.repair);
+  return payload as T;
+}

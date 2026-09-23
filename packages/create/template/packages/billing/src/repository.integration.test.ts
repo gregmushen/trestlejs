@@ -42,5 +42,28 @@ suite("tenant-scoped billing projection", () => {
       await database.delete(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId));
     }
   });
+
+  it("applies the most recent active override and ignores removed ones", async () => {
+    const organizationId = `billing-latest-${crypto.randomUUID()}`;
+    const repository = new PostgresBillingProjectionRepository(runtimeConnectionString ?? connectionString!, "postgres-js");
+    const database = createDatabase(connectionString!, "postgres-js");
+    const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1_000);
+    try {
+      await repository.put({ organizationId, provider: "local", plan: "pro", planVersion: 1, status: "active", cancelAtPeriodEnd: false, entitlements: ["article.basic"] });
+      await database.insert(organizationEntitlementOverride).values([
+        { organizationId, entitlement: "support.priority", enabled: true, reason: "newest but removed", authorId: "operator", effectiveAt: at(10), removedAt: at(5), removedBy: "operator", removalReason: "ended" },
+        { organizationId, entitlement: "support.priority", enabled: false, reason: "older", authorId: "operator", effectiveAt: at(60) },
+        { organizationId, entitlement: "support.priority", enabled: true, reason: "newer", authorId: "operator", effectiveAt: at(30) },
+        { organizationId, entitlement: "article.basic", enabled: false, reason: "removed deny", authorId: "operator", effectiveAt: at(30), removedAt: at(20), removedBy: "operator", removalReason: "mistake" },
+      ]);
+      const subscription = await repository.get(organizationId);
+      expect(subscription?.effectiveEntitlements).toContainEqual(expect.objectContaining({ code: "support.priority", enabled: true, source: "override" }));
+      expect(subscription?.effectiveEntitlements).toContainEqual(expect.objectContaining({ code: "article.basic", enabled: true, source: "plan" }));
+    } finally {
+      await database.delete(organizationEntitlementOverride).where(eq(organizationEntitlementOverride.organizationId, organizationId));
+      await database.delete(organizationEntitlement).where(eq(organizationEntitlement.organizationId, organizationId));
+      await database.delete(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId));
+    }
+  });
 });
 

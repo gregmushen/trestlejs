@@ -169,6 +169,13 @@
       "when": 1790294400015,
       "tag": "0023_brown_goblin_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790294400016,
+      "tag": "0024_lean_polaris",
+      "breakpoints": true
     }
   ]
 }

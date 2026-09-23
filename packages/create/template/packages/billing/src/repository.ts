@@ -1,6 +1,6 @@
 import { createTenantDatabase, organizationEntitlement, organizationEntitlementOverride, organizationSubscription, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { BillingProjectionRepository, SubscriptionSummary } from "@__TRESTLE_PROJECT_NAME__/integrations";
-import { and, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { Entitlements } from "./entitlements.js";
 
 export class PostgresBillingProjectionRepository implements BillingProjectionRepository {
@@ -13,7 +13,9 @@ export class PostgresBillingProjectionRepository implements BillingProjectionRep
       if (!subscription) return null;
       const entitlements = await transaction.select().from(organizationEntitlement).where(eq(organizationEntitlement.organizationId, organizationId));
       const now = new Date();
-      const overrides = await transaction.select().from(organizationEntitlementOverride).where(and(eq(organizationEntitlementOverride.organizationId, organizationId), lte(organizationEntitlementOverride.effectiveAt, now), or(isNull(organizationEntitlementOverride.expiresAt), gt(organizationEntitlementOverride.expiresAt, now))));
+      const overrides = await transaction.select().from(organizationEntitlementOverride).where(and(eq(organizationEntitlementOverride.organizationId, organizationId), isNull(organizationEntitlementOverride.removedAt), lte(organizationEntitlementOverride.effectiveAt, now), or(isNull(organizationEntitlementOverride.expiresAt), gt(organizationEntitlementOverride.expiresAt, now))))
+        // The most recent effective override for an entitlement wins.
+        .orderBy(asc(organizationEntitlementOverride.effectiveAt));
       const resolved = new Entitlements(new Set(entitlements.map((item) => item.entitlement)), { plan: subscription.plan, planVersion: subscription.planVersion, now, overrides: overrides.map((item) => ({ code: item.entitlement, enabled: item.enabled, reason: item.reason, authorId: item.authorId, effectiveAt: item.effectiveAt, ...(item.expiresAt ? { expiresAt: item.expiresAt } : {}) })) });
       return { organizationId, provider: subscription.provider, ...(subscription.providerCustomerId ? { providerCustomerId: subscription.providerCustomerId } : {}), ...(subscription.providerSubscriptionId ? { providerSubscriptionId: subscription.providerSubscriptionId } : {}), plan: subscription.plan, planVersion: subscription.planVersion, status: subscription.status as SubscriptionSummary["status"], ...(subscription.currentPeriodStart ? { currentPeriodStart: subscription.currentPeriodStart } : {}), ...(subscription.currentPeriodEnd ? { currentPeriodEnd: subscription.currentPeriodEnd } : {}), cancelAtPeriodEnd: subscription.cancelAtPeriodEnd, entitlements: resolved.list(), effectiveEntitlements: resolved.explain() };
     });

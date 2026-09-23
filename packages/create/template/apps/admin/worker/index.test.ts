@@ -56,6 +56,18 @@ describe("platform admin Worker", () => {
     expect(session.body.permissions.some((code: string) => !code.startsWith("platform."))).toBe(false);
   });
 
+  it("separates commercial authority from operations authority and validates overrides before touching data", async () => {
+    const overrides = "/api/admin/commercial/subscriptions/org-1/overrides";
+    state.roles = ["platform_operator"];
+    expect(await call("GET", "/api/admin/commercial/subscriptions")).toMatchObject({ status: 403, body: { reason: "permission_missing" } });
+    expect(await call("POST", overrides, { body: { entitlement: "support.priority", enabled: true, reason: "x" } })).toMatchObject({ status: 403 });
+    state.roles = ["commercial_admin"];
+    expect(await call("POST", overrides, { body: { entitlement: "not.defined", enabled: true, reason: "x" } })).toMatchObject({ status: 400, body: { error: "invalid" } });
+    expect(await call("POST", overrides, { body: { entitlement: "support.priority", reason: "x" } })).toMatchObject({ status: 400 });
+    expect(await call("POST", overrides, { body: { entitlement: "support.priority", enabled: true } })).toMatchObject({ status: 400, body: { message: expect.stringContaining("reason") } });
+    expect(await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "x" } })).toMatchObject({ status: 403 });
+  });
+
   it("exposes no sign-up, organization, or unknown admin routes on the admin origin", async () => {
     expect((await call("POST", "/api/auth/sign-up/email")).status).toBe(404);
     expect((await call("POST", "/api/auth/organization/create")).status).toBe(404);

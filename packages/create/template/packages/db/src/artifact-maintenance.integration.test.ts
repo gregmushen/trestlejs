@@ -27,21 +27,32 @@ suite("bounded artifact maintenance cursor", () => {
   });
 
   it("pages through every organization, wraps, and rejects unbounded scans", async () => {
+    // Other suites create organizations concurrently, so assert the cursor's properties
+    // (ordered, complete for this suite's rows, wrapping) instead of an exact snapshot.
     const database = createDatabase(connectionString!, "postgres-js");
-    const organizations = (await sql!<{ id: string }[]>`select id from organization order by id`).map(({ id }) => id);
-    expect(organizations).toEqual(expect.arrayContaining([...ids]));
     const first = await nextArtifactMaintenanceOrganizations(database, 2);
-    expect(first).toEqual(organizations.slice(0, 2));
-    expect(await nextMaintenanceOrganizations(database, "webhook-payloads", 1)).toEqual(organizations.slice(0, 1));
+    expect(first).toHaveLength(2);
+    expect(first).toEqual([...first].sort());
+    const [webhookFirst] = await nextMaintenanceOrganizations(database, "webhook-payloads", 1);
+    expect(webhookFirst).toBeDefined();
     let traversed = [...first];
-    while (traversed.length < organizations.length) {
+    for (let guard = 0; ; guard += 1) {
+      expect(guard).toBeLessThan(10_000);
       const page = await nextArtifactMaintenanceOrganizations(database, 2);
       expect(page.length).toBeGreaterThan(0);
+      if (page[0]! <= traversed.at(-1)!) {
+        // The cursor wrapped to the beginning after the last organization.
+        expect(page[0]! <= first[0]!).toBe(true);
+        break;
+      }
       traversed = [...traversed, ...page];
     }
-    expect(traversed).toEqual(organizations);
-    expect(await nextMaintenanceOrganizations(database, "webhook-payloads", 1)).toEqual(organizations.slice(1, 2));
-    expect(await nextArtifactMaintenanceOrganizations(database, 2)).toEqual(organizations.slice(0, 2));
+    expect(traversed).toEqual([...traversed].sort());
+    expect(new Set(traversed).size).toBe(traversed.length);
+    expect(traversed).toEqual(expect.arrayContaining([...ids]));
+    // Each named cursor advances independently.
+    const [webhookSecond] = await nextMaintenanceOrganizations(database, "webhook-payloads", 1);
+    expect(webhookSecond! > webhookFirst!).toBe(true);
     await expect(nextArtifactMaintenanceOrganizations(database, 101)).rejects.toThrow("Invalid artifact maintenance page size");
     await expect(nextMaintenanceOrganizations(database, "invalid name", 1)).rejects.toThrow("Invalid maintenance cursor name");
   });

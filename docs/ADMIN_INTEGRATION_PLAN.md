@@ -19,7 +19,8 @@ This plan lands the optional platform admin on `main` in small slices, next to t
 | 4a | Platform plane persistence: `trestle_platform` database role, audited `platform_role_assignment`, platform-only access resolution, `trestle admin grant`, `revoke`, and `list` | Merged (#111) |
 | 4b | Optional admin shell (`capabilities.admin`): `apps/admin` on a separate origin, platform authentication, central view registry, Overview and Health, sanitized setup guidance; `create` gating (4b-1). 4b-2: `trestle apply` scaffolding, admin secret targets, and conditional staging/production deploy with an admin smoke | Merged (#112, #113) |
 | 5 | Operations views over `main`'s async (dead outbox redrive), artifacts, and webhooks (disable and replay), with audit. Migration 0023 grants `trestle_platform` metadata columns only, and RLS limits it to the three recovery transitions | In review |
-| 6 | Commercial controls and machine access: plans and overrides; service accounts and scoped API keys (mint, rotate, revoke), with audit | Planned |
+| 6a | Commercial controls: subscription reads and audited entitlement override grant and revoke, with tombstones (0024). Tenant runtimes lose override write access | In review |
+| 6b | Machine access: service accounts and scoped API keys (mint, rotate, revoke), with audit | Planned |
 | 7 | Support sessions (entry and exit audited), regional settings (re-targeted from #57), identity and SSO | Planned |
 | 8 | Generated canary with admin enabled and disabled, platform sign-in, cross-plane denial, support session, and an API key before and after revocation; then an admin path in the deployed staging gate once its resources are isolated | Planned |
 | 9 | `ADMIN_SPEC.md` and `ADMIN_ADDITIONS_SPEC.md` on `main`, corrected against the implementation, with unbuilt features marked deferred; roadmap updated | Planned |
