@@ -278,9 +278,12 @@ Alpha 36 adds committed tenant provenance to outbox rows and generated resource
 mutations. Queue envelopes remain tenant-authority-free; webhook projection
 must reload the committed outbox row before selecting a tenant subscription.
 Alpha 37 adds inert endpoint intent and normalized public-event-version
-subscriptions with forced tenant RLS and cross-tenant foreign-key checks. It
-does not yet store signing secrets, project messages, or send requests. The
-next slices are message/delivery persistence and projection, deterministic
+subscriptions with forced tenant RLS and cross-tenant foreign-key checks.
+Alpha 38 adds tenant-owned immutable message and delivery rows plus a
+post-commit projector that reloads trusted outbox provenance, validates the
+public contract, enforces payload limits and entitlements, and snapshots active
+subscriptions idempotently. It does not yet store signing secrets, invoke the
+projector automatically, or send requests. The next slices are deterministic
 local capture, native Queue-backed delivery and recovery, and then the optional
 Svix adapter. A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
