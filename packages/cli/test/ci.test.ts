@@ -138,6 +138,19 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.cleanup", status: "fail" }));
   });
 
+  it("rejects preview and promotion without post-smoke Cloudflare resource verification", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const previewPath = path.join(root, ".github", "workflows", "preview.yml");
+    await writeFile(previewPath, (await readFile(previewPath, "utf8")).replace("cloudflare-r2.mjs verify", "cloudflare-r2.mjs status"));
+    const deployPath = path.join(root, ".github", "workflows", "deploy.yml");
+    await writeFile(deployPath, (await readFile(deployPath, "utf8")).replaceAll("cloudflare-queues.mjs verify", "cloudflare-queues.mjs status"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.async-resources-verified", status: "fail" }));
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.async-resources-verified", status: "fail" }));
+  });
+
   it("rejects bypassing encrypted Neon preview credentials", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);

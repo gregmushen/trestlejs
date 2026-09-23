@@ -579,6 +579,12 @@ report. Missing and unexpected bindings fail closed; disabled capabilities
 must report as unavailable. This verifies deployment wiring once preview or
 staging reaches the smoke step, not actual Queue delivery, Workflow execution,
 or R2 persistence. The asynchronous provider-backed gate remains open.
+Alpha 79 follows the deployed HTTP smoke with read-only Cloudflare API checks
+for the exact Queue, dead-letter Queue, and R2 bucket identities derived from
+the target Worker name. Missing or mismatched resources fail the preview,
+staging, or production deployment before evidence is published. Disabled
+capabilities make no provider requests. This still does not prove that an
+application event was delivered or an artifact was persisted remotely.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

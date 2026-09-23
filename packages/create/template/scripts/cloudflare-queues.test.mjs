@@ -40,6 +40,18 @@ test("Queue cleanup targets the exact remote identity and accepts absence", asyn
   assert.deepEqual(await client.remove("example-worker-pr-1-events"), { name: "example-worker-pr-1-events", state: "absent" });
 });
 
+test("Queue verification requires one exact remote identity without printing credentials", async () => {
+  const queues = [{ queue_name: "example-worker-pr-1-events", queue_id: queueId }];
+  const client = queueClient({ accountId, token: "private-token", fetcher: async () => Response.json({ success: true, result: queues, result_info: { total_pages: 1 } }) });
+  assert.deepEqual(await client.verify("example-worker-pr-1-events"), { name: "example-worker-pr-1-events", state: "present" });
+  await assert.rejects(client.verify("different-worker-pr-1-events"), /missing or has an invalid identity/u);
+  queues[0].queue_id = "invalid";
+  await assert.rejects(client.verify("example-worker-pr-1-events"), (error) => {
+    assert.doesNotMatch(error.message, /private-token/u);
+    return /invalid identity/u.test(error.message);
+  });
+});
+
 test("Queue API failures fail closed without exposing token", async () => {
   const client = queueClient({ accountId, token: "private-token", fetcher: async () => new Response(JSON.stringify({ success: false }), { status: 403 }) });
   await assert.rejects(client.ensure("example-worker-pr-1-events"), /HTTP 403/u);
@@ -54,4 +66,9 @@ test("disabled Queue capability does not require credentials or provision resour
   });
   assert.equal(cli.status, 0, cli.stderr);
   assert.match(cli.stdout, /Queues disabled; no resources changed/u);
+  const verify = spawnSync(process.execPath, [new URL("./cloudflare-queues.mjs", import.meta.url).pathname, "verify", "example-worker-pr-1"], {
+    encoding: "utf8", env: { ...process.env, CLOUDFLARE_API_TOKEN: "", CLOUDFLARE_ACCOUNT_ID: "" },
+  });
+  assert.equal(verify.status, 0, verify.stderr);
+  assert.match(verify.stdout, /Queues disabled; no resources changed/u);
 });
