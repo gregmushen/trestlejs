@@ -127,7 +127,13 @@ artifact signing secret is set.
 The R2 adapter exposes bounded `recoverIncomplete(organizationId, before, limit)`.
 Scheduled maintenance pages through organizations and uses tenant-scoped recovery
 to claim stale pending records, delete their exact R2 keys, retry failures, and
-retire recovered IDs. Ready-artifact retention remains an application policy.
+retire recovered IDs. It also audits bounded pages of ready PostgreSQL references
+using metadata-only R2 HEAD requests under tenant-scoped database access.
+Missing or mismatched objects fail the scheduled run and are logged by artifact
+ID and organization ID without object keys or contents; the audit never deletes
+anything. It does not detect orphaned R2 objects or verify that an isolated
+database restore can reach the provider bucket. Ready-artifact retention remains
+an application policy.
 Queue delivery is at least once. The PostgreSQL event inbox prevents a completed
 logical event from running its handler again and leases in-progress work for
 recovery. Handlers that call external services must still pass the event's
