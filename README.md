@@ -282,7 +282,7 @@ trestle workflow status <name> <id> inspect a Cloudflare Workflow instance
 trestle backup verify ... --yes     prove an isolated Neon restore and RLS
 trestle architecture check          enforce static application boundaries
 trestle upgrade plan                preview an application-preserving upgrade
-trestle upgrade apply --yes         apply versioned metadata/codemod migrations
+trestle upgrade apply --yes         update metadata only after source-version review
 trestle resource add-field ...      add an optional field and tracked migration
 ```
 
@@ -290,6 +290,12 @@ Run `pnpm exec trestle --help` and the relevant subcommand help for the exact
 surface in your installed release. The architecture specification describes
 the v1 target as well as shipped behavior; it is not a claim that every future
 command is already implemented.
+
+`trestle upgrade` does not copy newer application-owned source into an existing
+project. Updating the CLI with pnpm updates the package and lockfile, but a
+project whose `.trestle/framework.json` records an older template version
+remains a manual-review upgrade until its source migration is reviewed. The
+upgrade command will not relabel that source as current.
 
 ## Repository packages
 

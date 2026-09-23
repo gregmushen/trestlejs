@@ -48,8 +48,13 @@ try {
   }
   await assertMonotonicJournal();
   const upgradePlan = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "plan", "--json"], { cwd: project, encoding: "utf8" }));
+  if (upgradePlan.data.operations.find((operation) => operation.id === "cli-version")?.classification !== "manual-review") {
+    throw new Error("Tarball-installed canary did not exercise the package/lockfile upgrade gate");
+  }
   for (const operation of upgradePlan.data.operations) {
-    if (operation.classification === "manual-review") throw new Error(`Generated project requires manual upgrade review: ${operation.id}`);
+    // This canary deliberately installs the CLI from a local tarball rather
+    // than the registry, so only the production package/lockfile pin differs.
+    if (operation.classification === "manual-review" && operation.id !== "cli-version") throw new Error(`Generated project requires manual upgrade review: ${operation.id}`);
   }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Author"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article", "--field", "summary:text?", "published:boolean?", "authorId:relation?:Author:set-null"], project);
