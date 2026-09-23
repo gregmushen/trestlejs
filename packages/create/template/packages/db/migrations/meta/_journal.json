@@ -78,6 +78,13 @@
       "when": 1790294400002,
       "tag": "0010_sweet_wong",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790294400003,
+      "tag": "0011_dry_rage",
+      "breakpoints": true
     }
   ]
 }
