@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { createTenantDatabase } from "./index.js";
-import { createWebhookSecretCipher, loadCurrentWebhookSigningSecret, setWebhookEndpointState, WebhookSecretService } from "./webhook-secrets.js";
+import { createWebhookSecretCipher, loadCurrentWebhookSigningSecret, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretService } from "./webhook-secrets.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -121,6 +121,32 @@ suite("encrypted outbound webhook signing secrets", () => {
     await expect(change("active")).rejects.toThrow("subscription and current signing secret");
     expect(await change("disabled")).toBe(true);
     expect((await sql!`select state from webhook_endpoint where id=${endpointId}`)[0]?.state).toBe("disabled");
+  });
+
+  it("replaces customer subscriptions atomically without crossing tenants or accepting removed events", async () => {
+    const organizationId = "webhook-subscriptions-org";
+    const availableEvents = [{ type: "article.published", version: 1 }, { type: "article.deleted", version: 1 }];
+    const created = await harness().service.registerEndpoint(organizationId, {
+      name: "Subscriptions", destinationUrl: "https://hooks.example.com/receive", provider: "local",
+      subscriptions: [availableEvents[0]!], availableEvents,
+    });
+    endpointIds.push(created.endpointId);
+    const replace = (tenant: string, subscriptions: typeof availableEvents, allowed = availableEvents, deny = false) => replaceWebhookSubscriptions({
+      organizationId: tenant, endpointId: created.endpointId, environment: "local",
+      authority: { authorize: async () => { if (deny) throw new Error("not authorized"); return { actorId: "test-user" }; } },
+      tenantDatabase, clock: { now: () => new Date("2026-09-22T13:00:00.000Z") },
+      subscriptions, availableEvents: allowed,
+    });
+    expect(await replace("another-org", [availableEvents[1]!])).toBe(false);
+    await expect(replace(organizationId, [availableEvents[1]!], availableEvents, true)).rejects.toThrow("not authorized");
+    await expect(replace(organizationId, [availableEvents[1]!], [availableEvents[0]!])).rejects.toThrow("unavailable");
+    await expect(replace(organizationId, [availableEvents[1]!, availableEvents[1]!])).rejects.toThrow("duplicated");
+    expect(await replace(organizationId, [availableEvents[1]!])).toBe(true);
+    expect(await replace(organizationId, [availableEvents[1]!])).toBe(true);
+    const rows = await sql!<{ public_event_type: string; public_version: number }[]>`select public_event_type, public_version from webhook_subscription where endpoint_id=${created.endpointId}`;
+    expect(rows).toEqual([{ public_event_type: "article.deleted", public_version: 1 }]);
+    const [endpointRow] = await sql!<{ updated_by: string }[]>`select updated_by from webhook_endpoint where id=${created.endpointId}`;
+    expect(endpointRow?.updated_by).toBe("test-user");
   });
 
   it("rotates with bounded overlap, expires the previous key, and never reveals it through list", async () => {

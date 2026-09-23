@@ -33,6 +33,19 @@ export type WebhookEndpointRegistration = {
   availableEvents: readonly { type: string; version: number; entitlement?: string }[];
 };
 
+type WebhookSubscriptions = Pick<WebhookEndpointRegistration, "subscriptions" | "availableEvents">;
+
+function validateSubscriptions(input: WebhookSubscriptions): void {
+  if (!input.subscriptions.length || input.subscriptions.length > 100) throw new WebhookSecretError("Select 1–100 public webhook events");
+  const allowed = new Set(input.availableEvents.map((event) => `${event.type}@${event.version}`));
+  const requested = new Set<string>();
+  for (const subscription of input.subscriptions) {
+    const key = `${subscription.type}@${subscription.version}`;
+    if (!allowed.has(key) || requested.has(key)) throw new WebhookSecretError("Webhook subscription is unavailable or duplicated");
+    requested.add(key);
+  }
+}
+
 const encoder = new TextEncoder();
 const base64 = (bytes: Uint8Array | ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(bytes)));
 const fromBase64 = (value: string) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
@@ -145,14 +158,7 @@ export class WebhookSecretService {
     if (!name || name.length > 120) throw new WebhookSecretError("Webhook endpoint name must be 1–120 characters");
     if (input.provider !== "local" && input.provider !== "native") throw new WebhookSecretError("Unsupported webhook endpoint provider");
     const destinationUrl = parseNativeWebhookDestination(input.destinationUrl).url;
-    if (!input.subscriptions.length || input.subscriptions.length > 100) throw new WebhookSecretError("Select 1–100 public webhook events");
-    const allowed = new Set(input.availableEvents.map((event) => `${event.type}@${event.version}`));
-    const requested = new Set<string>();
-    for (const subscription of input.subscriptions) {
-      const key = `${subscription.type}@${subscription.version}`;
-      if (!allowed.has(key) || requested.has(key)) throw new WebhookSecretError("Webhook subscription is unavailable or duplicated");
-      requested.add(key);
-    }
+    validateSubscriptions(input);
     const secret = await freshSecret();
     const cipher = await this.cipher;
     return this.input.tenantDatabase(organizationId).transaction(async (transaction) => {
@@ -291,6 +297,41 @@ export async function setWebhookEndpointState(input: {
       if (!subscription || !secret) throw new WebhookSecretError("Endpoint needs a subscription and current signing secret before activation");
     }
     await transaction.update(webhookEndpoint).set({ state: input.state, updatedAt: now, updatedBy: actorId }).where(and(
+      eq(webhookEndpoint.id, input.endpointId), eq(webhookEndpoint.organizationId, input.organizationId),
+    ));
+    return true;
+  });
+}
+
+/** Replace the complete event selection atomically; active delivery sees either old or new subscriptions. */
+export async function replaceWebhookSubscriptions(input: {
+  organizationId: string;
+  endpointId: string;
+  environment: "local" | "preview" | "staging" | "production";
+  authority: WebhookSecretAuthority;
+  tenantDatabase: (organizationId: string) => Database;
+  clock: { now(): Date };
+} & WebhookSubscriptions): Promise<boolean> {
+  validateSubscriptions(input);
+  const now = nowFrom(input.clock);
+  const actorId = requireActor((await input.authority.authorize({ action: "manage", organizationId: input.organizationId, endpointId: input.endpointId })).actorId);
+  return input.tenantDatabase(input.organizationId).transaction(async (transaction) => {
+    const [endpoint] = await transaction.select({ id: webhookEndpoint.id }).from(webhookEndpoint).where(and(
+      eq(webhookEndpoint.id, input.endpointId), eq(webhookEndpoint.organizationId, input.organizationId),
+      eq(webhookEndpoint.environment, input.environment), isNull(webhookEndpoint.deletedAt),
+    )).for("update").limit(1);
+    if (!endpoint) return false;
+    const previous = await transaction.select({ type: webhookSubscription.publicEventType, version: webhookSubscription.publicVersion })
+      .from(webhookSubscription).where(and(eq(webhookSubscription.organizationId, input.organizationId), eq(webhookSubscription.endpointId, input.endpointId)));
+    const eventKey = (event: { type: string; version: number }) => `${event.type}@${event.version}`;
+    if (previous.length === input.subscriptions.length && previous.every((event) => input.subscriptions.some((requested) => eventKey(requested) === eventKey(event)))) return true;
+    await transaction.delete(webhookSubscription).where(and(eq(webhookSubscription.organizationId, input.organizationId), eq(webhookSubscription.endpointId, input.endpointId)));
+    await transaction.insert(webhookSubscription).values(input.subscriptions.map((subscription) => ({
+      organizationId: input.organizationId, endpointId: input.endpointId,
+      publicEventType: subscription.type, publicVersion: subscription.version,
+      createdBy: actorId, createdAt: now,
+    })));
+    await transaction.update(webhookEndpoint).set({ updatedAt: now, updatedBy: actorId }).where(and(
       eq(webhookEndpoint.id, input.endpointId), eq(webhookEndpoint.organizationId, input.organizationId),
     ));
     return true;

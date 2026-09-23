@@ -5,7 +5,7 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
-import { billingProviderEvent, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, PostgresEventInbox, PostgresOutboxStore, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
+import { billingProviderEvent, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, PostgresEventInbox, PostgresOutboxStore, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -67,10 +67,11 @@ function inspectionPageSize(value: string | undefined): number | null {
   return size <= 100 ? size : null;
 }
 
+const webhookSubscriptionsSchema = z.array(z.object({ type: z.string(), version: z.number().int().positive() }).strict()).min(1).max(100);
 const createWebhookEndpointSchema = z.object({
   name: z.string().trim().min(1).max(120),
   destinationUrl: z.url().max(2048),
-  subscriptions: z.array(z.object({ type: z.string(), version: z.number().int().positive() }).strict()).min(1).max(100),
+  subscriptions: webhookSubscriptionsSchema,
 }).strict();
 
 app.get("/api/developer/webhooks/events", requireExecutionContext, (context) => {
@@ -164,6 +165,48 @@ app.get("/api/developer/webhooks/endpoints", requireExecutionContext, async (con
     organizationId: execution.tenant.organizationId, environment: context.env.APP_ENV ?? "local",
     tenantDatabase: () => execution.data, limit,
   }) });
+});
+
+app.get("/api/developer/webhooks/endpoints/:id/subscriptions", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "organization:webhooks:read" });
+  const endpointId = context.req.param("id");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(endpointId)) return context.json({ error: "Invalid endpoint ID" }, 400);
+  const subscriptions = await listWebhookSubscriptions({
+    organizationId: execution.tenant.organizationId, environment: context.env.APP_ENV ?? "local",
+    endpointId, tenantDatabase: () => execution.data,
+  });
+  return subscriptions ? context.json({ subscriptions }) : context.json({ error: "Endpoint not found" }, 404);
+});
+
+app.patch("/api/developer/webhooks/endpoints/:id/subscriptions", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "organization:webhooks:manage" });
+  const expectedOrigin = context.env.WEB_ORIGIN ?? context.env.BETTER_AUTH_URL ?? "http://localhost:42069";
+  if (!context.req.header("origin") || context.req.header("origin") !== expectedOrigin) return context.json({ error: "Invalid request origin" }, 403);
+  const endpointId = context.req.param("id");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(endpointId)) return context.json({ error: "Invalid endpoint ID" }, 400);
+  if (!context.req.header("content-type")?.toLowerCase().startsWith("application/json")) return context.json({ error: "JSON content type required" }, 415);
+  let body: unknown;
+  try { body = await context.req.json(); }
+  catch { return context.json({ error: "Invalid JSON body" }, 400); }
+  const parsed = z.object({ subscriptions: webhookSubscriptionsSchema }).strict().safeParse(body);
+  if (!parsed.success) return context.json({ error: "Invalid webhook subscriptions" }, 400);
+  try {
+    const updated = await replaceWebhookSubscriptions({
+      organizationId: execution.tenant.organizationId, endpointId, environment: context.env.APP_ENV ?? "local",
+      authority: { authorize: async () => ({ actorId: execution.principal.id }) },
+      tenantDatabase: () => execution.data, clock: execution.clock,
+      subscriptions: parsed.data.subscriptions,
+      availableEvents: applicationEventCatalog.publicEvents().filter((event) => !event.entitlement || execution.entitlements.has(event.entitlement)),
+    });
+    if (!updated) return context.json({ error: "Endpoint not found" }, 404);
+    execution.log.info("webhooks.endpoint.subscriptions_changed", { endpointId, subscriptionCount: parsed.data.subscriptions.length });
+    return context.json({ subscriptions: parsed.data.subscriptions });
+  } catch (error) {
+    if (error instanceof WebhookSecretError) return context.json({ error: error.message }, 400);
+    throw error;
+  }
 });
 
 app.get("/api/developer/webhooks/endpoints/:id/deliveries", requireExecutionContext, async (context) => {

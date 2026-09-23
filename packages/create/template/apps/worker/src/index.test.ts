@@ -73,9 +73,11 @@ describe("worker routes", () => {
     const events = await app.request("/api/developer/webhooks/events", undefined, environment);
     const create = await app.request("/api/developer/webhooks/endpoints", { method: "POST", headers: { origin: "http://localhost:42069", "content-type": "application/json" }, body: "{}" }, environment);
     const stateChange = await app.request(`/api/developer/webhooks/endpoints/${crypto.randomUUID()}/state`, { method: "PATCH", headers: { origin: "http://localhost:42069", "content-type": "application/json" }, body: '{"state":"active"}' }, environment);
+    const subscriptions = await app.request(`/api/developer/webhooks/endpoints/${crypto.randomUUID()}/subscriptions`, undefined, environment);
+    const replace = await app.request(`/api/developer/webhooks/endpoints/${crypto.randomUUID()}/subscriptions`, { method: "PATCH", headers: { origin: "http://localhost:42069", "content-type": "application/json" }, body: '{"subscriptions":[]}' }, environment);
     const deliveries = await app.request(`/api/developer/webhooks/endpoints/${crypto.randomUUID()}/deliveries`, undefined, environment);
     const attempts = await app.request(`/api/developer/webhooks/deliveries/whd_${"a".repeat(64)}/attempts`, undefined, environment);
-    expect([endpoint.status, events.status, create.status, stateChange.status, deliveries.status, attempts.status]).toEqual([401, 401, 401, 401, 401, 401]);
+    expect([endpoint.status, events.status, create.status, stateChange.status, subscriptions.status, replace.status, deliveries.status, attempts.status]).toEqual([401, 401, 401, 401, 401, 401, 401, 401]);
   });
 
   it("rejects anonymous artifact uploads and invalid signed access", async () => {

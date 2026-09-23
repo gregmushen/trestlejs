@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { createTenantDatabase } from "./index.js";
-import { listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints } from "./webhook-inspection.js";
+import { listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions } from "./webhook-inspection.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -43,6 +43,9 @@ suite("tenant-safe outbound webhook inspection", () => {
     expect(JSON.stringify(endpoints)).not.toContain(sensitive);
     expect(await listWebhookEndpoints({ organizationId: "inspection-owner", environment: "staging", tenantDatabase })).toEqual([]);
     expect(await listWebhookEndpoints({ organizationId: "inspection-other", environment: "preview", tenantDatabase })).toEqual([expect.objectContaining({ id: other.endpointId })]);
+    expect(await listWebhookSubscriptions({ organizationId: "inspection-owner", environment: "preview", endpointId: own.endpointId, tenantDatabase })).toEqual([{ type: "article.published", version: 1 }]);
+    expect(await listWebhookSubscriptions({ organizationId: "inspection-other", environment: "preview", endpointId: own.endpointId, tenantDatabase })).toBeNull();
+    expect(await listWebhookSubscriptions({ organizationId: "inspection-owner", environment: "staging", endpointId: own.endpointId, tenantDatabase })).toBeNull();
 
     const deliveries = await listWebhookDeliveries({ organizationId: "inspection-owner", environment: "preview", endpointId: own.endpointId, tenantDatabase });
     expect(deliveries).toEqual([expect.objectContaining({ id: own.deliveryId, messageId: own.messageId, eventType: "article.published", payloadAvailable: true })]);

@@ -431,6 +431,14 @@ unknown/duplicate subscriptions, tenant isolation, one-time display, and
 redaction. New endpoints are disabled by default. Editing subscriptions,
 rotation with step-up, replay, durable audit, pagination, admin controls, live Cloudflare
 delivery proof, and Svix remain subsequent work.
+Alpha 60 adds tenant-scoped subscription inspection and replacement for
+existing endpoints. The customer screen can change selected public event
+versions without exposing internal event definitions. Replacement validates
+current catalog and entitlement availability, rejects duplicates and empty
+sets, and commits the full selection atomically under endpoint locking and
+forced RLS. PostgreSQL and browser tests cover cross-tenant denial, removed
+events, rejected edits, and the customer edit flow. Endpoint URL/name editing,
+secret rotation UI, replay, durable audit, and pagination remain.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

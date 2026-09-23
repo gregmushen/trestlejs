@@ -89,9 +89,12 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     const newEndpointId = "11719456-3380-43e5-8a06-d4da18623cc9";
     const oneTimeSecret = "whsec_browser-only-once";
     let registered = false;
+    let selectedEvents = [{ type: "article.published", version: 1 }];
     await page.route("**/api/developer/webhooks/**", async (route) => {
       const path = new URL(route.request().url()).pathname;
-      const json = path.endsWith("/events") ? { events: [{ type: "article.published", version: 1, description: "An article was published", available: true }] }
+      if (path.endsWith("/subscriptions") && route.request().method() === "PATCH") selectedEvents = (route.request().postDataJSON() as { subscriptions: typeof selectedEvents }).subscriptions;
+      const json = path.endsWith("/events") ? { events: [{ type: "article.published", version: 1, description: "An article was published", available: true }, { type: "article.deleted", version: 1, description: "An article was deleted", available: true }] }
+        : path.endsWith("/subscriptions") ? { subscriptions: selectedEvents }
         : path.endsWith("/deliveries") ? { deliveries: [] }
         : path.endsWith("/attempts") ? { attempts: [] }
         : route.request().method() === "POST" ? { endpoint: { id: newEndpointId, state: "disabled" }, signingSecret: oneTimeSecret }
@@ -108,6 +111,13 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     await expect(page.getByText("Save this signing secret now. It cannot be recovered.")).toBeVisible();
     await page.getByRole("button", { name: "I saved it; hide secret" }).click();
     await expect(page.getByText(oneTimeSecret)).toHaveCount(0);
+    const subscriptionEditor = page.getByRole("region", { name: "Endpoint subscriptions" });
+    await expect(subscriptionEditor.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
+    await subscriptionEditor.getByRole("checkbox", { name: /article.deleted v1/u }).check();
+    await subscriptionEditor.getByRole("checkbox", { name: /article.published v1/u }).uncheck();
+    await subscriptionEditor.getByRole("button", { name: "Save subscriptions" }).click();
+    await expect(subscriptionEditor.getByText("Subscriptions saved.")).toBeVisible();
+    expect(selectedEvents).toEqual([{ type: "article.deleted", version: 1 }]);
     await page.unroute("**/api/developer/webhooks/**");
 
     const endpointId = "c45cf83d-1341-4242-a57d-5bb6c6266f85";
@@ -118,6 +128,7 @@ test("a customer verifies email and switches isolated organizations", async ({ p
       if (forbidden) { await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "Forbidden" }) }); return; }
       const path = new URL(route.request().url()).pathname;
       const body = path.endsWith("/events") ? { events: [] }
+        : path.endsWith("/subscriptions") ? { subscriptions: [{ type: "article.published", version: 1 }] }
         : path.endsWith("/attempts") ? { attempts: [{ id: `${deliveryId}.1`, attemptNumber: 1, kind: "native", attemptedAt: "2026-09-23T00:00:00.000Z", completedAt: "2026-09-23T00:00:01.000Z", responseStatus: 503, resultCategory: "http", outcome: "retry", durationMs: 1000, nextRetryAt: null, requestBody: sensitive }] }
         : path.endsWith("/deliveries") ? { deliveries: [{ id: deliveryId, messageId: "hidden-message", eventType: "article.published", eventVersion: 1, occurredAt: "2026-09-23T00:00:00.000Z", state: "retry", attemptCount: 1, nextAttemptAt: null, terminalReason: null, createdAt: "2026-09-23T00:00:00.000Z", completedAt: null, payloadAvailable: true, correlationId: null, envelope: sensitive }] }
         : { endpoints: [{ id: endpointId, name: "Product events", destinationHost: "hooks.example.test", state: "active", health: "healthy", provider: "native", subscriptionCount: 1, createdAt: "2026-09-23T00:00:00.000Z", updatedAt: "2026-09-23T00:00:00.000Z", destinationUrl: `https://hooks.example.test/${sensitive}` }] };

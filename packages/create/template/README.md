@@ -174,6 +174,10 @@ local or native delivery mode is configured. The catalog, registration, and
 state APIs require an authenticated selected organization, and the mutation
 routes verify the browser origin. Do not put signing keys into application logs
 or endpoint URLs.
+The endpoint detail screen can replace its complete public-event subscription
+set. Changes are validated against the current event catalog and plan
+entitlements and affect future events only; previously created deliveries
+retain their committed identity and status.
 If `capabilities.workflows` is enabled, the deployment config binds the
 application-owned `TrestleWorkflow` class. Queue delivery starts a Workflow
 using the event ID as its stable instance ID; a repeated Queue delivery
