@@ -447,6 +447,13 @@ or metadata finalization leaves a durable cleanup candidate for the existing
 bounded scheduled sweep. PostgreSQL and integration tests cover cross-tenant
 denial, fail-closed reads, retry, and identifier non-reuse. This is not a
 ready-object retention policy or a full bucket-to-metadata reconciliation job.
+Alpha 62 removes false-positive restore verification. An isolated restore now
+counts ready artifact references; zero references pass the R2-reference gate,
+while any unverified reference makes the overall result fail, even when the
+database checks pass. Missing two-tenant adversarial RLS evidence also fails.
+The CLI independently requires every expected check, successful isolated
+cleanup, and the declared RTO before reporting a verified restore. This does
+not yet supply provider-backed R2 reference verification or a retention policy.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

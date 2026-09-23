@@ -4,6 +4,23 @@ import path from "node:path";
 export type RecoveryPolicy = Readonly<{ schemaVersion: 1; provider: "neon"; sourceBranch: string; restoreTargets: readonly string[]; recoveryPointObjectiveHours: number; recoveryTimeObjectiveMinutes: number; artifactPolicy: "metadata-reference-verification" | "none" }>;
 export type RecoveryConnectionOutput = Readonly<{ branchId: string; migrationUrl: string; runtimeUrl: string }>;
 
+const requiredRecoveryChecks = ["database.reachable", "schema.migrations", "auth.integrity", "role.application", "rls.forced", "rls.runtime", "artifacts.references"];
+
+export function recoveryEvidencePassed(report: unknown, cleanup: unknown, rtoMet: unknown): boolean {
+  if (!report || typeof report !== "object" || cleanup !== "deleted" || rtoMet !== true) return false;
+  const value = report as { status?: unknown; checks?: unknown };
+  if (value.status !== "passed" || !Array.isArray(value.checks) || value.checks.length !== requiredRecoveryChecks.length) return false;
+  const checks = value.checks as Array<{ id?: unknown; status?: unknown }>;
+  return requiredRecoveryChecks.every((id) => checks.filter((check) => check?.id === id && check.status === "pass").length === 1);
+}
+
+export function recoveryStatusLabel(latest: unknown): string {
+  if (!latest) return "not yet — run trestle backup verify";
+  if (!latest || typeof latest !== "object") return "not verified — invalid evidence";
+  const value = latest as { cleanup?: unknown; rtoMet?: unknown };
+  return recoveryEvidencePassed(latest, value.cleanup, value.rtoMet) ? "passed" : "not verified — last attempt failed or incomplete";
+}
+
 export async function readRecoveryPolicy(root: string): Promise<RecoveryPolicy> {
   const value = JSON.parse(await readFile(path.join(root, ".trestle", "recovery.json"), "utf8")) as Partial<RecoveryPolicy>;
   if (value.schemaVersion !== 1 || value.provider !== "neon" || !validName(value.sourceBranch) || !Array.isArray(value.restoreTargets) || value.restoreTargets.length === 0 || value.restoreTargets.some((target) => !validName(target) || target === value.sourceBranch) || !positive(value.recoveryPointObjectiveHours) || !positive(value.recoveryTimeObjectiveMinutes) || !["metadata-reference-verification", "none"].includes(value.artifactPolicy ?? "")) throw new Error("invalid .trestle/recovery.json policy");
