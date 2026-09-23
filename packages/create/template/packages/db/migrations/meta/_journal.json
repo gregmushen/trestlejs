@@ -197,6 +197,13 @@
       "when": 1790294400019,
       "tag": "0027_strange_photon",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790294400020,
+      "tag": "0028_naive_loners",
+      "breakpoints": true
     }
   ]
 }

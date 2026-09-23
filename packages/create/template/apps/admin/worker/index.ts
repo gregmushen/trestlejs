@@ -164,8 +164,8 @@ admin.post("/api/admin/operations/webhooks/:organizationId/endpoints/:endpointId
 });
 
 admin.post("/api/admin/operations/webhooks/:organizationId/deliveries/:deliveryId/replay", async (context) => {
-  await replayWebhookDelivery(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), deliveryId: context.req.param("deliveryId") }, await actionContext(context));
-  return context.json({ replayed: true, correlationId: context.get("correlationId") });
+  const replay = await replayWebhookDelivery(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), deliveryId: context.req.param("deliveryId") }, await actionContext(context));
+  return context.json({ replayed: true, replayDeliveryId: replay.deliveryId, created: replay.created, correlationId: context.get("correlationId") });
 });
 
 admin.get("/api/admin/commercial/subscriptions", async (context) => {

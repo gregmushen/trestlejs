@@ -12,7 +12,7 @@ const run = `ops${Date.now()}`;
 const organizationId = `${run}-org`;
 const correlationId = `${run}-corr`;
 const context = (reason = "customer ticket 42") => ({ actor: { type: "platform_operator" as const, id: `${run}-operator` }, reason, environment: "local", correlationId });
-const ids = { outbox: crypto.randomUUID(), live: crypto.randomUUID(), endpoint: "", dead: `${run}-dead`, purged: `${run}-purged`, succeeded: `${run}-ok` };
+const ids = { outbox: crypto.randomUUID(), live: crypto.randomUUID(), endpoint: "", dead: `${run}-dead`, concurrent: `${run}-concurrent`, purged: `${run}-purged`, succeeded: `${run}-ok` };
 
 async function asPlatform<T>(work: (transaction: postgres.TransactionSql) => Promise<T>): Promise<T> {
   return await sql!.begin(async (transaction) => {
@@ -35,7 +35,7 @@ suite("platform operations on the trestle_platform connection", () => {
     const [endpoint] = await sql!<{ id: string }[]>`insert into webhook_endpoint (organization_id, environment, name, destination_url, state, provider, created_by, updated_by)
       values (${organizationId}, 'preview', 'Ops hook', 'https://customer.example/hook', 'active', 'native', 'owner', 'owner') returning id`;
     ids.endpoint = endpoint!.id;
-    for (const [delivery, state, payloadDeleted] of [[ids.dead, "exhausted", false], [ids.purged, "dead", true], [ids.succeeded, "succeeded", false]] as const) {
+    for (const [delivery, state, payloadDeleted] of [[ids.dead, "exhausted", false], [ids.concurrent, "dead", false], [ids.purged, "dead", true], [ids.succeeded, "succeeded", false]] as const) {
       await sql!`insert into webhook_message (id, organization_id, source_event_id, public_event_type, public_version, occurred_at, resource_type, resource_id, envelope, payload_size, retention_class, entitlement_decision, status, correlation_id, payload_deleted_at)
         values (${`${delivery}-m`}, ${organizationId}, ${crypto.randomUUID()}, 'article.published', 1, now(), 'article', 'a1', ${sql!.json({ secret: "envelope" })}, 20, 'standard', 'not_required', 'ready', ${correlationId}, ${payloadDeleted ? new Date() : null})`;
       await sql!`insert into webhook_delivery (id, organization_id, message_id, endpoint_id, state, attempt_count, terminal_reason, completed_at)
@@ -45,7 +45,7 @@ suite("platform operations on the trestle_platform connection", () => {
   });
 
   afterAll(async () => {
-    await sql!`delete from audit_event where correlation_id = ${correlationId}`;
+    await sql!`delete from audit_event where correlation_id in (${correlationId}, ${`${correlationId}-concurrent`})`;
     await sql!`delete from artifact_metadata where organization_id = ${organizationId}`;
     await sql!`delete from webhook_delivery where organization_id = ${organizationId}`;
     await sql!`delete from webhook_message where organization_id = ${organizationId}`;
@@ -73,10 +73,33 @@ suite("platform operations on the trestle_platform connection", () => {
 
   it("allows only the audited recovery transitions, enforced by PostgreSQL", async () => {
     expect(await failure(asPlatform(async (transaction) => await transaction`update webhook_endpoint set state = 'active' where id = ${ids.endpoint}`))).toMatch(/row-level security/u);
-    expect(await failure(asPlatform(async (transaction) => await transaction`update webhook_delivery set state = 'succeeded' where id = ${ids.dead}`))).toMatch(/row-level security/u);
-    expect((await asPlatform(async (transaction) => await transaction`update webhook_delivery set state = 'retry' where id = ${ids.succeeded}`)).count).toBe(0);
+    expect(await failure(asPlatform(async (transaction) => await transaction`update webhook_delivery set state = 'succeeded' where id = ${ids.dead}`))).toMatch(/permission denied/u);
+    expect(await failure(asPlatform(async (transaction) => await transaction`update webhook_delivery set state = 'retry' where id = ${ids.succeeded}`))).toMatch(/permission denied/u);
     expect(await failure(asPlatform(async (transaction) => await transaction`update outbox_message set payload = '{}' where id = ${ids.outbox}`))).toMatch(/permission denied/u);
     expect(await failure(asPlatform(async (transaction) => await transaction`delete from webhook_delivery where id = ${ids.dead}`))).toMatch(/permission denied/u);
+    expect(await failure(asPlatform(async (transaction) => await transaction`insert into webhook_delivery (id, organization_id, message_id, endpoint_id) values ('forged', ${organizationId}, ${`${ids.dead}-m`}, ${ids.endpoint})`))).toMatch(/permission denied/u);
+    expect(await failure(sql!.begin(async (transaction) => {
+      await transaction.unsafe("set local role trestle_app");
+      return transaction`select * from trestle_replay_webhook_delivery(${organizationId}, ${ids.dead}, now(), 'platform_operator', 'operator', 'reason', 'local', 'corr')`;
+    }))).toMatch(/permission denied/u);
+  });
+
+  it("serializes concurrent platform replays into one new execution", async () => {
+    const concurrentContext = { ...context("receiver recovered"), correlationId: `${correlationId}-concurrent` };
+    const [first, second] = await Promise.all([
+      replayWebhookDelivery(createPlatformDatabase(connectionString!, "postgres-js"), { organizationId, deliveryId: ids.concurrent }, concurrentContext),
+      replayWebhookDelivery(createPlatformDatabase(connectionString!, "postgres-js"), { organizationId, deliveryId: ids.concurrent }, concurrentContext),
+    ]);
+    expect(first.deliveryId).toBe(second.deliveryId);
+    expect([first.created, second.created].sort()).toEqual([false, true]);
+    const rows = await sql!`select id, replay_of_delivery_id, state, attempt_count from webhook_delivery where replay_of_delivery_id = ${ids.concurrent}`;
+    expect(rows).toEqual([{ id: first.deliveryId, replay_of_delivery_id: ids.concurrent, state: "pending", attempt_count: 0 }]);
+    const audits = await sql!`select target_id from audit_event where name = 'platform.webhook_delivery.replayed' and target_id = ${first.deliveryId}`;
+    expect(audits).toHaveLength(1);
+    await sql!`update webhook_delivery set state = 'succeeded', next_attempt_at = null, completed_at = now() where id = ${first.deliveryId}`;
+    expect((await listFailedWebhookDeliveries(createPlatformDatabase(connectionString!, "postgres-js"))).find(({ id }) => id === ids.concurrent)).toMatchObject({ replayable: false, successfulReplayId: first.deliveryId, replayUnavailableReason: "resolved" });
+    await expect(replayWebhookDelivery(createPlatformDatabase(connectionString!, "postgres-js"), { organizationId, deliveryId: ids.concurrent }, concurrentContext)).rejects.toThrow("already succeeded");
+    expect(await sql!`select id from webhook_delivery where replay_of_delivery_id = ${ids.concurrent}`).toHaveLength(1);
   });
 
   it("redrives, disables, and replays with a reason and a redacted audit record in the same transaction", async () => {
@@ -84,27 +107,37 @@ suite("platform operations on the trestle_platform connection", () => {
     await expect(redriveOutboxEvent(platform, ids.outbox, context(" "))).rejects.toBeInstanceOf(PlatformOperationError);
     await redriveOutboxEvent(platform, ids.outbox, context());
     await expect(redriveOutboxEvent(platform, ids.live, context())).rejects.toThrow("not dead-lettered");
-    await disableWebhookEndpoint(platform, { organizationId, endpointId: ids.endpoint }, context("abusive destination"));
-    await expect(disableWebhookEndpoint(platform, { organizationId, endpointId: ids.endpoint }, context())).rejects.toThrow("already disabled");
-    await replayWebhookDelivery(platform, { organizationId, deliveryId: ids.dead }, context("receiver fixed"));
+    const replay = await replayWebhookDelivery(platform, { organizationId, deliveryId: ids.dead }, context("receiver fixed"));
+    expect(replay).toMatchObject({ created: true });
+    expect(replay.deliveryId).not.toBe(ids.dead);
+    expect(await replayWebhookDelivery(platform, { organizationId, deliveryId: ids.dead }, context("receiver fixed"))).toEqual({ deliveryId: replay.deliveryId, created: false });
     await expect(replayWebhookDelivery(platform, { organizationId, deliveryId: ids.purged }, context())).rejects.toThrow("no longer retained");
     await expect(replayWebhookDelivery(platform, { organizationId: "another-org", deliveryId: ids.dead }, context())).rejects.toThrow("does not exist");
+    await expect(replayWebhookDelivery(platform, { organizationId, deliveryId: ids.succeeded }, context())).rejects.toThrow("cannot be replayed");
+    expect((await listFailedWebhookDeliveries(platform)).find(({ id }) => id === ids.dead)).toMatchObject({ replayable: false, activeReplayId: replay.deliveryId, replayUnavailableReason: "replay_pending" });
+    await disableWebhookEndpoint(platform, { organizationId, endpointId: ids.endpoint }, context("abusive destination"));
+    await expect(disableWebhookEndpoint(platform, { organizationId, endpointId: ids.endpoint }, context())).rejects.toThrow("already disabled");
+    await expect(replayWebhookDelivery(platform, { organizationId, deliveryId: ids.purged }, context())).rejects.toThrow("no longer retained");
 
     const [outbox] = await sql!`select status, last_error from outbox_message where id = ${ids.outbox}`;
     expect(outbox).toEqual({ status: "pending", last_error: null });
     const [endpoint] = await sql!`select state, updated_by from webhook_endpoint where id = ${ids.endpoint}`;
     expect(endpoint).toEqual({ state: "disabled", updated_by: `platform_operator:${run}-operator` });
-    const [delivery] = await sql!`select state, attempt_count, terminal_reason, completed_at, next_attempt_at <= now() as due from webhook_delivery where id = ${ids.dead}`;
-    expect(delivery).toEqual({ state: "retry", attempt_count: 7, terminal_reason: null, completed_at: null, due: true });
+    const [delivery] = await sql!`select state, attempt_count, terminal_reason, completed_at, next_attempt_at from webhook_delivery where id = ${ids.dead}`;
+    expect(delivery).toMatchObject({ state: "exhausted", attempt_count: 7, terminal_reason: "retry_exhausted:http_500" });
+    expect(delivery?.completed_at).toBeInstanceOf(Date);
+    expect(delivery?.next_attempt_at).toBeNull();
+    const [replayed] = await sql!`select state, attempt_count, replay_of_delivery_id, message_id, endpoint_id, next_attempt_at <= now() as due from webhook_delivery where id = ${replay.deliveryId}`;
+    expect(replayed).toEqual({ state: "pending", attempt_count: 0, replay_of_delivery_id: ids.dead, message_id: `${ids.dead}-m`, endpoint_id: ids.endpoint, due: true });
 
     const events = await sql!`select name, actor_type, actor_id, organization_id, target_type, reason, summary from audit_event where correlation_id = ${correlationId} order by occurred_at, name`;
-    expect(events.map((event) => event.name)).toEqual(["platform.outbox_event.redriven", "platform.webhook_endpoint.disabled", "platform.webhook_delivery.replayed"]);
+    expect(events.map((event) => event.name)).toEqual(["platform.outbox_event.redriven", "platform.webhook_delivery.replayed", "platform.webhook_endpoint.disabled"]);
     expect(events.every((event) => event.actor_type === "platform_operator" && event.organization_id === organizationId)).toBe(true);
     expect(JSON.stringify(events)).not.toMatch(/customer\.example|payload|envelope/u);
 
     // The organization sees that the platform acted, but not who or the internal reason.
     const tenantEvents = await listAuditEvents(createTenantDatabase(connectionString!, "postgres-js", organizationId), organizationId);
-    const replay = tenantEvents.find((event) => event.name === "platform.webhook_delivery.replayed");
-    expect(replay).toMatchObject({ actorType: "platform_operator", actorId: "platform", reason: null, correlationId });
+    const replayEvent = tenantEvents.find((event) => event.name === "platform.webhook_delivery.replayed");
+    expect(replayEvent).toMatchObject({ actorType: "platform_operator", actorId: "platform", reason: null, correlationId });
   });
 });

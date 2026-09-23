@@ -40,6 +40,8 @@ export const webhookDelivery = pgTable("webhook_delivery", {
   organizationId: text("organization_id").notNull(),
   messageId: text("message_id").notNull(),
   endpointId: uuid("endpoint_id").notNull(),
+  /** A replay is a new execution of the retained message, not a reset of the original. */
+  replayOfDeliveryId: text("replay_of_delivery_id"),
   state: text("state").default("pending").notNull(),
   nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
   leaseToken: uuid("lease_token"),
@@ -50,15 +52,17 @@ export const webhookDelivery = pgTable("webhook_delivery", {
   completedAt: timestamp("completed_at", { withTimezone: true }),
 }, (table) => [
   uniqueIndex("webhook_delivery_id_organization_uidx").on(table.id, table.organizationId),
-  uniqueIndex("webhook_delivery_message_endpoint_uidx").on(table.messageId, table.endpointId),
+  uniqueIndex("webhook_delivery_message_endpoint_uidx").on(table.messageId, table.endpointId).where(sql`${table.replayOfDeliveryId} IS NULL`),
+  uniqueIndex("webhook_delivery_active_replay_uidx").on(table.replayOfDeliveryId).where(sql`${table.replayOfDeliveryId} IS NOT NULL AND ${table.state} IN ('pending', 'leased', 'retry')`),
   index("webhook_delivery_organization_state_idx").on(table.organizationId, table.state, table.nextAttemptAt),
   index("webhook_delivery_lease_recovery_idx").on(table.state, table.leasedUntil),
   foreignKey({ columns: [table.messageId, table.organizationId], foreignColumns: [webhookMessage.id, webhookMessage.organizationId], name: "webhook_delivery_message_tenant_fk" }),
   foreignKey({ columns: [table.endpointId, table.organizationId], foreignColumns: [webhookEndpoint.id, webhookEndpoint.organizationId], name: "webhook_delivery_endpoint_tenant_fk" }),
+  foreignKey({ columns: [table.replayOfDeliveryId, table.organizationId], foreignColumns: [table.id, table.organizationId], name: "webhook_delivery_replay_tenant_fk" }),
   check("webhook_delivery_state_check", sql`${table.state} IN ('pending', 'leased', 'retry', 'succeeded', 'dead', 'exhausted')`),
   check("webhook_delivery_lease_pair_check", sql`(${table.state} = 'leased' AND ${table.leaseToken} IS NOT NULL AND ${table.leasedUntil} IS NOT NULL) OR (${table.state} <> 'leased' AND ${table.leaseToken} IS NULL AND ${table.leasedUntil} IS NULL)`),
   pgPolicy("webhook_delivery_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
-  // The platform admin may only move a dead or exhausted delivery back to retry.
+  // Platform replay uses a narrowly scoped SECURITY DEFINER function; there is
+  // no direct INSERT or UPDATE permission on delivery rows.
   pgPolicy("webhook_delivery_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
-  pgPolicy("webhook_delivery_platform_replay", { for: "update", to: "trestle_platform", using: sql`${table.state} IN ('dead', 'exhausted')`, withCheck: sql`${table.state} = 'retry'` }),
 ]).enableRLS();

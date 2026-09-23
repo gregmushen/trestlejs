@@ -623,6 +623,16 @@ local attempt without network delivery. The test verifies customer inspection
 redaction, duplicate processing, update projection idempotency, and that an
 unselected delete event remains private. This is deterministic local proof;
 deployed Cloudflare delivery still requires provider-backed evidence.
+Alpha 85 corrects platform webhook replay semantics: an audited replay creates
+a new delivery execution linked to the retained immutable message and original
+delivery, leaving the original terminal state and attempt history unchanged.
+Concurrent requests share one active replay; expired payloads, inactive
+endpoints, already-successful replays, and cross-tenant identities fail closed. PostgreSQL grants deny
+direct platform writes to tenant deliveries, while a narrowly granted replay
+function performs the validated insert. The customer inspection model exposes
+the replay link, and platform operations show when a replay is already queued.
+This is a local and database-backed recovery contract, not deployed native
+egress proof or Svix provider reconciliation.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

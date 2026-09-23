@@ -42,7 +42,7 @@ export type Health = { environment: string; platformDatabase: { reachable: boole
 export type DeadOutboxEvent = { id: string; eventName: string; organizationId: string | null; correlationId: string; attempts: number; lastError: string | null; createdAt: string };
 export type WebhookOperations = {
   endpoints: Array<{ id: string; organizationId: string; environment: string; name: string; state: string; health: string; provider: string; updatedAt: string }>;
-  failedDeliveries: Array<{ id: string; organizationId: string; endpointId: string; eventType: string; state: string; attemptCount: number; terminalReason: string | null; completedAt: string | null; replayable: boolean }>;
+  failedDeliveries: Array<{ id: string; organizationId: string; endpointId: string; eventType: string; state: string; attemptCount: number; terminalReason: string | null; completedAt: string | null; replayable: boolean; activeReplayId: string | null; successfulReplayId: string | null; replayUnavailableReason: "payload_expired" | "endpoint_inactive" | "replay_pending" | "resolved" | null }>;
 };
 export type ArtifactOperations = { states: Record<"pending" | "ready" | "cleaning" | "deleted", { count: number; bytes: number }>; stalePending: number };
 export type SubscriptionRow = { organizationId: string; organizationName: string; plan: string | null; planVersion: number | null; status: string | null; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean | null };
