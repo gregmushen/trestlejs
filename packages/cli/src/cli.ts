@@ -12,7 +12,7 @@ import { Command, CommanderError, InvalidArgumentError } from "commander";
 
 import { formatCiValidation, validateCi } from "./ci.js";
 import { checkArchitecture, formatArchitecture } from "./architecture.js";
-import { parseRecoveryConnectionOutput, readRecoveryPolicy, validateRecoveryPoint, validateRecoveryTarget } from "./backup.js";
+import { parseRecoveryConnectionOutput, readRecoveryPolicy, recoveryEvidencePassed, recoveryStatusLabel, validateRecoveryPoint, validateRecoveryTarget } from "./backup.js";
 import { projectContext } from "./context.js";
 import { formatDoctorHuman, formatDoctorJson, runDoctor } from "./doctor.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
@@ -614,7 +614,7 @@ export function createProgram(runtime: CliRuntime): Command {
         `Source branch:       ${provider.source.name}`,
         `Provider history:    ${provider.status}`,
         `Retention:           ${provider.historyRetentionSeconds === null ? "provider default/unknown" : `${provider.historyRetentionSeconds} seconds`}`,
-        `Restore verified:    ${latest ? "evidence available" : "not yet — run trestle backup verify"}`,
+        `Restore verified:    ${recoveryStatusLabel(latest)}`,
         `RPO objective:       ${policy.recoveryPointObjectiveHours} hours`,
         `RTO objective:       ${policy.recoveryTimeObjectiveMinutes} minutes`,
         "Provider history is not proof of a usable restore.",
@@ -646,7 +646,7 @@ export function createProgram(runtime: CliRuntime): Command {
         await runCommand("node", ["scripts/neon-recovery.mjs", "restore", policy.sourceBranch, target, point ?? "latest"], { cwd: context.root, env: { ...childEnvironment, TRESTLE_RECOVERY_OUTPUT: protectedOutput }, stdio: "pipe" });
         created = true;
         const connections = parseRecoveryConnectionOutput(await readFile(protectedOutput, "utf8"));
-        const result = await runCommand("pnpm", ["exec", "tsx", "scripts/verify-recovery.ts"], { cwd: context.root, env: { ...childEnvironment, DATABASE_MIGRATION_URL: connections.migrationUrl, DATABASE_URL: connections.runtimeUrl, TRESTLE_VERIFY_STARTED_AT: startedAt }, stdio: "pipe" });
+        const result = await runCommand("pnpm", ["exec", "tsx", "scripts/verify-recovery.ts"], { cwd: context.root, env: { ...childEnvironment, DATABASE_MIGRATION_URL: connections.migrationUrl, DATABASE_URL: connections.runtimeUrl, TRESTLE_VERIFY_STARTED_AT: startedAt, TRESTLE_ARTIFACT_POLICY: policy.artifactPolicy }, stdio: "pipe" });
         report = JSON.parse(result.stdout) as typeof report;
       } finally {
         try {
@@ -659,12 +659,12 @@ export function createProgram(runtime: CliRuntime): Command {
       if (!report) throw new CliFailure("recovery verification did not produce evidence");
       const durationMs = new Date(report.completedAt).getTime() - new Date(startedAt).getTime();
       const rtoMet = durationMs <= policy.recoveryTimeObjectiveMinutes * 60_000;
-      const evidence = { schemaVersion: 1, environment: options.env, provider: "neon", sourceBranch: policy.sourceBranch, target, recoveryPoint: point ?? "latest", cleanup, durationMs, rtoMet, policy: { recoveryPointObjectiveHours: policy.recoveryPointObjectiveHours, recoveryTimeObjectiveMinutes: policy.recoveryTimeObjectiveMinutes, artifactPolicy: policy.artifactPolicy }, ...report };
+      const evidence = { schemaVersion: 1, environment: options.env, provider: "neon", sourceBranch: policy.sourceBranch, target, recoveryPoint: point ?? "latest", cleanup, durationMs, rtoMet, policy: { recoveryPointObjectiveHours: policy.recoveryPointObjectiveHours, recoveryTimeObjectiveMinutes: policy.recoveryTimeObjectiveMinutes, artifactPolicy: policy.artifactPolicy }, ...report, status: recoveryEvidencePassed(report, cleanup, rtoMet) ? "passed" : "failed" };
       const evidenceDirectory = path.join(context.root, ".trestle", "recovery-evidence");
       await mkdir(evidenceDirectory, { recursive: true });
       await writeFile(path.join(evidenceDirectory, `${options.env}-latest.json`), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
-      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(evidence), null, 2)}\n` : [`Recovery verification: ${report.status}`, `Isolated target:       ${target}`, `Cleanup:               ${cleanup}`, `Duration:              ${Math.ceil(durationMs / 1000)}s (${rtoMet ? "within" : "exceeds"} ${policy.recoveryTimeObjectiveMinutes}m RTO)`, ...report.checks.map((check) => `${check.status === "pass" ? "✓" : check.status === "fail" ? "✗" : "?"} ${check.id} — ${check.evidence}`), ""].join("\n"));
-      if (report.status !== "passed" || cleanup !== "deleted" || !rtoMet) throw new CliFailure("recovery verification failed, exceeded RTO, or isolated cleanup was incomplete");
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(evidence), null, 2)}\n` : [`Recovery verification: ${evidence.status}`, `Isolated target:       ${target}`, `Cleanup:               ${cleanup}`, `Duration:              ${Math.ceil(durationMs / 1000)}s (${rtoMet ? "within" : "exceeds"} ${policy.recoveryTimeObjectiveMinutes}m RTO)`, ...report.checks.map((check) => `${check.status === "pass" ? "✓" : check.status === "fail" ? "✗" : "?"} ${check.id} — ${check.evidence}`), ""].join("\n"));
+      if (evidence.status !== "passed") throw new CliFailure("recovery verification failed, remained unverifiable, exceeded RTO, or isolated cleanup was incomplete");
     });
 
   const restore = program.command("restore").description("create an isolated Neon point-in-time recovery branch");

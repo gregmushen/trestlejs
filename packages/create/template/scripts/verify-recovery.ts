@@ -1,12 +1,12 @@
 import postgres from "postgres";
 import { tenantConnectionString } from "../packages/db/src/index.js";
+import { artifactReferenceCheck, recoveryCheckStatus, type RecoveryCheck } from "./recovery-evidence.js";
 
-type Check = { id: string; status: "pass" | "fail" | "unverifiable"; evidence: string };
 const migrationUrl = process.env.DATABASE_MIGRATION_URL;
 const runtimeUrl = process.env.DATABASE_URL;
 if (!migrationUrl || !runtimeUrl) throw new Error("DATABASE_MIGRATION_URL and DATABASE_URL are required");
 const migration = postgres(migrationUrl, { max: 1, prepare: false });
-const checks: Check[] = [];
+const checks: RecoveryCheck[] = [];
 
 async function check(id: string, operation: () => Promise<string>): Promise<void> {
   try { checks.push({ id, status: "pass", evidence: await operation() }); }
@@ -23,7 +23,7 @@ try {
     const organizations = await migration<{ id: string }[]>`select id from organization order by id limit 2`;
     const first = organizations[0]?.id;
     const second = organizations[1]?.id;
-    if (!first || !second) return "fewer than two organizations; tenant isolation is structurally configured but adversarial two-tenant verification is unavailable";
+    if (!first || !second) throw new Error("two organizations are required for adversarial tenant-isolation verification");
     const tenant = postgres(tenantConnectionString(runtimeUrl, first), { max: 1, prepare: false });
     try {
       const visible = await tenant<{ organization_id: string }[]>`select organization_id from tenant_record`;
@@ -36,8 +36,11 @@ try {
       return "cross-tenant SELECT, INSERT, UPDATE, and DELETE failed closed";
     } finally { await tenant.end(); }
   });
-  checks.push({ id: "artifacts.references", status: "unverifiable", evidence: "database metadata restored; R2 object bytes require the declared provider-specific object verification policy" });
+  try {
+    const [row] = await migration<{ count: number }[]>`select count(*)::int as count from artifact_metadata where upload_state='ready' and deleted_at is null`;
+    if (!row || !Number.isSafeInteger(row.count)) throw new Error("could not count ready artifact references");
+    checks.push(artifactReferenceCheck(process.env.TRESTLE_ARTIFACT_POLICY, row.count));
+  } catch { checks.push({ id: "artifacts.references", status: "fail", evidence: "ready artifact references could not be enumerated" }); }
 } finally { await migration.end(); }
 
-const failed = checks.filter((item) => item.status === "fail").length;
-process.stdout.write(`${JSON.stringify({ status: failed ? "failed" : "passed", startedAt: process.env.TRESTLE_VERIFY_STARTED_AT ?? null, completedAt: new Date().toISOString(), checks })}\n`);
+process.stdout.write(`${JSON.stringify({ status: recoveryCheckStatus(checks), startedAt: process.env.TRESTLE_VERIFY_STARTED_AT ?? null, completedAt: new Date().toISOString(), checks })}\n`);
