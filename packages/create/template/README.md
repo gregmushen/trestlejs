@@ -153,6 +153,11 @@ material after 30 days for standard events or seven days for short events.
 Delivery and attempt status metadata remains; expired pending work is stopped,
 and an active delivery lease delays erasure until the lease ends. Applications
 should review these default retention periods against their own policy.
+The native egress policy validates HTTPS destinations and resolves both DNS
+address families anew for each attempt. It rejects the entire response if any
+address is non-public. A future transport must connect only to an approved
+address while using the original hostname for TLS verification; the policy
+alone does not enable native delivery.
 When enabling outbound delivery, set the optional encrypted Worker credential
 `WEBHOOK_SECRET_KEY` to at least 32 random bytes per environment through
 `trestle secrets edit`; it encrypts endpoint secrets at rest. Endpoint secrets

@@ -360,6 +360,14 @@ material after the application defaults of 30 days (standard) or seven days
 (short), stops pending retries, and preserves status metadata. Active leases
 defer erasure until safe. Provider-specific effective retention and 90-day
 metadata pruning remain future work.
+Alpha 52 adds the native webhook destination egress policy: HTTPS-only URLs,
+no embedded credentials or fragments, fresh IPv4 and IPv6 resolution for each
+attempt, rejection of the entire DNS answer set if any address is non-public,
+and an approved-address result that must be used for a pinned TLS connection
+with the original hostname for certificate verification. Adversarial tests
+cover private, loopback, link-local, carrier-grade NAT, reserved, multicast,
+unspecified, and IPv4-mapped IPv6 answers. Native mode still fails closed until
+the pinned transport and Queue dispatcher are integrated and verified.
 Trestle does not yet deliver projected webhooks externally or provide
 customer inspection UI. The next slices are native Queue-backed delivery and
 recovery, then the optional Svix adapter. A committed domain event remains authoritative;
