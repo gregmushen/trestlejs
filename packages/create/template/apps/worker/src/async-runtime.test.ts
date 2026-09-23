@@ -1,5 +1,6 @@
-import { eventEnvelopeSchema, InMemoryEventInbox, LocalWorkflowScheduler } from "@__TRESTLE_PROJECT_NAME__/events";
+import { defineEvent, defineEventCatalog, eventEnvelopeSchema, InMemoryEventInbox, LocalWorkflowScheduler } from "@__TRESTLE_PROJECT_NAME__/events";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { createQueueConsumer, createWorkflowQueueConsumer, EventConsumerRegistry, handleEventWithInbox } from "./async-runtime.js";
 
@@ -24,6 +25,29 @@ describe("Worker Queue consumer", () => {
     expect(states).toEqual(["retry", "ack", "ack"]);
   });
   it("rejects duplicate consumer registrations", () => { const registry = new EventConsumerRegistry(); const definition = { name: "article.published", schemaVersion: 1, parse: (payload: unknown) => payload }; registry.register(definition, async () => undefined); expect(() => registry.register(definition, async () => undefined)).toThrow("already registered"); });
+
+  it("processes catalog-declared events without a bespoke consumer and keeps projection inside the inbox retry boundary", async () => {
+    const catalog = defineEventCatalog([defineEvent({
+      name: "article.published", schemaVersion: 1, description: "Article published", sensitivity: "internal",
+      resource: { type: "article", id: (payload: { title: string }) => payload.title }, payload: z.object({ title: z.string() }),
+    })]);
+    const registry = new EventConsumerRegistry(catalog);
+    const inbox = new InMemoryEventInbox();
+    const event = { ...envelope(), resource: { type: "article", id: "Hello" } };
+    let projections = 0;
+    const states: string[] = [];
+    const consumer = createQueueConsumer(registry, inbox, async () => {
+      projections += 1;
+      if (projections === 1) throw new Error("projection unavailable");
+    });
+    const batch = { messages: [{ body: event, ack: () => states.push("ack"), retry: () => states.push("retry") }] };
+    expect(await consumer(batch, {})).toEqual({ acknowledged: 0, retried: 1 });
+    expect(await consumer(batch, {})).toEqual({ acknowledged: 1, retried: 0 });
+    expect(await consumer(batch, {})).toEqual({ acknowledged: 1, retried: 0 });
+    expect(projections).toBe(2);
+    expect(states).toEqual(["retry", "ack", "ack"]);
+    expect(await consumer({ messages: [{ body: { ...event, resource: { type: "article", id: "forged" } }, ack: () => states.push("ack"), retry: () => states.push("retry") }] }, {})).toEqual({ acknowledged: 0, retried: 1 });
+  });
 
   it("hands a Queue event to one stable Workflow instance and retries its handler deterministically", async () => {
     const now = new Date("2026-09-22T00:00:00Z");

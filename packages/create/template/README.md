@@ -120,8 +120,11 @@ runtime schemas and are private by default. An explicit `webhook` projection
 adds a separately versioned, validated public contract with examples and
 projection fixtures. The generated database now includes tenant-owned endpoint,
 subscription, message, delivery, attempt, and encrypted signing-secret tables.
-The post-commit projector and deterministic local capture are callable, but
-neither is dispatched automatically and no remote webhook request is sent yet.
+With `WEBHOOK_DELIVERY_MODE=local` in a local environment and Queues enabled,
+the Worker projects catalog-declared events after outbox dispatch, within the
+Queue or Workflow inbox retry boundary. Disabled mode is the default. Native
+and Svix modes fail closed until their delivery adapters ship. Local delivery
+capture is still invoked explicitly; no remote webhook request is sent yet.
 When enabling outbound delivery, set the optional encrypted Worker credential
 `WEBHOOK_SECRET_KEY` to at least 32 random bytes per environment through
 `trestle secrets edit`; it encrypts endpoint secrets at rest. Endpoint secrets

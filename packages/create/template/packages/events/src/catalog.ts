@@ -177,6 +177,9 @@ export function defineEventCatalog(definitions: readonly ApplicationEventDefinit
     } else publicEvents.set(publicKey, definition);
   }
   return {
+    has(name: string, schemaVersion: number): boolean {
+      return internal.has(`${name}@${schemaVersion}`);
+    },
     parse(name: string, schemaVersion: number, payload: unknown): unknown {
       const definition = internal.get(`${name}@${schemaVersion}`);
       if (!definition) throw new EventCatalogError(`Internal event ${name}@${schemaVersion} is not registered`);

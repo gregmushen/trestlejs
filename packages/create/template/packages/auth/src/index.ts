@@ -12,6 +12,7 @@ export interface AuthEnvironment {
   DATABASE_DRIVER?: DatabaseDriver;
   EMAIL_DELIVERY_MODE?: "capture" | "local" | "provider" | "resend";
   APP_ENV?: "local" | "preview" | "staging" | "production";
+  WEBHOOK_DELIVERY_MODE?: "disabled" | "local" | "native" | "svix";
   RESEND_API_KEY?: string;
   RESEND_WEBHOOK_SECRET?: string;
   EMAIL_FROM?: string;
