@@ -51,8 +51,12 @@ suite("forced PostgreSQL tenant isolation", () => {
     const repository = new PostgresArtifactMetadataRepository(createDatabase(connectionString!, "postgres-js"));
     try {
       await repository.put({ id, organizationId: "org-a", key: "org-a/original", contentType: "text/plain", size: 1, createdAt: new Date() });
-      await expect(repository.put({ id, organizationId: "org-b", key: "org-b/replacement", contentType: "text/plain", size: 2, createdAt: new Date() })).rejects.toThrow("another organization");
+      await expect(repository.put({ id, organizationId: "org-b", key: "org-b/replacement", contentType: "text/plain", size: 2, createdAt: new Date() })).rejects.toThrow("unavailable");
+      await expect(repository.put({ id, organizationId: "org-a", key: "org-a/replacement", contentType: "text/plain", size: 2, createdAt: new Date() })).rejects.toThrow("unavailable");
       expect(await repository.get("org-a", id)).toMatchObject({ key: "org-a/original", size: 1 });
+      expect(await repository.discard("org-b", id, "org-a/original")).toBe(false);
+      expect(await repository.discard("org-a", id, "org-a/replacement")).toBe(false);
+      expect(await repository.get("org-a", id)).not.toBeNull();
     } finally {
       await sql!`delete from artifact_metadata where id = ${id}`;
     }

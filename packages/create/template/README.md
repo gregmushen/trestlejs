@@ -95,7 +95,11 @@ Set the encrypted Worker secret `ARTIFACT_SIGNING_SECRET` to at least 32 random
 bytes in each R2-enabled remote environment. The Worker stores tenant-owned
 artifact metadata in PostgreSQL, serves uploads through `POST /api/artifacts`,
 and issues short-lived download links through `GET /api/artifacts/:id/access`.
-These links are bearer capabilities: do not log or share them. Local development
+Artifact IDs are single-use, including after deletion, so an old signed link
+cannot become valid for a replacement object. R2 uploads reserve tenant-owned
+metadata before writing a uniquely keyed object; if the upload fails, the
+reservation is released only after R2 deletion is confirmed. These links are
+bearer capabilities: do not log or share them. Local development
 uses an in-memory store and the local auth secret for signing if no dedicated
 artifact signing secret is set.
 Queue delivery is at least once. The PostgreSQL event inbox prevents a completed

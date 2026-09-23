@@ -46,6 +46,8 @@ jobs:
       - run: pnpm test
         env:
           TRESTLE_RLS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_test
+          TRESTLE_INBOX_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_test
+          TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_test
           TRESTLE_SYSTEM_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_test
           TRESTLE_PROVIDER_INTEGRATION_TESTS: "0"
       - run: pnpm build

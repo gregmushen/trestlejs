@@ -2,9 +2,39 @@ import { describe, expect, it } from "vitest";
 import { CloudflareR2ArtifactStore, InMemoryArtifactMetadataRepository, LocalArtifactStore, createArtifactSigner } from "./index.js";
 
 describe("tenant-owned artifact storage", () => {
-  it("stores, copies, and deletes local artifacts within one tenant", async () => { const store = new LocalArtifactStore(); const body = new Uint8Array([1, 2, 3]); const metadata = await store.put({ id: "a", organizationId: "org-a", key: "report.pdf", contentType: "application/pdf", body }); body[0] = 9; expect(metadata).toMatchObject({ organizationId: "org-a", size: 3 }); expect((await store.get("org-a", "a"))?.body[0]).toBe(1); expect(await store.delete("org-a", "a")).toBe(true); expect(await store.get("org-a", "a")).toBeNull(); });
-  it("fails closed for cross-tenant reads, deletes, and identifier replacement", async () => { const store = new LocalArtifactStore(); await store.put({ id: "a", organizationId: "org-a", key: "a.txt", contentType: "text/plain", body: new Uint8Array() }); expect(await store.get("org-b", "a")).toBeNull(); expect(await store.delete("org-b", "a")).toBe(false); await expect(store.put({ id: "a", organizationId: "org-b", key: "b.txt", contentType: "text/plain", body: new Uint8Array() })).rejects.toThrow("another organization"); });
-  it("prefixes R2 keys with tenant ownership and preserves metadata", async () => { const calls: unknown[] = []; const bytes = new Uint8Array([4, 5]); const bucket = { put: async (...args: unknown[]) => { calls.push(args); }, get: async () => ({ size: 2, arrayBuffer: async () => bytes.buffer }), delete: async (key: string) => { calls.push(key); } }; const store = new CloudflareR2ArtifactStore(bucket, new InMemoryArtifactMetadataRepository()); await store.put({ id: "a", organizationId: "org-a", key: "x.bin", contentType: "application/octet-stream", body: bytes }); expect(calls[0]).toEqual(["org-a/x.bin", bytes, expect.objectContaining({ customMetadata: { artifactId: "a", organizationId: "org-a" } })]); expect((await store.get("org-a", "a"))?.body).toEqual(bytes); expect(await store.get("org-b", "a")).toBeNull(); });
+  it("stores, copies, and deletes local artifacts within one tenant", async () => { const store = new LocalArtifactStore(); const body = new Uint8Array([1, 2, 3]); const metadata = await store.put({ id: "a", organizationId: "org-a", key: "report.pdf", contentType: "application/pdf", body }); body[0] = 9; expect(metadata).toMatchObject({ organizationId: "org-a", size: 3 }); expect((await store.get("org-a", "a"))?.body[0]).toBe(1); expect(await store.delete("org-a", "a")).toBe(true); expect(await store.get("org-a", "a")).toBeNull(); await expect(store.put({ id: "a", organizationId: "org-a", key: "report.pdf", contentType: "application/pdf", body })).rejects.toThrow("unavailable"); });
+  it("fails closed for cross-tenant reads, deletes, and identifier replacement", async () => { const store = new LocalArtifactStore(); await store.put({ id: "a", organizationId: "org-a", key: "a.txt", contentType: "text/plain", body: new Uint8Array() }); expect(await store.get("org-b", "a")).toBeNull(); expect(await store.delete("org-b", "a")).toBe(false); await expect(store.put({ id: "a", organizationId: "org-b", key: "b.txt", contentType: "text/plain", body: new Uint8Array() })).rejects.toThrow("unavailable"); await expect(store.put({ id: "a", organizationId: "org-a", key: "a.txt", contentType: "text/plain", body: new Uint8Array() })).rejects.toThrow("unavailable"); });
+  it("reserves immutable metadata before uploading a uniquely keyed R2 object", async () => {
+    const calls: unknown[] = [];
+    const bytes = new Uint8Array([4, 5]);
+    const metadata = new InMemoryArtifactMetadataRepository();
+    const bucket = { put: async (...args: unknown[]) => { calls.push(args); expect(await metadata.get("org-a", "a")).not.toBeNull(); }, get: async () => ({ size: 2, arrayBuffer: async () => bytes.buffer }), delete: async (key: string) => { calls.push(key); } };
+    const store = new CloudflareR2ArtifactStore(bucket, metadata);
+    const created = await store.put({ id: "a", organizationId: "org-a", key: "x.bin", contentType: "application/octet-stream", body: bytes });
+    expect(created.key).toMatch(/^org-a\/a\/[0-9a-f-]{36}\/x\.bin$/u);
+    expect(calls[0]).toEqual([created.key, bytes, expect.objectContaining({ customMetadata: { artifactId: "a", organizationId: "org-a" } })]);
+    expect((await store.get("org-a", "a"))?.body).toEqual(bytes);
+    expect(await store.get("org-b", "a")).toBeNull();
+    await expect(store.put({ id: "a", organizationId: "org-b", key: "x.bin", contentType: "application/octet-stream", body: bytes })).rejects.toThrow("unavailable");
+    expect(calls).toHaveLength(1);
+    expect(await store.delete("org-a", "a")).toBe(true);
+    await expect(store.put({ id: "a", organizationId: "org-a", key: "x.bin", contentType: "application/octet-stream", body: bytes })).rejects.toThrow("unavailable");
+  });
+  it("removes a failed upload only after R2 cleanup is confirmed", async () => {
+    const metadata = new InMemoryArtifactMetadataRepository();
+    const deleted: string[] = [];
+    const store = new CloudflareR2ArtifactStore({ put: async () => { throw new Error("provider write failed"); }, get: async () => null, delete: async (key) => { deleted.push(key); } }, metadata);
+    await expect(store.put({ id: "failed", organizationId: "org-a", key: "x.bin", contentType: "application/octet-stream", body: new Uint8Array([1]) })).rejects.toThrow("provider write failed");
+    expect(deleted).toHaveLength(1);
+    expect(await metadata.get("org-a", "failed")).toBeNull();
+  });
+  it("retains the metadata reservation when R2 cleanup is uncertain", async () => {
+    const metadata = new InMemoryArtifactMetadataRepository();
+    const store = new CloudflareR2ArtifactStore({ put: async () => { throw new Error("write timed out"); }, get: async () => null, delete: async () => { throw new Error("delete timed out"); } }, metadata);
+    await expect(store.put({ id: "uncertain", organizationId: "org-a", key: "x.bin", contentType: "application/octet-stream", body: new Uint8Array([1]) })).rejects.toThrow("cleanup could not be verified");
+    expect(await metadata.get("org-a", "uncertain")).not.toBeNull();
+    await expect(store.put({ id: "uncertain", organizationId: "org-a", key: "x.bin", contentType: "application/octet-stream", body: new Uint8Array([1]) })).rejects.toThrow("unavailable");
+  });
   it("signs artifact access with tenant scope, expiry, and a cryptographic MAC", async () => {
     let now = new Date("2026-01-01T00:00:00Z");
     const signer = createArtifactSigner("a-32-byte-minimum-secret-for-tests", () => now);
