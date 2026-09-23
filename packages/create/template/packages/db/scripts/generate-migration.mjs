@@ -15,7 +15,7 @@ if (JSON.stringify(after.entries.slice(0, before.entries.length)) !== JSON.strin
   throw new Error("Drizzle modified existing migration journal entries");
 }
 if (after.entries.length > before.entries.length) {
-  let previous = before.entries.at(-1)?.when ?? 0;
+  let previous = Math.max(0, ...before.entries.map((entry) => entry.when));
   if (!Number.isSafeInteger(previous)) throw new Error("Invalid migration journal timestamp");
   for (const entry of after.entries.slice(before.entries.length)) {
     entry.when = Math.max(Date.now(), previous + 1);

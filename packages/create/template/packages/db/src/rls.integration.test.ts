@@ -90,6 +90,33 @@ suite("forced PostgreSQL tenant isolation", () => {
     }
   });
 
+  it("claims stale incomplete metadata with exact tenant, key, and cutoff", async () => {
+    const staleId = `${prefix}stale-artifact`;
+    const recentId = `${prefix}recent-artifact`;
+    const repository = new PostgresArtifactMetadataRepository(createDatabase(connectionString!, "postgres-js"));
+    const old = new Date("2026-01-01T00:00:00Z");
+    const recent = new Date("2026-01-03T00:00:00Z");
+    const cutoff = new Date("2026-01-02T00:00:00Z");
+    try {
+      await repository.put({ id: staleId, organizationId: "org-a", key: "org-a/stale", contentType: "text/plain", size: 1, createdAt: old });
+      await repository.put({ id: recentId, organizationId: "org-a", key: "org-a/recent", contentType: "text/plain", size: 1, createdAt: recent });
+      expect((await repository.listIncomplete("org-a", cutoff, 10)).map(({ id }) => id)).toEqual([staleId]);
+      expect(await repository.listIncomplete("org-b", cutoff, 10)).toEqual([]);
+      expect(await repository.claimIncomplete("org-b", staleId, "org-a/stale", cutoff)).toBe(false);
+      expect(await repository.claimIncomplete("org-a", staleId, "org-a/wrong", cutoff)).toBe(false);
+      expect(await repository.claimIncomplete("org-a", recentId, "org-a/recent", cutoff)).toBe(false);
+      expect(await repository.claimIncomplete("org-a", staleId, "org-a/stale", cutoff)).toBe(true);
+      expect(await repository.complete("org-a", staleId, "org-a/stale")).toBe(false);
+      expect(await repository.get("org-a", staleId)).toBeNull();
+      expect(await repository.retire("org-a", staleId, "org-a/stale")).toBe(true);
+      expect(await repository.listIncomplete("org-a", cutoff, 10)).toEqual([]);
+      await expect(repository.put({ id: staleId, organizationId: "org-a", key: "org-a/reuse", contentType: "text/plain", size: 1, createdAt: recent })).rejects.toThrow("unavailable");
+      await expect(repository.listIncomplete("org-a", cutoff, 101)).rejects.toThrow("Invalid artifact recovery");
+    } finally {
+      await sql!`delete from artifact_metadata where id in (${staleId}, ${recentId})`;
+    }
+  });
+
   it("fails closed without tenant context", async () => {
     await sql!.begin(async (transaction) => {
       await transaction`set local role trestle_app`;

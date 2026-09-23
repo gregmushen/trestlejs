@@ -9,6 +9,6 @@ export const artifactMetadata = pgTable("artifact_metadata", {
 }, (table) => [
   index("artifact_metadata_organization_idx").on(table.organizationId),
   index("artifact_metadata_upload_state_idx").on(table.uploadState, table.createdAt),
-  check("artifact_metadata_upload_state_check", sql`${table.uploadState} IN ('pending', 'ready', 'deleted')`),
+  check("artifact_metadata_upload_state_check", sql`${table.uploadState} IN ('pending', 'ready', 'cleaning', 'deleted')`),
   pgPolicy("artifact_metadata_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
 ]).enableRLS();

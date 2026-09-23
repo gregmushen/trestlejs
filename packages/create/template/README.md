@@ -104,6 +104,10 @@ an uncertain finalization retires the ID. These links are
 bearer capabilities: do not log or share them. Local development
 uses an in-memory store and the local auth secret for signing if no dedicated
 artifact signing secret is set.
+The R2 adapter exposes bounded `recoverIncomplete(organizationId, before, limit)`
+for a trusted maintenance process. It claims old pending records before deleting
+their exact R2 keys, retries deletion failures, and retires recovered IDs. This
+is a tenant-scoped recovery primitive, not an automatically scheduled job.
 Queue delivery is at least once. The PostgreSQL event inbox prevents a completed
 logical event from running its handler again and leases in-progress work for
 recovery. Handlers that call external services must still pass the event's
