@@ -83,6 +83,51 @@ async function changeEndpointState(organizationId: string, endpointId: string, s
   }
 }
 
+async function updateSubscriptions(organizationId: string, endpointId: string, subscriptions: Subscription[]) {
+  const response = await fetch(`${apiOrigin}/api/developer/webhooks/endpoints/${encodeURIComponent(endpointId)}/subscriptions`, {
+    method: "PATCH", credentials: "include", headers: { "content-type": "application/json", "x-trestle-tenant": organizationId },
+    body: JSON.stringify({ subscriptions }),
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(result.error ?? "Webhook subscriptions could not be saved.");
+  }
+}
+
+function WebhookSubscriptions({ organizationId, endpointId, userId, events }: { organizationId: string; endpointId: string; userId: string; events: PublicEvent[] }) {
+  const queryClient = useQueryClient();
+  const key = ["webhook-inspection", userId, organizationId, "subscriptions", endpointId];
+  const current = useQuery({
+    queryKey: key, retry: false,
+    queryFn: () => inspect<{ subscriptions: Subscription[] }>(`/api/developer/webhooks/endpoints/${encodeURIComponent(endpointId)}/subscriptions`, organizationId),
+  });
+  const update = useMutation({ mutationFn: (subscriptions: Subscription[]) => updateSubscriptions(organizationId, endpointId, subscriptions),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: key });
+      await queryClient.invalidateQueries({ queryKey: ["webhook-inspection", userId, organizationId, "endpoints"] });
+    },
+  });
+  const form = useForm({
+    defaultValues: { subscriptions: [] as Subscription[] },
+    onSubmit: async ({ value }) => { await update.mutateAsync(value.subscriptions); },
+  });
+  useEffect(() => { if (current.data?.subscriptions) form.setFieldValue("subscriptions", current.data.subscriptions); }, [current.data, form]);
+  const choices = [...events, ...(current.data?.subscriptions ?? []).filter((subscription) => !events.some((event) => event.type === subscription.type && event.version === subscription.version)).map((subscription) => ({ ...subscription, description: "No longer in the public event catalog", available: false }))];
+  return <section aria-label="Endpoint subscriptions" className="mt-8 border-t border-slate-200 pt-6">
+    <h2 className="text-xl font-semibold">Subscriptions</h2>
+    <p className="mt-1 text-sm text-slate-600">Choose the public event versions this endpoint receives. Changes affect future events, not deliveries already created.</p>
+    {current.isPending ? <p className="mt-3">Loading subscriptions…</p> : current.error ? <p className="mt-3 text-red-700" role="alert">{current.error.message}</p> : <form className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); void form.handleSubmit().catch(() => undefined); }}>
+      <form.Field name="subscriptions">{(field) => <div className="space-y-2">{choices.map((event) => {
+        const selected = field.state.value.some((item) => item.type === event.type && item.version === event.version);
+        return <label className="flex items-start gap-2 text-sm" key={`${event.type}@${event.version}`}><input type="checkbox" className="mt-1" checked={selected} disabled={!event.available && !selected} onChange={() => field.handleChange(selected ? field.state.value.filter((item) => item.type !== event.type || item.version !== event.version) : [...field.state.value, { type: event.type, version: event.version }])} /><span><span className="font-medium">{event.type} v{event.version}</span> — {event.description}{!event.available && " (unavailable; remove before saving)"}</span></label>;
+      })}</div>}</form.Field>
+      {update.error && <p className="text-sm text-red-700" role="alert">{update.error.message}</p>}
+      {update.isSuccess && <p className="text-sm text-green-700" role="status">Subscriptions saved.</p>}
+      <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting, state.values.subscriptions.length] as const}>{([canSubmit, isSubmitting, count]) => <button className="button" disabled={!canSubmit || isSubmitting || count === 0 || update.isPending} type="submit">{isSubmitting || update.isPending ? "Saving…" : "Save subscriptions"}</button>}</form.Subscribe>
+    </form>}
+  </section>;
+}
+
 function UtcTime({ value }: { value: string | null }) {
   if (!value) return <>—</>;
   const date = new Date(value);
@@ -176,6 +221,8 @@ export function WebhookInspection() {
       </li>)}</ul> : <p className="mt-3 text-slate-600">No webhook endpoints for this organization.</p>}
 
       {selectedEndpoint && <div className="mt-5 flex flex-wrap items-center gap-3"><span className="text-sm text-slate-600">{selectedEndpoint.name} is {selectedEndpoint.state}.</span><button className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium" type="button" disabled={stateChange.isPending} onClick={() => void stateChange.mutateAsync({ id: selectedEndpoint.id, state: selectedEndpoint.state === "active" ? "disabled" : "active" }).catch(() => undefined)}>{selectedEndpoint.state === "active" ? "Disable endpoint" : "Activate endpoint"}</button>{stateChange.error && <span className="text-sm text-red-700" role="alert">{stateChange.error.message}</span>}</div>}
+
+      {selectedEndpoint && publicEvents.data?.events && <WebhookSubscriptions key={selectedEndpoint.id} organizationId={organizationId} endpointId={selectedEndpoint.id} userId={session.user.id} events={publicEvents.data.events} />}
 
       {endpointId && <div className="mt-8 border-t border-slate-200 pt-6"><h2 className="text-xl font-semibold">Deliveries</h2><p className="mt-1 text-sm text-slate-500">Showing up to 50 most recent deliveries.</p>
         {deliveries.isPending ? <p className="mt-3">Loading deliveries…</p> : deliveries.error ? <p className="mt-3 text-red-700" role="alert">{deliveries.error.message}</p> : deliveries.data?.deliveries?.length ? <ul className="mt-3 space-y-2">{deliveries.data.deliveries.map((delivery) => <li key={delivery.id}>

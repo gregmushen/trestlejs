@@ -43,6 +43,24 @@ export async function listWebhookEndpoints(input: {
   }));
 }
 
+/** Null means the endpoint is absent in this tenant/environment; [] is a legacy empty selection. */
+export async function listWebhookSubscriptions(input: {
+  organizationId: string;
+  environment: "local" | "preview" | "staging" | "production";
+  endpointId: string;
+  tenantDatabase: (organizationId: string) => Database;
+}): Promise<Array<{ type: string; version: number }> | null> {
+  const database = input.tenantDatabase(input.organizationId);
+  const [endpoint] = await database.select({ id: webhookEndpoint.id }).from(webhookEndpoint).where(and(
+    eq(webhookEndpoint.id, input.endpointId), eq(webhookEndpoint.organizationId, input.organizationId),
+    eq(webhookEndpoint.environment, input.environment), isNull(webhookEndpoint.deletedAt),
+  )).limit(1);
+  if (!endpoint) return null;
+  return database.select({ type: webhookSubscription.publicEventType, version: webhookSubscription.publicVersion })
+    .from(webhookSubscription).where(and(eq(webhookSubscription.organizationId, input.organizationId), eq(webhookSubscription.endpointId, input.endpointId)))
+    .orderBy(webhookSubscription.publicEventType, webhookSubscription.publicVersion);
+}
+
 export async function listWebhookDeliveries(input: {
   organizationId: string;
   environment: "local" | "preview" | "staging" | "production";
