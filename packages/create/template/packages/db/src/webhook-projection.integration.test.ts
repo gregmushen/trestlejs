@@ -6,6 +6,7 @@ import { z } from "zod";
 import { createTenantDatabase } from "./index.js";
 import { PostgresOutboxStore } from "./outbox.js";
 import { projectCommittedWebhook } from "./webhook-projection.js";
+import { parseNativeWebhookWakeup, resolveNativeWebhookWork } from "./webhook-work.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -125,5 +126,38 @@ suite("committed outbound webhook projection", () => {
     });
     const forced = await sql!`select relname, relforcerowsecurity from pg_class where relname in ('webhook_message','webhook_delivery') order by relname`;
     expect(forced).toEqual([{ relname: "webhook_delivery", relforcerowsecurity: true }, { relname: "webhook_message", relforcerowsecurity: true }]);
+  });
+
+  it("resolves ID-only native Queue work from committed provenance under tenant RLS", async () => {
+    const firstEvent = await commit("article.published", "work-org-a");
+    const otherSameTenantEvent = await commit("article.published", "work-org-a");
+    const secondEvent = await commit("article.published", "work-org-b");
+    const endpoint = async (organizationId: string) => {
+      const [record] = await sql!<{ id: string }[]>`insert into webhook_endpoint (organization_id, environment, name, destination_url, state, provider, created_by, updated_by) values (${organizationId}, 'preview', ${crypto.randomUUID()}, 'https://example.test/hook', 'active', 'native', 'test-user', 'test-user') returning id`;
+      endpointIds.push(record!.id);
+      await sql!`insert into webhook_subscription (organization_id, endpoint_id, public_event_type, public_version, created_by) values (${organizationId}, ${record!.id}, 'article.published', 1, 'test-user')`;
+      return record!.id;
+    };
+    const firstEndpoint = await endpoint("work-org-a");
+    await endpoint("work-org-b");
+    for (const eventId of [firstEvent, otherSameTenantEvent, secondEvent]) {
+      await projectCommittedWebhook({ eventId, environment: "preview", catalog, outbox: outbox!, tenantDatabase });
+    }
+    const [firstDelivery] = await sql!<{ id: string }[]>`select d.id from webhook_delivery d join webhook_message m on m.id=d.message_id where m.source_event_id=${firstEvent}`;
+    const [secondDelivery] = await sql!<{ id: string }[]>`select d.id from webhook_delivery d join webhook_message m on m.id=d.message_id where m.source_event_id=${secondEvent}`;
+    const wakeup = { sourceEventId: firstEvent, deliveryId: firstDelivery!.id };
+    const resolve = (work: unknown, environment: "preview" | "staging" = "preview") => resolveNativeWebhookWork({ wakeup: work, environment, outbox: outbox!, tenantDatabase });
+    expect(parseNativeWebhookWakeup(wakeup)).toEqual(wakeup);
+    expect(await resolve(wakeup)).toEqual({ state: "ready", organizationId: "work-org-a", deliveryId: firstDelivery!.id });
+    expect(await resolve(wakeup)).toEqual({ state: "ready", organizationId: "work-org-a", deliveryId: firstDelivery!.id });
+    expect(await resolve({ ...wakeup, deliveryId: secondDelivery!.id })).toEqual({ state: "not_found" });
+    expect(await resolve({ ...wakeup, sourceEventId: otherSameTenantEvent })).toEqual({ state: "not_found" });
+    expect(await resolve({ ...wakeup, sourceEventId: secondEvent })).toEqual({ state: "not_found" });
+    expect(await resolve({ ...wakeup, sourceEventId: crypto.randomUUID() })).toEqual({ state: "not_found" });
+    expect(await resolve(wakeup, "staging")).toEqual({ state: "not_native" });
+    await sql!`update webhook_endpoint set state='paused' where id=${firstEndpoint}`;
+    expect(await resolve(wakeup)).toEqual({ state: "inactive" });
+    expect(() => parseNativeWebhookWakeup({ ...wakeup, organizationId: "work-org-b" })).toThrow("Invalid native webhook wake-up");
+    expect(() => parseNativeWebhookWakeup({ ...wakeup, deliveryId: "whd_not_an_id" })).toThrow("Invalid native webhook wake-up");
   });
 });

@@ -307,8 +307,13 @@ reclamation. Alpha 44 adds lease-token-fenced attempt settlement, bounded
 jittered retries, `410 Gone` and exhaustion terminal states, and safe native
 attempt metadata that omits signed request bodies and headers. PostgreSQL tests
 cover duplicate and stale settlement, tenant isolation, retry timing, and
-transaction rollback. The Queue consumer and pinned-address transport remain
-unimplemented, so native mode still fails closed.
+transaction rollback. Alpha 45 adds strict ID-only Queue wake-up validation
+and a read-only resolver that obtains tenant provenance from the committed
+outbox row, then verifies the projected delivery under forced tenant RLS.
+Tests reject forged tenants, swapped event/delivery identities, inactive
+endpoints, and environment mismatches. Queue publication/consumption and the
+pinned-address transport remain unimplemented, so native mode still fails
+closed.
 Trestle does not yet deliver projected webhooks automatically or provide
 customer inspection UI. The next slices are native Queue-backed delivery and
 recovery, then the optional Svix adapter. A committed domain event remains authoritative;
