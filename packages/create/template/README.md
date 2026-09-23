@@ -103,6 +103,15 @@ logical event from running its handler again and leases in-progress work for
 recovery. Handlers that call external services must still pass the event's
 stable `idempotencyKey`: a crash after an external side effect but before the
 inbox completion record can cause that operation to be retried.
+If `capabilities.workflows` is enabled, the deployment config binds the
+application-owned `TrestleWorkflow` class. Queue delivery starts a Workflow
+using the event ID as its stable instance ID; a repeated Queue delivery
+reuses the existing instance. The Workflow validates the versioned event,
+executes the registered handler as a retryable step, and records completion
+through the PostgreSQL inbox. Local development keeps direct Queue handling
+and offers an advanceable-clock Workflow scheduler for deterministic tests.
+Inspect or restart failed remote instances with Wrangler's Workflow commands;
+provider retention is not a substitute for PostgreSQL's completion record.
 `CLOUDFLARE_WORKERS_SUBDOMAIN` is the account label before `.workers.dev`; it
 is used to derive the Worker URL exercised by the preview smoke gate. Preview
 preflight verifies that it matches the configured Cloudflare account. Preview

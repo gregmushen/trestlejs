@@ -55,7 +55,7 @@ try {
   const manifestSource = await readFile(generatedProjectManifest, "utf8");
   if (!manifestSource.includes("  queues: false")) throw new Error("generated project did not declare opt-in Queues");
   if (!manifestSource.includes("  r2: false")) throw new Error("generated project did not declare opt-in R2");
-  await writeFile(generatedProjectManifest, manifestSource.replace("  queues: false", "  queues: true").replace("  r2: false", "  r2: true"));
+  await writeFile(generatedProjectManifest, manifestSource.replace("  queues: false", "  queues: true").replace("  r2: false", "  r2: true").replace("  workflows: false", "  workflows: true"));
   await run(process.execPath, ["scripts/queue-config.mjs", "render", "preview", "release-canary-worker-pr-1"], project);
   const queueDoctor = spawnSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "doctor", "--env", "preview", "--json"], {
     cwd: project, encoding: "utf8", env: { ...process.env, TRESTLE_WRANGLER_CONFIG: "apps/worker/.trestle-queues.wrangler.jsonc" },
@@ -66,6 +66,9 @@ try {
   }
   if (queueDoctorReport.data.checks.find((item) => item.id === "cloudflare.r2.binding")?.status !== "pass") {
     throw new Error("Doctor did not recognize the opt-in preview R2 binding");
+  }
+  if (queueDoctorReport.data.checks.find((item) => item.id === "cloudflare.workflows.binding")?.status !== "pass") {
+    throw new Error("Doctor did not recognize the opt-in preview Workflow binding");
   }
   await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);
   console.log(`Generated release canary passed at ${project}`);

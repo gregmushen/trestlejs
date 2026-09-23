@@ -37,6 +37,12 @@ describe("worker routes", () => {
     await expect(worker.scheduled(undefined, environment)).resolves.toBeUndefined();
   });
 
+  it("fails enabled Workflow delivery without its binding", async () => {
+    await expect(worker.queue({ messages: [] }, { ...environment, APP_ENV: "preview", TRESTLE_WORKFLOWS_ENABLED: "true" })).rejects.toThrow("TRESTLE_WORKFLOW binding");
+    const health = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "preview", TRESTLE_WORKFLOWS_ENABLED: "true" });
+    await expect(health.json()).resolves.toMatchObject({ capabilities: { workflows: { enabled: true, configured: false } } });
+  });
+
   it("reports health", async () => {
     const response = await app.request("/api/health", undefined, environment);
     expect(response.status).toBe(200);

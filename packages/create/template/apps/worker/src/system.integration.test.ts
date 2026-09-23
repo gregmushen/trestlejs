@@ -1,7 +1,9 @@
 import { artifactMetadata, createDatabase, eventInbox, organization, outboxMessage, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { TrestleWorkflow } from "./cloudflare-workflow.js";
 import worker, { app } from "./index.js";
 
 const databaseUrl = process.env.TRESTLE_SYSTEM_TEST_DATABASE_URL;
@@ -128,16 +130,31 @@ suite("local product path", () => {
         });
         const queuedEvent = queued.find((event) => (event as { id?: string }).id === outbox!.id);
         expect(queuedEvent).toMatchObject({ id: outbox!.id, name: "resource.article.created", resource: { type: "article", id: article.id } });
+        const workflowInstances = new Map<string, EventEnvelope>();
+        const workflowEnvironment = { ...environment, TRESTLE_WORKFLOWS_ENABLED: "true", TRESTLE_WORKFLOW: {
+          create: async ({ id, params }: { id: string; params: EventEnvelope }) => { if (workflowInstances.has(id)) throw new Error("duplicate instance"); workflowInstances.set(id, params); return { id }; },
+          get: async (id: string) => { if (!workflowInstances.has(id)) throw new Error("not found"); return { id }; },
+        } };
         const delivery: string[] = [];
-        expect(await worker.queue({ messages: [{ body: queuedEvent, ack: () => delivery.push("ack"), retry: () => delivery.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
+        expect(await worker.queue({ messages: [{ body: queuedEvent, ack: () => delivery.push("ack"), retry: () => delivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 1, retried: 0 });
         expect(delivery).toEqual(["ack"]);
+        expect(workflowInstances.get(outbox!.id)).toMatchObject({ id: outbox!.id, idempotencyKey: outbox!.idempotencyKey });
+        const workflow = Object.assign(new TrestleWorkflow(), { env: environment });
+        const workflowEvent = { payload: workflowInstances.get(outbox!.id)!, instanceId: outbox!.id, timestamp: new Date(), workflowName: "test-workflow" };
+        const stepNames: string[] = [];
+        const stepConfigs: unknown[] = [];
+        const step = { do: async (name: string, config: unknown, callback: () => Promise<void>) => { stepNames.push(name); stepConfigs.push(config); await callback(); } } as Parameters<TrestleWorkflow["run"]>[1];
+        await workflow.run(workflowEvent, step);
+        await workflow.run(workflowEvent, step);
+        expect(stepNames).toEqual(["consume-event-v1", "consume-event-v1"]);
+        expect(stepConfigs[0]).toMatchObject({ retries: { limit: 5, backoff: "exponential" }, timeout: "2 minutes" });
         const duplicateDelivery: string[] = [];
-        expect(await worker.queue({ messages: [{ body: queuedEvent, ack: () => duplicateDelivery.push("ack"), retry: () => duplicateDelivery.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
+        expect(await worker.queue({ messages: [{ body: queuedEvent, ack: () => duplicateDelivery.push("ack"), retry: () => duplicateDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 1, retried: 0 });
         expect(duplicateDelivery).toEqual(["ack"]);
         const [inbox] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, outbox!.idempotencyKey)).limit(1);
         expect(inbox).toMatchObject({ status: "completed", attempts: 1 });
         const invalidDelivery: string[] = [];
-        expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: article.id } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, environment)).toEqual({ acknowledged: 0, retried: 1 });
+        expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: article.id } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 0, retried: 1 });
         expect(invalidDelivery).toEqual(["retry"]);
         const [dispatched] = await database.select().from(outboxMessage).where(eq(outboxMessage.id, outbox!.id)).limit(1);
         expect(dispatched?.status).toBe("succeeded");
