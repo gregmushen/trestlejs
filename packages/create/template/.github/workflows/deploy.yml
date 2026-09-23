@@ -116,6 +116,13 @@ jobs:
           command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-site-staging --branch main
       - run: node scripts/smoke.mjs
         env: { TRESTLE_DEPLOY_ENV: staging, SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
+      - name: Verify staging Queue and R2 resources
+        run: |
+          node scripts/cloudflare-queues.mjs verify __TRESTLE_PROJECT_NAME__-worker-staging
+          node scripts/cloudflare-r2.mjs verify __TRESTLE_PROJECT_NAME__-worker-staging
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Install deployed browser runtime
         run: pnpm exec playwright install --with-deps --only-shell chromium
       - name: Verify deployed staging site and application in Chromium
@@ -229,6 +236,13 @@ jobs:
           command: pages deploy dist --project-name __TRESTLE_PROJECT_NAME__-site --branch main
       - run: node scripts/smoke.mjs
         env: { TRESTLE_DEPLOY_ENV: production, SITE_URL: "${{ vars.SITE_URL }}", APP_URL: "${{ vars.APP_URL }}", API_URL: "${{ vars.API_URL }}" }
+      - name: Verify production Queue and R2 resources
+        run: |
+          node scripts/cloudflare-queues.mjs verify __TRESTLE_PROJECT_NAME__-worker
+          node scripts/cloudflare-r2.mjs verify __TRESTLE_PROJECT_NAME__-worker
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Install deployed browser runtime
         run: pnpm exec playwright install --with-deps --only-shell chromium
       - name: Verify deployed production site and application in Chromium

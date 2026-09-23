@@ -36,6 +36,19 @@ test("R2 cleanup deletes only the exact empty preview bucket and accepts absence
   assert.deepEqual(await client.remove(bucketName), { name: bucketName, state: "absent" });
 });
 
+test("R2 verification checks the exact bucket without printing credentials", async () => {
+  let result = { name: bucketName };
+  const client = r2Client({ accountId, token: "private-token", fetcher: async () => result ? Response.json({ success: true, result }) : Response.json({ success: false }, { status: 404 }) });
+  assert.deepEqual(await client.verify(bucketName), { name: bucketName, state: "present" });
+  result = { name: "another-bucket" };
+  await assert.rejects(client.verify(bucketName), /invalid identity/u);
+  result = null;
+  await assert.rejects(client.verify(bucketName), (error) => {
+    assert.doesNotMatch(error.message, /private-token/u);
+    return /missing or has an invalid identity/u.test(error.message);
+  });
+});
+
 test("R2 failures fail closed and nonempty buckets are never purged", async () => {
   const unauthorized = r2Client({ accountId, token: "private-token", fetcher: async () => Response.json({ success: false }, { status: 403 }) });
   await assert.rejects(unauthorized.ensure(bucketName), /HTTP 403/u);
@@ -52,4 +65,9 @@ test("disabled R2 capability requires no credentials", () => {
   });
   assert.equal(cli.status, 0, cli.stderr);
   assert.match(cli.stdout, /R2 disabled; no resources changed/u);
+  const verify = spawnSync(process.execPath, [new URL("./cloudflare-r2.mjs", import.meta.url).pathname, "verify", "example-worker-pr-1"], {
+    encoding: "utf8", env: { ...process.env, CLOUDFLARE_API_TOKEN: "", CLOUDFLARE_ACCOUNT_ID: "" },
+  });
+  assert.equal(verify.status, 0, verify.stderr);
+  assert.match(verify.stdout, /R2 disabled; no resources changed/u);
 });
