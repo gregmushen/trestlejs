@@ -608,6 +608,14 @@ roll back; system and Chromium tests inspect the committed, tenant-scoped
 outbox records. Existing application-owned resources are not silently
 rewritten. Deployed Queue execution and customer-visible webhook projections
 remain open.
+Alpha 83 adds an explicit public-webhook opt-in for newly generated resource
+events through `--webhook-event` or SetupPlan `webhookEvents`. Each selected
+created, updated, or deleted event gets a separately versioned, schema-checked
+public projection containing only resource identity and, where applicable,
+revision. Unselected events stay private. The generated application tests the
+public catalog and its projection fixtures. Existing application-owned
+resource catalogs are not silently rewritten. This is a contract and local
+projection path, not proof of deployed endpoint delivery.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

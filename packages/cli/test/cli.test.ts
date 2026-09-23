@@ -89,6 +89,16 @@ describe("TrestleJS CLI", () => {
     await expect(readFile(path.join(root, ".trestle/resources/article.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rejects duplicate or unknown public webhook event selections before changing project source", async () => {
+    const root = await fixture();
+    for (const kinds of [["created", "created"], ["paid"]]) {
+      const output = capture(root);
+      expect(await executeCli(["generate", "resource", "Article", "--webhook-event", ...kinds], output.runtime)).toBe(1);
+      expect(output.stderr()).toContain("--webhook-event accepts");
+    }
+    await expect(readFile(path.join(root, ".trestle/resources/article.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("previews setup without creating or changing a plan", async () => {
     const root = await fixture();
     const output = capture(root);
@@ -371,7 +381,7 @@ export const applicationEventCatalog = defineEventCatalog([
       integrations: { email: false, billing: false },
       environments: ["local", "preview", "staging", "production"],
       secrets: [],
-      resources: [{ name: "Article", tenant: true, crud: true }],
+      resources: [{ name: "Article", tenant: true, crud: true, webhookEvents: ["created", "updated"] }],
       externalResources: [],
       destructiveOperations: [],
       verification: { commands: ["pnpm check"] },
@@ -416,6 +426,10 @@ export const applicationEventCatalog = defineEventCatalog([
     expect(catalogSource).toContain('name: "resource.article.updated", schemaVersion: 1');
     expect(catalogSource).toContain('name: "resource.article.deleted", schemaVersion: 1');
     expect(catalogSource).toContain("  articleCreatedApplicationEvent,");
+    expect(catalogSource).toContain('type: "resource.article.created", version: 1');
+    expect(catalogSource).toContain('type: "resource.article.updated", version: 1');
+    expect(catalogSource).not.toContain('type: "resource.article.deleted", version: 1');
+    expect(await readFile(path.join(root, "packages/events/src/resources/article-webhooks.test.ts"), "utf8")).toContain("public webhook contract");
     const workerSource = await readFile(path.join(root, "apps/worker/src/index.ts"), "utf8");
     expect(workerSource).toContain("eventConsumers.register(articleCreatedEvent, handleArticleCreated);");
     expect(workerSource).toContain("eventConsumers.register(articleUpdatedEvent, handleArticleUpdated);");
@@ -456,12 +470,12 @@ export const applicationEventCatalog = defineEventCatalog([
       .replace("  articleUpdatedApplicationEvent,\n", "")
       .replace("  articleDeletedApplicationEvent,\n", "");
     await writeFile(catalogPath, legacyCatalog);
-    expect(await executeCli(["generate", "resource", "Article"], capture(root).runtime)).toBe(0);
+    expect(await executeCli(["generate", "resource", "Article", "--webhook-event", "created", "updated"], capture(root).runtime)).toBe(0);
     const legacyRepositoryPath = path.join(root, "packages/data/src/resources/article-repository.ts");
     const currentRepository = await readFile(legacyRepositoryPath, "utf8");
     await rm(legacyRepositoryPath);
     const legacyRepair = capture(root);
-    expect(await executeCli(["generate", "resource", "Article"], legacyRepair.runtime)).toBe(1);
+    expect(await executeCli(["generate", "resource", "Article", "--webhook-event", "created", "updated"], legacyRepair.runtime)).toBe(1);
     expect(legacyRepair.stderr()).toContain("create-only event contract");
     await expect(readFile(legacyRepositoryPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await writeFile(legacyRepositoryPath, currentRepository);

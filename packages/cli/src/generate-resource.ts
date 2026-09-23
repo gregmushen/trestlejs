@@ -80,6 +80,7 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
   }
   if (!resource.tenant || !resource.crud) throw new CliFailure("the v1 resource generator requires --tenant and --crud");
   const n = names(resource.name);
+  const webhookEvents = (["created", "updated", "deleted"] as const).filter((kind) => resource.webhookEvents.includes(kind));
   const project = manifest.project.name;
   const contractsPath = manifest.packages.contracts ?? "packages/contracts";
   const domainPath = manifest.packages.domain ?? "packages/domain";
@@ -103,14 +104,16 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     path.join(root, appPath, "src", "api", `${n.kebab}.ts`),
     path.join(root, workerPath, "src", "resources", `${n.kebab}-events.ts`),
     path.join(root, dataPath, "src", "resources", `${n.kebab}-events.integration.test.ts`),
+    path.join(root, eventsPath, "src", "resources", `${n.kebab}-webhooks.test.ts`),
   ];
   const declarationExists = await exists(declarationPath);
   const collisions = (await Promise.all(targets.map(async (target) => (await exists(target) ? target : undefined)))).filter((target): target is string => Boolean(target));
   if (collisions.length && !declarationExists) throw new CliFailure(`resource ${resource.name} collides with existing files: ${collisions.join(", ")}`);
   if (declarationExists) {
-    const current = JSON.parse(await readFile(declarationPath, "utf8")) as { name?: string; tenant?: boolean; crud?: boolean; fields?: unknown; authorization?: unknown; pagination?: unknown };
+    const current = JSON.parse(await readFile(declarationPath, "utf8")) as { name?: string; tenant?: boolean; crud?: boolean; fields?: unknown; webhookEvents?: unknown; authorization?: unknown; pagination?: unknown };
     const intended = { fields: resource.fields, authorization: resource.authorization ?? { read: "resource.read", write: "resource.write" }, pagination: resource.pagination };
-    if (current.name !== resource.name || current.tenant !== resource.tenant || current.crud !== resource.crud || JSON.stringify({ fields: current.fields, authorization: current.authorization, pagination: current.pagination }) !== JSON.stringify(intended)) {
+    if (current.name !== resource.name || current.tenant !== resource.tenant || current.crud !== resource.crud || JSON.stringify({ fields: current.fields, authorization: current.authorization, pagination: current.pagination }) !== JSON.stringify(intended)
+      || JSON.stringify((["created", "updated", "deleted"] as const).filter((kind) => Array.isArray(current.webhookEvents) && current.webhookEvents.includes(kind))) !== JSON.stringify(webhookEvents)) {
       throw new CliFailure(`resource ${resource.name} already exists with a different declaration`);
     }
   }
@@ -136,7 +139,7 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     throw new CliFailure(`resource ${resource.name} has an incomplete change-event catalog registration`);
   }
   if (declarationExists && !emitsChangeEvents) {
-    const missing = (await Promise.all(targets.slice(1, -1).map(async (target) => (await exists(target) ? undefined : target))))
+    const missing = (await Promise.all(targets.slice(1, 11).map(async (target) => (await exists(target) ? undefined : target))))
       .filter((target): target is string => Boolean(target));
     if (missing.length) throw new CliFailure(`resource ${resource.name} uses the earlier create-only event contract; review and restore its application-owned source before regeneration: ${missing.join(", ")}`);
     return [];
@@ -162,11 +165,12 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     tenant: resource.tenant,
     crud: resource.crud,
     fields: resource.fields,
+    webhookEvents,
     authorization: { read: readPermission, write: writePermission },
     pagination: resource.pagination,
     persistence: { table: n.snake, schema: path.relative(root, targets[4]!) },
     contracts: path.relative(root, targets[1]!),
-    files: (emitsChangeEvents ? targets : targets.slice(0, -1)).slice(1).map((target) => path.relative(root, target)),
+    files: [...targets.slice(1, 11), ...(emitsChangeEvents ? [targets[11]!] : []), ...(webhookEvents.length ? [targets[12]!] : [])].map((target) => path.relative(root, target)),
     registrations: [path.join(workerPath, "src", "index.ts"), path.join(appPath, "src", "main.tsx")],
     routes: resource.crud ? [
       { method: "GET", path: routePath, auth: true },
@@ -524,29 +528,72 @@ suite("${n.className} change-event atomicity", () => {
 `);
 
   if (!hasDefinition) {
+    const publicProjection = (kind: "created" | "updated" | "deleted") => {
+      if (!webhookEvents.includes(kind)) return "";
+      const hasRevision = kind !== "created";
+      const payload = hasRevision ? "{ resourceId: z.uuid(), revision: z.number().int().positive() }" : "{ resourceId: z.uuid() }";
+      const sample = `{ resourceId: "00000000-0000-4000-8000-000000000001"${hasRevision ? ", revision: 1" : ""} }`;
+      const projected = `{ resourceId: payload.resourceId${hasRevision ? ", revision: payload.revision" : ""} }`;
+      return `  webhook: {
+    type: "resource.${n.snake}.${kind}", version: 1,
+    description: "The ${n.className} resource was ${kind}.",
+    payload: z.object(${payload}).strict(),
+    project: (payload: { resourceId: string${hasRevision ? "; revision: number" : ""} }) => (${projected}),
+    sensitivity: { classification: "customer", retentionClass: "standard" },
+    examples: [${sample}],
+    fixtures: [{ internal: ${sample}, public: ${sample} }],
+  },
+`;
+    };
     const definitions = `export const ${eventSymbols[0]} = defineEvent({
   name: "${eventName}", schemaVersion: 1,
   description: "A ${n.className} resource was created.", sensitivity: "internal",
   payload: z.object({ resourceId: z.uuid() }),
   resource: { type: "${n.snake}", id: (payload: { resourceId: string }) => payload.resourceId },
+${publicProjection("created")}
 });
 export const ${eventSymbols[1]} = defineEvent({
   name: "${updatedEventName}", schemaVersion: 1,
   description: "A ${n.className} resource was updated.", sensitivity: "internal",
   payload: z.object({ resourceId: z.uuid(), revision: z.number().int().positive() }),
   resource: { type: "${n.snake}", id: (payload: { resourceId: string }) => payload.resourceId },
+${publicProjection("updated")}
 });
 export const ${eventSymbols[2]} = defineEvent({
   name: "${deletedEventName}", schemaVersion: 1,
   description: "A ${n.className} resource was deleted.", sensitivity: "internal",
   payload: z.object({ resourceId: z.uuid(), revision: z.number().int().positive() }),
   resource: { type: "${n.snake}", id: (payload: { resourceId: string }) => payload.resourceId },
+${publicProjection("deleted")}
 });\n`;
     const updatedCatalog = catalogSource
       .replace("// trestle:resource-event-definitions", `${definitions}// trestle:resource-event-definitions`)
       .replace("  // trestle:resource-event-list", `  ${eventSymbols.join(",\n  ")},\n  // trestle:resource-event-list`);
     await writeFile(catalogPath, updatedCatalog, "utf8");
   }
+
+  if (webhookEvents.length) await writeGenerated(targets[12]!, `import { describe, expect, it } from "vitest";
+import { applicationEventCatalog } from "../application-catalog.js";
+
+describe("${n.className} public webhook contract", () => {
+  const resourceId = "00000000-0000-4000-8000-000000000001";
+  const selected = ${JSON.stringify(webhookEvents)};
+
+  it("exposes only the explicitly selected, versioned events", () => {
+    expect(applicationEventCatalog.publicEvents()
+      .filter((event) => event.type.startsWith("resource.${n.snake}."))
+      .map((event) => [event.type, event.version]))
+      .toEqual(selected.map((kind) => ["resource.${n.snake}." + kind, 1]).sort((left, right) => String(left[0]).localeCompare(String(right[0]))));
+    for (const kind of ["created", "updated", "deleted"] as const) {
+      const payload = kind === "created" ? { resourceId } : { resourceId, revision: 1 };
+      const projection = applicationEventCatalog.project("resource.${n.snake}." + kind, 1, payload);
+      if (selected.includes(kind)) {
+        expect(projection).toMatchObject({ type: "resource.${n.snake}." + kind, version: 1, resource: { type: "${n.snake}", id: resourceId }, data: payload });
+      } else expect(projection).toBeNull();
+    }
+  });
+});
+`);
 
   await writeGenerated(targets[7]!, `import { describe, expect, it } from "vitest";
 import { ${n.camel}CreateSchema, ${n.camel}UpdateSchema } from "./${n.kebab}.js";

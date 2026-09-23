@@ -41,4 +41,12 @@ describe("SetupPlan", () => {
     ] }] };
     expect(() => parseSetupPlan(JSON.stringify(input))).toThrow(SetupPlanError);
   });
+
+  it("keeps resource events private unless public webhook exposure is selected", () => {
+    expect(parseSetupPlan(JSON.stringify(validPlan)).resources[0]?.webhookEvents).toEqual([]);
+    const input = { ...validPlan, resources: [{ name: "Article", tenant: true, crud: true, webhookEvents: ["created", "updated"] }] };
+    expect(parseSetupPlan(JSON.stringify(input)).resources[0]?.webhookEvents).toEqual(["created", "updated"]);
+    const duplicate = { ...input, resources: [{ ...input.resources[0], webhookEvents: ["created", "created"] }] };
+    expect(() => parseSetupPlan(JSON.stringify(duplicate))).toThrow(SetupPlanError);
+  });
 });
