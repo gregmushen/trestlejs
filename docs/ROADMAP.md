@@ -56,7 +56,9 @@ beta is complete before the evidence gates pass.
   support behind capability flags.
 - [ ] Connect the Worker mutation path to the transactional outbox and wire
   the Queue consumer to the event registry.
-- [ ] Add PostgreSQL-backed artifact metadata, retention, and cleanup.
+- [ ] Add PostgreSQL-backed artifact metadata, retention, and cleanup. Alpha 34
+  adds bounded scheduled cleanup for incomplete R2 uploads; ready-object
+  retention policy and deleted-object audit/reconciliation remain.
 - [ ] Align Drizzle snapshots and make migration generation idempotent.
 - [ ] Add protected Resend/Stripe test-mode integration tests and staging
   recipient protection.
@@ -254,7 +256,8 @@ Remaining Alpha 8 release work is provider wiring and operational hardening:
   outbox append, and connect the Worker Queue consumer to the event registry;
 - persist artifact metadata through the PostgreSQL repository in the R2 path;
 - align Drizzle snapshots with the checked-in asynchronous migrations; and
-- add protected provider integration tests and retention/cleanup jobs.
+- add protected provider integration tests and ready-object retention and
+  reconciliation jobs. Alpha 34 schedules incomplete-upload recovery.
 
 - Versioned domain-event and message-envelope registries.
 - Transactional outbox with leasing, retry, recovery, and retention.

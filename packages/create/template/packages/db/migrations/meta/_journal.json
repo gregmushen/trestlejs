@@ -68,50 +68,71 @@
     {
       "idx": 9,
       "version": "7",
-      "when": 1790380800000,
-      "tag": "0009_access_control",
+      "when": 1790294400001,
+      "tag": "0009_lowly_sentinels",
       "breakpoints": true
     },
     {
       "idx": 10,
       "version": "7",
-      "when": 1790467200000,
-      "tag": "0010_operational_projections",
+      "when": 1790294400002,
+      "tag": "0010_sweet_wong",
       "breakpoints": true
     },
     {
       "idx": 11,
       "version": "7",
-      "when": 1790553600000,
-      "tag": "0011_admin_additions",
+      "when": 1790294400003,
+      "tag": "0011_dry_rage",
       "breakpoints": true
     },
     {
       "idx": 12,
       "version": "7",
-      "when": 1790640000000,
-      "tag": "0012_authentication_assurance",
+      "when": 1790380800000,
+      "tag": "0012_access_control",
       "breakpoints": true
     },
     {
       "idx": 13,
       "version": "7",
-      "when": 1790726400000,
-      "tag": "0013_identity_providers",
+      "when": 1790467200000,
+      "tag": "0013_operational_projections",
       "breakpoints": true
     },
     {
       "idx": 14,
       "version": "7",
-      "when": 1790812800000,
-      "tag": "0014_admin_workflows",
+      "when": 1790553600000,
+      "tag": "0014_admin_additions",
       "breakpoints": true
     },
     {
       "idx": 15,
       "version": "7",
+      "when": 1790640000000,
+      "tag": "0015_authentication_assurance",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790726400000,
+      "tag": "0016_identity_providers",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790812800000,
+      "tag": "0017_admin_workflows",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
       "when": 1790899200000,
-      "tag": "0015_reconcile_authority",
+      "tag": "0018_reconcile_authority",
       "breakpoints": true
     }
   ]
