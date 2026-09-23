@@ -284,6 +284,7 @@ trestle architecture check          enforce static application boundaries
 trestle upgrade plan                preview an application-preserving upgrade
 trestle upgrade apply --yes         update metadata only after source-version review
 trestle upgrade diff                inventory target-template source changes
+trestle upgrade migrations          compare journal order and SQL identities without writes
 trestle upgrade source-apply --yes  apply pristine adjacent-alpha source only
 trestle upgrade source-finalize --yes  run local checks and certify source parity
 trestle resource add-field ...      add an optional field and tracked migration
@@ -312,6 +313,13 @@ Freshly generated projects record checksums of their generated files in
 with the target template without changing them. Older projects without a
 matching baseline receive an unverified inventory rather than an automatic
 overwrite recommendation.
+`trestle upgrade migrations` compares the application's journal and SQL files
+with the bundled target template. It identifies the first divergent index,
+missing or unjournaled files, and appended histories without changing either
+chain. `--check` exits unsuccessfully for any difference. A matching audit is
+not proof that migrations were applied in a deployed
+database; a divergence requires an isolated replay and schema review, never a
+journal overwrite.
 
 ## Repository packages
 

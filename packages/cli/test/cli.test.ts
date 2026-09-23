@@ -102,6 +102,17 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toBe("");
   });
 
+  it("fails closed when a project has no migration journal and emits structured audit evidence", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["upgrade", "migrations", "--json"], output.runtime)).toBe(1);
+    const document = JSON.parse(output.stdout()) as { schemaVersion: number; data: { classification: string; requiresReview: boolean; issues: string[] } };
+    expect(document.schemaVersion).toBe(1);
+    expect(document.data.classification).toBe("invalid");
+    expect(document.data.requiresReview).toBe(true);
+    expect(document.data.issues[0]).toContain("application:");
+  });
+
   it("reports environment capability intent without claiming provider verification", async () => {
     const root = await fixture();
     const output = capture(root);
