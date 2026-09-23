@@ -36,6 +36,13 @@ To run it locally, migrate an isolated local database, install Chromium with
 The test starts its own Worker and app on ports 8787 and 42069; it refuses to
 reuse an unrelated service already listening on either port. It is separate
 from `pnpm check` because it requires a real browser and database.
+The same browser suite also loads the Astro site and follows its sign-in and
+pricing links into the hydrated React application. Preview, staging, and
+production deploy workflows run `pnpm test:deployed` against their actual
+HTTPS URLs after the existing HTTP smoke gate. The deployed browser test is
+read-only and checks public navigation, API access from the app origin, and
+an application deep link; it does not claim to verify deployed sign-up or
+provider email delivery, which remain separate beta gates.
 
 ```yaml
 BETTER_AUTH_SECRET: <randomly generated>
