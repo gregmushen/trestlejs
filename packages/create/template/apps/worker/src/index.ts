@@ -11,6 +11,7 @@ import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBilling
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
 import { maintainArtifacts } from "./artifact-maintenance.js";
+import { auditArtifactReferences } from "./artifact-reference-audit.js";
 import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
@@ -494,15 +495,26 @@ export default {
       createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.native.recovery.completed", result);
       if (result.failed > 0) throw new Error("Native webhook recovery left incomplete work");
     }
+    let artifactUnresolved = false;
     if (environment.TRESTLE_ARTIFACTS) {
-      const result = await maintainArtifacts(environment);
-      createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.maintenance.completed", result);
-      if (result.failed > 0) throw new Error("Artifact maintenance left incomplete cleanup work");
+      try {
+        const result = await maintainArtifacts(environment);
+        createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.maintenance.completed", result);
+        const audit = await auditArtifactReferences(environment, (item) => {
+          createLogger({ environment: environment.APP_ENV ?? "local" }).error(`artifact.reference.${item.reason}`, item);
+        });
+        createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.reference.audit.completed", audit);
+        artifactUnresolved = result.failed > 0 || audit.missing > 0 || audit.mismatched > 0 || audit.failed > 0;
+      } catch {
+        artifactUnresolved = true;
+        createLogger({ environment: environment.APP_ENV ?? "local" }).error("artifact.maintenance.unavailable");
+      }
     }
     if (environment.WEBHOOK_DELIVERY_MODE === "local" || environment.WEBHOOK_DELIVERY_MODE === "native") {
       const result = await maintainWebhookPayloads(environment);
       createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.retention.completed", result);
       if (result.failed > 0) throw new Error("Webhook retention left incomplete cleanup work");
     }
+    if (artifactUnresolved) throw new Error("Artifact maintenance or reference audit found unresolved work");
   },
 };

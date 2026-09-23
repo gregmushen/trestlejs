@@ -1,10 +1,11 @@
 import { PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
-import { artifactMetadata, createDatabase, eventInbox, organization, organizationEntitlement, organizationSubscription, outboxMessage, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { artifactMetadata, createDatabase, createTenantDatabase, eventInbox, organization, organizationEntitlement, organizationSubscription, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { TrestleWorkflow } from "./cloudflare-workflow.js";
+import { runArtifactReferenceAudit } from "./artifact-reference-audit.js";
 import worker, { app } from "./index.js";
 
 const databaseUrl = process.env.TRESTLE_SYSTEM_TEST_DATABASE_URL;
@@ -97,6 +98,7 @@ suite("local product path", () => {
       const r2Environment = { ...environment, TRESTLE_ARTIFACTS: {
         put: async (key: string, body: Uint8Array) => { r2Objects.set(key, body.slice()); },
         get: async (key: string) => { const body = r2Objects.get(key); return body ? { size: body.byteLength, arrayBuffer: async () => body.slice().buffer } : null; },
+        head: async (key: string) => { const body = r2Objects.get(key); if (!body) return null; const [owner, artifactId] = key.split("/"); return { size: body.byteLength, httpMetadata: { contentType: "text/plain" }, customMetadata: { organizationId: owner!, artifactId: artifactId! } }; },
         delete: async (key: string) => { r2Objects.delete(key); },
       } };
       const r2Upload = await app.request("http://localhost:8787/api/artifacts", {
@@ -109,6 +111,14 @@ suite("local product path", () => {
       expect(persistedArtifact).toMatchObject({ organizationId, contentType: "text/plain" });
       expect(persistedArtifact.storageKey).toMatch(new RegExp(`^${organizationId}/${r2ArtifactId}/[0-9a-f-]{36}/${r2ArtifactId}$`));
       expect(r2Objects.has(persistedArtifact.storageKey)).toBe(true);
+      const findings: unknown[] = [];
+      expect(await runArtifactReferenceAudit(
+        [{ id: r2ArtifactId, organizationId: organizationId! }],
+        (tenantId, id) => new PostgresArtifactMetadataRepository(createTenantDatabase(databaseUrl!, "postgres-js", tenantId)).get(tenantId, id),
+        (key) => r2Environment.TRESTLE_ARTIFACTS.head(key),
+        (item) => findings.push(item),
+      )).toEqual({ selected: 1, checked: 1, skipped: 0, missing: 0, mismatched: 0, failed: 0 });
+      expect(findings).toEqual([]);
       const r2Access = await app.request(`http://localhost:8787/api/artifacts/${r2ArtifactId}/access`, { headers: artifactHeaders }, r2Environment);
       expect(r2Access.status).toBe(200);
       const r2Url = (await r2Access.json() as { url: string }).url;

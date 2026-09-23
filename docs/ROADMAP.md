@@ -59,8 +59,9 @@ beta is complete before the evidence gates pass.
 - [ ] Add PostgreSQL-backed artifact metadata, retention, and cleanup. Alpha 34
   adds bounded scheduled cleanup for incomplete R2 uploads. Alpha 61 makes
   requested deletion fail closed and durably retries failed R2 cleanup;
-  ready-object retention policy and independent deleted-object
-  audit/reconciliation remain.
+  Alpha 63 audits ready PostgreSQL references against R2 metadata in bounded,
+  tenant-scoped pages. Ready-object retention, orphan R2 object detection,
+  and restore-time provider verification remain.
 - [ ] Align Drizzle snapshots and make migration generation idempotent.
 - [ ] Add protected Resend/Stripe test-mode integration tests and staging
   recipient protection.
@@ -454,6 +455,13 @@ database checks pass. Missing two-tenant adversarial RLS evidence also fails.
 The CLI independently requires every expected check, successful isolated
 cleanup, and the declared RTO before reporting a verified restore. This does
 not yet supply provider-backed R2 reference verification or a retention policy.
+Alpha 63 adds a bounded scheduled R2 reference audit. It pages organizations
+through the maintenance role, reloads each ready artifact under tenant RLS,
+and uses metadata-only R2 HEAD checks to detect missing objects, size/type
+drift, and owner/ID metadata mismatches. Confirmed issues fail the scheduled
+run and emit safe semantic logs; no objects or metadata are deleted. This is
+not orphan-object detection, a ready-object retention policy, or proof that
+an isolated database restore can access the correct provider bucket.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
