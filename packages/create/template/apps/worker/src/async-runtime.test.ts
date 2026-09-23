@@ -1,7 +1,7 @@
-import { eventEnvelopeSchema, InMemoryEventInbox } from "@__TRESTLE_PROJECT_NAME__/events";
+import { eventEnvelopeSchema, InMemoryEventInbox, LocalWorkflowScheduler } from "@__TRESTLE_PROJECT_NAME__/events";
 import { describe, expect, it } from "vitest";
 
-import { createQueueConsumer, EventConsumerRegistry } from "./async-runtime.js";
+import { createQueueConsumer, createWorkflowQueueConsumer, EventConsumerRegistry, handleEventWithInbox } from "./async-runtime.js";
 
 const envelope = () => eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "article.published", schemaVersion: 1, occurredAt: new Date().toISOString(), resource: { type: "article", id: "article-1" }, correlationId: "correlation-1", idempotencyKey: "article-1:published", payload: { title: "Hello" } });
 
@@ -24,4 +24,42 @@ describe("Worker Queue consumer", () => {
     expect(states).toEqual(["retry", "ack", "ack"]);
   });
   it("rejects duplicate consumer registrations", () => { const registry = new EventConsumerRegistry(); const definition = { name: "article.published", schemaVersion: 1, parse: (payload: unknown) => payload }; registry.register(definition, async () => undefined); expect(() => registry.register(definition, async () => undefined)).toThrow("already registered"); });
+
+  it("hands a Queue event to one stable Workflow instance and retries its handler deterministically", async () => {
+    const now = new Date("2026-09-22T00:00:00Z");
+    const clock = { current: now, now() { return this.current; } };
+    const workflows = new LocalWorkflowScheduler(clock);
+    const registry = new EventConsumerRegistry();
+    const inbox = new InMemoryEventInbox(clock);
+    let attempts = 0;
+    registry.register({ name: "article.published", schemaVersion: 1, parse: (payload) => payload }, async () => { attempts += 1; if (attempts === 1) throw new Error("temporary"); });
+    const event = envelope();
+    const binding = {
+      create: async ({ id, params }: { id: string; params: typeof event }) => { if (workflows.list().some((job) => job.id === id)) throw new Error("duplicate instance"); workflows.schedule(params, now); return { id }; },
+      get: async (id: string) => { if (!workflows.list().some((job) => job.id === id)) throw new Error("not found"); return { id }; },
+    };
+    const acknowledgements: string[] = [];
+    const batch = { messages: [{ body: event, ack: () => acknowledgements.push("ack"), retry: () => acknowledgements.push("retry") }] };
+    const consumer = createWorkflowQueueConsumer(registry, binding);
+    expect(await consumer(batch)).toEqual({ acknowledged: 1, retried: 0 });
+    expect(await consumer(batch)).toEqual({ acknowledged: 1, retried: 0 });
+    expect(workflows.list()).toHaveLength(1);
+    expect(workflows.list()[0]?.id).toBe(event.id);
+    expect(await workflows.runDue(async (message) => await handleEventWithInbox(registry, inbox, message, {}), { retryDelayMs: 1_000 })).toBe(0);
+    expect(workflows.list()[0]).toMatchObject({ status: "scheduled", attempts: 1 });
+    clock.current = new Date(now.getTime() + 1_000);
+    expect(await workflows.runDue(async (message) => await handleEventWithInbox(registry, inbox, message, {}))).toBe(1);
+    expect(workflows.list()[0]).toMatchObject({ status: "succeeded", attempts: 2 });
+    expect(attempts).toBe(2);
+    expect(acknowledgements).toEqual(["ack", "ack"]);
+  });
+
+  it("retries Queue delivery when Workflow creation and lookup both fail", async () => {
+    const registry = new EventConsumerRegistry();
+    registry.register({ name: "article.published", schemaVersion: 1, parse: (payload) => payload }, async () => undefined);
+    const states: string[] = [];
+    const consumer = createWorkflowQueueConsumer(registry, { create: async () => { throw new Error("provider unavailable"); }, get: async () => { throw new Error("not found"); } });
+    expect(await consumer({ messages: [{ body: envelope(), ack: () => states.push("ack"), retry: () => states.push("retry") }] })).toEqual({ acknowledged: 0, retried: 1 });
+    expect(states).toEqual(["retry"]);
+  });
 });

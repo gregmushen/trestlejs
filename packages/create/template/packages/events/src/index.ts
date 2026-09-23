@@ -64,7 +64,30 @@ export class LocalWorkflowScheduler {
   private readonly jobs = new Map<string, WorkflowJob>();
   constructor(private readonly clock: OutboxClock = { now: () => new Date() }) {}
   schedule(message: EventEnvelope, runAt: Date): WorkflowJob { const existing = [...this.jobs.values()].find((job) => job.message.idempotencyKey === message.idempotencyKey); if (existing) return existing; const job = { id: message.id, runAt, message, status: "scheduled" as const, attempts: 0 }; this.jobs.set(job.id, job); return job; }
-  async runDue(handler: (message: EventEnvelope) => Promise<void>, options: { maxAttempts?: number; retryDelayMs?: number } = {}): Promise<number> { const maxAttempts = options.maxAttempts ?? 5; const retryDelayMs = options.retryDelayMs ?? 1_000; let completed = 0; for (const job of this.jobs.values()) { if (!["scheduled", "failed"].includes(job.status) || job.runAt > this.clock.now()) continue; job.status = "running"; job.attempts += 1; try { await handler(job.message); job.status = "succeeded"; completed += 1; } catch (error) { job.lastError = error instanceof Error ? error.message : String(error); if (job.attempts >= maxAttempts) job.status = "failed"; else { job.status = "scheduled"; job.runAt = new Date(this.clock.now().getTime() + 2 ** (job.attempts - 1) * retryDelayMs); } } } return completed; }
+  async runDue(handler: (message: EventEnvelope) => Promise<void>, options: { maxAttempts?: number; retryDelayMs?: number } = {}): Promise<number> {
+    const maxAttempts = options.maxAttempts ?? 5;
+    const retryDelayMs = options.retryDelayMs ?? 1_000;
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || !Number.isInteger(retryDelayMs) || retryDelayMs < 0) throw new Error("Invalid workflow retry policy");
+    let completed = 0;
+    for (const job of this.jobs.values()) {
+      if (job.status !== "scheduled" || job.runAt > this.clock.now()) continue;
+      job.status = "running";
+      job.attempts += 1;
+      try {
+        await handler(job.message);
+        job.status = "succeeded";
+        completed += 1;
+      } catch (error) {
+        job.lastError = error instanceof Error ? error.name : "Error";
+        if (job.attempts >= maxAttempts) job.status = "failed";
+        else {
+          job.status = "scheduled";
+          job.runAt = new Date(this.clock.now().getTime() + 2 ** (job.attempts - 1) * retryDelayMs);
+        }
+      }
+    }
+    return completed;
+  }
   list(): WorkflowJob[] { return [...this.jobs.values()].map((job) => ({ ...job, message: { ...job.message } })); }
 }
 

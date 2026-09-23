@@ -16,7 +16,19 @@ describe("Alpha 8 asynchronous execution spine", () => {
   it("backs off failures, dead-letters after the limit, and redrives explicitly", () => { const outbox = new InMemoryOutbox(clock); const entry = outbox.append(message("outbox-2")); for (let attempt = 1; attempt <= 3; attempt += 1) { outbox.lease(); outbox.fail(entry.id, new Error(`failure-${attempt}`), 3); clock.current = new Date(clock.current.getTime() + 2 ** (attempt - 1) * 1_000); } expect(outbox.list()[0]).toMatchObject({ status: "dead", attempts: 3, lastError: "failure-3" }); expect(outbox.redrive(entry.id).status).toBe("pending"); });
   it("delivers each queue idempotency key once", async () => { const queue = new InMemoryQueue(); expect(await queue.send(message("queue-1"))).toBe(true); expect(await queue.send(message("queue-1"))).toBe(false); const handled: string[] = []; expect(await queue.drain(async (event) => { handled.push(event.idempotencyKey); })).toBe(1); expect(handled).toEqual(["queue-1"]); });
   it("does not run scheduled workflows before their deterministic clock time", async () => { const scheduler = new LocalWorkflowScheduler(clock); const job = scheduler.schedule(message("workflow-1"), new Date(now.getTime() + 60_000)); expect(await scheduler.runDue(async () => undefined)).toBe(0); clock.current = new Date(now.getTime() + 60_000); expect(await scheduler.runDue(async (event) => { expect(event.idempotencyKey).toBe("workflow-1"); })).toBe(1); expect(scheduler.list()[0]).toMatchObject({ id: job.id, status: "succeeded", attempts: 1 }); });
-  it("retries failed workflows deterministically", async () => { const retryClock = { current: now, now() { return this.current; } }; const scheduler = new LocalWorkflowScheduler(retryClock); scheduler.schedule(message("workflow-retry"), now); let calls = 0; expect(await scheduler.runDue(async () => { calls += 1; throw new Error("temporary"); }, { retryDelayMs: 1_000 })).toBe(0); expect(scheduler.list()[0]).toMatchObject({ status: "scheduled", attempts: 1, lastError: "temporary" }); expect(await scheduler.runDue(async () => undefined)).toBe(0); retryClock.current = new Date(now.getTime() + 1_000); expect(await scheduler.runDue(async () => undefined)).toBe(1); expect(calls).toBe(1); });
+  it("retries failed workflows deterministically", async () => { const retryClock = { current: now, now() { return this.current; } }; const scheduler = new LocalWorkflowScheduler(retryClock); scheduler.schedule(message("workflow-retry"), now); let calls = 0; expect(await scheduler.runDue(async () => { calls += 1; throw new Error("temporary"); }, { retryDelayMs: 1_000 })).toBe(0); expect(scheduler.list()[0]).toMatchObject({ status: "scheduled", attempts: 1, lastError: "Error" }); expect(await scheduler.runDue(async () => undefined)).toBe(0); retryClock.current = new Date(now.getTime() + 1_000); expect(await scheduler.runDue(async () => undefined)).toBe(1); expect(calls).toBe(1); });
+  it("does not rerun terminal failures or persist sensitive error messages", async () => {
+    const retryClock = { current: now, now() { return this.current; } };
+    const scheduler = new LocalWorkflowScheduler(retryClock);
+    scheduler.schedule(message("workflow-terminal"), now);
+    let calls = 0;
+    await scheduler.runDue(async () => { calls += 1; throw new Error("sk_sensitive-provider-key"); }, { maxAttempts: 1 });
+    expect(scheduler.list()[0]).toMatchObject({ status: "failed", attempts: 1, lastError: "Error" });
+    retryClock.current = new Date(now.getTime() + 86_400_000);
+    expect(await scheduler.runDue(async () => { calls += 1; })).toBe(0);
+    expect(calls).toBe(1);
+    expect(JSON.stringify(scheduler.list())).not.toContain("sk_sensitive-provider-key");
+  });
   it("dispatches leased outbox messages and records publisher failures", async () => {
     const leased = [{ ...new InMemoryOutbox(clock).append(message("dispatch-1")), status: "leased" as const }]; const succeeded: string[] = []; const failed: string[] = [];
     const store = { lease: async () => leased, succeed: async (id: string) => { succeeded.push(id); }, fail: async (id: string) => { failed.push(id); } } as unknown as OutboxStore;

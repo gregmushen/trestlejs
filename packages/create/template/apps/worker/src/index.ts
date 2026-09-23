@@ -9,7 +9,7 @@ import { billingProviderEvent, createDatabase, emailDeliveryEvent, PostgresEvent
 import type { CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
-import { createQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type QueueBatch } from "./async-runtime.js";
+import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
 import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
@@ -187,6 +187,7 @@ app.get("/api/health/operational", (context) => context.json({
     email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && configuredValue(context.env.EMAIL_FROM)), stagingProtected: !["preview", "staging"].includes(context.env.APP_ENV ?? "local") || configuredValue(context.env.EMAIL_STAGING_REDIRECT) },
     billing: { mode: context.env.STRIPE_MODE ?? "local", configured: (context.env.STRIPE_MODE ?? "local") === "local" || Boolean(context.env.STRIPE_SECRET_KEY && context.env.STRIPE_WEBHOOK_SECRET && configuredValue(context.env.STRIPE_PUBLISHABLE_KEY) && configuredPrices(context.env.STRIPE_PRICES) && configuredValue(context.env.BILLING_RETURN_URL)), plans: Object.keys(plans).length },
     artifacts: { configured: artifactRuntimeReady(context.env), mode: context.env.TRESTLE_ARTIFACTS ? "r2" : context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" : "unavailable" },
+    workflows: { enabled: (context.env as WorkerEnvironment).TRESTLE_WORKFLOWS_ENABLED === "true", configured: Boolean((context.env as WorkerEnvironment).TRESTLE_WORKFLOW) },
   },
 }));
 
@@ -261,10 +262,14 @@ app.onError((error, context) => {
   return context.json({ error: mapped.code, message: mapped.message, retryable: mapped.retryable }, mapped.status);
 });
 
-type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBinding };
+type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBinding; TRESTLE_WORKFLOW?: CloudflareWorkflowBinding; TRESTLE_WORKFLOWS_ENABLED?: string };
 export default {
   fetch: app.fetch.bind(app),
-  queue: async (batch: QueueBatch, environment: AuthEnvironment) => {
+  queue: async (batch: QueueBatch, environment: WorkerEnvironment) => {
+    if (environment.TRESTLE_WORKFLOWS_ENABLED === "true") {
+      if (!environment.TRESTLE_WORKFLOW) throw new Error("Enabled Workflows require the TRESTLE_WORKFLOW binding");
+      return await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW)(batch);
+    }
     const inbox = new PostgresEventInbox(environment.DATABASE_URL, { assumeApplicationRole: true });
     try { return await createQueueConsumer(eventConsumers, inbox)(batch, environment); }
     finally { await inbox.close(); }

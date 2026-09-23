@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "__TRESTLE_PROJECT_NAME__-worker",
-  "main": "src/index.ts",
+  "main": "src/worker-entry.ts",
   "compatibility_date": "2026-09-21",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {

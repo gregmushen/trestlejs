@@ -28,19 +28,41 @@ export class EventConsumerRegistry<Environment = unknown> {
   }
 }
 
+export type CloudflareWorkflowBinding = {
+  create(options: { id: string; params: EventEnvelope }): Promise<{ id: string }>;
+  get(id: string): Promise<unknown>;
+};
+
+export async function handleEventWithInbox<Environment>(registry: EventConsumerRegistry<Environment>, inbox: EventInboxStore, envelope: EventEnvelope, environment: Environment): Promise<void> {
+  registry.validate(envelope);
+  const claim = await inbox.claim(envelope);
+  if (claim.state === "completed") return;
+  if (claim.state === "busy") throw new Error("Inbox event is already being processed");
+  try {
+    await registry.handle(envelope, environment);
+    await inbox.complete(envelope.idempotencyKey, claim.token);
+  } catch (error) {
+    await inbox.release(envelope.idempotencyKey, claim.token, error);
+    throw error;
+  }
+}
+
 export function createQueueConsumer<Environment>(registry: EventConsumerRegistry<Environment>, inbox: EventInboxStore) {
   return async (batch: QueueBatch, environment: Environment): Promise<{ acknowledged: number; retried: number }> =>
+    await processQueueBatch(batch.messages, async (envelope) => await handleEventWithInbox(registry, inbox, envelope, environment));
+}
+
+export function createWorkflowQueueConsumer<Environment>(registry: EventConsumerRegistry<Environment>, binding: CloudflareWorkflowBinding) {
+  return async (batch: QueueBatch): Promise<{ acknowledged: number; retried: number }> =>
     await processQueueBatch(batch.messages, async (envelope) => {
       registry.validate(envelope);
-      const claim = await inbox.claim(envelope);
-      if (claim.state === "completed") return;
-      if (claim.state === "busy") throw new Error("Inbox event is already being processed");
       try {
-        await registry.handle(envelope, environment);
-        await inbox.complete(envelope.idempotencyKey, claim.token);
+        await binding.create({ id: envelope.id, params: envelope });
       } catch (error) {
-        await inbox.release(envelope.idempotencyKey, claim.token, error);
-        throw error;
+        // A Queue delivery can be repeated after Workflow creation succeeds.
+        // Only an existing instance with the same stable ID is safe to acknowledge.
+        try { if (!await binding.get(envelope.id)) throw error; }
+        catch { throw error; }
       }
     });
 }
