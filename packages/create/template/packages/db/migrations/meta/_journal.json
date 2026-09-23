@@ -183,6 +183,13 @@
       "when": 1790294400017,
       "tag": "0025_goofy_maelstrom",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790294400018,
+      "tag": "0026_fast_psylocke",
+      "breakpoints": true
     }
   ]
 }

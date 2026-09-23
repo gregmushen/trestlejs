@@ -61,3 +61,10 @@ export async function adminPost<T>(path: string, body: Record<string, unknown>):
   return payload as T;
 }
 export type PlatformApiKey = { id: string; organizationId: string; serviceAccountId: string; serviceAccountName: string; name: string; environment: string; displayPrefix: string; scopes: string[]; expiresAt: string | null; createdAt: string; rotatedFrom: string | null; revokedAt: string | null; revocationReason: string | null };
+export type SupportSessionRecord = { id: string; organizationId: string; operatorId: string; reason: string; startedAt: string; expiresAt: string; endedAt: string | null; endedBy: string | null };
+export type SupportOrganization = {
+  organization: { id: string; name: string; slug: string | null; createdAt: string } | null;
+  members: Array<{ userId: string; role: string; name: string; email: string; joinedAt: string }>;
+  subscription: { plan: string; planVersion: number; status: string; currentPeriodEnd: string | null } | null;
+  recentAudit: Array<{ name: string; occurredAt: string; actorType: string; outcome: string; correlationId: string }>;
+};

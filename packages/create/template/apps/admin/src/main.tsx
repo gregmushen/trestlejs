@@ -11,10 +11,11 @@ import { HealthView } from "./views/health";
 import { MachineAccessView } from "./views/machine-access";
 import { OverviewView } from "./views/overview";
 import { SubscriptionsView } from "./views/subscriptions";
+import { SupportView } from "./views/support";
 import { WebhooksView } from "./views/webhooks";
 import "./styles.css";
 
-const viewComponents: Record<string, () => ReactNode> = { overview: OverviewView, health: HealthView, async: AsyncView, webhooks: WebhooksView, subscriptions: SubscriptionsView, "machine-access": MachineAccessView, artifacts: ArtifactsView };
+const viewComponents: Record<string, () => ReactNode> = { overview: OverviewView, health: HealthView, async: AsyncView, webhooks: WebhooksView, support: SupportView, subscriptions: SubscriptionsView, "machine-access": MachineAccessView, artifacts: ArtifactsView };
 
 function useAdminSession() {
   return useQuery({ queryKey: ["admin-session"], retry: false, queryFn: () => adminApi<AdminSession>("/api/admin/session") });

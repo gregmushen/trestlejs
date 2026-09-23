@@ -41,6 +41,7 @@ export const permissions = definePermissions({
   "platform.entitlements.manage": { plane: "platform", description: "Grant and revoke entitlement overrides" },
   "platform.machine_access.read": { plane: "platform", description: "List service accounts and API key metadata across organizations" },
   "platform.api_keys.revoke": { plane: "platform", description: "Revoke an organization's API key, for example after a leak" },
+  "platform.support_sessions.use": { plane: "platform", description: "Start, use, and end audited, time-boxed, read-only support sessions in one organization" },
 });
 
 export type PermissionCode = (typeof permissions.codes)[number];
