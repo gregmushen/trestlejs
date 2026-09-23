@@ -58,6 +58,9 @@ jobs:
       - name: Build and test
         run: pnpm check
 
+      - name: Install browser test runtime
+        run: npx --yes playwright@1.63.0 install --with-deps --only-shell chromium
+
       - name: Exercise a clean generated project
         run: pnpm check:generated
         env:
