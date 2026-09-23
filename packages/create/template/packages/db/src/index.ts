@@ -31,6 +31,7 @@ export * from "./webhook-projection.js";
 export * from "./webhook-attempt-schema.js";
 export * from "./webhook-local.js";
 export * from "./webhook-claims.js";
+export * from "./webhook-settlement.js";
 export * from "./webhook-secret-schema.js";
 export * from "./webhook-secrets.js";
 export * from "./outbox.js";

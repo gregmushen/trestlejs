@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { createTenantDatabase } from "./index.js";
 import { claimNativeWebhookDelivery } from "./webhook-claims.js";
+import { settleNativeWebhookAttempt } from "./webhook-settlement.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -28,6 +29,7 @@ async function fixture(organizationId: string, options: { provider?: "native" | 
 
 suite("native webhook delivery leases", () => {
   afterAll(async () => {
+    if (deliveryIds.length) await sql!`delete from webhook_attempt where delivery_id = any(${deliveryIds})`;
     if (deliveryIds.length) await sql!`delete from webhook_delivery where id = any(${deliveryIds})`;
     if (messageIds.length) await sql!`delete from webhook_message where id = any(${messageIds})`;
     if (endpointIds.length) await sql!`delete from webhook_endpoint where id = any(${endpointIds})`;
@@ -79,5 +81,68 @@ suite("native webhook delivery leases", () => {
     await expect(claimNativeWebhookDelivery({ ...base, clock: { now: () => new Date("invalid") } })).rejects.toThrow("clock");
     await expect(sql!`update webhook_delivery set state='leased' where id=${deliveryId}`).rejects.toThrow();
     expect((await sql!`select relforcerowsecurity from pg_class where relname='webhook_delivery'`)[0]?.relforcerowsecurity).toBe(true);
+  });
+
+  it("records success atomically without retaining native request bodies or signatures", async () => {
+    const { deliveryId } = await fixture("settle-success");
+    const claim = await claimNativeWebhookDelivery({ organizationId: "settle-success", deliveryId, tenantDatabase, clock: { now: () => initialTime } });
+    if (claim.state !== "leased") throw new Error("Expected lease");
+    const input = { organizationId: "settle-success", deliveryId, leaseToken: claim.leaseToken, tenantDatabase, clock: { now: () => new Date(initialTime.getTime() + 250) }, result: { kind: "response" as const, status: 204 }, durationMs: 250 };
+    expect(await settleNativeWebhookAttempt(input)).toEqual({ state: "succeeded", attemptId: `${deliveryId}.1`, attemptNumber: 1, nextRetryAt: null });
+    expect(await settleNativeWebhookAttempt(input)).toEqual({ state: "stale" });
+    expect((await sql!`select state, attempt_count, lease_token, leased_until, next_attempt_at, completed_at from webhook_delivery where id=${deliveryId}`)[0]).toMatchObject({ state: "succeeded", attempt_count: 1, lease_token: null, leased_until: null, next_attempt_at: null, completed_at: new Date(initialTime.getTime() + 250) });
+    expect((await sql!`select kind, request_url, request_headers, request_body, simulated_status, response_status, result_category, outcome, duration_ms from webhook_attempt where delivery_id=${deliveryId}`)[0]).toEqual({ kind: "native", request_url: null, request_headers: {}, request_body: null, simulated_status: null, response_status: 204, result_category: "http", outcome: "succeeded", duration_ms: 250 });
+  });
+
+  it("retries non-2xx without redirects and treats 410 as terminal", async () => {
+    const { deliveryId } = await fixture("settle-retry");
+    const first = await claimNativeWebhookDelivery({ organizationId: "settle-retry", deliveryId, tenantDatabase, clock: { now: () => initialTime } });
+    if (first.state !== "leased") throw new Error("Expected lease");
+    const now = new Date(initialTime.getTime() + 100);
+    const retried = await settleNativeWebhookAttempt({ organizationId: "settle-retry", deliveryId, leaseToken: first.leaseToken, tenantDatabase, clock: { now: () => now }, result: { kind: "response", status: 302 }, durationMs: 100 });
+    expect(retried).toMatchObject({ state: "retry", attemptNumber: 1 });
+    if (retried.state !== "retry" || !retried.nextRetryAt) throw new Error("Expected retry time");
+    expect(retried.nextRetryAt.getTime() - now.getTime()).toBeGreaterThanOrEqual(27_000);
+    expect(retried.nextRetryAt.getTime() - now.getTime()).toBeLessThanOrEqual(33_000);
+    expect(await claimNativeWebhookDelivery({ organizationId: "settle-retry", deliveryId, tenantDatabase, clock: { now: () => now } })).toEqual({ state: "not_due" });
+    const second = await claimNativeWebhookDelivery({ organizationId: "settle-retry", deliveryId, tenantDatabase, clock: { now: () => retried.nextRetryAt! } });
+    if (second.state !== "leased") throw new Error("Expected second lease");
+    expect(second.attemptNumber).toBe(2);
+    expect(await settleNativeWebhookAttempt({ organizationId: "settle-retry", deliveryId, leaseToken: second.leaseToken, tenantDatabase, clock: { now: () => new Date(retried.nextRetryAt!.getTime() + 1) }, result: { kind: "response", status: 410 }, durationMs: 1 })).toMatchObject({ state: "dead", attemptNumber: 2, nextRetryAt: null });
+    expect((await sql!`select state, terminal_reason from webhook_delivery where id=${deliveryId}`)[0]).toEqual({ state: "dead", terminal_reason: "http_410" });
+    expect((await sql!`select response_status, outcome from webhook_attempt where delivery_id=${deliveryId} order by attempt_number`)).toEqual([{ response_status: 302, outcome: "retry" }, { response_status: 410, outcome: "dead" }]);
+  });
+
+  it("exhausts bounded failures and refuses a stale or cross-tenant settlement", async () => {
+    const { deliveryId } = await fixture("settle-exhausted");
+    const base = { organizationId: "settle-exhausted", deliveryId, tenantDatabase, maxAttempts: 2 };
+    const first = await claimNativeWebhookDelivery({ ...base, clock: { now: () => initialTime }, leaseMs: 1_000 });
+    if (first.state !== "leased") throw new Error("Expected lease");
+    const recovered = await claimNativeWebhookDelivery({ ...base, clock: { now: () => new Date(initialTime.getTime() + 1_000) }, leaseMs: 1_000 });
+    if (recovered.state !== "leased") throw new Error("Expected recovery");
+    expect(await settleNativeWebhookAttempt({ ...base, leaseToken: first.leaseToken, clock: { now: () => new Date(initialTime.getTime() + 1_001) }, result: { kind: "failure", category: "timeout" }, durationMs: 1_000 })).toEqual({ state: "stale" });
+    expect(await settleNativeWebhookAttempt({ ...base, organizationId: "another-tenant", leaseToken: recovered.leaseToken, clock: { now: () => new Date(initialTime.getTime() + 1_001) }, result: { kind: "failure", category: "timeout" }, durationMs: 1_000 })).toEqual({ state: "stale" });
+    const retry = await settleNativeWebhookAttempt({ ...base, leaseToken: recovered.leaseToken, clock: { now: () => new Date(initialTime.getTime() + 1_001) }, result: { kind: "failure", category: "timeout" }, durationMs: 1_000 });
+    if (retry.state !== "retry" || !retry.nextRetryAt) throw new Error("Expected retry");
+    const second = await claimNativeWebhookDelivery({ ...base, clock: { now: () => retry.nextRetryAt! } });
+    if (second.state !== "leased") throw new Error("Expected next lease");
+    expect(await settleNativeWebhookAttempt({ ...base, leaseToken: second.leaseToken, clock: { now: () => new Date(retry.nextRetryAt!.getTime() + 1) }, result: { kind: "failure", category: "blocked_address" }, durationMs: 1 })).toMatchObject({ state: "exhausted", attemptNumber: 2, nextRetryAt: null });
+    expect((await sql!`select state, terminal_reason, attempt_count from webhook_delivery where id=${deliveryId}`)[0]).toEqual({ state: "exhausted", terminal_reason: "retry_exhausted:blocked_address", attempt_count: 2 });
+    expect((await sql!`select result_category, outcome from webhook_attempt where delivery_id=${deliveryId} order by attempt_number`)).toEqual([{ result_category: "timeout", outcome: "retry" }, { result_category: "blocked_address", outcome: "exhausted" }]);
+  });
+
+  it("rejects invalid results before mutation and rolls back a conflicting attempt", async () => {
+    const { deliveryId } = await fixture("settle-invalid");
+    const claimed = await claimNativeWebhookDelivery({ organizationId: "settle-invalid", deliveryId, tenantDatabase, clock: { now: () => initialTime } });
+    if (claimed.state !== "leased") throw new Error("Expected lease");
+    const base = { organizationId: "settle-invalid", deliveryId, leaseToken: claimed.leaseToken, tenantDatabase, clock: { now: () => initialTime }, durationMs: 0 };
+    await expect(settleNativeWebhookAttempt({ ...base, result: { kind: "response", status: 700 } })).rejects.toThrow("HTTP status");
+    await expect(settleNativeWebhookAttempt({ ...base, result: { kind: "failure", category: "network" }, durationMs: -1 })).rejects.toThrow("duration");
+    await expect(settleNativeWebhookAttempt({ ...base, leaseToken: "invalid", result: { kind: "response", status: 200 } })).rejects.toThrow("lease token");
+    await expect(settleNativeWebhookAttempt({ ...base, result: { kind: "response", status: 200 }, maxAttempts: 8 })).rejects.toThrow("maximum attempt");
+    expect((await sql!`select state, attempt_count from webhook_delivery where id=${deliveryId}`)[0]).toEqual({ state: "leased", attempt_count: 0 });
+    await sql!`insert into webhook_attempt (id, organization_id, delivery_id, attempt_number, kind, attempted_at, completed_at, request_headers, outcome, duration_ms) values (${`${deliveryId}.1`}, 'settle-invalid', ${deliveryId}, 1, 'native', ${initialTime}, ${initialTime}, ${sql!.json({})}, 'retry', 0)`;
+    await expect(settleNativeWebhookAttempt({ ...base, result: { kind: "response", status: 200 } })).rejects.toThrow();
+    expect((await sql!`select state, attempt_count from webhook_delivery where id=${deliveryId}`)[0]).toEqual({ state: "leased", attempt_count: 0 });
   });
 });

@@ -53,7 +53,7 @@ export const webhookDelivery = pgTable("webhook_delivery", {
   index("webhook_delivery_lease_recovery_idx").on(table.state, table.leasedUntil),
   foreignKey({ columns: [table.messageId, table.organizationId], foreignColumns: [webhookMessage.id, webhookMessage.organizationId], name: "webhook_delivery_message_tenant_fk" }),
   foreignKey({ columns: [table.endpointId, table.organizationId], foreignColumns: [webhookEndpoint.id, webhookEndpoint.organizationId], name: "webhook_delivery_endpoint_tenant_fk" }),
-  check("webhook_delivery_state_check", sql`${table.state} IN ('pending', 'leased', 'retry', 'succeeded', 'dead')`),
+  check("webhook_delivery_state_check", sql`${table.state} IN ('pending', 'leased', 'retry', 'succeeded', 'dead', 'exhausted')`),
   check("webhook_delivery_lease_pair_check", sql`(${table.state} = 'leased' AND ${table.leaseToken} IS NOT NULL AND ${table.leasedUntil} IS NOT NULL) OR (${table.state} <> 'leased' AND ${table.leaseToken} IS NULL AND ${table.leasedUntil} IS NULL)`),
   pgPolicy("webhook_delivery_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
 ]).enableRLS();
