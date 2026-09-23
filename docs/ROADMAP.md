@@ -548,6 +548,12 @@ or symlinked journal files, missing SQL, and unjournaled SQL. A divergent
 canary correctly reports eight shared entries followed by different index-8
 migrations. The command does not rewrite history or claim physical-schema
 equivalence; an isolated replay and schema review remain required.
+Alpha 75 makes the packed release canary assert exact migration history
+before resource generation. Its browser site uses a per-run internal test
+port after an Alpha 74 publication attempt exposed an intermittent fixed-port
+collision on the hosted runner. Generated applications retain their documented
+local Astro port; this only hardens the release proof. The first Alpha 74
+publish attempt failed at site startup, and the unchanged-tag retry passed.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

@@ -1,4 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomInt } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,15 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "trestle-release-canary-"));
 const project = path.join(temporaryRoot, "release-canary");
+// The release canary once hit EADDRINUSE while binding the generated site's
+// fixed 42068 default, even after localhost readiness probes refused it.
+// Give this isolated browser exercise a per-run port without changing the
+// generated application's normal local-development default.
+const browserSitePort = process.env.TRESTLE_BROWSER_SITE_PORT ?? String(randomInt(20_000, 30_000));
+if (!/^[0-9]+$/u.test(browserSitePort) || Number(browserSitePort) < 1024 || Number(browserSitePort) > 65535) {
+  throw new Error("TRESTLE_BROWSER_SITE_PORT must be an unprivileged TCP port");
+}
+const browserSiteEnvironment = { TRESTLE_BROWSER_SITE_PORT: browserSitePort, SITE_URL: `http://localhost:${browserSitePort}` };
 
 async function run(command, arguments_, cwd, extraEnvironment = {}) {
   await new Promise((resolve, reject) => {
@@ -32,6 +42,10 @@ try {
   const sourceDiff = JSON.parse(execFileSync("pnpm", ["exec", "trestle", "upgrade", "diff", "--json"], { cwd: project, encoding: "utf8" }));
   if (!sourceDiff.data.baselineTrusted || sourceDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
     throw new Error("Fresh generated project did not match its bundled target template");
+  }
+  const migrationAudit = JSON.parse(execFileSync("pnpm", ["exec", "trestle", "upgrade", "migrations", "--check", "--json"], { cwd: project, encoding: "utf8" }));
+  if (migrationAudit.data.classification !== "matching" || migrationAudit.data.commonPrefix < 1) {
+    throw new Error("Fresh generated project did not match its bundled migration history");
   }
   const migrationsPath = path.join(project, "packages", "db", "migrations");
   const journalPath = path.join(migrationsPath, "meta", "_journal.json");
@@ -78,13 +92,13 @@ try {
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "resource", "add-field", "Article", "archived:boolean?", "--yes"], project);
   await assertMonotonicJournal();
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], project);
-  await run("pnpm", ["check"], project);
+  await run("pnpm", ["check"], project, browserSiteEnvironment);
   if (process.env.TRESTLE_GENERATED_DATABASE_URL) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1" });
-    await run("pnpm", ["test:browser"], project, { TRESTLE_BROWSER_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_BROWSER_ARTICLES: "1" });
+    await run("pnpm", ["test:browser"], project, { ...browserSiteEnvironment, TRESTLE_BROWSER_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_BROWSER_ARTICLES: "1" });
     await run("pnpm", ["exec", "playwright", "test", "tests/browser/site-handoff.spec.ts", "--list"], project, {
       TRESTLE_BROWSER_MODE: "deployed",
       SITE_URL: "https://site.example.test",
