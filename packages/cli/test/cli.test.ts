@@ -406,17 +406,25 @@ export const applicationEventCatalog = defineEventCatalog([
     expect(routeSource).toContain("new ArticleService(new PostgresArticleRepository");
     const eventSource = await readFile(path.join(root, "apps/worker/src/resources/article-events.ts"), "utf8");
     expect(eventSource).toContain('name: "resource.article.created"');
+    expect(eventSource).toContain('name: "resource.article.updated"');
+    expect(eventSource).toContain('name: "resource.article.deleted"');
     expect(eventSource).toContain('applicationEventCatalog.parse("resource.article.created", 1, payload)');
     expect(eventSource).toContain("{ resourceId: string }");
     expect(eventSource).not.toContain("payload.organizationId");
     const catalogSource = await readFile(path.join(root, "packages/events/src/application-catalog.ts"), "utf8");
     expect(catalogSource).toContain('name: "resource.article.created", schemaVersion: 1');
+    expect(catalogSource).toContain('name: "resource.article.updated", schemaVersion: 1');
+    expect(catalogSource).toContain('name: "resource.article.deleted", schemaVersion: 1');
     expect(catalogSource).toContain("  articleCreatedApplicationEvent,");
     const workerSource = await readFile(path.join(root, "apps/worker/src/index.ts"), "utf8");
     expect(workerSource).toContain("eventConsumers.register(articleCreatedEvent, handleArticleCreated);");
+    expect(workerSource).toContain("eventConsumers.register(articleUpdatedEvent, handleArticleUpdated);");
+    expect(workerSource).toContain("eventConsumers.register(articleDeletedEvent, handleArticleDeleted);");
     const repositorySource = await readFile(path.join(root, "packages/data/src/resources/article-repository.ts"), "utf8");
     expect(repositorySource).toContain("eq(article.organizationId, this.organizationId)");
     expect(repositorySource).toContain('transaction.execute(this.events.statement("resource.article.created", { resourceId: record.id }');
+    expect(repositorySource).toContain('transaction.execute(this.events.statement("resource.article.updated", { resourceId: record.id, revision: record.revision }');
+    expect(repositorySource).toContain('transaction.execute(this.events.statement("resource.article.deleted", { resourceId: record.id, revision: record.revision }');
     expect(repositorySource).not.toContain("outboxMessage");
     const screenSource = await readFile(path.join(root, "apps/app/src/resources/article.tsx"), "utf8");
     expect(screenSource).toContain('const key = ["articles", session?.user.id, organizationId] as const');
@@ -439,6 +447,25 @@ export const applicationEventCatalog = defineEventCatalog([
     expect(JSON.parse(after.stdout()).data.converged).toBe(true);
     const resume = capture(root);
     expect(await executeCli(["apply", ".trestle/setup.json", "--yes"], resume.runtime)).toBe(0);
+
+    const catalogPath = path.join(root, "packages/events/src/application-catalog.ts");
+    const currentCatalog = await readFile(catalogPath, "utf8");
+    const legacyCatalog = currentCatalog
+      .replace(/export const articleUpdatedApplicationEvent = defineEvent\(\{[\s\S]*?\n\}\);\n/u, "")
+      .replace(/export const articleDeletedApplicationEvent = defineEvent\(\{[\s\S]*?\n\}\);\n/u, "")
+      .replace("  articleUpdatedApplicationEvent,\n", "")
+      .replace("  articleDeletedApplicationEvent,\n", "");
+    await writeFile(catalogPath, legacyCatalog);
+    expect(await executeCli(["generate", "resource", "Article"], capture(root).runtime)).toBe(0);
+    const legacyRepositoryPath = path.join(root, "packages/data/src/resources/article-repository.ts");
+    const currentRepository = await readFile(legacyRepositoryPath, "utf8");
+    await rm(legacyRepositoryPath);
+    const legacyRepair = capture(root);
+    expect(await executeCli(["generate", "resource", "Article"], legacyRepair.runtime)).toBe(1);
+    expect(legacyRepair.stderr()).toContain("create-only event contract");
+    await expect(readFile(legacyRepositoryPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await writeFile(legacyRepositoryPath, currentRepository);
+    await writeFile(catalogPath, currentCatalog);
 
     const domainPath = path.join(root, "packages/domain/src/resources/article.ts");
     await writeFile(domainPath, `${await readFile(domainPath, "utf8")}\n// application-owned customization\n`);

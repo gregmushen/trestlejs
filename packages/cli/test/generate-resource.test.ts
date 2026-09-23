@@ -10,6 +10,7 @@ describe("resource field definitions", () => {
     expect(parseResourceField("authorId:relation?:Author:set-null")).toEqual({ name: "authorId", type: "relation", required: false, references: { resource: "Author", onDelete: "set-null" } });
     expect(() => parseResourceField("authorId:relation:Author:cascade")).toThrow("must initially be optional");
     expect(() => parseResourceField("bad-name:string?")).toThrow("invalid field");
+    expect(() => parseResourceField("revision:integer?")).toThrow("reserved");
   });
 
   it("keeps a Drizzle snapshot aligned with the latest base migration", async () => {

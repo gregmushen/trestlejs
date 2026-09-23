@@ -94,6 +94,7 @@ export const setupPlanSchema = z.object({
     }
     const fields = resource.fields.map(({ name }) => name);
     if (new Set(fields).size !== fields.length) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "resource fields must not contain duplicates" });
+    if (fields.some((name) => ["id", "organizationId", "revision", "createdAt", "updatedAt"].includes(name))) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "resource fields cannot use generated identity or versioning names" });
     if (!resource.fields.some((field) => field.name === "name" && field.type === "string" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "generated CRUD screens require a required name:string field" });
     if (resource.fields.some((field) => field.name !== "name" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "additional generated fields must initially be optional for additive migration safety" });
     if (resource.pagination.defaultLimit > resource.pagination.maxLimit) context.addIssue({ code: "custom", path: ["resources", index, "pagination"], message: "default pagination limit cannot exceed max limit" });

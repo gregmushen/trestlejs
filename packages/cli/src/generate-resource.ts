@@ -21,6 +21,7 @@ export function parseResourceField(value: string): ResourceField {
   const required = !type.endsWith("?");
   const normalizedType = type.replace(/\?$/u, "") as ResourceField["type"];
   if (!name || !/^[a-z][A-Za-z0-9]*$/u.test(name) || !["string", "text", "integer", "boolean", "datetime", "relation"].includes(normalizedType)) throw new CliFailure(`invalid field ${value}; expected name:type[?] or name:relation:Resource[:onDelete]`);
+  if (["id", "organizationId", "revision", "createdAt", "updatedAt"].includes(name)) throw new CliFailure(`field ${name} is reserved for resource identity and versioning`);
   if (normalizedType === "relation") {
     if (!reference || !/^[A-Z][A-Za-z0-9]*$/u.test(reference) || !["restrict", "cascade", "set-null"].includes(onDelete)) throw new CliFailure(`invalid relationship field ${value}`);
     if (required) throw new CliFailure("relationship fields must initially be optional; use name:relation?:Resource:onDelete");
@@ -101,6 +102,7 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     path.join(root, dbPath, "src", `${n.kebab}-rls.integration.test.ts`),
     path.join(root, appPath, "src", "api", `${n.kebab}.ts`),
     path.join(root, workerPath, "src", "resources", `${n.kebab}-events.ts`),
+    path.join(root, dataPath, "src", "resources", `${n.kebab}-events.integration.test.ts`),
   ];
   const declarationExists = await exists(declarationPath);
   const collisions = (await Promise.all(targets.map(async (target) => (await exists(target) ? target : undefined)))).filter((target): target is string => Boolean(target));
@@ -116,10 +118,29 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
   if (!catalogSource?.includes("// trestle:resource-event-definitions") || !catalogSource.includes("// trestle:resource-event-list")) {
     throw new CliFailure("resource generation requires the application event catalog registration anchors; review and upgrade packages/events/src/application-catalog.ts before generating another resource");
   }
-  const eventSymbol = `${n.camel}CreatedApplicationEvent`;
-  const hasDefinition = catalogSource.includes(`export const ${eventSymbol} = defineEvent(`);
-  const hasRegistration = catalogSource.includes(`  ${eventSymbol},`);
-  if (hasDefinition !== hasRegistration) throw new CliFailure(`resource ${resource.name} has an incomplete application event catalog registration`);
+  const eventKinds = ["created", "updated", "deleted"] as const;
+  const eventSymbols = eventKinds.map((kind) => `${n.camel}${kind[0]!.toUpperCase()}${kind.slice(1)}ApplicationEvent`);
+  for (const eventSymbol of eventSymbols) {
+    const hasDefinition = catalogSource.includes(`export const ${eventSymbol} = defineEvent(`);
+    const hasRegistration = catalogSource.includes(`  ${eventSymbol},`);
+    if (hasDefinition !== hasRegistration) throw new CliFailure(`resource ${resource.name} has an incomplete application event catalog registration`);
+  }
+  const hasDefinition = catalogSource.includes(`export const ${eventSymbols[0]} = defineEvent(`);
+  const changeDefinitions = eventSymbols.slice(1).map((symbol) => catalogSource.includes(`export const ${symbol} = defineEvent(`));
+  if (changeDefinitions.some(Boolean) && !changeDefinitions.every(Boolean)) throw new CliFailure(`resource ${resource.name} has an incomplete change-event catalog`);
+  if (!declarationExists && hasDefinition) throw new CliFailure(`resource ${resource.name} has an event registration but no resource declaration`);
+  if (declarationExists && !hasDefinition) throw new CliFailure(`resource ${resource.name} has no application event registration; review its application-owned source`);
+  const hasChangeDefinitions = changeDefinitions.every(Boolean);
+  const emitsChangeEvents = !declarationExists || hasChangeDefinitions;
+  if (declarationExists && hasChangeDefinitions !== catalogSource.includes(`  ${eventSymbols[1]},`)) {
+    throw new CliFailure(`resource ${resource.name} has an incomplete change-event catalog registration`);
+  }
+  if (declarationExists && !emitsChangeEvents) {
+    const missing = (await Promise.all(targets.slice(1, -1).map(async (target) => (await exists(target) ? undefined : target))))
+      .filter((target): target is string => Boolean(target));
+    if (missing.length) throw new CliFailure(`resource ${resource.name} uses the earlier create-only event contract; review and restore its application-owned source before regeneration: ${missing.join(", ")}`);
+    return [];
+  }
 
   for (const target of targets) await mkdir(path.dirname(target), { recursive: true });
   const created: string[] = [];
@@ -130,6 +151,8 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
   };
   const routePath = `/api/${n.pluralKebab}`;
   const eventName = `resource.${n.snake}.created`;
+  const updatedEventName = `resource.${n.snake}.updated`;
+  const deletedEventName = `resource.${n.snake}.deleted`;
   const readPermission = resource.authorization?.read ?? "resource.read";
   const writePermission = resource.authorization?.write ?? "resource.write";
 
@@ -143,7 +166,7 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     pagination: resource.pagination,
     persistence: { table: n.snake, schema: path.relative(root, targets[4]!) },
     contracts: path.relative(root, targets[1]!),
-    files: targets.slice(1).map((target) => path.relative(root, target)),
+    files: (emitsChangeEvents ? targets : targets.slice(0, -1)).slice(1).map((target) => path.relative(root, target)),
     registrations: [path.join(workerPath, "src", "index.ts"), path.join(appPath, "src", "main.tsx")],
     routes: resource.crud ? [
       { method: "GET", path: routePath, auth: true },
@@ -166,6 +189,7 @@ export const ${n.camel}Schema = z.object({
 ${resource.fields.map((field) => `  ${field.name}: ${field.required ? zodExpression(field) : `${zodExpression({ ...field, required: true })}.nullable()`},`).join("\n")}
   id: z.string().uuid(),
   organizationId: z.string().min(1),
+  revision: z.number().int().positive(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 });
@@ -197,7 +221,7 @@ export class ${n.className}Service {
   await writeGenerated(targets[3]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
 import { ${n.camel}, type Database } from "@${project}/db";
 import type { ${n.className}Repository } from "@${project}/domain";
-import { and, asc, eq, gt, type SQL } from "drizzle-orm";
+import { and, asc, eq, gt, or, sql, type SQL } from "drizzle-orm";
 
 type ResourceEvents = { statement(name: string, payload: unknown, options: { schemaVersion?: number; idempotencyKey: string }): SQL };
 
@@ -224,11 +248,36 @@ export class Postgres${n.className}Repository implements ${n.className}Repositor
     });
   }
   async update(id: string, input: Update${n.className}): Promise<${n.className} | null> {
-    const [record] = await this.database.update(${n.camel}).set({ ...input, updatedAt: new Date() }).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).returning();
-    return record ?? null;
+    return this.database.transaction(async (transaction) => {
+      const changed = or(
+${resource.fields.map((field) => `        input.${field.name} !== undefined ? sql\`\${${n.camel}.${field.name}} is distinct from \${input.${field.name}}\` : undefined,`).join("\n")}
+      );
+      if (!changed) {
+        const [record] = await transaction.select().from(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).limit(1);
+        return record ?? null;
+      }
+      const [record] = await transaction.update(${n.camel})
+        .set({ ...input, revision: sql\`\${${n.camel}.revision} + 1\`, updatedAt: new Date() })
+        .where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId), changed)).returning();
+      if (!record) {
+        const [current] = await transaction.select().from(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).limit(1);
+        return current ?? null;
+      }
+      await transaction.execute(this.events.statement("${updatedEventName}", { resourceId: record.id, revision: record.revision }, {
+        schemaVersion: 1, idempotencyKey: "${updatedEventName}:" + record.id + ":" + record.revision,
+      }));
+      return record;
+    });
   }
   async remove(id: string): Promise<boolean> {
-    return (await this.database.delete(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).returning()).length > 0;
+    return this.database.transaction(async (transaction) => {
+      const [record] = await transaction.delete(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).returning();
+      if (!record) return false;
+      await transaction.execute(this.events.statement("${deletedEventName}", { resourceId: record.id, revision: record.revision }, {
+        schemaVersion: 1, idempotencyKey: "${deletedEventName}:" + record.id,
+      }));
+      return true;
+    });
   }
 }
 `);
@@ -241,6 +290,7 @@ export const ${n.camel} = pgTable("${n.snake}", {
   id: uuid("id").defaultRandom().primaryKey(),
   organizationId: text("organization_id").notNull(),
 ${resource.fields.map((field) => `  ${field.name}: ${columnExpression(field)},`).join("\n")}
+  revision: integer("revision").default(1).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
@@ -393,12 +443,28 @@ export function create${n.className}Api(organizationId: string) {
 import { applicationEventCatalog, type EventDefinition, type EventEnvelope } from "@${project}/events";
 
 export type ${n.className}CreatedPayload = { resourceId: string };
+export type ${n.className}UpdatedPayload = { resourceId: string; revision: number };
+export type ${n.className}DeletedPayload = { resourceId: string; revision: number };
 
 export const ${n.camel}CreatedEvent: EventDefinition<${n.className}CreatedPayload> = {
   name: "${eventName}",
   schemaVersion: 1,
   parse(payload: unknown): ${n.className}CreatedPayload {
     return applicationEventCatalog.parse("${eventName}", 1, payload) as ${n.className}CreatedPayload;
+  },
+};
+export const ${n.camel}UpdatedEvent: EventDefinition<${n.className}UpdatedPayload> = {
+  name: "${updatedEventName}",
+  schemaVersion: 1,
+  parse(payload: unknown): ${n.className}UpdatedPayload {
+    return applicationEventCatalog.parse("${updatedEventName}", 1, payload) as ${n.className}UpdatedPayload;
+  },
+};
+export const ${n.camel}DeletedEvent: EventDefinition<${n.className}DeletedPayload> = {
+  name: "${deletedEventName}",
+  schemaVersion: 1,
+  parse(payload: unknown): ${n.className}DeletedPayload {
+    return applicationEventCatalog.parse("${deletedEventName}", 1, payload) as ${n.className}DeletedPayload;
   },
 };
 
@@ -409,18 +475,76 @@ export async function handle${n.className}Created(payload: ${n.className}Created
     eventId: envelope.id,
   });
 }
+export async function handle${n.className}Updated(payload: ${n.className}UpdatedPayload, envelope: EventEnvelope): Promise<void> {
+  createLogger({ correlationId: envelope.correlationId }).info("resource.${n.kebab}.updated.consumed", {
+    resourceId: payload.resourceId, revision: payload.revision, eventId: envelope.id,
+  });
+}
+export async function handle${n.className}Deleted(payload: ${n.className}DeletedPayload, envelope: EventEnvelope): Promise<void> {
+  createLogger({ correlationId: envelope.correlationId }).info("resource.${n.kebab}.deleted.consumed", {
+    resourceId: payload.resourceId, revision: payload.revision, eventId: envelope.id,
+  });
+}
+`);
+
+  if (emitsChangeEvents) await writeGenerated(targets[11]!, `import { ${n.camel}, createDatabase, createTenantDatabase } from "@${project}/db";
+import { eq, sql } from "drizzle-orm";
+import { describe, expect, it } from "vitest";
+import { Postgres${n.className}Repository } from "./${n.kebab}-repository.js";
+
+const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
+const suite = connectionString ? describe : describe.skip;
+
+suite("${n.className} change-event atomicity", () => {
+  it("rolls back update and delete when the event cannot be recorded", async () => {
+    const organizationId = "event-" + crypto.randomUUID();
+    const admin = createDatabase(connectionString!, "postgres-js");
+    const tenant = createTenantDatabase(connectionString!, "postgres-js", organizationId);
+    const repository = new Postgres${n.className}Repository(tenant, organizationId, {
+      statement: () => sql\`select 1 / 0\`,
+    });
+    const rows = await admin.insert(${n.camel}).values([
+      { organizationId, name: "Update original" },
+      { organizationId, name: "Delete original" },
+    ]).returning();
+    const updateId = rows[0]!.id;
+    const deleteId = rows[1]!.id;
+    try {
+      await expect(repository.update(updateId, { name: "Update changed" })).rejects.toThrow("select 1 / 0");
+      const [unchanged] = await admin.select().from(${n.camel}).where(eq(${n.camel}.id, updateId));
+      expect(unchanged).toMatchObject({ name: "Update original", revision: 1 });
+      await expect(repository.remove(deleteId)).rejects.toThrow("select 1 / 0");
+      const [undeleted] = await admin.select().from(${n.camel}).where(eq(${n.camel}.id, deleteId));
+      expect(undeleted).toMatchObject({ name: "Delete original", revision: 1 });
+    } finally {
+      await admin.delete(${n.camel}).where(eq(${n.camel}.organizationId, organizationId));
+    }
+  });
+});
 `);
 
   if (!hasDefinition) {
-    const definition = `export const ${eventSymbol} = defineEvent({
+    const definitions = `export const ${eventSymbols[0]} = defineEvent({
   name: "${eventName}", schemaVersion: 1,
   description: "A ${n.className} resource was created.", sensitivity: "internal",
   payload: z.object({ resourceId: z.uuid() }),
   resource: { type: "${n.snake}", id: (payload: { resourceId: string }) => payload.resourceId },
+});
+export const ${eventSymbols[1]} = defineEvent({
+  name: "${updatedEventName}", schemaVersion: 1,
+  description: "A ${n.className} resource was updated.", sensitivity: "internal",
+  payload: z.object({ resourceId: z.uuid(), revision: z.number().int().positive() }),
+  resource: { type: "${n.snake}", id: (payload: { resourceId: string }) => payload.resourceId },
+});
+export const ${eventSymbols[2]} = defineEvent({
+  name: "${deletedEventName}", schemaVersion: 1,
+  description: "A ${n.className} resource was deleted.", sensitivity: "internal",
+  payload: z.object({ resourceId: z.uuid(), revision: z.number().int().positive() }),
+  resource: { type: "${n.snake}", id: (payload: { resourceId: string }) => payload.resourceId },
 });\n`;
     const updatedCatalog = catalogSource
-      .replace("// trestle:resource-event-definitions", `${definition}// trestle:resource-event-definitions`)
-      .replace("  // trestle:resource-event-list", `  ${eventSymbol},\n  // trestle:resource-event-list`);
+      .replace("// trestle:resource-event-definitions", `${definitions}// trestle:resource-event-definitions`)
+      .replace("  // trestle:resource-event-list", `  ${eventSymbols.join(",\n  ")},\n  // trestle:resource-event-list`);
     await writeFile(catalogPath, updatedCatalog, "utf8");
   }
 
@@ -469,10 +593,15 @@ suite("${n.className} forced tenant isolation", () => {
   let workerSource = await readFile(workerIndex, "utf8");
   const workerImport = `import { ${n.camel}Routes } from "./resources/${n.kebab}-routes.js";`;
   if (!workerSource.includes(workerImport)) workerSource = `${workerImport}\n${workerSource}`;
-  const workerEventImport = `import { ${n.camel}CreatedEvent, handle${n.className}Created } from "./resources/${n.kebab}-events.js";`;
+  const workerEventImport = emitsChangeEvents
+    ? `import { ${n.camel}CreatedEvent, ${n.camel}UpdatedEvent, ${n.camel}DeletedEvent, handle${n.className}Created, handle${n.className}Updated, handle${n.className}Deleted } from "./resources/${n.kebab}-events.js";`
+    : `import { ${n.camel}CreatedEvent, handle${n.className}Created } from "./resources/${n.kebab}-events.js";`;
   if (!workerSource.includes(workerEventImport)) workerSource = `${workerEventImport}\n${workerSource}`;
   const workerRegistration = `app.route("/", ${n.camel}Routes);`;
-  const workerEventRegistration = `eventConsumers.register(${n.camel}CreatedEvent, handle${n.className}Created);`;
+  const workerEventRegistration = emitsChangeEvents ? `eventConsumers.register(${n.camel}CreatedEvent, handle${n.className}Created);
+eventConsumers.register(${n.camel}UpdatedEvent, handle${n.className}Updated);
+eventConsumers.register(${n.camel}DeletedEvent, handle${n.className}Deleted);`
+    : `eventConsumers.register(${n.camel}CreatedEvent, handle${n.className}Created);`;
   const workerAnchor = ["\nconst consumeQueue =", "\ntype WorkerEnvironment =", "\nexport default {", "\nexport default app;"].find((candidate) => workerSource.includes(candidate));
   if (!workerAnchor) throw new Error("Worker entrypoint has no supported resource registration anchor");
   if (!workerSource.includes(workerRegistration)) {

@@ -127,6 +127,8 @@ That creates an application-owned vertical slice containing:
 - a Drizzle table and tracked migration;
 - a forced PostgreSQL RLS policy and tenant-isolation test;
 - authenticated Hono list/create/read/update/delete routes;
+- private, transactional create/update/delete events with revisioned update
+  identity and no duplicate event for an unchanged retry;
 - a TanStack Query/Form screen at `/articles`;
 - contract tests and read-only resource metadata.
 

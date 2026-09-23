@@ -599,6 +599,15 @@ the committed event's tenant, resource, payload, correlation, and stable
 tenant-scoped retry key after an HTTP create. Update/delete events, deployed
 Queue execution, and customer-visible webhook projections remain separate
 work.
+Alpha 82 extends that transactional boundary to generated resource updates
+and deletes. New resources receive a persisted revision: only an actual
+change increments it and emits an update event, so retrying the same update
+does not duplicate the event. A repeated delete likewise emits nothing.
+Generated PostgreSQL tests inject event failure and prove both mutations
+roll back; system and Chromium tests inspect the committed, tenant-scoped
+outbox records. Existing application-owned resources are not silently
+rewritten. Deployed Queue execution and customer-visible webhook projections
+remain open.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
