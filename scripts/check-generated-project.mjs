@@ -112,7 +112,7 @@ try {
     await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/data", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
-    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1" });
+    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" });
     await run("pnpm", ["test:browser"], project, { ...browserSiteEnvironment, TRESTLE_BROWSER_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_BROWSER_ARTICLES: "1" });
     await run("pnpm", ["exec", "playwright", "test", "tests/browser/site-handoff.spec.ts", "--list"], project, {
       TRESTLE_BROWSER_MODE: "deployed",

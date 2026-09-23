@@ -131,6 +131,8 @@ That creates an application-owned vertical slice containing:
   identity and no duplicate event for an unchanged retry;
 - optional, explicit `--webhook-event created|updated|deleted` selections that
   generate versioned, metadata-only public projections while other events stay private;
+- a deterministic generated-app test that follows an opted-in event through
+  local Queue/Workflow processing into one signed, inspectable webhook attempt;
 - a TanStack Query/Form screen at `/articles`;
 - contract tests and read-only resource metadata.
 

@@ -182,6 +182,11 @@ in a resource SetupPlan. Generated public schemas, examples, and projection
 fixtures belong to the application and should be reviewed before deployment.
 Changing exposure for an existing generated resource is a deliberate
 application-owned catalog edit, not an implicit regeneration.
+The generated system test can exercise the opted-in Article path with
+`TRESTLE_SYSTEM_TEST_WEBHOOKS=1`: it registers a local endpoint, captures a
+signed attempt without network delivery, and verifies retry idempotency and
+inspection redaction. This requires `TRESTLE_SYSTEM_TEST_ARTICLES=1` and a
+dedicated test PostgreSQL database.
 With `WEBHOOK_DELIVERY_MODE=local` in a local environment and Queues enabled,
 the Worker projects catalog-declared events after outbox dispatch, then
 automatically captures a signed local attempt for each active subscribed
