@@ -5,7 +5,7 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
-import { billingProviderEvent, createDatabase, emailDeliveryEvent, PostgresEventInbox, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
+import { billingProviderEvent, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, PostgresEventInbox, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -58,6 +58,50 @@ function configuredPrices(value: string | undefined): boolean {
     return Boolean(prices && typeof prices === "object" && !Array.isArray(prices) && Object.keys(prices).length > 0);
   } catch { return false; }
 }
+
+function inspectionPageSize(value: string | undefined): number | null {
+  if (value === undefined) return 50;
+  if (!/^[1-9][0-9]{0,2}$/u.test(value)) return null;
+  const size = Number(value);
+  return size <= 100 ? size : null;
+}
+
+app.get("/api/developer/webhooks/endpoints", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "organization:webhooks:read" });
+  const limit = inspectionPageSize(context.req.query("limit"));
+  if (!limit) return context.json({ error: "Invalid page size" }, 400);
+  return context.json({ endpoints: await listWebhookEndpoints({
+    organizationId: execution.tenant.organizationId, environment: context.env.APP_ENV ?? "local",
+    tenantDatabase: () => execution.data, limit,
+  }) });
+});
+
+app.get("/api/developer/webhooks/endpoints/:id/deliveries", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "organization:webhooks:deliveries:read" });
+  const endpointId = context.req.param("id");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(endpointId)) return context.json({ error: "Invalid endpoint ID" }, 400);
+  const limit = inspectionPageSize(context.req.query("limit"));
+  if (!limit) return context.json({ error: "Invalid page size" }, 400);
+  return context.json({ deliveries: await listWebhookDeliveries({
+    organizationId: execution.tenant.organizationId, environment: context.env.APP_ENV ?? "local",
+    endpointId, tenantDatabase: () => execution.data, limit,
+  }) });
+});
+
+app.get("/api/developer/webhooks/deliveries/:id/attempts", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "organization:webhooks:deliveries:read" });
+  const deliveryId = context.req.param("id");
+  if (!/^whd_[0-9a-f]{64}$/u.test(deliveryId)) return context.json({ error: "Invalid delivery ID" }, 400);
+  const limit = inspectionPageSize(context.req.query("limit"));
+  if (!limit) return context.json({ error: "Invalid page size" }, 400);
+  return context.json({ attempts: await listWebhookAttempts({
+    organizationId: execution.tenant.organizationId, environment: context.env.APP_ENV ?? "local",
+    deliveryId, tenantDatabase: () => execution.data, limit,
+  }) });
+});
 
 app.get("/api/dev/emails", (context) => {
   if (!localEmailEnabled(context.env)) return context.notFound();

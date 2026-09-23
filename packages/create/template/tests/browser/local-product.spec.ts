@@ -41,6 +41,14 @@ test("a customer verifies email and switches isolated organizations", async ({ p
   expect(secondId).toBeTruthy();
   expect(firstId).not.toBe(secondId);
 
+  for (const organizationId of [firstId!, secondId!]) {
+    const headers = { "x-trestle-tenant": organizationId };
+    const inspection = await page.context().request.get("http://localhost:42069/api/developer/webhooks/endpoints", { headers });
+    expect(inspection.status()).toBe(200);
+    expect(await inspection.json()).toEqual({ endpoints: [] });
+    expect((await page.context().request.get("http://localhost:42069/api/developer/webhooks/endpoints?limit=101", { headers })).status()).toBe(400);
+  }
+
   const activate = async (organizationId: string, plan: string) => {
     const response = await page.context().request.post("http://localhost:42069/api/dev/billing", {
       headers: { "x-trestle-tenant": organizationId },

@@ -33,6 +33,7 @@ export * from "./webhook-local.js";
 export * from "./webhook-claims.js";
 export * from "./webhook-native.js";
 export * from "./webhook-recovery.js";
+export * from "./webhook-inspection.js";
 export * from "./webhook-settlement.js";
 export * from "./webhook-work.js";
 export * from "./webhook-retention.js";

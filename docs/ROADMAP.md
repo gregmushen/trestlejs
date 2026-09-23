@@ -395,9 +395,16 @@ rejection does not increment an attempt or drop the delivery; it is delayed
 and remains visible to the recovery sweep. PostgreSQL contention tests cover
 the limit and release of a slot after settlement. Per-tenant/global limits,
 plan throughput, and provider request-rate policies remain separate work.
-Trestle does not yet provide customer webhook inspection UI. The next slices
-are deployed native delivery proof and the optional Svix adapter. A committed
-domain event remains authoritative;
+Alpha 56 adds authenticated, tenant-scoped webhook inspection endpoints for
+endpoint state, delivery history, and attempt outcomes. The read model selects
+metadata only: destination hosts, not paths or query strings; no signing keys,
+headers, request bodies, response bodies, or payload envelopes. Owner and admin
+roles receive granular read permissions, while forced RLS and environment
+predicates remain separate protections. PostgreSQL and generated-browser tests
+cover tenant isolation, redaction, and malformed requests. This is an API
+slice, not the customer inspection UI; cursor pagination, deeper operational
+controls, deployed native delivery proof, and the optional Svix adapter remain.
+A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging

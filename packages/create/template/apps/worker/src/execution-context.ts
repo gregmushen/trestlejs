@@ -47,7 +47,9 @@ const defaults: ContextDependencies = {
 };
 
 function organizationPermissions(role: string): ReadonlySet<string> {
-  return role === "owner" || role === "admin" ? new Set(["organization:manage"]) : new Set();
+  return role === "owner" || role === "admin"
+    ? new Set(["organization:manage", "organization:webhooks:read", "organization:webhooks:deliveries:read"])
+    : new Set();
 }
 
 function applicationPermissions(role: string | null): ReadonlySet<string> | undefined {
