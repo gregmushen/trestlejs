@@ -64,6 +64,7 @@ jobs:
       - name: Exercise a clean generated project
         run: pnpm check:generated
         env:
+          DEBUG: pw:webserver
           TRESTLE_GENERATED_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_generated
 
       - name: Build publishable tarballs

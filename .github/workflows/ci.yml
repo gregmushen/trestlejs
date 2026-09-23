@@ -45,4 +45,5 @@ jobs:
         run: npx --yes playwright@1.63.0 install --with-deps --only-shell chromium
       - run: pnpm check:generated
         env:
+          DEBUG: pw:webserver
           TRESTLE_GENERATED_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_generated
