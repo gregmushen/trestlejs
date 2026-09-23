@@ -129,6 +129,8 @@ That creates an application-owned vertical slice containing:
 - authenticated Hono list/create/read/update/delete routes;
 - private, transactional create/update/delete events with revisioned update
   identity and no duplicate event for an unchanged retry;
+- optional, explicit `--webhook-event created|updated|deleted` selections that
+  generate versioned, metadata-only public projections while other events stay private;
 - a TanStack Query/Form screen at `/articles`;
 - contract tests and read-only resource metadata.
 
@@ -274,6 +276,8 @@ trestle email ...                   inspect local transactional email
 trestle payments stripe ...         operate the Stripe golden path
 trestle generate email <Name>       generate a React Email template
 trestle generate resource <Name>    generate a tenant-safe vertical slice
+trestle generate resource <Name> --webhook-event created updated
+                                    expose only selected public event contracts
 trestle plan ...                    validate and inspect setup intent
 trestle apply <plan> --yes          apply reviewed supported mutations
 trestle resources                   inspect declared domain resources

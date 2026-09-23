@@ -27,6 +27,7 @@ export const setupResourceSchema = z.object({
   tenant: z.boolean().default(true),
   crud: z.boolean().default(true),
   fields: z.array(setupResourceFieldSchema).min(1).default([{ name: "name", type: "string", required: true }]),
+  webhookEvents: z.array(z.enum(["created", "updated", "deleted"])).default([]),
   authorization: z.object({ read: z.string().min(1), write: z.string().min(1) }).strict().optional(),
   pagination: z.object({ defaultLimit: z.number().int().min(1).max(100), maxLimit: z.number().int().min(1).max(250) }).strict().default({ defaultLimit: 25, maxLimit: 100 }),
 }).strict();
@@ -94,6 +95,7 @@ export const setupPlanSchema = z.object({
     }
     const fields = resource.fields.map(({ name }) => name);
     if (new Set(fields).size !== fields.length) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "resource fields must not contain duplicates" });
+    if (new Set(resource.webhookEvents).size !== resource.webhookEvents.length) context.addIssue({ code: "custom", path: ["resources", index, "webhookEvents"], message: "public webhook events must not contain duplicates" });
     if (fields.some((name) => ["id", "organizationId", "revision", "createdAt", "updatedAt"].includes(name))) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "resource fields cannot use generated identity or versioning names" });
     if (!resource.fields.some((field) => field.name === "name" && field.type === "string" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "generated CRUD screens require a required name:string field" });
     if (resource.fields.some((field) => field.name !== "name" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "additional generated fields must initially be optional for additive migration safety" });

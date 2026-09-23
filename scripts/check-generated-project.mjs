@@ -81,9 +81,16 @@ try {
     if (operation.classification === "manual-review" && operation.id !== "cli-version") throw new Error(`Generated project requires manual upgrade review: ${operation.id}`);
   }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Author"], project);
-  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article", "--field", "summary:text?", "published:boolean?", "authorId:relation?:Author:set-null"], project);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article", "--field", "summary:text?", "published:boolean?", "authorId:relation?:Author:set-null", "--webhook-event", "created", "updated"], project);
   await assertMonotonicJournal();
   const workerEntry = await readFile(path.join(project, "apps", "worker", "src", "index.ts"), "utf8");
+  const eventCatalog = await readFile(path.join(project, "packages", "events", "src", "application-catalog.ts"), "utf8");
+  if (!eventCatalog.includes('type: "resource.article.created", version: 1')
+    || !eventCatalog.includes('type: "resource.article.updated", version: 1')
+    || eventCatalog.includes('type: "resource.article.deleted", version: 1')
+    || eventCatalog.includes('type: "resource.author.created", version: 1')) {
+    throw new Error("Generated public webhook projections do not match explicit resource opt-ins");
+  }
   for (const resource of ["author", "article"]) {
     if (!workerEntry.includes(`app.route("/", ${resource}Routes);`) || ["Created", "Updated", "Deleted"].some((kind) =>
       !workerEntry.includes(`eventConsumers.register(${resource}${kind}Event, handle${resource[0].toUpperCase()}${resource.slice(1)}${kind});`))) {
