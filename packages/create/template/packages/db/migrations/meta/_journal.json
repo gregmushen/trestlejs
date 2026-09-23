@@ -162,6 +162,13 @@
       "when": 1790294400014,
       "tag": "0022_clammy_sentinels",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790294400015,
+      "tag": "0023_brown_goblin_queen",
+      "breakpoints": true
     }
   ]
 }

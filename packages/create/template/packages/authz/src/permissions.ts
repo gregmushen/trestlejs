@@ -32,6 +32,9 @@ export const permissions = definePermissions({
   "platform.audit.read": { plane: "platform", description: "Read administrative and access audit history" },
   "platform.roles.read": { plane: "platform", description: "Read platform-role assignments" },
   "platform.roles.manage": { plane: "platform", description: "Grant and revoke platform roles" },
+  "platform.operations.read": { plane: "platform", description: "Read async, webhook, and artifact operational metadata across organizations" },
+  "platform.outbox.redrive": { plane: "platform", description: "Return dead-lettered outbox events to delivery" },
+  "platform.webhooks.manage": { plane: "platform", description: "Disable webhook endpoints and replay failed deliveries" },
 });
 
 export type PermissionCode = (typeof permissions.codes)[number];

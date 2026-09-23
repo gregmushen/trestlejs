@@ -30,6 +30,8 @@ export const webhookMessage = pgTable("webhook_message", {
   check("webhook_message_entitlement_check", sql`${table.entitlementDecision} IN ('not_required', 'allowed', 'denied')`),
   check("webhook_message_status_check", sql`${table.status} IN ('ready', 'suppressed')`),
   pgPolicy("webhook_message_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
+  // Platform reads are limited by column grants to metadata; envelopes are never granted.
+  pgPolicy("webhook_message_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
 ]).enableRLS();
 
 /** One logical endpoint delivery; attempts and transport remain separate. */
@@ -56,4 +58,7 @@ export const webhookDelivery = pgTable("webhook_delivery", {
   check("webhook_delivery_state_check", sql`${table.state} IN ('pending', 'leased', 'retry', 'succeeded', 'dead', 'exhausted')`),
   check("webhook_delivery_lease_pair_check", sql`(${table.state} = 'leased' AND ${table.leaseToken} IS NOT NULL AND ${table.leasedUntil} IS NOT NULL) OR (${table.state} <> 'leased' AND ${table.leaseToken} IS NULL AND ${table.leasedUntil} IS NULL)`),
   pgPolicy("webhook_delivery_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
+  // The platform admin may only move a dead or exhausted delivery back to retry.
+  pgPolicy("webhook_delivery_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
+  pgPolicy("webhook_delivery_platform_replay", { for: "update", to: "trestle_platform", using: sql`${table.state} IN ('dead', 'exhausted')`, withCheck: sql`${table.state} = 'retry'` }),
 ]).enableRLS();

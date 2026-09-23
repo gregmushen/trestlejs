@@ -74,13 +74,18 @@ export async function recordAuditEvent(database: Writer, input: AuditEventInput)
 
 export type AuditRecord = Readonly<{ id: string; occurredAt: Date; name: string; actorType: string; actorId: string; targetType: string; targetId: string; reason: string | null; summary: Record<string, unknown>; outcome: string; correlationId: string }>;
 
-/** A page of one organization's audit history, newest first. Tenant RLS bounds the rows as well. */
+/**
+ * A page of one organization's audit history, newest first. Tenant RLS bounds the rows as well.
+ * Platform actions on the organization are listed, but the operator's identity and internal
+ * reason stay internal: customers see that the platform acted, what changed, and the correlation ID.
+ */
 export async function listAuditEvents(database: Database, organizationId: string, options: Readonly<{ limit?: number; before?: Date }> = {}): Promise<AuditRecord[]> {
   const limit = Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), 100);
-  return await database.select({
+  const rows = await database.select({
     id: auditEvent.id, occurredAt: auditEvent.occurredAt, name: auditEvent.name, actorType: auditEvent.actorType, actorId: auditEvent.actorId,
     targetType: auditEvent.targetType, targetId: auditEvent.targetId, reason: auditEvent.reason, summary: auditEvent.summary, outcome: auditEvent.outcome, correlationId: auditEvent.correlationId,
   }).from(auditEvent)
     .where(options.before ? and(eq(auditEvent.organizationId, organizationId), lt(auditEvent.occurredAt, options.before)) : eq(auditEvent.organizationId, organizationId))
     .orderBy(desc(auditEvent.occurredAt), desc(auditEvent.id)).limit(limit);
+  return rows.map((row) => row.actorType === "platform_operator" ? { ...row, actorId: "platform", reason: null } : row);
 }

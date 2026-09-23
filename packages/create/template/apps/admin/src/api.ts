@@ -19,6 +19,14 @@ export async function adminApi<T>(path: string): Promise<T> {
   return body as T;
 }
 
+/** Platform actions always carry an operator-entered reason, which is recorded in audit_event. */
+export async function adminAction<T>(path: string, reason: string): Promise<T> {
+  const response = await fetch(`${adminApiOrigin}${path}`, { method: "POST", credentials: "include", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify({ reason }) });
+  const body = await response.json().catch(() => ({})) as { error?: string; reason?: string; message?: string; repair?: string };
+  if (!response.ok) throw new AdminApiError(response.status, body.reason ?? body.error ?? "request_failed", body.message ?? "The action failed", body.repair);
+  return body as T;
+}
+
 export type AdminSession = {
   operator: { id: string; email: string };
   roles: string[];
@@ -30,3 +38,10 @@ export type Overview = { organizations: number; users: number; operators: number
 
 export type CapabilityStatus = { id: string; label: string; state: "configured" | "not_configured" | "unknown"; mode?: string; repair?: string };
 export type Health = { environment: string; platformDatabase: { reachable: boolean; distinctLogin: boolean }; application: { reachable: boolean; capabilities: CapabilityStatus[] } };
+
+export type DeadOutboxEvent = { id: string; eventName: string; organizationId: string | null; correlationId: string; attempts: number; lastError: string | null; createdAt: string };
+export type WebhookOperations = {
+  endpoints: Array<{ id: string; organizationId: string; environment: string; name: string; state: string; health: string; provider: string; updatedAt: string }>;
+  failedDeliveries: Array<{ id: string; organizationId: string; endpointId: string; eventType: string; state: string; attemptCount: number; terminalReason: string | null; completedAt: string | null; replayable: boolean }>;
+};
+export type ArtifactOperations = { states: Record<"pending" | "ready" | "cleaning" | "deleted", { count: number; bytes: number }>; stalePending: number };

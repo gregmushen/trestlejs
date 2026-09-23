@@ -47,6 +47,23 @@ suite("platform admin Worker against PostgreSQL", () => {
     await expect(health.json()).resolves.toMatchObject({ platformDatabase: { reachable: true } });
   });
 
+  it("redrives a dead outbox event over HTTP and audits it with the request's correlation ID", async () => {
+    signedIn = operator;
+    const eventId = crypto.randomUUID();
+    await sql!`insert into outbox_message (id, event_name, schema_version, occurred_at, resource_type, resource_id, organization_id, correlation_id, idempotency_key, payload, status, attempts, available_at)
+      values (${eventId}, 'article.published', 1, now(), 'article', 'a1', ${`${run}-org`}, 'origin-corr', ${`${run}-idem`}, ${sql!.json({})}, 'dead', 5, now())`;
+    const listed = await admin.request("/api/admin/operations/outbox?limit=100", undefined, environment);
+    expect(((await listed.json()) as { dead: Array<{ id: string }> }).dead.map(({ id }) => id)).toContain(eventId);
+    const response = await admin.request(`/api/admin/operations/outbox/${eventId}/redrive`, {
+      method: "POST", headers: { origin: "http://localhost:42070", "content-type": "application/json", "x-correlation-id": `${run}-corr` }, body: JSON.stringify({ reason: "consumer fixed" }),
+    }, environment);
+    expect(response.status).toBe(200);
+    expect(await admin.request(`/api/admin/operations/outbox/${eventId}/redrive`, { method: "POST", headers: { origin: "http://localhost:42070", "content-type": "application/json" }, body: JSON.stringify({ reason: "again" }) }, environment)).toHaveProperty("status", 404);
+    const [event] = await sql!`select actor_type, actor_id, reason, organization_id from audit_event where correlation_id = ${`${run}-corr`} and name = 'platform.outbox_event.redriven'`;
+    expect(event).toEqual({ actor_type: "platform_operator", actor_id: operator, reason: "consumer fixed", organization_id: `${run}-org` });
+    await sql!`delete from outbox_message where id = ${eventId}`;
+  });
+
   it("denies a tenant Owner with no platform role", async () => {
     signedIn = owner;
     const response = await admin.request("/api/admin/overview", undefined, environment);

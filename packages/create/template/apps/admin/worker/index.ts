@@ -1,8 +1,11 @@
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { AccessDeniedError, platformAccess, publicDenial, type AccessEvaluator } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
-import { createPlatformDatabase, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
-import { Hono } from "hono";
+import {
+  artifactOperations, createPlatformDatabase, disableWebhookEndpoint, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformWebhookEndpoints,
+  PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, type DatabaseDriver, type PlatformChangeContext,
+} from "@__TRESTLE_PROJECT_NAME__/db";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 
 import { adminViews, type AdminCapability } from "../src/registry.js";
@@ -73,6 +76,12 @@ admin.use("/api/*", async (context, next) => cors({ origin: context.env.ADMIN_OR
 
 admin.get("/api/admin/health/live", (context) => context.json({ status: "ok" }));
 
+// Admin actions are cookie-authenticated, so each one must come from the admin SPA's own origin.
+admin.use("/api/admin/*", async (context, next) => {
+  if (!["GET", "HEAD", "OPTIONS"].includes(context.req.method) && context.req.header("origin") !== (context.env.ADMIN_ORIGIN ?? "http://localhost:42070")) return context.json({ error: "forbidden", reason: "origin_mismatch", message: "Admin actions must come from the admin origin" }, 403);
+  await next();
+});
+
 // Only sign-in, session, and sign-out are exposed; sign-up and organization endpoints do not exist here.
 for (const [method, path] of [["POST", "/api/auth/sign-in/email"], ["POST", "/api/auth/sign-out"], ["GET", "/api/auth/get-session"]] as const) {
   admin.on(method, path, async (context) => await adminAuth(context.env).handler(context.req.raw));
@@ -116,6 +125,51 @@ admin.get("/api/admin/session", (context) => {
 
 admin.get("/api/admin/overview", async (context) => context.json(await overview(platformDatabase(context.env))));
 
+type AdminContext = Context<{ Bindings: AdminEnvironment; Variables: Variables }>;
+
+/** Every platform action names its operator, reason, environment, and correlation ID for audit_event. */
+async function actionContext(context: AdminContext): Promise<PlatformChangeContext> {
+  const body = await context.req.json().catch(() => ({})) as { reason?: unknown };
+  if (typeof body.reason !== "string") throw new PlatformOperationError("invalid", "A reason is required");
+  return { actor: { type: "platform_operator", id: context.get("operator").id }, reason: body.reason, environment: context.env.APP_ENV ?? "local", correlationId: context.get("correlationId") };
+}
+
+const iso = (value: Date | null) => value?.toISOString() ?? null;
+
+admin.get("/api/admin/operations/outbox", async (context) => {
+  const events = await listDeadOutboxEvents(platformDatabase(context.env), { limit: Number(context.req.query("limit") ?? 50) });
+  return context.json({ dead: events.map((event) => ({ ...event, createdAt: event.createdAt.toISOString() })) });
+});
+
+admin.post("/api/admin/operations/outbox/:id/redrive", async (context) => {
+  await redriveOutboxEvent(platformDatabase(context.env), context.req.param("id"), await actionContext(context));
+  return context.json({ redriven: true, correlationId: context.get("correlationId") });
+});
+
+admin.get("/api/admin/operations/webhooks", async (context) => {
+  const database = platformDatabase(context.env);
+  const [endpoints, failed] = await Promise.all([listPlatformWebhookEndpoints(database), listFailedWebhookDeliveries(database)]);
+  return context.json({
+    endpoints: endpoints.map((endpoint) => ({ ...endpoint, updatedAt: endpoint.updatedAt.toISOString() })),
+    failedDeliveries: failed.map((delivery) => ({ ...delivery, completedAt: iso(delivery.completedAt) })),
+  });
+});
+
+admin.post("/api/admin/operations/webhooks/:organizationId/endpoints/:endpointId/disable", async (context) => {
+  await disableWebhookEndpoint(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), endpointId: context.req.param("endpointId") }, await actionContext(context));
+  return context.json({ disabled: true, correlationId: context.get("correlationId") });
+});
+
+admin.post("/api/admin/operations/webhooks/:organizationId/deliveries/:deliveryId/replay", async (context) => {
+  await replayWebhookDelivery(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), deliveryId: context.req.param("deliveryId") }, await actionContext(context));
+  return context.json({ replayed: true, correlationId: context.get("correlationId") });
+});
+
+admin.get("/api/admin/operations/artifacts", async (context) => {
+  // Pending uploads older than a day are stale; the artifact maintenance job cleans them up.
+  return context.json(await artifactOperations(platformDatabase(context.env), { staleBefore: new Date(Date.now() - 86_400_000) }));
+});
+
 const capabilityLabels: Record<AdminCapability, string> = { database: "Database", email: "Email", billing: "Billing", queues: "Queues", artifacts: "Artifacts", workflows: "Workflows" };
 
 /** Sanitized: configured flags and modes only, never values. Unconfigured capabilities carry a setup command. */
@@ -147,7 +201,10 @@ admin.get("/api/admin/health", async (context) => {
   });
 });
 
+const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const;
+
 admin.onError((error, context) => {
+  if (error instanceof PlatformOperationError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code]);
   createLogger({ correlationId: context.get("correlationId"), surface: "admin" }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);
 });

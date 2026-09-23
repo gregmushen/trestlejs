@@ -5,11 +5,14 @@ import { createRoot } from "react-dom/client";
 
 import { AdminApiError, adminApi, authClient, type AdminSession, type Health } from "./api";
 import { adminViews } from "./registry";
+import { ArtifactsView } from "./views/artifacts";
+import { AsyncView } from "./views/async";
 import { HealthView } from "./views/health";
 import { OverviewView } from "./views/overview";
+import { WebhooksView } from "./views/webhooks";
 import "./styles.css";
 
-const viewComponents: Record<string, () => ReactNode> = { overview: OverviewView, health: HealthView };
+const viewComponents: Record<string, () => ReactNode> = { overview: OverviewView, health: HealthView, async: AsyncView, webhooks: WebhooksView, artifacts: ArtifactsView };
 
 function useAdminSession() {
   return useQuery({ queryKey: ["admin-session"], retry: false, queryFn: () => adminApi<AdminSession>("/api/admin/session") });
