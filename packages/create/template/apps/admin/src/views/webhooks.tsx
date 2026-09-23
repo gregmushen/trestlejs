@@ -21,7 +21,7 @@ export function WebhooksView() {
           <td className="py-2"><code className="text-xs">{delivery.eventType}</code></td><td>{delivery.organizationId}</td><td>{delivery.state}</td><td>{delivery.attemptCount}</td><td>{delivery.terminalReason ?? "—"}</td>
           <td>{delivery.replayable
             ? <ActionButton label="Replay" path={path(delivery.organizationId, `deliveries/${encodeURIComponent(delivery.id)}/replay`)} invalidate="admin-webhooks" allowed={canManage} />
-            : <span className="text-xs text-muted">Payload expired</span>}</td>
+            : <span className="text-xs text-muted">{delivery.replayUnavailableReason === "resolved" ? "Resolved by replay" : delivery.replayUnavailableReason === "replay_pending" ? "Replay queued" : delivery.replayUnavailableReason === "endpoint_inactive" ? "Endpoint inactive" : "Payload expired"}</span>}</td>
         </tr>)}</tbody>
       </table>}
     <h2 className="mt-8 text-lg font-semibold">Endpoints</h2>

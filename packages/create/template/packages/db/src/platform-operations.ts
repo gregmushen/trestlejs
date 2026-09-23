@@ -12,8 +12,10 @@ import { webhookEndpoint } from "./webhook-schema.js";
  * Platform operations over main's async, webhook, and artifact subsystems.
  * Every function runs on the trestle_platform connection, whose column grants
  * exclude payloads, envelopes, destinations, lease tokens, and storage keys, and
- * whose RLS policies allow only the transitions below: dead outbox → pending,
- * endpoint → disabled, and dead/exhausted delivery → retry. Each action records a
+ * whose RLS policies allow only the transitions below: dead outbox → pending
+ * and endpoint → disabled. Delivery replay uses a narrowly granted database
+ * function that creates a new execution without altering the original.
+ * Each action records a
  * redacted audit_event in the same transaction.
  */
 export class PlatformOperationError extends Error {
@@ -92,7 +94,7 @@ export async function disableWebhookEndpoint(database: Database, input: Readonly
   });
 }
 
-export type FailedWebhookDelivery = Readonly<{ id: string; organizationId: string; endpointId: string; eventType: string; state: string; attemptCount: number; terminalReason: string | null; completedAt: Date | null; replayable: boolean }>;
+export type FailedWebhookDelivery = Readonly<{ id: string; organizationId: string; endpointId: string; eventType: string; state: string; attemptCount: number; terminalReason: string | null; completedAt: Date | null; replayable: boolean; activeReplayId: string | null; successfulReplayId: string | null; replayUnavailableReason: "payload_expired" | "endpoint_inactive" | "replay_pending" | "resolved" | null }>;
 
 /** Dead and exhausted deliveries, newest first. A delivery is replayable while its message payload is retained. */
 export async function listFailedWebhookDeliveries(database: Database, options: Readonly<{ limit?: number }> = {}): Promise<FailedWebhookDelivery[]> {
@@ -100,34 +102,43 @@ export async function listFailedWebhookDeliveries(database: Database, options: R
     id: webhookDelivery.id, organizationId: webhookDelivery.organizationId, endpointId: webhookDelivery.endpointId, eventType: webhookMessage.publicEventType,
     state: webhookDelivery.state, attemptCount: webhookDelivery.attemptCount, terminalReason: webhookDelivery.terminalReason, completedAt: webhookDelivery.completedAt,
     messageStatus: webhookMessage.status, payloadDeletedAt: webhookMessage.payloadDeletedAt,
+    endpointState: webhookEndpoint.state, endpointDeletedAt: webhookEndpoint.deletedAt,
+    activeReplayId: sql<string | null>`(select replay.id from webhook_delivery replay where replay.replay_of_delivery_id = coalesce(${webhookDelivery.replayOfDeliveryId}, ${webhookDelivery.id}) and replay.state in ('pending', 'leased', 'retry') limit 1)`,
+    successfulReplayId: sql<string | null>`(select replay.id from webhook_delivery replay where replay.replay_of_delivery_id = coalesce(${webhookDelivery.replayOfDeliveryId}, ${webhookDelivery.id}) and replay.state = 'succeeded' limit 1)`,
   }).from(webhookDelivery)
     .innerJoin(webhookMessage, and(eq(webhookMessage.id, webhookDelivery.messageId), eq(webhookMessage.organizationId, webhookDelivery.organizationId)))
+    .innerJoin(webhookEndpoint, and(eq(webhookEndpoint.id, webhookDelivery.endpointId), eq(webhookEndpoint.organizationId, webhookDelivery.organizationId)))
     .where(inArray(webhookDelivery.state, ["dead", "exhausted"]))
     .orderBy(desc(webhookDelivery.completedAt), asc(webhookDelivery.id)).limit(pageSize(options.limit));
-  return rows.map(({ messageStatus, payloadDeletedAt, ...row }) => ({ ...row, replayable: messageStatus === "ready" && payloadDeletedAt === null }));
+  return rows.map(({ messageStatus, payloadDeletedAt, endpointState, endpointDeletedAt, ...row }) => {
+    const replayUnavailableReason = messageStatus !== "ready" || payloadDeletedAt !== null ? "payload_expired" : row.successfulReplayId ? "resolved" : endpointState !== "active" || endpointDeletedAt !== null ? "endpoint_inactive" : row.activeReplayId ? "replay_pending" : null;
+    return { ...row, replayable: replayUnavailableReason === null, replayUnavailableReason };
+  });
 }
 
 /**
- * Replays a dead or exhausted delivery: it returns to `retry`, due now, and the
- * native delivery sweep claims it on its next pass. Attempt history is kept, so the
- * replay is one more attempt in the same sequence rather than a fresh schedule.
+ * Creates a fresh delivery execution linked to a failed delivery and its
+ * immutable message. A concurrent replay of the same source returns the
+ * existing active execution. Neither path changes the original attempt history.
  */
-export async function replayWebhookDelivery(database: Database, input: Readonly<{ organizationId: string; deliveryId: string }>, context: PlatformChangeContext): Promise<void> {
+export async function replayWebhookDelivery(database: Database, input: Readonly<{ organizationId: string; deliveryId: string }>, context: PlatformChangeContext): Promise<{ deliveryId: string; created: boolean }> {
   const reason = requireReason(context.reason);
-  await database.transaction(async (transaction) => {
-    const [delivery] = await transaction.select({ state: webhookDelivery.state, attemptCount: webhookDelivery.attemptCount, messageStatus: webhookMessage.status, payloadDeletedAt: webhookMessage.payloadDeletedAt })
-      .from(webhookDelivery)
-      .innerJoin(webhookMessage, and(eq(webhookMessage.id, webhookDelivery.messageId), eq(webhookMessage.organizationId, webhookDelivery.organizationId)))
-      .where(and(eq(webhookDelivery.id, input.deliveryId), eq(webhookDelivery.organizationId, input.organizationId))).for("update", { of: webhookDelivery }).limit(1);
-    if (!delivery) throw new PlatformOperationError("not_found", "The webhook delivery does not exist");
-    if (delivery.state !== "dead" && delivery.state !== "exhausted") throw new PlatformOperationError("conflict", `A ${delivery.state} delivery cannot be replayed`);
-    if (delivery.messageStatus !== "ready" || delivery.payloadDeletedAt !== null) throw new PlatformOperationError("conflict", "The event payload is no longer retained, so the delivery cannot be replayed");
-    await transaction.update(webhookDelivery).set({ state: "retry", nextAttemptAt: context.now ?? sql`now()`, terminalReason: null, completedAt: null })
-      .where(and(eq(webhookDelivery.id, input.deliveryId), eq(webhookDelivery.organizationId, input.organizationId), inArray(webhookDelivery.state, ["dead", "exhausted"])));
-    await recordAuditEvent(transaction, {
-      ...auditContext(context), name: "platform.webhook_delivery.replayed", organizationId: input.organizationId, target: { type: "webhook_delivery", id: input.deliveryId },
-      reason, summary: { previousState: delivery.state, attemptCount: delivery.attemptCount },
-    });
+  const replayAt = context.now ?? new Date();
+  if (!Number.isFinite(replayAt.getTime())) throw new PlatformOperationError("invalid", "Invalid replay time");
+  return database.transaction(async (transaction) => {
+    const result = await transaction.execute(sql`select result, delivery_id, previous_state, previous_attempt_count from trestle_replay_webhook_delivery(${input.organizationId}, ${input.deliveryId}, ${replayAt.toISOString()}::timestamptz, ${context.actor.type}, ${context.actor.id}, ${reason}, ${context.environment}, ${context.correlationId})`);
+    const rows = (Array.isArray(result) ? result : (result as { rows: unknown[] }).rows) as Array<Record<string, unknown>>;
+    const row = rows[0];
+    if (!row || row.result === "not_found") throw new PlatformOperationError("not_found", "The webhook delivery does not exist");
+    if (row.result === "not_terminal") throw new PlatformOperationError("conflict", `A ${row.previous_state} delivery cannot be replayed`);
+    if (row.result === "payload_gone") throw new PlatformOperationError("conflict", "The event payload is no longer retained, so the delivery cannot be replayed");
+    if (row.result === "endpoint_inactive") throw new PlatformOperationError("conflict", "The webhook endpoint must be active before replay");
+    if (row.result === "already_succeeded") throw new PlatformOperationError("conflict", "A replay of this delivery has already succeeded");
+    if (row.result !== "created" && row.result !== "existing") throw new Error("Unexpected webhook replay result");
+    const replayId = String(row.delivery_id);
+    // The database function atomically writes the mandatory audit row. A
+    // direct function caller cannot bypass that record.
+    return { deliveryId: replayId, created: row.result === "created" };
   });
 }
 

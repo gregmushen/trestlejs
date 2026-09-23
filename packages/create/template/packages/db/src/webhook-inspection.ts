@@ -73,6 +73,7 @@ export async function listWebhookDeliveries(input: {
     id: webhookDelivery.id, messageId: webhookMessage.id, eventType: webhookMessage.publicEventType,
     eventVersion: webhookMessage.publicVersion, occurredAt: webhookMessage.occurredAt,
     state: webhookDelivery.state, attemptCount: webhookDelivery.attemptCount,
+    replayOfDeliveryId: webhookDelivery.replayOfDeliveryId,
     nextAttemptAt: webhookDelivery.nextAttemptAt, terminalReason: webhookDelivery.terminalReason,
     createdAt: webhookDelivery.createdAt, completedAt: webhookDelivery.completedAt,
     payloadDeletedAt: webhookMessage.payloadDeletedAt, messageStatus: webhookMessage.status,
