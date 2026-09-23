@@ -1,6 +1,6 @@
 {
   "name": "@trestlejs/core",
-  "version": "0.1.0-alpha.74",
+  "version": "0.1.0-alpha.75",
   "description": "Shared project metadata and deterministic infrastructure for TrestleJS applications.",
   "license": "MIT",
   "author": {
