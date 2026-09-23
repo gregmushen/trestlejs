@@ -368,6 +368,15 @@ with the original hostname for certificate verification. Adversarial tests
 cover private, loopback, link-local, carrier-grade NAT, reserved, multicast,
 unspecified, and IPv4-mapped IPv6 answers. Native mode still fails closed until
 the pinned transport and Queue dispatcher are integrated and verified.
+Alpha 53 adds the pinned HTTPS transport behind that policy. It uses the
+approved IP for the connection and the original hostname for SNI and TLS
+certificate validation, sends one bounded HTTP/1.1 request, rejects request
+header injection, does not follow redirects, bounds response headers and
+timeouts, and normalizes response and failure categories. Tests cover the
+connection identity, 2xx/redirect responses, interim and malformed responses,
+unauthorized TLS, DNS-policy rejection, and late-handshake races. The Queue
+dispatcher and live Cloudflare transport proof remain required before native
+mode can be enabled.
 Trestle does not yet deliver projected webhooks externally or provide
 customer inspection UI. The next slices are native Queue-backed delivery and
 recovery, then the optional Svix adapter. A committed domain event remains authoritative;

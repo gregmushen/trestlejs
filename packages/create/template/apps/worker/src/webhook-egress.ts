@@ -17,7 +17,7 @@ type Resolver = {
   resolve6(hostname: string): Promise<string[]>;
 };
 
-function parsedPublicAddress(value: string): string {
+export function approveWebhookAddress(value: string): string {
   if (value.includes("%")) throw new WebhookEgressError("Destination resolved to a non-public address");
   if (!ipaddr.isValid(value)) throw new WebhookEgressError("Destination resolved to an invalid address");
   const parsed = ipaddr.process(value);
@@ -58,6 +58,6 @@ export async function resolveWebhookDestination(raw: string, resolver: Resolver 
     resolver.resolve6(hostname).catch((error: unknown) => { if (dnsMissing(error)) return []; throw error; }),
   ]).then(([ipv4, ipv6]) => [...ipv4, ...ipv6]);
   if (addresses.length === 0) throw new WebhookEgressError("Destination has no resolved addresses");
-  const approved = [...new Set(addresses.map(parsedPublicAddress))];
+  const approved = [...new Set(addresses.map(approveWebhookAddress))];
   return { url, hostname, port: url.port ? Number(url.port) : 443, addresses: approved };
 }

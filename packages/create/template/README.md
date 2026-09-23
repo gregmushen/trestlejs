@@ -156,8 +156,10 @@ should review these default retention periods against their own policy.
 The native egress policy validates HTTPS destinations and resolves both DNS
 address families anew for each attempt. It rejects the entire response if any
 address is non-public. A future transport must connect only to an approved
-address while using the original hostname for TLS verification; the policy
-alone does not enable native delivery.
+address while using the original hostname for TLS verification. The included
+pinned HTTPS transport has bounded timeouts and headers and never follows
+redirects. It is not yet connected to Queue dispatch, so native mode remains
+disabled until the full delivery path is verified.
 When enabling outbound delivery, set the optional encrypted Worker credential
 `WEBHOOK_SECRET_KEY` to at least 32 random bytes per environment through
 `trestle secrets edit`; it encrypts endpoint secrets at rest. Endpoint secrets
