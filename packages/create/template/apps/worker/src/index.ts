@@ -6,7 +6,7 @@ import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository }
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
 import { billingProviderEvent, createDatabase, emailDeliveryEvent, PostgresEventInbox, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
-import type { CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
+import { applicationEventCatalog, type CloudflareQueueBinding } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
@@ -15,9 +15,10 @@ import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
 import { createBillingService } from "./services.js";
+import { projectWebhookForEvent } from "./webhook-runtime.js";
 
 export const app = new Hono<{ Bindings: AuthEnvironment; Variables: AppVariables }>();
-export const eventConsumers = new EventConsumerRegistry<AuthEnvironment>();
+export const eventConsumers = new EventConsumerRegistry<AuthEnvironment>(applicationEventCatalog);
 
 app.use("*", async (context, next) => {
   const supplied = context.req.header("x-correlation-id");
@@ -272,8 +273,12 @@ export default {
       return await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW)(batch);
     }
     const inbox = new PostgresEventInbox(environment.DATABASE_URL, { assumeApplicationRole: true });
-    try { return await createQueueConsumer(eventConsumers, inbox)(batch, environment); }
-    finally { await inbox.close(); }
+    const outbox = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
+    try {
+      return await createQueueConsumer(eventConsumers, inbox, async (envelope, currentEnvironment) => {
+        await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox });
+      })(batch, environment);
+    } finally { await Promise.all([inbox.close(), outbox.close()]); }
   },
   scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
     if (!environment.TRESTLE_EVENTS && !environment.TRESTLE_ARTIFACTS) {

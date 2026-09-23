@@ -288,10 +288,15 @@ an advanceable clock; local capture makes no network requests. Alpha 40 adds
 encrypted tenant-owned signing-secret versions, one-time issuance, bounded
 rotation overlap, immediate previous-key revocation, and metadata-only
 management reads. The key is an optional encrypted runtime credential until
-the capability is enabled. Trestle does not yet invoke projection or delivery
-automatically or provide customer inspection UI. The next slices are runtime
-wiring, native Queue-backed delivery and recovery, and then the optional
-Svix adapter. A committed domain event remains authoritative;
+the capability is enabled. Alpha 41 connects catalog-declared events to
+post-commit projection in Queue and Workflow consumers: it reloads the
+committed outbox row, rejects mismatched Queue envelopes, uses canonical tenant
+and entitlement state, and keeps projection within inbox retry handling when
+local webhook mode is explicitly enabled. Disabled mode remains inert; native
+and Svix modes fail closed until their delivery adapters exist.
+Trestle does not yet deliver projected webhooks automatically or provide
+customer inspection UI. The next slices are native Queue-backed delivery and
+recovery, then the optional Svix adapter. A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
