@@ -1,0 +1,18 @@
+import { describe, expect, it } from "vitest";
+
+import { AdminViewError, adminViews, defineAdminViews } from "./registry";
+
+describe("admin view registry", () => {
+  it("requires unique views guarded by registered platform permissions", () => {
+    expect(adminViews.map((view) => view.id)).toEqual(["overview", "health"]);
+    const view = { id: "x", path: "/x", label: "X", group: "G", permission: "platform.overview.read", api: [] };
+    expect(() => defineAdminViews([view, { ...view, path: "/y" }])).toThrow(AdminViewError);
+    expect(() => defineAdminViews([{ ...view, permission: "organization.read" }])).toThrow("must require a platform permission");
+    expect(() => defineAdminViews([{ ...view, permission: "platform.nope.read" }])).toThrow("unregistered");
+    expect(() => defineAdminViews([{ ...view, api: [{ method: "GET", path: "/api/tenant/x" }] }])).toThrow("/api/admin/");
+    expect(() => defineAdminViews([
+      { ...view, api: [{ method: "GET", path: "/api/admin/x" }] },
+      { ...view, id: "y", path: "/y", permission: "platform.audit.read", api: [{ method: "GET", path: "/api/admin/x" }] },
+    ])).toThrow("different permissions");
+  });
+});

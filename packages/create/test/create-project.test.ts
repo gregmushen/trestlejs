@@ -146,6 +146,26 @@ describe("createProject", () => {
     }
   }, 15_000);
 
+  it("generates the platform admin only when requested, with a consistent manifest", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "trestle-admin-"));
+    temporaryDirectories.push(parent);
+    const without = await createProject({ cwd: parent, directory: "plain", install: false, git: false });
+    await expect(stat(path.join(without.directory, "apps", "admin"))).rejects.toMatchObject({ code: "ENOENT" });
+    const plain = await loadProjectManifest(without.directory);
+    expect(plain.capabilities.admin).toBe(false);
+    expect(plain.apps.admin).toBeUndefined();
+    expect(JSON.parse(await readFile(path.join(without.directory, ".trestle", "template-baseline.json"), "utf8")).files).not.toHaveProperty("apps/admin/worker/index.ts");
+
+    const withAdmin = await createProject({ cwd: parent, directory: "operated", install: false, git: false, admin: true });
+    const manifest = await loadProjectManifest(withAdmin.directory);
+    expect(manifest.capabilities.admin).toBe(true);
+    expect(manifest.apps.admin).toBe("apps/admin");
+    expect(await readFile(path.join(withAdmin.directory, "apps", "admin", "wrangler.jsonc"), "utf8")).toContain('"name": "operated-admin"');
+    const baseline = JSON.parse(await readFile(path.join(withAdmin.directory, ".trestle", "template-baseline.json"), "utf8")).files as Record<string, string>;
+    expect(baseline).toHaveProperty("apps/admin/worker/index.ts");
+    expect(baseline[".trestle/project.yaml"]).toBe(createHash("sha256").update(await readFile(path.join(withAdmin.directory, ".trestle", "project.yaml"))).digest("hex"));
+  });
+
   it("refuses a non-empty target", async () => {
     const parent = await mkdtemp(path.join(os.tmpdir(), "create-trestlejs-"));
     temporaryDirectories.push(parent);

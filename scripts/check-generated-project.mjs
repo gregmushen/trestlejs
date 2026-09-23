@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomInt } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -132,6 +132,25 @@ try {
     throw new Error("Doctor did not recognize the opt-in preview Workflow binding");
   }
   await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);
+  // Admin disabled (the default): no admin app and no admin deployment configuration.
+  if (await stat(path.join(project, "apps", "admin")).then(() => true, () => false)) throw new Error("The default project generated apps/admin");
+  // Admin enabled: a second project generated with --admin installs, builds, and passes its admin
+  // suite; with a database that includes real platform sign-in and cross-plane denial.
+  const adminProject = path.join(temporaryRoot, "admin-canary");
+  await run(process.execPath, [path.join(root, "packages/create/dist/bin.js"), adminProject, "--no-git", "--no-install", "--admin"], root);
+  const adminManifestPath = path.join(adminProject, "package.json");
+  const adminManifest = JSON.parse(await readFile(adminManifestPath, "utf8"));
+  adminManifest.devDependencies.trestlejs = `file:${cliArchive}`;
+  adminManifest.pnpm = { ...(adminManifest.pnpm ?? {}), overrides: { ...(adminManifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
+  await writeFile(adminManifestPath, `${JSON.stringify(adminManifest, null, 2)}\n`);
+  await run("pnpm", ["install"], adminProject);
+  const adminDiff = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "diff", "--json"], { cwd: adminProject, encoding: "utf8" }));
+  if (!adminDiff.data.baselineTrusted || adminDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
+    throw new Error("Fresh admin-enabled project did not match its bundled target template");
+  }
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], adminProject);
+  await run("pnpm", ["--filter", "./apps/admin", "build"], adminProject);
+  await run("pnpm", ["--filter", "./apps/admin", "exec", "vitest", "run"], adminProject, process.env.TRESTLE_GENERATED_DATABASE_URL ? { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL } : {});
   console.log(`Generated release canary passed at ${project}`);
 } finally {
   if (process.env.TRESTLE_KEEP_GENERATED === "1") {

@@ -26,16 +26,18 @@ export async function executeCreateCli(
     .argument("<directory>", "project directory")
     .option("--no-install", "skip pnpm install")
     .option("--no-git", "skip git initialization")
+    .option("--admin", "include the optional platform admin (apps/admin)")
     .showHelpAfterError()
     .showSuggestionAfterError()
     .exitOverride()
     .configureOutput({ writeOut: runtime.stdout, writeErr: runtime.stderr })
-    .action(async (directory: string, options: { install: boolean; git: boolean }) => {
+    .action(async (directory: string, options: { install: boolean; git: boolean; admin?: boolean }) => {
       const result = await createProject({
         cwd: runtime.cwd(),
         directory,
         install: options.install,
         git: options.git,
+        admin: Boolean(options.admin),
       });
       runtime.stdout(
         `Created ${result.name} at ${result.directory}\n\nNext:\n  cd ${directory}\n  pnpm dev\n`,

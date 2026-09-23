@@ -72,6 +72,9 @@ export const projectManifestSchema = z
   })
   .strict()
   .superRefine((manifest, context) => {
+    // The optional platform admin is generated as apps/admin; the capability and the app move together.
+    if (manifest.capabilities.admin && !manifest.apps.admin) context.addIssue({ code: "custom", path: ["apps", "admin"], message: "capabilities.admin requires apps.admin (generated with create-trestlejs --admin)" });
+    if (manifest.apps.admin && !manifest.capabilities.admin) context.addIssue({ code: "custom", path: ["capabilities", "admin"], message: "apps.admin is declared but capabilities.admin is false" });
     const unique = new Set(manifest.environments);
     if (unique.size !== manifest.environments.length) {
       context.addIssue({

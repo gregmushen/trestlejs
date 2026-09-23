@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadProjectManifest, TRESTLEJS_VERSION } from "@trestlejs/core";
+import { applyManifestCapabilities, loadProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "@trestlejs/core";
 import { initializeSecrets } from "trestlejs";
 
 export type CreateProjectOptions = {
@@ -12,6 +12,8 @@ export type CreateProjectOptions = {
   directory: string;
   install: boolean;
   git: boolean;
+  /** Generate the optional platform admin (capabilities.admin). Off by default. */
+  admin?: boolean;
   run?: (command: string, arguments_: string[], cwd: string) => Promise<void>;
 };
 
@@ -42,15 +44,17 @@ function render(input: string, projectName: string): string {
     .replaceAll("__TRESTLEJS_VERSION__", TRESTLEJS_VERSION);
 }
 
-async function copyTemplate(source: string, destination: string, projectName: string, baseline: Record<string, string>, relative = ""): Promise<void> {
+async function copyTemplate(source: string, destination: string, projectName: string, baseline: Record<string, string>, enabled: ReadonlySet<OptionalTemplateCapability>, relative = ""): Promise<void> {
   await mkdir(destination, { recursive: true });
   for (const entry of (await readdir(source, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
     const outputName = entry.name === "_gitignore" ? ".gitignore" : entry.name;
     const sourcePath = path.join(source, entry.name);
     const destinationPath = path.join(destination, outputName);
     const relativePath = path.posix.join(relative, outputName);
+    const capability = templatePathCapability(relativePath);
+    if (capability && !enabled.has(capability)) continue;
     if (entry.isDirectory()) {
-      await copyTemplate(sourcePath, destinationPath, projectName, baseline, relativePath);
+      await copyTemplate(sourcePath, destinationPath, projectName, baseline, enabled, relativePath);
       continue;
     }
     if (!entry.isFile()) {
@@ -60,6 +64,14 @@ async function copyTemplate(source: string, destination: string, projectName: st
     await writeFile(destinationPath, rendered);
     baseline[relativePath] = createHash("sha256").update(rendered).digest("hex");
   }
+}
+
+/** Declares enabled optional capabilities in the manifest; each capability and its app path move together. */
+async function applyCapabilities(destination: string, baseline: Record<string, string>, enabled: ReadonlySet<OptionalTemplateCapability>): Promise<void> {
+  const manifestPath = path.join(destination, ".trestle", "project.yaml");
+  const updated = applyManifestCapabilities(await readFile(manifestPath, "utf8"), enabled);
+  await writeFile(manifestPath, updated);
+  baseline[".trestle/project.yaml"] = createHash("sha256").update(updated).digest("hex");
 }
 
 async function defaultRun(command: string, arguments_: string[], cwd: string): Promise<void> {
@@ -96,7 +108,9 @@ export async function createProject(options: CreateProjectOptions): Promise<Crea
 
   try {
     const baseline: Record<string, string> = {};
-    await copyTemplate(templateRoot, destination, name, baseline);
+    const enabled = new Set<OptionalTemplateCapability>(options.admin ? ["admin"] : []);
+    await copyTemplate(templateRoot, destination, name, baseline, enabled);
+    if (enabled.size) await applyCapabilities(destination, baseline, enabled);
     await writeFile(path.join(destination, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files: Object.fromEntries(Object.entries(baseline).sort(([left], [right]) => left.localeCompare(right))) }, null, 2)}\n`);
     const manifest = await loadProjectManifest(destination);
     if (manifest.project.name !== name) {
