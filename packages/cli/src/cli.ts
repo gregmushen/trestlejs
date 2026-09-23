@@ -763,8 +763,8 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--crud", "generate CRUD contracts, routes, and UI", true)
     .option("--no-crud", "generate persistence without CRUD surfaces")
     .option("--field <definition...>", "additional field as name:type[?] or name:relation:Resource[:onDelete]")
-    .option("--read-permission <permission>", "application permission required to list/read", "resource:read")
-    .option("--write-permission <permission>", "application permission required to create/update/delete", "resource:write")
+    .option("--read-permission <permission>", "application permission required to list/read", "resource.read")
+    .option("--write-permission <permission>", "application permission required to create/update/delete", "resource.write")
     .option("--page-size <size>", "default cursor page size", Number, 25)
     .option("--max-page-size <size>", "maximum cursor page size", Number, 100)
     .action(async (name: string, options: { tenant: boolean; crud: boolean; field?: string[]; readPermission: string; writePermission: string; pageSize: number; maxPageSize: number }, command: Command) => {

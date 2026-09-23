@@ -22,10 +22,10 @@ describe("versioned project upgrades", () => {
     await expect(applyUpgrade(root)).rejects.toThrow("Upgrade requires manual review");
     expect(await readFile(path.join(root, "package.json"), "utf8")).toContain("alpha.8");
     for (const directory of ["packages/context/src", "apps/worker/src", "packages/db/src", "packages/db/migrations", "packages/billing/src", "scripts"]) await mkdir(path.join(root, directory), { recursive: true });
-    await writeFile(path.join(root, "packages/context/src/index.ts"), "export const AUTHORITY_MODEL_VERSION = 2;\n");
-    await writeFile(path.join(root, "apps/worker/src/execution-context.ts"), "const applicationRole = 'contributor';\n");
+    await writeFile(path.join(root, "packages/context/src/index.ts"), "export const AUTHORITY_MODEL_VERSION = 3;\n");
+    await writeFile(path.join(root, "apps/worker/src/execution-context.ts"), "loadApplicationRoles: async () => [],\n");
     await writeFile(path.join(root, "packages/db/src/auth-schema.ts"), "export const applicationRole = 'contributor';\n");
-    await writeFile(path.join(root, "packages/db/migrations/0007_authority.sql"), 'ALTER TABLE "member" ADD COLUMN "application_role" text;\n');
+    await writeFile(path.join(root, "packages/db/migrations/0019_access.sql"), 'CREATE TABLE "application_role_assignment" ("id" uuid);\n');
     await writeFile(path.join(root, "packages/db/src/index.ts"), "import 'drizzle-orm/neon-serverless';\n");
     await writeFile(path.join(root, "packages/db/src/roles.ts"), "export function verifyRuntimeRoleDataAccess() {}\n");
     await writeFile(path.join(root, "packages/billing/src/repository.ts"), "import { createTenantDatabase } from '@project/db';\n");

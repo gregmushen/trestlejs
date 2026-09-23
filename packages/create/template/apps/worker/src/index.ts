@@ -14,6 +14,7 @@ import { maintainArtifacts } from "./artifact-maintenance.js";
 import { auditArtifactReferences } from "./artifact-reference-audit.js";
 import { auditArtifactOrphans } from "./artifact-orphan-audit.js";
 import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
+import { accessRoutes } from "./access-routes.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
 import { createBillingService } from "./services.js";
@@ -79,7 +80,7 @@ const createWebhookEndpointSchema = z.object({
 
 app.get("/api/developer/webhooks/events", requireExecutionContext, (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:webhooks:read" });
+  execution.access.require({ permission: "organization.webhooks.read" });
   return context.json({ events: applicationEventCatalog.publicEvents().map(({ schema, examples, ...event }) => ({
     ...event, schema, examples,
     available: !event.entitlement || execution.entitlements.has(event.entitlement),
@@ -88,7 +89,7 @@ app.get("/api/developer/webhooks/events", requireExecutionContext, (context) => 
 
 app.post("/api/developer/webhooks/endpoints", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:webhooks:manage" });
+  execution.access.require({ permission: "organization.webhooks.manage" });
   const origin = context.req.header("origin");
   const expectedOrigin = context.env.WEB_ORIGIN ?? context.env.BETTER_AUTH_URL ?? "http://localhost:42069";
   if (!origin || origin !== expectedOrigin) return context.json({ error: "Invalid request origin" }, 403);
@@ -125,7 +126,7 @@ app.post("/api/developer/webhooks/endpoints", requireExecutionContext, async (co
 
 app.patch("/api/developer/webhooks/endpoints/:id/state", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:webhooks:manage" });
+  execution.access.require({ permission: "organization.webhooks.manage" });
   const origin = context.req.header("origin");
   const expectedOrigin = context.env.WEB_ORIGIN ?? context.env.BETTER_AUTH_URL ?? "http://localhost:42069";
   if (!origin || origin !== expectedOrigin) return context.json({ error: "Invalid request origin" }, 403);
@@ -161,7 +162,7 @@ app.patch("/api/developer/webhooks/endpoints/:id/state", requireExecutionContext
 
 app.get("/api/developer/webhooks/endpoints", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:webhooks:read" });
+  execution.access.require({ permission: "organization.webhooks.read" });
   const limit = inspectionPageSize(context.req.query("limit"));
   if (!limit) return context.json({ error: "Invalid page size" }, 400);
   return context.json({ endpoints: await listWebhookEndpoints({
@@ -172,7 +173,7 @@ app.get("/api/developer/webhooks/endpoints", requireExecutionContext, async (con
 
 app.get("/api/developer/webhooks/endpoints/:id/subscriptions", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:webhooks:read" });
+  execution.access.require({ permission: "organization.webhooks.read" });
   const endpointId = context.req.param("id");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(endpointId)) return context.json({ error: "Invalid endpoint ID" }, 400);
   const subscriptions = await listWebhookSubscriptions({
@@ -184,7 +185,7 @@ app.get("/api/developer/webhooks/endpoints/:id/subscriptions", requireExecutionC
 
 app.patch("/api/developer/webhooks/endpoints/:id/subscriptions", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:webhooks:manage" });
+  execution.access.require({ permission: "organization.webhooks.manage" });
   const expectedOrigin = context.env.WEB_ORIGIN ?? context.env.BETTER_AUTH_URL ?? "http://localhost:42069";
   if (!context.req.header("origin") || context.req.header("origin") !== expectedOrigin) return context.json({ error: "Invalid request origin" }, 403);
   const endpointId = context.req.param("id");
@@ -214,7 +215,7 @@ app.patch("/api/developer/webhooks/endpoints/:id/subscriptions", requireExecutio
 
 app.get("/api/developer/webhooks/endpoints/:id/deliveries", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:webhooks:deliveries:read" });
+  execution.access.require({ permission: "organization.webhooks.deliveries.read" });
   const endpointId = context.req.param("id");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(endpointId)) return context.json({ error: "Invalid endpoint ID" }, 400);
   const limit = inspectionPageSize(context.req.query("limit"));
@@ -227,7 +228,7 @@ app.get("/api/developer/webhooks/endpoints/:id/deliveries", requireExecutionCont
 
 app.get("/api/developer/webhooks/deliveries/:id/attempts", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:webhooks:deliveries:read" });
+  execution.access.require({ permission: "organization.webhooks.deliveries.read" });
   const deliveryId = context.req.param("id");
   if (!/^whd_[0-9a-f]{64}$/u.test(deliveryId)) return context.json({ error: "Invalid delivery ID" }, 400);
   const limit = inspectionPageSize(context.req.query("limit"));
@@ -309,7 +310,7 @@ app.post("/webhooks/stripe", async (context) => {
 
 app.post("/api/billing/checkout", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:manage" });
+  execution.access.require({ permission: "organization.billing.manage" });
   const input = await context.req.json<{ plan: string; requestId: string }>();
   execution.log.info("billing.checkout.started", { plan: input.plan });
   const checkout = await execution.services.billing.createCheckoutSession({ organizationId: execution.tenant.organizationId, plan: input.plan, requestId: input.requestId, ...(execution.principal.email ? { customerEmail: execution.principal.email } : {}) });
@@ -320,7 +321,7 @@ app.post("/api/billing/checkout", requireExecutionContext, async (context) => {
 
 app.post("/api/billing/portal", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:manage" });
+  execution.access.require({ permission: "organization.billing.manage" });
   const input = await context.req.json<{ requestId: string }>();
   const portal = await execution.services.billing.createPortalSession({ organizationId: execution.tenant.organizationId, requestId: input.requestId });
   execution.log.info("billing.portal.created", { portalSessionId: portal.id });
@@ -335,7 +336,7 @@ app.get("/api/billing/subscription", requireExecutionContext, async (context) =>
 app.post("/api/dev/billing", requireExecutionContext, async (context) => {
   if ((context.env.STRIPE_MODE ?? "local") !== "local") return context.notFound();
   const execution = context.get("execution");
-  execution.access.require({ plane: "organization", permission: "organization:manage" });
+  execution.access.require({ permission: "organization.billing.manage" });
   const input = await context.req.json<{ action: "activate" | "fail-payment" | "cancel"; plan?: string }>();
   const local = execution.services.billing as LocalBillingAdapter;
   if (input.action === "activate") await local.activate({ organizationId: execution.tenant.organizationId, plan: input.plan ?? "starter" });
@@ -347,6 +348,8 @@ app.post("/api/dev/billing", requireExecutionContext, async (context) => {
 app.on(["GET", "POST"], "/api/auth/*", (context) =>
   createAuth(context.env).handler(context.req.raw),
 );
+
+app.route("/", accessRoutes);
 
 app.get("/api/me", async (context) => {
   const session = await createAuth(context.env).api.getSession({ headers: context.req.raw.headers });
@@ -381,13 +384,13 @@ const artifactIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 
 // Artifacts are product resources: only application-plane authority grants them.
 // Organization roles, including Owner, never imply application actions.
-export function canAccessArtifacts(execution: Pick<AppVariables["execution"], "access">, permission: "resource:read" | "resource:write"): boolean {
-  return execution.access.check({ plane: "application", permission }).allowed;
+export function canAccessArtifacts(execution: Pick<AppVariables["execution"], "access">, permission: "resource.read" | "resource.write"): boolean {
+  return execution.access.check({ permission });
 }
 
 app.post("/api/artifacts", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  if (!canAccessArtifacts(execution, "resource:write")) return context.json({ error: "Forbidden" }, 403);
+  if (!canAccessArtifacts(execution, "resource.write")) return context.json({ error: "Forbidden" }, 403);
   if (!artifactRuntimeReady(context.env)) return context.json({ error: "Artifact storage is not configured" }, 503);
   const declaredLength = Number(context.req.header("content-length") ?? 0);
   if (!Number.isSafeInteger(declaredLength) || declaredLength > 10 * 1024 * 1024) return context.json({ error: "Artifact exceeds 10 MiB" }, 413);
@@ -403,7 +406,7 @@ app.post("/api/artifacts", requireExecutionContext, async (context) => {
 
 app.get("/api/artifacts/:id/access", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  if (!canAccessArtifacts(execution, "resource:read")) return context.json({ error: "Forbidden" }, 403);
+  if (!canAccessArtifacts(execution, "resource.read")) return context.json({ error: "Forbidden" }, 403);
   if (!artifactRuntimeReady(context.env)) return context.json({ error: "Artifact storage is not configured" }, 503);
   const id = context.req.param("id");
   if (!artifactIdPattern.test(id)) return context.notFound();
@@ -415,7 +418,7 @@ app.get("/api/artifacts/:id/access", requireExecutionContext, async (context) =>
 
 app.delete("/api/artifacts/:id", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
-  if (!canAccessArtifacts(execution, "resource:write")) return context.json({ error: "Forbidden" }, 403);
+  if (!canAccessArtifacts(execution, "resource.write")) return context.json({ error: "Forbidden" }, 403);
   if (!artifactRuntimeReady(context.env)) return context.json({ error: "Artifact storage is not configured" }, 503);
   const id = context.req.param("id");
   if (!artifactIdPattern.test(id)) return context.notFound();
