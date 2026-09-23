@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 
 import { applicationRoleAssignment } from "./access-schema.js";
+import { recordAuditEvent, type AuditEventInput } from "./audit.js";
 import type { Database } from "./index.js";
 
 export type ApplicationRoleGrant = Readonly<{ userId: string; role: string; grantedBy: string; grantedAt: Date }>;
@@ -37,7 +38,7 @@ export async function grantApplicationRoles(database: Database, input: Readonly<
  * Makes `roles` the user's exact active application roles in one transaction.
  * Removed roles are revoked, not deleted, so the grant history remains.
  */
-export async function replaceApplicationRoles(database: Database, input: Readonly<{ organizationId: string; userId: string; roles: readonly string[]; actor: string; now: Date }>): Promise<{ added: string[]; removed: string[] }> {
+export async function replaceApplicationRoles(database: Database, input: Readonly<{ organizationId: string; userId: string; roles: readonly string[]; actor: string; now: Date; audit?: AuditEventInput }>): Promise<{ added: string[]; removed: string[] }> {
   return await database.transaction(async (transaction) => {
     const scope = and(eq(applicationRoleAssignment.organizationId, input.organizationId), eq(applicationRoleAssignment.userId, input.userId), isNull(applicationRoleAssignment.revokedAt));
     const current = (await transaction.select({ role: applicationRoleAssignment.role }).from(applicationRoleAssignment).where(scope)).map(({ role }) => role);
@@ -46,6 +47,8 @@ export async function replaceApplicationRoles(database: Database, input: Readonl
     const removed = current.filter((role) => !wanted.includes(role)).sort();
     if (removed.length) await transaction.update(applicationRoleAssignment).set({ revokedAt: input.now, revokedBy: input.actor }).where(and(scope, inArray(applicationRoleAssignment.role, removed)));
     if (added.length) await transaction.insert(applicationRoleAssignment).values(added.map((role) => ({ organizationId: input.organizationId, userId: input.userId, role, grantedBy: input.actor, grantedAt: input.now })));
+    // The audit record commits with the change, or not at all.
+    if (input.audit && (added.length || removed.length)) await recordAuditEvent(transaction, { ...input.audit, summary: { ...input.audit.summary, added, removed } });
     return { added, removed };
   });
 }

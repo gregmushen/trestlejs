@@ -24,10 +24,12 @@ const run = `acc${Date.now()}`;
 const orgA = `${run}-a`;
 const orgB = `${run}-b`;
 const users = { owner: `${run}-owner`, admin: `${run}-appadmin`, editor: `${run}-editor`, reader: `${run}-reader`, outsider: `${run}-outsider` };
-const environment = { DATABASE_URL: connectionString ?? "", DATABASE_DRIVER: "postgres-js" as const, BETTER_AUTH_SECRET: "test-secret-at-least-32-characters", APP_ENV: "local" as const };
+const environment = { DATABASE_URL: connectionString ?? "", DATABASE_DRIVER: "postgres-js" as const, BETTER_AUTH_SECRET: "test-secret-at-least-32-characters", APP_ENV: "local" as const, WEBHOOK_SECRET_KEY: "k".repeat(48) };
 
-async function call(method: string, target: string, body?: unknown) {
-  const response = await app.request(target, { method, headers: { "content-type": "application/json", "x-trestle-tenant": state.organizationId }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, environment);
+async function call(method: string, target: string, body?: unknown, correlationId?: string) {
+  const headers: Record<string, string> = { "content-type": "application/json", "x-trestle-tenant": state.organizationId, origin: "http://localhost:42069" };
+  if (correlationId) headers["x-correlation-id"] = correlationId;
+  const response = await app.request(target, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, environment);
   return { status: response.status, body: await response.json().catch(() => ({})) as Record<string, any> };
 }
 
@@ -45,6 +47,10 @@ suite("tenant access routes", () => {
 
   afterAll(async () => {
     await sql!`delete from application_role_assignment where organization_id like ${`${run}%`}`;
+    await sql!`delete from audit_event where organization_id like ${`${run}%`}`;
+    await sql!`delete from webhook_subscription where organization_id like ${`${run}%`}`;
+    await sql!`delete from webhook_secret_version where organization_id like ${`${run}%`}`.catch(() => undefined);
+    await sql!`delete from webhook_endpoint where organization_id like ${`${run}%`}`;
     await sql!`delete from member where organization_id like ${`${run}%`}`;
     await sql!`delete from organization where id like ${`${run}%`}`;
     await sql!`delete from "user" where id like ${`${run}%`}`;
@@ -109,4 +115,38 @@ suite("tenant access routes", () => {
     expect([...registered].filter((route) => !declared.has(route) && !generated.has(route)).sort()).toEqual([]);
     expect([...declared].filter((route) => !registered.has(route)).sort()).toEqual([]);
   });
+
+  it("records role changes in the same transaction, correlated to the request", async () => {
+    state.userId = users.admin;
+    const correlationId = `${run}-roles`;
+    expect((await call("PUT", `/api/tenant/users/${users.editor}/application-roles`, { roles: ["editor", "reader"] }, correlationId)).status).toBe(200);
+    const [event] = await sql!`select name, actor_type, actor_id, target_id, summary, outcome from audit_event where correlation_id = ${correlationId}`;
+    expect(event).toMatchObject({ name: "access.application_roles.changed", actor_type: "user", actor_id: users.admin, target_id: users.editor, outcome: "succeeded", summary: { added: ["reader"], removed: [] } });
+    const refused = `${run}-refused`;
+    expect((await call("PUT", `/api/tenant/users/${users.admin}/application-roles`, { roles: [] }, refused)).status).toBe(409);
+    expect(await sql!`select id from audit_event where correlation_id = ${refused}`).toHaveLength(0);
+  });
+
+  it("audits webhook endpoint changes without their destination", async () => {
+    const endpointId = crypto.randomUUID();
+    await sql!`insert into webhook_endpoint (id, organization_id, environment, name, destination_url, state, provider, created_by, updated_by) values (${endpointId}, ${orgA}, 'local', 'CRM', 'https://crm.example.test/hook?token=abc', 'active', 'local', ${users.owner}, ${users.owner})`;
+    const correlationId = `${run}-hook`;
+    expect(await call("PATCH", `/api/developer/webhooks/endpoints/${endpointId}/state`, { state: "disabled" }, correlationId)).toMatchObject({ status: 200, body: { endpoint: { state: "disabled" } } });
+    const [event] = await sql!`select name, actor_id, target_id, summary from audit_event where correlation_id = ${correlationId}`;
+    expect(event).toMatchObject({ name: "webhooks.endpoint.state_changed", actor_id: users.owner, target_id: endpointId, summary: { state: "disabled" } });
+    expect(JSON.stringify(event)).not.toMatch(/crm\.example|token=abc/u);
+  });
+
+  it("shows audit history to organization administrators only, within the tenant", async () => {
+    const history = await call("GET", "/api/tenant/audit");
+    expect(history.status).toBe(200);
+    expect(history.body.events.length).toBeGreaterThan(0);
+    expect(history.body.events.map((event: { correlationId: string }) => event.correlationId)).toContain(`${run}-roles`);
+    state.userId = users.reader;
+    expect((await call("GET", "/api/tenant/audit")).status).toBe(403);
+    state.userId = users.outsider;
+    state.organizationId = orgB;
+    expect((await call("GET", "/api/tenant/audit")).body.events).toEqual([]);
+  });
 });
+

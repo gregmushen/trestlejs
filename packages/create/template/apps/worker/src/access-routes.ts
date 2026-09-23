@@ -1,10 +1,11 @@
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { applicationRoles, organizationRoles, unknownApplicationRoles } from "@__TRESTLE_PROJECT_NAME__/authz";
-import { applicationRoleHolders, createDatabase, listApplicationRoleGrants, member, replaceApplicationRoles } from "@__TRESTLE_PROJECT_NAME__/db";
+import { applicationRoleHolders, createDatabase, listApplicationRoleGrants, listAuditEvents, member, replaceApplicationRoles } from "@__TRESTLE_PROJECT_NAME__/db";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
+import { tenantAuditEvent } from "./audit.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 
 const administratorRole = "app_admin";
@@ -35,6 +36,15 @@ accessRoutes.get("/api/tenant/application-role-assignments", async (context) => 
   return context.json({ assignments: grants.map((grant) => ({ ...grant, grantedAt: grant.grantedAt.toISOString() })) });
 });
 
+accessRoutes.get("/api/tenant/audit", async (context) => {
+  const execution = context.get("execution");
+  const before = context.req.query("before");
+  const beforeDate = before ? new Date(before) : undefined;
+  if (beforeDate && Number.isNaN(beforeDate.getTime())) return context.json({ error: "invalid", message: "before must be an ISO timestamp" }, 422);
+  const events = await listAuditEvents(execution.data, execution.tenant.organizationId, { limit: Number(context.req.query("limit") ?? 50), ...(beforeDate ? { before: beforeDate } : {}) });
+  return context.json({ events: events.map((event) => ({ ...event, occurredAt: event.occurredAt.toISOString() })) });
+});
+
 accessRoutes.put("/api/tenant/users/:userId/application-roles", async (context) => {
   const execution = context.get("execution");
   const organizationId = execution.tenant.organizationId;
@@ -51,7 +61,10 @@ accessRoutes.put("/api/tenant/users/:userId/application-roles", async (context) 
   if (holders.length === 1 && holders[0] === userId && !parsed.data.roles.includes(administratorRole)) {
     return context.json({ error: "conflict", message: "The organization must keep at least one application administrator" }, 409);
   }
-  const change = await replaceApplicationRoles(execution.data, { organizationId, userId, roles: parsed.data.roles, actor: `user:${execution.principal.id}`, now: execution.clock.now() });
+  const change = await replaceApplicationRoles(execution.data, {
+    organizationId, userId, roles: parsed.data.roles, actor: `user:${execution.principal.id}`, now: execution.clock.now(),
+    audit: tenantAuditEvent(execution, context.env.APP_ENV, { name: "access.application_roles.changed", target: { type: "user", id: userId } }),
+  });
   execution.log.info("access.application_roles.changed", { targetUserId: userId, added: change.added, removed: change.removed });
   return context.json({ userId, roles: [...new Set(parsed.data.roles)].sort(), ...change });
 });
