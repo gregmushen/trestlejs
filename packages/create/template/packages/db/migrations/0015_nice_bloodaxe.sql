@@ -3,7 +3,9 @@ CREATE TABLE "webhook_attempt" (
 	"organization_id" text NOT NULL,
 	"delivery_id" text NOT NULL,
 	"attempt_number" integer NOT NULL,
+	"kind" text NOT NULL,
 	"attempted_at" timestamp with time zone NOT NULL,
+	"completed_at" timestamp with time zone,
 	"request_url" text NOT NULL,
 	"request_headers" jsonb NOT NULL,
 	"request_body" text NOT NULL,
@@ -12,6 +14,7 @@ CREATE TABLE "webhook_attempt" (
 	"duration_ms" integer NOT NULL,
 	"next_retry_at" timestamp with time zone,
 	CONSTRAINT "webhook_attempt_number_check" CHECK ("webhook_attempt"."attempt_number" > 0),
+	CONSTRAINT "webhook_attempt_kind_check" CHECK ("webhook_attempt"."kind" IN ('local', 'native', 'provider_handoff', 'provider_reported')),
 	CONSTRAINT "webhook_attempt_duration_check" CHECK ("webhook_attempt"."duration_ms" >= 0),
 	CONSTRAINT "webhook_attempt_outcome_check" CHECK ("webhook_attempt"."outcome" IN ('succeeded', 'retry', 'dead'))
 );

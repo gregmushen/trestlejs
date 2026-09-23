@@ -45,11 +45,13 @@ suite("deterministic local outbound webhook capture", () => {
       expect(await captureLocalWebhookDelivery(input)).toMatchObject({ state: "succeeded", attemptNumber: 1, nextRetryAt: null });
       expect(await captureLocalWebhookDelivery(input)).toEqual({ state: "not_due" });
       expect(fetchSpy).not.toHaveBeenCalled();
-      const [attempt] = await sql!<{ request_body: string; request_headers: Record<string, string>; simulated_status: number; duration_ms: number }[]>`select request_body, request_headers, simulated_status, duration_ms from webhook_attempt where delivery_id=${deliveryId}`;
+      const [attempt] = await sql!<{ kind: string; request_body: string; request_headers: Record<string, string>; simulated_status: number; duration_ms: number; completed_at: Date }[]>`select kind, request_body, request_headers, simulated_status, duration_ms, completed_at from webhook_attempt where delivery_id=${deliveryId}`;
       expect(JSON.parse(attempt!.request_body)).toEqual(envelope);
       expect(attempt?.request_headers["webhook-id"]).toBe(messageId);
       expect(attempt?.simulated_status).toBe(200);
       expect(attempt?.duration_ms).toBe(50);
+      expect(attempt?.kind).toBe("local");
+      expect(attempt?.completed_at).toEqual(new Date("2026-09-22T12:00:01.050Z"));
       const header = attempt!.request_headers["webhook-signature"];
       if (!header) throw new Error("Missing captured webhook signature");
       const signature = header.replace(/^v1,/, "");

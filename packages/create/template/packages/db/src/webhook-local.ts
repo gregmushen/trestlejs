@@ -123,7 +123,7 @@ export async function captureLocalWebhookDelivery(input: {
     if (!claimed) return { state: "not_due" };
     await transaction.insert(webhookAttempt).values({
       id: attemptId, organizationId: input.organizationId, deliveryId: input.deliveryId,
-      attemptNumber, attemptedAt: now, requestUrl: record.endpointUrl, requestHeaders: headers,
+      attemptNumber, kind: "local", attemptedAt: now, completedAt: new Date(now.getTime() + simulated.durationMs), requestUrl: record.endpointUrl, requestHeaders: headers,
       requestBody: body, simulatedStatus: simulated.status, outcome: state,
       durationMs: simulated.durationMs, nextRetryAt,
     });

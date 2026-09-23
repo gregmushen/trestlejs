@@ -1493,11 +1493,23 @@
           "primaryKey": false,
           "notNull": true
         },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "attempted_at": {
           "name": "attempted_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "request_url": {
           "name": "request_url",
@@ -1621,6 +1633,10 @@
         "webhook_attempt_number_check": {
           "name": "webhook_attempt_number_check",
           "value": "\"webhook_attempt\".\"attempt_number\" > 0"
+        },
+        "webhook_attempt_kind_check": {
+          "name": "webhook_attempt_kind_check",
+          "value": "\"webhook_attempt\".\"kind\" IN ('local', 'native', 'provider_handoff', 'provider_reported')"
         },
         "webhook_attempt_duration_check": {
           "name": "webhook_attempt_duration_check",
