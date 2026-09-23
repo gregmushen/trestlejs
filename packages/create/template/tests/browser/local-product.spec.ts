@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import postgres from "postgres";
 
 test("a customer verifies email and switches isolated organizations", async ({ page }) => {
   const nonce = crypto.randomUUID().slice(0, 12);
@@ -163,6 +164,19 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     expect(articles.status()).toBe(200);
     const articleId = ((await articles.json()) as { articles: Array<{ id: string }> }).articles[0]?.id;
     expect(articleId).toBeTruthy();
+    if (!articleId) throw new Error("Created article was not returned by the list API");
+    if (process.env.TRESTLE_BROWSER_DATABASE_URL) {
+      const database = postgres(process.env.TRESTLE_BROWSER_DATABASE_URL, { max: 1, prepare: false });
+      try {
+        const committed = await database`select organization_id, event_name, schema_version, resource_type, resource_id, correlation_id, idempotency_key, payload
+          from outbox_message where resource_id=${articleId}`;
+        expect(committed).toHaveLength(1);
+        expect(committed[0]).toMatchObject({ organization_id: firstId, event_name: "resource.article.created",
+          schema_version: 1, resource_type: "article", resource_id: articleId,
+          idempotency_key: `${firstId}:resource.article.created:${articleId}`, payload: { resourceId: articleId } });
+        expect(committed[0]?.correlation_id).toEqual(expect.any(String));
+      } finally { await database.end(); }
+    }
     await switchOrganization(secondId!);
     await expect(page.getByText(`Edited ${nonce}`)).not.toBeVisible();
     const headers = { "x-trestle-tenant": secondId! };

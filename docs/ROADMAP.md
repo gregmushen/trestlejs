@@ -591,6 +591,14 @@ transaction. The generated publisher has no direct-send convenience path;
 transaction rollback removes both records, and retry keys are tenant-scoped.
 It is a foundation for application-owned event emission, not deployed
 webhook-delivery proof or automatic events for every generated resource.
+Alpha 81 makes new generated resource-create mutations use that publisher in
+the same PostgreSQL transaction as the resource insert. The generator
+registers a private, schema-validated application event and makes its Queue
+consumer parse through the same catalog. Generated browser coverage verifies
+the committed event's tenant, resource, payload, correlation, and stable
+tenant-scoped retry key after an HTTP create. Update/delete events, deployed
+Queue execution, and customer-visible webhook projections remain separate
+work.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
