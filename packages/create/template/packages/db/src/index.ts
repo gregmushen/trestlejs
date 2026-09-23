@@ -11,6 +11,7 @@ import * as emailSchema from "./email-schema.js";
 import * as tenantSchema from "./tenant-schema.js";
 import * as outboxSchema from "./outbox-schema.js";
 import * as webhookSchema from "./webhook-schema.js";
+import * as webhookProjectionSchema from "./webhook-projection-schema.js";
 
 export * from "./auth-schema.js";
 export * from "./artifact-schema.js";
@@ -23,11 +24,13 @@ export * from "./roles.js";
 export * from "./tenant-schema.js";
 export * from "./outbox-schema.js";
 export * from "./webhook-schema.js";
+export * from "./webhook-projection-schema.js";
+export * from "./webhook-projection.js";
 export * from "./outbox.js";
 export * from "./inbox.js";
 export * from "./tenancy.js";
 
-const schema = { ...authSchema, ...artifactSchema, ...artifactMaintenanceSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema, ...webhookSchema };
+const schema = { ...authSchema, ...artifactSchema, ...artifactMaintenanceSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema, ...webhookSchema, ...webhookProjectionSchema };
 
 export type DatabaseDriver = "neon-http" | "neon-serverless" | "postgres-js";
 
