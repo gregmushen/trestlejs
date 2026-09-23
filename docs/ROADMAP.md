@@ -479,6 +479,9 @@ Provider errors, missing credentials, missing objects, drift, or incomplete
 pagination fail the recovery evidence without leaking keys. A protected
 production restore drill and a ready-object retention policy remain necessary
 before claiming the storage recovery gate is met.
+Alpha 66 makes preview credential diagnostics distinguish a readable but
+incomplete encrypted file from an unreadable file. This does not satisfy
+missing provider credentials or the deployment gate.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
