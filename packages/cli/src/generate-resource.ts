@@ -84,8 +84,10 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
   const domainPath = manifest.packages.domain ?? "packages/domain";
   const dataPath = manifest.packages.data ?? "packages/data";
   const dbPath = manifest.packages.db ?? "packages/db";
+  const eventsPath = manifest.packages.events ?? "packages/events";
   const workerPath = manifest.apps.worker ?? "apps/worker";
   const appPath = manifest.apps.app ?? "apps/app";
+  const catalogPath = path.join(root, eventsPath, "src", "application-catalog.ts");
   const declarationPath = path.join(root, ".trestle", "resources", `${n.kebab}.json`);
   const targets = [
     declarationPath,
@@ -110,6 +112,14 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
       throw new CliFailure(`resource ${resource.name} already exists with a different declaration`);
     }
   }
+  const catalogSource = await readFile(catalogPath, "utf8").catch(() => undefined);
+  if (!catalogSource?.includes("// trestle:resource-event-definitions") || !catalogSource.includes("// trestle:resource-event-list")) {
+    throw new CliFailure("resource generation requires the application event catalog registration anchors; review and upgrade packages/events/src/application-catalog.ts before generating another resource");
+  }
+  const eventSymbol = `${n.camel}CreatedApplicationEvent`;
+  const hasDefinition = catalogSource.includes(`export const ${eventSymbol} = defineEvent(`);
+  const hasRegistration = catalogSource.includes(`  ${eventSymbol},`);
+  if (hasDefinition !== hasRegistration) throw new CliFailure(`resource ${resource.name} has an incomplete application event catalog registration`);
 
   for (const target of targets) await mkdir(path.dirname(target), { recursive: true });
   const created: string[] = [];
@@ -119,6 +129,7 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     created.push(path.relative(root, target));
   };
   const routePath = `/api/${n.pluralKebab}`;
+  const eventName = `resource.${n.snake}.created`;
   const readPermission = resource.authorization?.read ?? "resource.read";
   const writePermission = resource.authorization?.write ?? "resource.write";
 
@@ -184,12 +195,14 @@ export class ${n.className}Service {
 `);
 
   await writeGenerated(targets[3]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
-import { ${n.camel}, outboxMessage, type Database } from "@${project}/db";
+import { ${n.camel}, type Database } from "@${project}/db";
 import type { ${n.className}Repository } from "@${project}/domain";
-import { and, asc, eq, gt } from "drizzle-orm";
+import { and, asc, eq, gt, type SQL } from "drizzle-orm";
+
+type ResourceEvents = { statement(name: string, payload: unknown, options: { schemaVersion?: number; idempotencyKey: string }): SQL };
 
 export class Postgres${n.className}Repository implements ${n.className}Repository {
-  constructor(private readonly database: Database, private readonly organizationId: string, private readonly correlationId: string) {}
+  constructor(private readonly database: Database, private readonly organizationId: string, private readonly events: ResourceEvents) {}
   async list(input: { cursor?: string; limit: number }): Promise<{ items: ${n.className}[]; nextCursor?: string }> {
     const rows = await this.database.select().from(${n.camel}).where(and(eq(${n.camel}.organizationId, this.organizationId), input.cursor ? gt(${n.camel}.id, input.cursor) : undefined)).orderBy(asc(${n.camel}.id)).limit(input.limit + 1);
     const hasMore = rows.length > input.limit;
@@ -204,14 +217,9 @@ export class Postgres${n.className}Repository implements ${n.className}Repositor
     return this.database.transaction(async (transaction) => {
       const [record] = await transaction.insert(${n.camel}).values({ ...input, organizationId: this.organizationId }).returning();
       if (!record) throw new Error("Failed to create ${n.className}");
-      const occurredAt = new Date();
-      await transaction.insert(outboxMessage).values({
-        id: crypto.randomUUID(), eventName: "resource.${n.kebab}.created", schemaVersion: 1,
-        occurredAt, resourceType: "${n.kebab}", resourceId: record.id,
-        correlationId: this.correlationId, idempotencyKey: "resource.${n.kebab}.created:" + record.id,
-        organizationId: this.organizationId,
-        payload: { resourceId: record.id }, availableAt: occurredAt,
-      });
+      await transaction.execute(this.events.statement("${eventName}", { resourceId: record.id }, {
+        schemaVersion: 1, idempotencyKey: "${eventName}:" + record.id,
+      }));
       return record;
     });
   }
@@ -258,7 +266,7 @@ export const ${n.camel}Routes = new Hono<{ Bindings: AuthEnvironment; Variables:
 ${n.camel}Routes.use("${routePath}", requireExecutionContext);
 ${n.camel}Routes.use("${routePath}/*", requireExecutionContext);
 function service(execution: AppVariables["execution"]) {
-  return new ${n.className}Service(new Postgres${n.className}Repository(execution.data, execution.tenant.organizationId, execution.correlation.correlationId));
+  return new ${n.className}Service(new Postgres${n.className}Repository(execution.data, execution.tenant.organizationId, execution.events));
 }
 async function operation<T>(execution: AppVariables["execution"], event: string, work: () => Promise<T>): Promise<T> {
   const started = execution.clock.now().getTime();
@@ -382,20 +390,15 @@ export function create${n.className}Api(organizationId: string) {
 `);
 
   await writeGenerated(targets[10]!, `import { createLogger } from "@${project}/context";
-import type { EventDefinition, EventEnvelope } from "@${project}/events";
+import { applicationEventCatalog, type EventDefinition, type EventEnvelope } from "@${project}/events";
 
 export type ${n.className}CreatedPayload = { resourceId: string };
 
 export const ${n.camel}CreatedEvent: EventDefinition<${n.className}CreatedPayload> = {
-  name: "resource.${n.kebab}.created",
+  name: "${eventName}",
   schemaVersion: 1,
   parse(payload: unknown): ${n.className}CreatedPayload {
-    if (!payload || typeof payload !== "object") throw new Error("Invalid ${n.className} created event payload");
-    const value = payload as Record<string, unknown>;
-    if (typeof value.resourceId !== "string" || !value.resourceId) {
-      throw new Error("Invalid ${n.className} created event payload");
-    }
-    return { resourceId: value.resourceId };
+    return applicationEventCatalog.parse("${eventName}", 1, payload) as ${n.className}CreatedPayload;
   },
 };
 
@@ -407,6 +410,19 @@ export async function handle${n.className}Created(payload: ${n.className}Created
   });
 }
 `);
+
+  if (!hasDefinition) {
+    const definition = `export const ${eventSymbol} = defineEvent({
+  name: "${eventName}", schemaVersion: 1,
+  description: "A ${n.className} resource was created.", sensitivity: "internal",
+  payload: z.object({ resourceId: z.uuid() }),
+  resource: { type: "${n.snake}", id: (payload: { resourceId: string }) => payload.resourceId },
+});\n`;
+    const updatedCatalog = catalogSource
+      .replace("// trestle:resource-event-definitions", `${definition}// trestle:resource-event-definitions`)
+      .replace("  // trestle:resource-event-list", `  ${eventSymbol},\n  // trestle:resource-event-list`);
+    await writeFile(catalogPath, updatedCatalog, "utf8");
+  }
 
   await writeGenerated(targets[7]!, `import { describe, expect, it } from "vitest";
 import { ${n.camel}CreateSchema, ${n.camel}UpdateSchema } from "./${n.kebab}.js";

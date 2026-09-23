@@ -109,7 +109,8 @@ describe("createProject", () => {
     expect(previewWorkflow).toContain("bootstrap-managed");
     expect(previewWorkflow.indexOf("Migrate preview database")).toBeLessThan(previewWorkflow.indexOf("Configure preview database roles"));
     const applicationCatalog = await readFile(path.join(result.directory, "packages", "events", "src", "application-catalog.ts"), "utf8");
-    expect(applicationCatalog).toContain("defineEventCatalog([])");
+    expect(applicationCatalog).toContain("// trestle:resource-event-definitions");
+    expect(applicationCatalog).toContain("// trestle:resource-event-list");
     expect(await readFile(path.join(result.directory, "packages", "events", "src", "catalog.ts"), "utf8")).toContain("export function defineEvent");
     const setupSkill = await readFile(
       path.join(result.directory, ".agents", "skills", "trestle-setup", "SKILL.md"),

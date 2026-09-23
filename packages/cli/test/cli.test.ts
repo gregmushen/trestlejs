@@ -81,6 +81,14 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toContain("authority model 3");
   });
 
+  it("does not partially generate a resource when the application event catalog cannot be updated safely", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["generate", "resource", "Article"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("application event catalog registration anchors");
+    await expect(readFile(path.join(root, ".trestle/resources/article.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("previews setup without creating or changing a plan", async () => {
     const root = await fixture();
     const output = capture(root);
@@ -282,6 +290,7 @@ describe("TrestleJS CLI", () => {
       "packages/data/src",
       "packages/db/src",
       "packages/db/migrations",
+      "packages/events/src",
       "apps/worker/src",
       "apps/app/src",
     ]) await mkdir(path.join(root, directory), { recursive: true });
@@ -291,6 +300,13 @@ describe("TrestleJS CLI", () => {
       "packages/data/src/index.ts",
       "packages/db/src/index.ts",
     ]) await writeFile(path.join(root, file), "export {};\n");
+    await writeFile(path.join(root, "packages/events/src/application-catalog.ts"), `import { z } from "zod";
+import { defineEvent, defineEventCatalog } from "./catalog.js";
+// trestle:resource-event-definitions
+export const applicationEventCatalog = defineEventCatalog([
+  // trestle:resource-event-list
+]);
+`);
     await writeFile(path.join(root, "apps/worker/src/index.ts"), 'import { Hono } from "hono";\nconst app = new Hono();\napp.get("/api/health", (context) => context.json({ status: "ok" }));\nexport default app;\n');
     await writeFile(path.join(root, "apps/app/src/main.tsx"), 'const rootRoute = createRootRoute({ component: Shell });\nconst routeTree = rootRoute.addChildren([]);\n');
     const plan = {
@@ -339,14 +355,18 @@ describe("TrestleJS CLI", () => {
     expect(routeSource).toContain("new ArticleService(new PostgresArticleRepository");
     const eventSource = await readFile(path.join(root, "apps/worker/src/resources/article-events.ts"), "utf8");
     expect(eventSource).toContain('name: "resource.article.created"');
-    expect(eventSource).toContain("Invalid Article created event payload");
+    expect(eventSource).toContain('applicationEventCatalog.parse("resource.article.created", 1, payload)');
     expect(eventSource).toContain("{ resourceId: string }");
     expect(eventSource).not.toContain("payload.organizationId");
+    const catalogSource = await readFile(path.join(root, "packages/events/src/application-catalog.ts"), "utf8");
+    expect(catalogSource).toContain('name: "resource.article.created", schemaVersion: 1');
+    expect(catalogSource).toContain("  articleCreatedApplicationEvent,");
     const workerSource = await readFile(path.join(root, "apps/worker/src/index.ts"), "utf8");
     expect(workerSource).toContain("eventConsumers.register(articleCreatedEvent, handleArticleCreated);");
     const repositorySource = await readFile(path.join(root, "packages/data/src/resources/article-repository.ts"), "utf8");
     expect(repositorySource).toContain("eq(article.organizationId, this.organizationId)");
-    expect(repositorySource).toContain("organizationId: this.organizationId,\n        payload: { resourceId: record.id }");
+    expect(repositorySource).toContain('transaction.execute(this.events.statement("resource.article.created", { resourceId: record.id }');
+    expect(repositorySource).not.toContain("outboxMessage");
     const screenSource = await readFile(path.join(root, "apps/app/src/resources/article.tsx"), "utf8");
     expect(screenSource).toContain('const key = ["articles", session?.user.id, organizationId] as const');
     expect(screenSource).toContain('enabled: Boolean(session?.user.id && organizationId)');
