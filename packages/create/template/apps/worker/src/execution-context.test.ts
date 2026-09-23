@@ -21,6 +21,8 @@ describe("execution context", () => {
     expect(seen).toEqual(["user-1", "org-a"]);
     expect(context.tenant).toEqual({ organizationId: "org-a", role: "owner" });
     expect(context.authority.planes.organization?.has("organization:manage")).toBe(true);
+    expect(context.authority.planes.organization?.has("organization:webhooks:read")).toBe(true);
+    expect(context.authority.planes.organization?.has("organization:webhooks:deliveries:read")).toBe(true);
     expect(context.authority.planes.application?.has("resource:write")).toBe(true);
     expect(context.entitlements.has("workflows.advanced")).toBe(true);
     expect(context.correlation.correlationId).toBe("corr-1");
@@ -45,6 +47,7 @@ describe("execution context", () => {
     expect(context.access.check({ plane: "application", permission: "resource:read" }).allowed).toBe(true);
     expect(context.access.check({ plane: "application", permission: "resource:write" })).toMatchObject({ allowed: false, missing: ["permission"] });
     expect(context.access.check({ plane: "organization", permission: "organization:manage" })).toMatchObject({ allowed: false, missing: ["permission"] });
+    expect(context.access.check({ plane: "organization", permission: "organization:webhooks:read" })).toMatchObject({ allowed: false, missing: ["permission"] });
   });
 
   it("fails closed for revoked membership", async () => {

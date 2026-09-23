@@ -68,6 +68,13 @@ describe("worker routes", () => {
     expect(response.status).toBe(401);
   });
 
+  it("rejects anonymous webhook inspection before querying tenant data", async () => {
+    const endpoint = await app.request("/api/developer/webhooks/endpoints", undefined, environment);
+    const deliveries = await app.request(`/api/developer/webhooks/endpoints/${crypto.randomUUID()}/deliveries`, undefined, environment);
+    const attempts = await app.request(`/api/developer/webhooks/deliveries/whd_${"a".repeat(64)}/attempts`, undefined, environment);
+    expect([endpoint.status, deliveries.status, attempts.status]).toEqual([401, 401, 401]);
+  });
+
   it("rejects anonymous artifact uploads and invalid signed access", async () => {
     const upload = await app.request("/api/artifacts", { method: "POST", body: "private" }, environment);
     expect(upload.status).toBe(401);
