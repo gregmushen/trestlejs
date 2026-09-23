@@ -277,9 +277,12 @@ versions. It does not yet persist webhook messages or deliver to endpoints.
 Alpha 36 adds committed tenant provenance to outbox rows and generated resource
 mutations. Queue envelopes remain tenant-authority-free; webhook projection
 must reload the committed outbox row before selecting a tenant subscription.
-The next slices are normalized tenant-owned persistence and subscriptions,
-deterministic local capture, native Queue-backed delivery and recovery, and
-then the optional Svix adapter. A committed domain event remains authoritative;
+Alpha 37 adds inert endpoint intent and normalized public-event-version
+subscriptions with forced tenant RLS and cross-tenant foreign-key checks. It
+does not yet store signing secrets, project messages, or send requests. The
+next slices are message/delivery persistence and projection, deterministic
+local capture, native Queue-backed delivery and recovery, and then the optional
+Svix adapter. A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
