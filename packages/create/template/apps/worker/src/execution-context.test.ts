@@ -27,6 +27,7 @@ describe("execution context", () => {
     expect(context.authority.planes.application?.has("resource:write")).toBe(true);
     expect(context.entitlements.has("workflows.advanced")).toBe(true);
     expect(context.correlation.correlationId).toBe("corr-1");
+    expect(context.events.statement).toBeTypeOf("function");
   });
 
   it("does not infer application authority from organization ownership", async () => {

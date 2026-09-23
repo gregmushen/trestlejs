@@ -1,4 +1,5 @@
 import { eventEnvelopeSchema, safeErrorCategory, type EventEnvelope, type OutboxEntry, type OutboxStore } from "@__TRESTLE_PROJECT_NAME__/events";
+import { sql, type SQL } from "drizzle-orm";
 import postgres from "postgres";
 
 type Row = { id: string; event_name: string; schema_version: number; occurred_at: Date; resource_type: string; resource_id: string; organization_id: string | null; correlation_id: string; causation_id: string | null; idempotency_key: string; payload: unknown; status: "pending" | "leased" | "succeeded" | "dead"; attempts: number; available_at: Date; leased_until: Date | null; last_error: string | null };
@@ -12,6 +13,17 @@ export function outboxApplicationConnectionString(connectionString: string): str
   const options = url.searchParams.get("options");
   url.searchParams.set("options", [options, "-c role=trestle_app"].filter(Boolean).join(" "));
   return url.toString();
+}
+
+/** Compose an event insert with a domain mutation in the same Drizzle
+ * transaction. The tenant comes from the authenticated execution context,
+ * never from an event payload or Queue envelope. */
+export function outboxStatement(message: EventEnvelope, organizationId: string): SQL {
+  const parsed = eventEnvelopeSchema.parse(message);
+  if (!/^[A-Za-z0-9_-]+$/u.test(organizationId)) throw new Error("Invalid outbox organization identifier");
+  return sql`insert into outbox_message (id, event_name, schema_version, occurred_at, resource_type, resource_id, organization_id, correlation_id, causation_id, idempotency_key, payload, available_at)
+    values (${parsed.id}, ${parsed.name}, ${parsed.schemaVersion}, ${parsed.occurredAt}::timestamptz, ${parsed.resource.type}, ${parsed.resource.id}, ${organizationId}, ${parsed.correlationId}, ${parsed.causationId ?? null}, ${parsed.idempotencyKey}, ${JSON.stringify(parsed.payload)}::text::jsonb, ${parsed.occurredAt}::timestamptz)
+    on conflict (idempotency_key) do nothing`;
 }
 
 export class PostgresOutboxStore implements OutboxStore {

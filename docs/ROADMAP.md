@@ -585,6 +585,12 @@ the target Worker name. Missing or mismatched resources fail the preview,
 staging, or production deployment before evidence is published. Disabled
 capabilities make no provider requests. This still does not prove that an
 application event was delivered or an artifact was persisted remotely.
+Alpha 80 adds a tenant-bound, catalog-validated `execution.events.statement`
+for composing an outbox insert with an application mutation in one PostgreSQL
+transaction. The generated publisher has no direct-send convenience path;
+transaction rollback removes both records, and retry keys are tenant-scoped.
+It is a foundation for application-owned event emission, not deployed
+webhook-delivery proof or automatic events for every generated resource.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
