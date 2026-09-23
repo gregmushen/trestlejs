@@ -15,6 +15,7 @@ import { auditArtifactReferences } from "./artifact-reference-audit.js";
 import { auditArtifactOrphans } from "./artifact-orphan-audit.js";
 import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
 import { accessRoutes } from "./access-routes.js";
+import { auditTenantAction } from "./audit.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
 import { createBillingService } from "./services.js";
@@ -116,6 +117,8 @@ app.post("/api/developer/webhooks/endpoints", requireExecutionContext, async (co
       ...parsed.data, provider, availableEvents,
     });
     execution.log.info("webhooks.endpoint.created", { endpointId: result.endpointId, subscriptionCount: parsed.data.subscriptions.length });
+    // The signing secret and destination URL are never part of the audit record.
+    await auditTenantAction(execution, context.env.APP_ENV, { name: "webhooks.endpoint.created", target: { type: "webhook_endpoint", id: result.endpointId }, summary: { name: parsed.data.name, provider, subscriptions: parsed.data.subscriptions.length } });
     context.header("Cache-Control", "no-store");
     return context.json({ endpoint: { id: result.endpointId, state: "disabled", name: parsed.data.name }, signingSecret: result.secret }, 201);
   } catch (error) {
@@ -153,6 +156,7 @@ app.patch("/api/developer/webhooks/endpoints/:id/state", requireExecutionContext
     });
     if (!updated) return context.json({ error: "Endpoint not found" }, 404);
     execution.log.info("webhooks.endpoint.state_changed", { endpointId, state: parsed.data.state });
+    await auditTenantAction(execution, context.env.APP_ENV, { name: "webhooks.endpoint.state_changed", target: { type: "webhook_endpoint", id: endpointId }, summary: { state: parsed.data.state } });
     return context.json({ endpoint: { id: endpointId, state: parsed.data.state } });
   } catch (error) {
     if (error instanceof WebhookSecretError) return context.json({ error: error.message }, 409);
@@ -206,6 +210,7 @@ app.patch("/api/developer/webhooks/endpoints/:id/subscriptions", requireExecutio
     });
     if (!updated) return context.json({ error: "Endpoint not found" }, 404);
     execution.log.info("webhooks.endpoint.subscriptions_changed", { endpointId, subscriptionCount: parsed.data.subscriptions.length });
+    await auditTenantAction(execution, context.env.APP_ENV, { name: "webhooks.endpoint.subscriptions_changed", target: { type: "webhook_endpoint", id: endpointId }, summary: { subscriptions: parsed.data.subscriptions } });
     return context.json({ subscriptions: parsed.data.subscriptions });
   } catch (error) {
     if (error instanceof WebhookSecretError) return context.json({ error: error.message }, 400);

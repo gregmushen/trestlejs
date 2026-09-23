@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import * as accessSchema from "./access-schema.js";
+import * as auditSchema from "./audit-schema.js";
 import * as authSchema from "./auth-schema.js";
 import * as artifactSchema from "./artifact-schema.js";
 import * as artifactMaintenanceSchema from "./artifact-maintenance-schema.js";
@@ -18,6 +19,8 @@ import * as webhookSecretSchema from "./webhook-secret-schema.js";
 
 export * from "./access-schema.js";
 export * from "./application-roles.js";
+export * from "./audit-schema.js";
+export * from "./audit.js";
 export * from "./auth-schema.js";
 export * from "./artifact-schema.js";
 export * from "./artifact-maintenance-schema.js";
@@ -47,7 +50,7 @@ export * from "./outbox.js";
 export * from "./inbox.js";
 export * from "./tenancy.js";
 
-const schema = { ...accessSchema, ...authSchema, ...artifactSchema, ...artifactMaintenanceSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema, ...webhookSchema, ...webhookProjectionSchema, ...webhookAttemptSchema, ...webhookSecretSchema };
+const schema = { ...accessSchema, ...auditSchema, ...authSchema, ...artifactSchema, ...artifactMaintenanceSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema, ...webhookSchema, ...webhookProjectionSchema, ...webhookAttemptSchema, ...webhookSecretSchema };
 
 export type DatabaseDriver = "neon-http" | "neon-serverless" | "postgres-js";
 

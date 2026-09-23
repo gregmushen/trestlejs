@@ -15,6 +15,7 @@ import { definePermissions } from "./registry.js";
 export const permissions = definePermissions({
   "organization.read": { plane: "organization", description: "Read the organization profile and your own effective access" },
   "organization.members.read": { plane: "organization", description: "List organization members and their roles" },
+  "organization.audit.read": { plane: "organization", description: "Read the organization's redacted audit history" },
   "organization.billing.read": { plane: "organization", description: "Read the subscription and plan" },
   "organization.billing.manage": { plane: "organization", description: "Start checkout and open the billing portal" },
   "organization.webhooks.read": { plane: "organization", description: "List webhook endpoints, subscriptions, and public event types" },
