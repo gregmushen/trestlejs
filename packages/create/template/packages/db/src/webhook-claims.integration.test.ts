@@ -16,12 +16,12 @@ const deliveryIds: string[] = [];
 const tenantDatabase = (organizationId: string) => createTenantDatabase(databaseUrl!, "postgres-js", organizationId);
 const initialTime = new Date("2026-09-22T12:00:00.000Z");
 
-async function fixture(organizationId: string, options: { provider?: "native" | "local"; state?: "active" | "paused"; dueAt?: Date } = {}) {
-  const [endpoint] = await sql!<{ id: string }[]>`insert into webhook_endpoint (organization_id, environment, name, destination_url, state, provider, created_by, updated_by) values (${organizationId}, 'preview', ${crypto.randomUUID()}, 'https://example.com/hook', ${options.state ?? "active"}, ${options.provider ?? "native"}, 'test-user', 'test-user') returning id`;
+async function fixture(organizationId: string, options: { provider?: "native" | "local"; state?: "active" | "paused"; dueAt?: Date; endpointId?: string } = {}) {
+  const [endpoint] = options.endpointId ? [{ id: options.endpointId }] : await sql!<{ id: string }[]>`insert into webhook_endpoint (organization_id, environment, name, destination_url, state, provider, created_by, updated_by) values (${organizationId}, 'preview', ${crypto.randomUUID()}, 'https://example.com/hook', ${options.state ?? "active"}, ${options.provider ?? "native"}, 'test-user', 'test-user') returning id`;
   if (!endpoint) throw new Error("Endpoint fixture failed");
   const messageId = `whm_claim_${crypto.randomUUID()}`;
   const deliveryId = `whd_claim_${crypto.randomUUID()}`;
-  endpointIds.push(endpoint.id);
+  if (!options.endpointId) endpointIds.push(endpoint.id);
   messageIds.push(messageId);
   deliveryIds.push(deliveryId);
   const sourceEventId = crypto.randomUUID();
@@ -48,6 +48,28 @@ suite("native webhook delivery leases", () => {
     expect(leased).toMatchObject({ attemptNumber: 1, leasedUntil: new Date(initialTime.getTime() + 30_000) });
     const [row] = await sql!`select state, lease_token, leased_until, attempt_count from webhook_delivery where id=${deliveryId}`;
     expect(row).toMatchObject({ state: "leased", lease_token: leased?.state === "leased" ? leased.leaseToken : undefined, attempt_count: 0 });
+  });
+
+  it("bounds simultaneous leases per endpoint across competing workers", async () => {
+    const organizationId = "claim-capacity";
+    const first = await fixture(organizationId);
+    const deliveries = [first, ...await Promise.all(Array.from({ length: 6 }, () => fixture(organizationId, { endpointId: first.endpointId })))];
+    const results = await Promise.all(deliveries.map(({ deliveryId }) => claimNativeWebhookDelivery({
+      organizationId, deliveryId, tenantDatabase, clock: { now: () => initialTime },
+    })));
+    expect(results.filter((result) => result.state === "leased")).toHaveLength(4);
+    expect(results.filter((result) => result.state === "capacity")).toHaveLength(3);
+    const [active] = await sql!<{ active: number }[]>`select count(*)::int as active from webhook_delivery where endpoint_id=${first.endpointId} and state='leased'`;
+    expect(active?.active).toBe(4);
+    const winner = results.find((result) => result.state === "leased");
+    const waiting = results.findIndex((result) => result.state === "capacity");
+    if (winner?.state !== "leased" || waiting < 0) throw new Error("Expected leased and deferred deliveries");
+    await settleNativeWebhookAttempt({ organizationId, deliveryId: winner.deliveryId, leaseToken: winner.leaseToken, tenantDatabase,
+      clock: { now: () => new Date(initialTime.getTime() + 1) }, result: { kind: "response", status: 204 }, durationMs: 1 });
+    expect((await claimNativeWebhookDelivery({ organizationId, deliveryId: deliveries[waiting]!.deliveryId, tenantDatabase,
+      clock: { now: () => new Date(initialTime.getTime() + 1) } })).state).toBe("leased");
+    await expect(claimNativeWebhookDelivery({ organizationId, deliveryId: deliveries[waiting]!.deliveryId, tenantDatabase,
+      clock: { now: () => initialTime }, maxActivePerEndpoint: 0 })).rejects.toThrow("endpoint concurrency limit");
   });
 
   it("recovers due work and expired leases without crossing tenant or environment", async () => {

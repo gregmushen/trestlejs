@@ -30,6 +30,10 @@ export async function runNativeWebhookWakeup(input: {
   const work = await resolveNativeWebhookWork({ wakeup: input.wakeup, environment, outbox: input.outbox, tenantDatabase });
   if (work.state !== "ready") return { state: "ignored" };
   const claim = await claimNativeWebhookDelivery({ organizationId: work.organizationId, deliveryId: work.deliveryId, tenantDatabase, clock, leaseMs: 60_000 });
+  if (claim.state === "capacity") {
+    createLogger({ organizationId: work.organizationId }).info("webhook.native.capacity.deferred", { webhookDeliveryId: work.deliveryId });
+    return { state: "retry", delaySeconds: 30 };
+  }
   if (claim.state !== "leased") return { state: "ignored" };
   const payload = await loadNativeWebhookAttempt({ organizationId: work.organizationId, deliveryId: work.deliveryId, leaseToken: claim.leaseToken, environment, tenantDatabase, clock });
   if (!payload) return { state: "stale" };

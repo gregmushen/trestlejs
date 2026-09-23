@@ -388,6 +388,13 @@ wake-ups, retry, lease recovery, and metadata-only native attempt storage;
 generated browser and Worker dry-run checks pass. Live Cloudflare egress and
 end-to-end deployed delivery remain unproven, so the starter still defaults to
 disabled mode.
+Alpha 55 enforces the first native dispatch backpressure rule at the
+PostgreSQL claim boundary: at most four unexpired leases may be active for one
+endpoint by default, even when several Queue workers compete. A capacity
+rejection does not increment an attempt or drop the delivery; it is delayed
+and remains visible to the recovery sweep. PostgreSQL contention tests cover
+the limit and release of a slot after settlement. Per-tenant/global limits,
+plan throughput, and provider request-rate policies remain separate work.
 Trestle does not yet provide customer webhook inspection UI. The next slices
 are deployed native delivery proof and the optional Svix adapter. A committed
 domain event remains authoritative;
