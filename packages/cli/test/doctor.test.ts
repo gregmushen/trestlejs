@@ -23,6 +23,31 @@ describe("remote provider preflight", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "billing.stripe.configuration", status: "fail" }));
   });
 
+  it("distinguishes readable but incomplete credentials from unreadable credentials", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-readable-secrets-doctor-"));
+    const key = randomBytes(32).toString("hex");
+    try {
+      await mkdir(path.join(root, "config", "credentials"), { recursive: true });
+      await writeFile(path.join(root, "config", "credentials", "preview.yml.enc"), encryptSecrets({}, "preview", key));
+      const incomplete = await runDoctor(root, manifest, "preview", key);
+      expect(incomplete.checks).toContainEqual(expect.objectContaining({
+        id: "configuration.secrets.valid",
+        status: "fail",
+        message: expect.stringContaining("readable but required values are missing or undeclared"),
+        evidence: expect.stringContaining("STRIPE_SECRET_KEY is required for preview"),
+      }));
+      const unreadable = await runDoctor(root, manifest, "preview", randomBytes(32).toString("hex"));
+      expect(unreadable.checks).toContainEqual(expect.objectContaining({
+        id: "configuration.secrets.valid",
+        status: "fail",
+        message: "preview encrypted credentials cannot be read",
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("fails enabled remote capabilities when their Worker bindings are absent", async () => {
     const manifest = await loadProjectManifest(templateRoot);
     const enabled = { ...manifest, capabilities: { ...manifest.capabilities, queues: true, r2: true, workflows: true, durableObjects: true } };

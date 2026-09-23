@@ -298,8 +298,8 @@ export async function runDoctor(
         id: "configuration.secrets.valid",
         group: "architecture",
         status: problems.length === 0 ? "pass" : "fail",
-        message: problems.length === 0 ? `${environment} encrypted credentials are valid` : `${environment} encrypted credentials are invalid`,
-        ...(problems.length > 0 ? { evidence: problems.join("; "), remediation: `Run trestle secrets edit --env ${environment}` } : {}),
+        message: problems.length === 0 ? `${environment} encrypted credentials are valid` : `${environment} encrypted credentials are readable but required values are missing or undeclared`,
+        ...(problems.length > 0 ? { evidence: problems.join("; "), remediation: `Run trestle secrets check --env ${environment}, then trestle secrets edit --env ${environment}` } : {}),
       });
     } catch (error) {
       checks.push({
