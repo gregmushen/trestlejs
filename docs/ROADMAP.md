@@ -401,9 +401,19 @@ metadata only: destination hosts, not paths or query strings; no signing keys,
 headers, request bodies, response bodies, or payload envelopes. Owner and admin
 roles receive granular read permissions, while forced RLS and environment
 predicates remain separate protections. PostgreSQL and generated-browser tests
-cover tenant isolation, redaction, and malformed requests. This is an API
-slice, not the customer inspection UI; cursor pagination, deeper operational
-controls, deployed native delivery proof, and the optional Svix adapter remain.
+cover tenant isolation, redaction, and malformed requests.
+Alpha 57 adds the application-owned, read-only customer inspection screen for
+endpoints, deliveries, and attempt outcomes. Its TanStack queries are scoped
+to the signed-in user and selected organization, and switching organizations
+clears the selected endpoint and delivery. The screen renders only the safe
+metadata fields returned by Alpha 56, states its 50-record limit, and shows
+permission failures without exposing provider responses or secrets. Generated
+browser coverage exercises both organizations, the record hierarchy, redaction,
+and denied access. Cursor pagination, deeper operational controls, deployed
+native delivery proof, and the optional Svix adapter remain.
+Alpha 57 also shortens the local PostgreSQL socket idle period after the hosted
+generated system test exposed connection exhaustion. Worker request I/O remains
+isolated: database sockets are never cached across Cloudflare requests.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 
@@ -455,6 +465,10 @@ The largest gaps between Alpha 6 and the current v1 specification are:
 - shared error mapping and cross-boundary observability;
 - secure remote operational tooling and application console behavior;
 - richer resources, generated typed clients, and authorization policies;
+- foundational locale, time-zone, civil-date, exact-money, and currency
+  semantics; optional translation is separate product scope. The supplied
+  locale/time/money document is an overview and the full normative draft is
+  still needed before these contracts can be marked implemented;
 - framework upgrade/sync tooling and compatibility guarantees;
 - optional admin installation and admin-resource generation;
 - static architectural enforcement and complete machine-readable discovery;

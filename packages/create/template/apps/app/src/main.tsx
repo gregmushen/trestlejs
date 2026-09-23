@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { authClient } from "./auth-client";
 import { billingSubscriptionQueryKey } from "./tenant-query.js";
+import { WebhookInspection } from "./webhook-inspection";
 import "./styles.css";
 
 const apiOrigin = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.replace(/\/$/u, "") ?? "";
@@ -42,6 +43,7 @@ function Shell() {
         <Link to="/sign-in" activeProps={{ className: "text-brand-500" }}>Sign in</Link>
         <Link to="/sign-up" activeProps={{ className: "text-brand-500" }}>Create account</Link>
         <Link to="/dashboard" activeProps={{ className: "text-brand-500" }}>Dashboard</Link>
+        <Link to="/settings/webhooks" activeProps={{ className: "text-brand-500" }}>Webhooks</Link>
         {/* trestle:resource-links */}
       </div>
     </nav>
@@ -195,7 +197,8 @@ const forgotPasswordRoute = createRoute({ getParentRoute: () => rootRoute, path:
 const resetPasswordRoute = createRoute({ getParentRoute: () => rootRoute, path: "/reset-password", component: ResetPassword });
 const acceptInvitationRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accept-invitation", component: AcceptInvitation });
 const billingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings/billing", component: BillingSettings });
-const routeTree = rootRoute.addChildren([indexRoute, signInRoute, signUpRoute, dashboardRoute, checkEmailRoute, forgotPasswordRoute, resetPasswordRoute, acceptInvitationRoute, billingRoute]);
+const webhookInspectionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings/webhooks", component: WebhookInspection });
+const routeTree = rootRoute.addChildren([indexRoute, signInRoute, signUpRoute, dashboardRoute, checkEmailRoute, forgotPasswordRoute, resetPasswordRoute, acceptInvitationRoute, billingRoute, webhookInspectionRoute]);
 const router = createRouter({ routeTree });
 const queryClient = new QueryClient();
 
