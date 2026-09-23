@@ -61,9 +61,37 @@ test("a customer verifies email and switches isolated organizations", async ({ p
 
   await selector.selectOption(firstId!);
   await expect(selector).toHaveValue(firstId!);
-  await page.goto("/settings/billing");
-  await expect(page.getByText("Current plan:")).toContainText("starter");
+  await page.getByRole("link", { name: "Webhooks" }).click();
+  await expect(page.getByRole("heading", { name: "Outbound webhooks" })).toBeVisible();
+  await expect(page.getByText("No webhook endpoints for this organization.")).toBeVisible();
   await page.getByRole("combobox", { name: "Active organization" }).selectOption(secondId!);
+  await expect(page.getByText("No webhook endpoints for this organization.")).toBeVisible();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText("No webhook endpoints for this organization.")).toBeVisible();
+  if (process.env.TRESTLE_BROWSER_MODE !== "deployed") {
+    const endpointId = "c45cf83d-1341-4242-a57d-5bb6c6266f85";
+    const deliveryId = `whd_${"a".repeat(64)}`;
+    const sensitive = "never-render-this-webhook-secret";
+    let forbidden = false;
+    await page.route("**/api/developer/webhooks/**", async (route) => {
+      if (forbidden) { await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "Forbidden" }) }); return; }
+      const path = new URL(route.request().url()).pathname;
+      const body = path.endsWith("/attempts") ? { attempts: [{ id: `${deliveryId}.1`, attemptNumber: 1, kind: "native", attemptedAt: "2026-09-23T00:00:00.000Z", completedAt: "2026-09-23T00:00:01.000Z", responseStatus: 503, resultCategory: "http", outcome: "retry", durationMs: 1000, nextRetryAt: null, requestBody: sensitive }] }
+        : path.endsWith("/deliveries") ? { deliveries: [{ id: deliveryId, messageId: "hidden-message", eventType: "article.published", eventVersion: 1, occurredAt: "2026-09-23T00:00:00.000Z", state: "retry", attemptCount: 1, nextAttemptAt: null, terminalReason: null, createdAt: "2026-09-23T00:00:00.000Z", completedAt: null, payloadAvailable: true, correlationId: null, envelope: sensitive }] }
+        : { endpoints: [{ id: endpointId, name: "Product events", destinationHost: "hooks.example.test", state: "active", health: "healthy", provider: "native", subscriptionCount: 1, createdAt: "2026-09-23T00:00:00.000Z", updatedAt: "2026-09-23T00:00:00.000Z", destinationUrl: `https://hooks.example.test/${sensitive}` }] };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    });
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await page.getByRole("button", { name: /Product events/u }).click();
+    await page.getByRole("button", { name: /article.published v1/u }).click();
+    await expect(page.getByText("Attempt 1: retry")).toBeVisible();
+    await expect(page.getByText(sensitive)).toHaveCount(0);
+    forbidden = true;
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await expect(page.getByRole("alert").first()).toHaveText("You do not have permission to inspect this organization's webhooks.");
+    await page.unroute("**/api/developer/webhooks/**");
+  }
+  await page.goto("/settings/billing");
   await expect(page.getByText("Current plan:")).toContainText("pro");
   await page.getByRole("combobox", { name: "Active organization" }).selectOption(firstId!);
   await expect(page.getByText("Current plan:")).toContainText("starter");
