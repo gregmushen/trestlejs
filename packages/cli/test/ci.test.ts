@@ -35,6 +35,28 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.workflow.ci.yml.actions-pinned", status: "fail", evidence: "actions/checkout@v4" }));
   });
 
+  it("rejects provider verification that bypasses encrypted staging credentials", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "providers.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replace("$(pnpm exec trestle secrets get RESEND_API_KEY --env staging --raw)", "${{ secrets.RESEND_API_KEY }}"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.providers.encrypted-secrets", status: "fail" }));
+  });
+
+  it("rejects protected provider verification without staging configuration checks", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "providers.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replace("pnpm exec trestle doctor --env staging", "pnpm exec trestle env status --env staging"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.providers.encrypted-secrets", status: "fail" }));
+  });
+
   it("rejects omission of the local product system test", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);

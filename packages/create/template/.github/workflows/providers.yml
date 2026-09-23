@@ -17,10 +17,19 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Verify encrypted staging credentials and provider configuration
+        run: |
+          pnpm exec trestle secrets check --env staging
+          pnpm exec trestle doctor --env staging
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
       - name: Verify provider credentials and staging safety
-        run: pnpm --filter @__TRESTLE_PROJECT_NAME__/integrations exec vitest run src/provider.integration.test.ts
+        run: |
+          set -euo pipefail
+          RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env staging --raw)"
+          STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env staging --raw)"
+          export RESEND_API_KEY STRIPE_SECRET_KEY
+          pnpm --filter @__TRESTLE_PROJECT_NAME__/integrations exec vitest run src/provider.integration.test.ts
         env:
           TRESTLE_PROVIDER_INTEGRATION_TESTS: "1"
-          RESEND_API_KEY: "${{ secrets.RESEND_API_KEY }}"
-          EMAIL_STAGING_REDIRECT: "${{ vars.EMAIL_STAGING_REDIRECT }}"
-          STRIPE_SECRET_KEY: "${{ secrets.STRIPE_SECRET_KEY }}"
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"

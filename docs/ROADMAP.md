@@ -554,6 +554,13 @@ port after an Alpha 74 publication attempt exposed an intermittent fixed-port
 collision on the hosted runner. Generated applications retain their documented
 local Astro port; this only hardens the release proof. The first Alpha 74
 publish attempt failed at site startup, and the unchanged-tag retry passed.
+Alpha 76 aligns protected staging provider verification with Trestle's
+encrypted credentials: the workflow checks and decrypts the declared staging
+store using its environment master key, while integration tests read the
+canonical staging Worker variables and reject unsafe Resend/Stripe modes.
+Deterministic generated-project tests cover configuration selection. This does
+not replace live provider verification or close the canary preview's missing
+provider configuration gates.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
