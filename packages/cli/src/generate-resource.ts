@@ -456,13 +456,13 @@ suite("${n.className} forced tenant isolation", () => {
   if (!workerSource.includes(workerEventImport)) workerSource = `${workerEventImport}\n${workerSource}`;
   const workerRegistration = `app.route("/", ${n.camel}Routes);`;
   const workerEventRegistration = `eventConsumers.register(${n.camel}CreatedEvent, handle${n.className}Created);`;
+  const workerAnchor = ["\nconst consumeQueue =", "\ntype WorkerEnvironment =", "\nexport default {", "\nexport default app;"].find((candidate) => workerSource.includes(candidate));
+  if (!workerAnchor) throw new Error("Worker entrypoint has no supported resource registration anchor");
   if (!workerSource.includes(workerRegistration)) {
-    const anchor = workerSource.includes("\nconst consumeQueue =") ? "\nconst consumeQueue =" : "\nexport default app;";
-    workerSource = workerSource.replace(anchor, `\n${workerRegistration}\n${anchor}`);
+    workerSource = workerSource.replace(workerAnchor, `\n${workerRegistration}\n${workerAnchor}`);
   }
   if (!workerSource.includes(workerEventRegistration)) {
-    const anchor = workerSource.includes("\nconst consumeQueue =") ? "\nconst consumeQueue =" : "\nexport default app;";
-    workerSource = workerSource.replace(anchor, `\n${workerEventRegistration}\n${anchor}`);
+    workerSource = workerSource.replace(workerAnchor, `\n${workerEventRegistration}\n${workerAnchor}`);
   }
   await writeFile(workerIndex, workerSource, "utf8");
 

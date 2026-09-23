@@ -1,4 +1,4 @@
-import { createDatabase, organization, outboxMessage, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createDatabase, eventInbox, organization, outboxMessage, user } from "@__TRESTLE_PROJECT_NAME__/db";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -82,6 +82,11 @@ suite("local product path", () => {
         const delivery: string[] = [];
         expect(await worker.queue({ messages: [{ body: queuedEvent, ack: () => delivery.push("ack"), retry: () => delivery.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
         expect(delivery).toEqual(["ack"]);
+        const duplicateDelivery: string[] = [];
+        expect(await worker.queue({ messages: [{ body: queuedEvent, ack: () => duplicateDelivery.push("ack"), retry: () => duplicateDelivery.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
+        expect(duplicateDelivery).toEqual(["ack"]);
+        const [inbox] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, outbox!.idempotencyKey)).limit(1);
+        expect(inbox).toMatchObject({ status: "completed", attempts: 1 });
         const invalidDelivery: string[] = [];
         expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: article.id } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, environment)).toEqual({ acknowledged: 0, retried: 1 });
         expect(invalidDelivery).toEqual(["retry"]);
@@ -105,6 +110,7 @@ suite("local product path", () => {
       }, environment);
       expect(unjoined.status).toBe(404);
     } finally {
+      if (articleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${articleId}`));
       if (articleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, articleId));
       if (organizationId && process.env.TRESTLE_SYSTEM_TEST_ARTICLES === "1") await database.execute(sql`delete from article where organization_id = ${organizationId}`);
       if (organizationId) await database.delete(organization).where(eq(organization.id, organizationId));

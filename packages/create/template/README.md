@@ -88,6 +88,14 @@ producer/consumer binding with a dead-letter queue and cron dispatcher, and
 isolate preview Queue names by pull request. Preview cleanup deletes only its
 own Queues after deleting its Worker. Queues remain opt-in until this hosted
 path has been verified against a real account.
+If `capabilities.r2` is enabled, grant `Workers R2 Storage Write`. The workflows
+provision a separate bucket per environment; preview cleanup deletes its bucket
+only when empty and never purges application artifacts.
+Queue delivery is at least once. The PostgreSQL event inbox prevents a completed
+logical event from running its handler again and leases in-progress work for
+recovery. Handlers that call external services must still pass the event's
+stable `idempotencyKey`: a crash after an external side effect but before the
+inbox completion record can cause that operation to be retried.
 `CLOUDFLARE_WORKERS_SUBDOMAIN` is the account label before `.workers.dev`; it
 is used to derive the Worker URL exercised by the preview smoke gate. Preview
 preflight verifies that it matches the configured Cloudflare account. Preview

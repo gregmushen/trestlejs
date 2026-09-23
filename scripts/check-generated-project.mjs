@@ -35,6 +35,12 @@ try {
   }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Author"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article", "--field", "summary:text?", "published:boolean?", "authorId:relation?:Author:set-null"], project);
+  const workerEntry = await readFile(path.join(project, "apps", "worker", "src", "index.ts"), "utf8");
+  for (const resource of ["author", "article"]) {
+    if (!workerEntry.includes(`app.route("/", ${resource}Routes);`) || !workerEntry.includes(`eventConsumers.register(${resource}CreatedEvent, handle${resource[0].toUpperCase()}${resource.slice(1)}Created);`)) {
+      throw new Error(`Generated ${resource} Worker route or event handler was not registered`);
+    }
+  }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "resource", "add-field", "Article", "archived:boolean?", "--yes"], project);
@@ -42,6 +48,7 @@ try {
   await run("pnpm", ["check"], project);
   if (process.env.TRESTLE_GENERATED_DATABASE_URL) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run", "src/inbox.integration.test.ts"], project, { TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "src/system.integration.test.ts"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1" });
   }
   const generatedProjectManifest = path.join(project, ".trestle", "project.yaml");
