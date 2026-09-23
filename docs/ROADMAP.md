@@ -294,6 +294,12 @@ committed outbox row, rejects mismatched Queue envelopes, uses canonical tenant
 and entitlement state, and keeps projection within inbox retry handling when
 local webhook mode is explicitly enabled. Disabled mode remains inert; native
 and Svix modes fail closed until their delivery adapters exist.
+Alpha 42 adds a reusable native destination preflight: strict HTTPS URL
+parsing, public-address checks for IPv4 and IPv6, mixed-answer rejection,
+and fresh DNS resolution on every attempt. It deliberately does not enable
+native sending: Cloudflare Workers cannot pin an arbitrary `fetch` request to
+the address it just approved. A transport with that guarantee (or a trusted
+egress gateway) is required before native mode can be activated.
 Trestle does not yet deliver projected webhooks automatically or provide
 customer inspection UI. The next slices are native Queue-backed delivery and
 recovery, then the optional Svix adapter. A committed domain event remains authoritative;
