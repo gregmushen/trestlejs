@@ -1,7 +1,9 @@
-import { and, asc, eq, inArray, lte } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm";
 
 import type { Database } from "./index.js";
+import { parseNativeWebhookDestination } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { webhookEndpoint } from "./webhook-schema.js";
+import { webhookSubscription } from "./webhook-schema.js";
 import { webhookSecretVersion } from "./webhook-secret-schema.js";
 
 export class WebhookSecretError extends Error {
@@ -23,6 +25,13 @@ export type WebhookSecretMetadata = {
 };
 
 export type DisclosedWebhookSecret = { secret: string; metadata: WebhookSecretMetadata };
+export type WebhookEndpointRegistration = {
+  name: string;
+  destinationUrl: string;
+  provider: "local" | "native";
+  subscriptions: readonly { type: string; version: number }[];
+  availableEvents: readonly { type: string; version: number; entitlement?: string }[];
+};
 
 const encoder = new TextEncoder();
 const base64 = (bytes: Uint8Array | ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(bytes)));
@@ -127,6 +136,45 @@ export class WebhookSecretService {
     return actorId;
   }
 
+  /** Register the inert endpoint, subscriptions, and encrypted signing key in one tenant transaction. */
+  async registerEndpoint(organizationId: string, input: WebhookEndpointRegistration): Promise<{ endpointId: string; secret: string; metadata: WebhookSecretMetadata }> {
+    const now = nowFrom(this.input.clock);
+    const endpointId = crypto.randomUUID();
+    const actorId = await this.authorize("manage", organizationId, endpointId, now);
+    const name = input.name.trim();
+    if (!name || name.length > 120) throw new WebhookSecretError("Webhook endpoint name must be 1–120 characters");
+    if (input.provider !== "local" && input.provider !== "native") throw new WebhookSecretError("Unsupported webhook endpoint provider");
+    const destinationUrl = parseNativeWebhookDestination(input.destinationUrl).url;
+    if (!input.subscriptions.length || input.subscriptions.length > 100) throw new WebhookSecretError("Select 1–100 public webhook events");
+    const allowed = new Set(input.availableEvents.map((event) => `${event.type}@${event.version}`));
+    const requested = new Set<string>();
+    for (const subscription of input.subscriptions) {
+      const key = `${subscription.type}@${subscription.version}`;
+      if (!allowed.has(key) || requested.has(key)) throw new WebhookSecretError("Webhook subscription is unavailable or duplicated");
+      requested.add(key);
+    }
+    const secret = await freshSecret();
+    const cipher = await this.cipher;
+    return this.input.tenantDatabase(organizationId).transaction(async (transaction) => {
+      await transaction.insert(webhookEndpoint).values({
+        id: endpointId, organizationId, environment: this.input.environment, name, destinationUrl,
+        state: "disabled", provider: input.provider, createdBy: actorId, updatedBy: actorId,
+        createdAt: now, updatedAt: now,
+      });
+      await transaction.insert(webhookSubscription).values(input.subscriptions.map((subscription) => ({
+        organizationId, endpointId, publicEventType: subscription.type,
+        publicVersion: subscription.version, createdBy: actorId, createdAt: now,
+      })));
+      const [row] = await transaction.insert(webhookSecretVersion).values({
+        organizationId, endpointId, version: 1,
+        ciphertext: await cipher.encrypt(secret.value, organizationId, endpointId, 1),
+        fingerprint: secret.fingerprint, state: "current", activatedAt: now, createdBy: actorId,
+      }).returning();
+      if (!row) throw new WebhookSecretError("Webhook signing secret could not be created");
+      return { endpointId, secret: secret.value, metadata: metadata(row) };
+    });
+  }
+
   async issue(organizationId: string, endpointId: string): Promise<DisclosedWebhookSecret> {
     const now = nowFrom(this.input.clock);
     const actorId = await this.authorize("manage", organizationId, endpointId, now);
@@ -211,4 +259,40 @@ export class WebhookSecretService {
       return cipher.decrypt(row.ciphertext, organizationId, endpointId, row.version);
     }));
   }
+}
+
+/** Disabling must remain possible even if the encryption key is unavailable. */
+export async function setWebhookEndpointState(input: {
+  organizationId: string;
+  endpointId: string;
+  environment: "local" | "preview" | "staging" | "production";
+  state: "active" | "disabled";
+  activeProvider?: "local" | "native";
+  authority: WebhookSecretAuthority;
+  tenantDatabase: (organizationId: string) => Database;
+  clock: { now(): Date };
+}): Promise<boolean> {
+  const now = nowFrom(input.clock);
+  const actorId = requireActor((await input.authority.authorize({ action: "manage", organizationId: input.organizationId, endpointId: input.endpointId })).actorId);
+  return input.tenantDatabase(input.organizationId).transaction(async (transaction) => {
+    const [endpoint] = await transaction.select({ id: webhookEndpoint.id, provider: webhookEndpoint.provider }).from(webhookEndpoint).where(and(
+      eq(webhookEndpoint.id, input.endpointId), eq(webhookEndpoint.organizationId, input.organizationId),
+      eq(webhookEndpoint.environment, input.environment), isNull(webhookEndpoint.deletedAt),
+    )).for("update").limit(1);
+    if (!endpoint) return false;
+    if (input.state === "active") {
+      if (!input.activeProvider || endpoint.provider !== input.activeProvider) throw new WebhookSecretError("Endpoint provider does not match the active delivery capability");
+      const [subscription] = await transaction.select({ endpointId: webhookSubscription.endpointId }).from(webhookSubscription).where(and(
+        eq(webhookSubscription.organizationId, input.organizationId), eq(webhookSubscription.endpointId, input.endpointId),
+      )).limit(1);
+      const [secret] = await transaction.select({ endpointId: webhookSecretVersion.endpointId }).from(webhookSecretVersion).where(and(
+        eq(webhookSecretVersion.organizationId, input.organizationId), eq(webhookSecretVersion.endpointId, input.endpointId), eq(webhookSecretVersion.state, "current"),
+      )).limit(1);
+      if (!subscription || !secret) throw new WebhookSecretError("Endpoint needs a subscription and current signing secret before activation");
+    }
+    await transaction.update(webhookEndpoint).set({ state: input.state, updatedAt: now, updatedBy: actorId }).where(and(
+      eq(webhookEndpoint.id, input.endpointId), eq(webhookEndpoint.organizationId, input.organizationId),
+    ));
+    return true;
+  });
 }

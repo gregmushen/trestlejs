@@ -5,9 +5,9 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
-import { billingProviderEvent, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, PostgresEventInbox, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
+import { billingProviderEvent, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, PostgresEventInbox, PostgresOutboxStore, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
-import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
+import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
 import { maintainArtifacts } from "./artifact-maintenance.js";
@@ -20,6 +20,7 @@ import { maintainWebhookPayloads } from "./webhook-retention.js";
 import { maintainNativeWebhookDeliveries } from "./webhook-recovery.js";
 import { consumeNativeWebhookQueueMessages, looksLikeNativeWebhookWakeup } from "./webhook-native-queue.js";
 import type { NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
+import { z } from "zod";
 
 export const app = new Hono<{ Bindings: AuthEnvironment; Variables: AppVariables }>();
 export const eventConsumers = new EventConsumerRegistry<AuthEnvironment>(applicationEventCatalog);
@@ -65,6 +66,94 @@ function inspectionPageSize(value: string | undefined): number | null {
   const size = Number(value);
   return size <= 100 ? size : null;
 }
+
+const createWebhookEndpointSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  destinationUrl: z.url().max(2048),
+  subscriptions: z.array(z.object({ type: z.string(), version: z.number().int().positive() }).strict()).min(1).max(100),
+}).strict();
+
+app.get("/api/developer/webhooks/events", requireExecutionContext, (context) => {
+  const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "organization:webhooks:read" });
+  return context.json({ events: applicationEventCatalog.publicEvents().map(({ schema, examples, ...event }) => ({
+    ...event, schema, examples,
+    available: !event.entitlement || execution.entitlements.has(event.entitlement),
+  })) });
+});
+
+app.post("/api/developer/webhooks/endpoints", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "organization:webhooks:manage" });
+  const origin = context.req.header("origin");
+  const expectedOrigin = context.env.WEB_ORIGIN ?? context.env.BETTER_AUTH_URL ?? "http://localhost:42069";
+  if (!origin || origin !== expectedOrigin) return context.json({ error: "Invalid request origin" }, 403);
+  if (!context.req.header("content-type")?.toLowerCase().startsWith("application/json")) return context.json({ error: "JSON content type required" }, 415);
+  if (!context.env.WEBHOOK_SECRET_KEY || new TextEncoder().encode(context.env.WEBHOOK_SECRET_KEY).length < 32) {
+    return context.json({ error: "Webhook signing key is not configured" }, 503);
+  }
+  let body: unknown;
+  try { body = await context.req.json(); }
+  catch { return context.json({ error: "Invalid JSON body" }, 400); }
+  const parsed = createWebhookEndpointSchema.safeParse(body);
+  if (!parsed.success) return context.json({ error: "Invalid webhook endpoint" }, 400);
+  const availableEvents = applicationEventCatalog.publicEvents().filter((event) => !event.entitlement || execution.entitlements.has(event.entitlement));
+  const provider = context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" : "native";
+  try {
+    const service = new WebhookSecretService({
+      tenantDatabase: () => execution.data,
+      masterKey: context.env.WEBHOOK_SECRET_KEY,
+      environment: context.env.APP_ENV ?? "local",
+      clock: execution.clock,
+      authority: { authorize: async () => ({ actorId: execution.principal.id }) },
+    });
+    const result = await service.registerEndpoint(execution.tenant.organizationId, {
+      ...parsed.data, provider, availableEvents,
+    });
+    execution.log.info("webhooks.endpoint.created", { endpointId: result.endpointId, subscriptionCount: parsed.data.subscriptions.length });
+    context.header("Cache-Control", "no-store");
+    return context.json({ endpoint: { id: result.endpointId, state: "disabled", name: parsed.data.name }, signingSecret: result.secret }, 201);
+  } catch (error) {
+    if (error instanceof WebhookSecretError || error instanceof NativeWebhookDestinationError) return context.json({ error: error.message }, 400);
+    throw error;
+  }
+});
+
+app.patch("/api/developer/webhooks/endpoints/:id/state", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  execution.access.require({ plane: "organization", permission: "organization:webhooks:manage" });
+  const origin = context.req.header("origin");
+  const expectedOrigin = context.env.WEB_ORIGIN ?? context.env.BETTER_AUTH_URL ?? "http://localhost:42069";
+  if (!origin || origin !== expectedOrigin) return context.json({ error: "Invalid request origin" }, 403);
+  const endpointId = context.req.param("id");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(endpointId)) return context.json({ error: "Invalid endpoint ID" }, 400);
+  if (!context.req.header("content-type")?.toLowerCase().startsWith("application/json")) return context.json({ error: "JSON content type required" }, 415);
+  let body: unknown;
+  try { body = await context.req.json(); }
+  catch { return context.json({ error: "Invalid JSON body" }, 400); }
+  const parsed = z.object({ state: z.enum(["active", "disabled"]) }).strict().safeParse(body);
+  if (!parsed.success) return context.json({ error: "Invalid endpoint state" }, 400);
+  if (parsed.data.state === "active") {
+    const mode = context.env.WEBHOOK_DELIVERY_MODE ?? "disabled";
+    const allowed = context.env.APP_ENV === "local" || !context.env.APP_ENV ? mode === "local" : mode === "native" && Boolean((context.env as WorkerEnvironment).TRESTLE_EVENTS);
+    if (!allowed) return context.json({ error: "Webhook delivery capability is not configured" }, 409);
+  }
+  try {
+    if (parsed.data.state === "active" && (!context.env.WEBHOOK_SECRET_KEY || new TextEncoder().encode(context.env.WEBHOOK_SECRET_KEY).length < 32)) return context.json({ error: "Webhook signing key is not configured" }, 503);
+    const updated = await setWebhookEndpointState({
+      organizationId: execution.tenant.organizationId, endpointId, state: parsed.data.state,
+      environment: context.env.APP_ENV ?? "local", authority: { authorize: async () => ({ actorId: execution.principal.id }) },
+      ...(parsed.data.state === "active" ? { activeProvider: context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" as const : "native" as const } : {}),
+      tenantDatabase: () => execution.data, clock: execution.clock,
+    });
+    if (!updated) return context.json({ error: "Endpoint not found" }, 404);
+    execution.log.info("webhooks.endpoint.state_changed", { endpointId, state: parsed.data.state });
+    return context.json({ endpoint: { id: endpointId, state: parsed.data.state } });
+  } catch (error) {
+    if (error instanceof WebhookSecretError) return context.json({ error: error.message }, 409);
+    throw error;
+  }
+});
 
 app.get("/api/developer/webhooks/endpoints", requireExecutionContext, async (context) => {
   const execution = context.get("execution");

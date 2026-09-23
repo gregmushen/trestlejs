@@ -53,6 +53,14 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     expect(inspection.status()).toBe(200);
     expect(await inspection.json()).toEqual({ endpoints: [] });
     expect((await page.context().request.get("http://localhost:42069/api/developer/webhooks/endpoints?limit=101", { headers })).status()).toBe(400);
+    expect((await page.context().request.post("http://localhost:42069/api/developer/webhooks/endpoints", {
+      headers: { ...headers, origin: "https://attacker.example" },
+      data: { name: "Rejected", destinationUrl: "https://hooks.example.com/receive", subscriptions: [{ type: "article.published", version: 1 }] },
+    })).status()).toBe(403);
+    expect((await page.context().request.post("http://localhost:42069/api/developer/webhooks/endpoints", {
+      headers: { ...headers, origin: "http://localhost:42069" },
+      data: { name: "Missing key", destinationUrl: "https://hooks.example.com/receive", subscriptions: [{ type: "article.published", version: 1 }] },
+    })).status()).toBe(503);
   }
 
   const activate = async (organizationId: string, plan: string) => {
@@ -78,6 +86,30 @@ test("a customer verifies email and switches isolated organizations", async ({ p
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByText("No webhook endpoints for this organization.")).toBeVisible();
   if (process.env.TRESTLE_BROWSER_MODE !== "deployed") {
+    const newEndpointId = "11719456-3380-43e5-8a06-d4da18623cc9";
+    const oneTimeSecret = "whsec_browser-only-once";
+    let registered = false;
+    await page.route("**/api/developer/webhooks/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const json = path.endsWith("/events") ? { events: [{ type: "article.published", version: 1, description: "An article was published", available: true }] }
+        : path.endsWith("/deliveries") ? { deliveries: [] }
+        : path.endsWith("/attempts") ? { attempts: [] }
+        : route.request().method() === "POST" ? { endpoint: { id: newEndpointId, state: "disabled" }, signingSecret: oneTimeSecret }
+        : { endpoints: registered ? [{ id: newEndpointId, name: "Browser receiver", destinationHost: "hooks.example.com", state: "disabled", health: "unknown", provider: "local", subscriptionCount: 1, createdAt: "2026-09-23T00:00:00.000Z", updatedAt: "2026-09-23T00:00:00.000Z" }] : [] };
+      if (route.request().method() === "POST") registered = true;
+      await route.fulfill({ status: route.request().method() === "POST" ? 201 : 200, contentType: "application/json", body: JSON.stringify(json) });
+    });
+    await page.reload();
+    await page.getByRole("textbox", { name: "Endpoint name" }).fill("Browser receiver");
+    await page.getByRole("textbox", { name: "HTTPS destination" }).fill("https://hooks.example.com/receive");
+    await page.getByRole("checkbox", { name: /article.published v1/u }).check();
+    await page.getByRole("button", { name: "Create endpoint" }).click();
+    await expect(page.getByText(oneTimeSecret)).toBeVisible();
+    await expect(page.getByText("Save this signing secret now. It cannot be recovered.")).toBeVisible();
+    await page.getByRole("button", { name: "I saved it; hide secret" }).click();
+    await expect(page.getByText(oneTimeSecret)).toHaveCount(0);
+    await page.unroute("**/api/developer/webhooks/**");
+
     const endpointId = "c45cf83d-1341-4242-a57d-5bb6c6266f85";
     const deliveryId = `whd_${"a".repeat(64)}`;
     const sensitive = "never-render-this-webhook-secret";
@@ -85,7 +117,8 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     await page.route("**/api/developer/webhooks/**", async (route) => {
       if (forbidden) { await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "Forbidden" }) }); return; }
       const path = new URL(route.request().url()).pathname;
-      const body = path.endsWith("/attempts") ? { attempts: [{ id: `${deliveryId}.1`, attemptNumber: 1, kind: "native", attemptedAt: "2026-09-23T00:00:00.000Z", completedAt: "2026-09-23T00:00:01.000Z", responseStatus: 503, resultCategory: "http", outcome: "retry", durationMs: 1000, nextRetryAt: null, requestBody: sensitive }] }
+      const body = path.endsWith("/events") ? { events: [] }
+        : path.endsWith("/attempts") ? { attempts: [{ id: `${deliveryId}.1`, attemptNumber: 1, kind: "native", attemptedAt: "2026-09-23T00:00:00.000Z", completedAt: "2026-09-23T00:00:01.000Z", responseStatus: 503, resultCategory: "http", outcome: "retry", durationMs: 1000, nextRetryAt: null, requestBody: sensitive }] }
         : path.endsWith("/deliveries") ? { deliveries: [{ id: deliveryId, messageId: "hidden-message", eventType: "article.published", eventVersion: 1, occurredAt: "2026-09-23T00:00:00.000Z", state: "retry", attemptCount: 1, nextAttemptAt: null, terminalReason: null, createdAt: "2026-09-23T00:00:00.000Z", completedAt: null, payloadAvailable: true, correlationId: null, envelope: sensitive }] }
         : { endpoints: [{ id: endpointId, name: "Product events", destinationHost: "hooks.example.test", state: "active", health: "healthy", provider: "native", subscriptionCount: 1, createdAt: "2026-09-23T00:00:00.000Z", updatedAt: "2026-09-23T00:00:00.000Z", destinationUrl: `https://hooks.example.test/${sensitive}` }] };
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
