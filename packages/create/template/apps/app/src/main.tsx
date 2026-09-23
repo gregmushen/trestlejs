@@ -14,6 +14,7 @@ import { ServiceAccounts } from "./settings/api-keys";
 import { TenantApiError } from "./settings/api";
 import { BillingSettings } from "./settings/billing";
 import { PlanAndUsage } from "./settings/plan-usage";
+import { LanguageAndRegion, OrganizationRegionalSettings, RegionalLink } from "./settings/regional";
 import "./styles.css";
 
 const apiOrigin = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.replace(/\/$/u, "") ?? "";
@@ -46,7 +47,9 @@ function Shell() {
         <Link to="/settings/api-keys" activeProps={{ className: "text-brand-500" }}>API keys</Link>
         <Link to="/settings/billing" activeProps={{ className: "text-brand-500" }}>Billing</Link>
         <Link to="/settings/webhooks" activeProps={{ className: "text-brand-500" }}>Webhooks</Link>
+        <RegionalLink />
         <Link to="/settings/security" activeProps={{ className: "text-brand-500" }}>Security</Link>
+        <Link to="/account/language-region" activeProps={{ className: "text-brand-500" }}>Language & Region</Link>
         <IdentityLink />
         <NotificationBell />
         {/* trestle:resource-links */}
@@ -280,7 +283,9 @@ const identityRoute = createRoute({ getParentRoute: () => rootRoute, path: "/set
 const webhooksRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings/webhooks", component: Webhooks });
 const notificationsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/notifications", component: NotificationInbox });
 const notificationPreferencesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings/notifications", component: NotificationPreferences });
-const routeTree = rootRoute.addChildren([indexRoute, signInRoute, signUpRoute, dashboardRoute, checkEmailRoute, forgotPasswordRoute, resetPasswordRoute, acceptInvitationRoute, billingRoute, planRoute, membersRoute, apiKeysRoute, webhooksRoute, notificationsRoute, notificationPreferencesRoute, twoFactorRoute, securityRoute, identityRoute]);
+const regionalRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings/regional", component: OrganizationRegionalSettings });
+const languageRegionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/account/language-region", component: LanguageAndRegion });
+const routeTree = rootRoute.addChildren([indexRoute, signInRoute, signUpRoute, dashboardRoute, checkEmailRoute, forgotPasswordRoute, resetPasswordRoute, acceptInvitationRoute, billingRoute, planRoute, membersRoute, apiKeysRoute, webhooksRoute, notificationsRoute, notificationPreferencesRoute, twoFactorRoute, securityRoute, identityRoute, regionalRoute, languageRegionRoute]);
 const router = createRouter({ routeTree });
 // Client errors (401/403/404/422) are answers, not transient failures; only retry server errors.
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: (count, error) => !(error instanceof TenantApiError && error.status < 500) && count < 2 } } });

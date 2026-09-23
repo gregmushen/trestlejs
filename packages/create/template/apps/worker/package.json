@@ -20,6 +20,7 @@
     "@__TRESTLE_PROJECT_NAME__/events": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/platform": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/regional": "workspace:*",
     "better-auth": "1.7.5",
     "drizzle-orm": "0.45.3",
     "hono": "4.13.8",

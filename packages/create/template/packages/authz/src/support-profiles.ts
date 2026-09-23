@@ -50,7 +50,7 @@ export const supportProfiles = defineSupportProfiles(permissions, {
   read_only: {
     name: "Read-only support",
     description: "Inspect the tenant's configuration and product data without changing anything",
-    organization: ["organization.read", "organization.members.read", "organization.entitlements.read", "organization.service_accounts.read", "organization.webhooks.read", "organization.notifications.read", "organization.audit.read"],
+    organization: ["organization.read", "organization.members.read", "organization.entitlements.read", "organization.service_accounts.read", "organization.webhooks.read", "organization.notifications.read", "organization.settings.regional.read", "organization.audit.read"],
     application: ["application.roles.read", "resource.read", "workflows.read"],
   },
   integration_support: {
@@ -58,6 +58,12 @@ export const supportProfiles = defineSupportProfiles(permissions, {
     description: "Diagnose and repair webhook delivery: pause, resume, test, and replay endpoints",
     organization: ["organization.read", "organization.members.read", "organization.webhooks.read", "organization.webhooks.manage", "organization.webhooks.replay", "organization.audit.read"],
     application: ["resource.read"],
+  },
+  regional_support: {
+    name: "Regional settings support",
+    description: "Inspect and correct the organization's language, locale, time zone, and currency defaults with tenant authority",
+    organization: ["organization.read", "organization.members.read", "organization.settings.regional.read", "organization.settings.regional.manage", "organization.audit.read"],
+    application: [],
   },
 });
 

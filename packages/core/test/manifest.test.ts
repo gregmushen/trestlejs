@@ -120,4 +120,15 @@ artifacts:
     expect(issues(`${validManifest}identity:\n  sso: workos\n  directory: better-auth-scim\n`)).toEqual([expect.stringMatching(/Better Auth SSO/u)]);
     expect(issues(`${validManifest}identity:\n  sso: stytch\n  directory: disabled\n`)).toEqual([expect.stringMatching(/Stytch adapter is not available/u)]);
   });
+
+  it("parses regional defaults and rejects non-canonical identifiers", () => {
+    const issues = (text: string) => { try { parseProjectManifest(text); return []; } catch (error) { return (error as ManifestError).issues.map((issue) => issue.message); } };
+    const regional = (fields: string) => `${validManifest}regional:\n${fields}`;
+    const manifest = parseProjectManifest(regional("  language: en\n  locale: en-US\n  timeZone: America/Los_Angeles\n  currency: USD\n"));
+    expect(manifest.regional).toEqual({ language: "en", locale: "en-US", timeZone: "America/Los_Angeles", currency: "USD", organizationSettings: true, i18n: { enabled: false, languages: ["en"] } });
+    expect(issues(regional("  language: en\n  locale: en-US\n  timeZone: +07:00\n  currency: USD\n"))).toEqual([expect.stringMatching(/IANA/u)]);
+    expect(issues(regional("  language: en\n  locale: en_us\n  timeZone: UTC\n  currency: USD\n"))).toEqual([expect.stringMatching(/BCP 47/u)]);
+    expect(issues(regional("  language: en\n  locale: en-US\n  timeZone: UTC\n  currency: usd\n"))).toEqual([expect.stringMatching(/ISO 4217/u)]);
+    expect(issues(regional("  language: en\n  locale: en-US\n  timeZone: UTC\n  currency: USD\n  i18n:\n    enabled: true\n    languages: [es]\n"))).toEqual([expect.stringMatching(/include the application language/u)]);
+  });
 });

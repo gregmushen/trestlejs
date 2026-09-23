@@ -258,6 +258,17 @@ export function errorMessage(error: unknown): string {
 /* Client */
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+export type RegionalSettingJson = "language" | "locale" | "timeZone" | "currency";
+export type RegionalSourceJson = "operation" | "user" | "organization" | "application";
+export type RegionalResolvedJson = Record<RegionalSettingJson, { value: string; source: RegionalSourceJson }>;
+export type RegionalConfiguredJson = Record<RegionalSettingJson, string | null>;
+export type OrganizationRegionalJson = {
+  configured: RegionalConfiguredJson; effective: RegionalResolvedJson; application: Record<RegionalSettingJson, string>;
+  organizationSettings: boolean; i18n: { enabled: boolean; languages: string[] }; languages: string[];
+  applicationIssues: Array<{ message: string; repair: string }>; members: Array<{ userId: string; name: string; email: string }>; canRecover: boolean;
+};
+export type RegionalResolutionJson = { user: { userId: string; name: string }; configured: Omit<RegionalConfiguredJson, "currency">; effective: RegionalResolvedJson; organization: RegionalResolvedJson };
+
 type Query = Record<string, string | undefined>;
 export type Reasoned = { reason: string };
 
@@ -292,6 +303,9 @@ export function createAdminApi(options: { baseUrl?: string; fetch?: typeof fetch
     overview: () => request<Overview>("GET", "overview"),
     organizations: (q?: string) => request<{ organizations: OrganizationSummary[] }>("GET", "organizations", undefined, { q }),
     organization: (id: string) => request<{ organization: OrganizationSummary; members: OrganizationMember[] }>("GET", `organizations/${segment(id)}`),
+    organizationRegional: (id: string) => request<OrganizationRegionalJson>("GET", `organizations/${segment(id)}/regional`),
+    resolveRegional: (id: string, userId: string) => request<RegionalResolutionJson>("GET", `organizations/${segment(id)}/regional/resolve`, undefined, { userId }),
+    recoverRegional: (id: string, input: RegionalConfiguredJson, reason: string) => request<OrganizationRegionalJson>("PUT", `organizations/${segment(id)}/regional`, { ...input, ...reasoned(reason) }),
     supportProfiles: () => request<{ profiles: SupportProfile[]; durations: number[] }>("GET", "support/profiles"),
     previewSupport: (organizationId: string, profile: string) => request<{ profile: SupportProfile; permissions: SupportPermissionPreview[] }>("POST", "support/preview", { organizationId, profile }),
     startSupportSession: (input: { organizationId: string; profile: string; durationMinutes: number; ticket?: string }, reason: string) => request<{ session: SupportSession }>("POST", "support/sessions", { ...input, ...reasoned(reason) }),

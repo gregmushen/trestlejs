@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   accessDeclarationSchema,
   artifactsDeclarationSchema,
+  regionalDeclarationSchema,
   authenticationDeclarationSchema,
   commercialDeclarationSchema,
   communicationsDeclarationSchema,
@@ -69,6 +70,7 @@ export const setupPlanSchema = z.object({
   commercial: commercialDeclarationSchema.optional(),
   communications: communicationsDeclarationSchema.optional(),
   artifacts: artifactsDeclarationSchema.optional(),
+  regional: regionalDeclarationSchema.optional(),
   environments: z.array(environmentNameSchema).min(1),
   secrets: z.array(z.object({
     name: z.string().regex(/^[A-Z][A-Z0-9_]*$/u),

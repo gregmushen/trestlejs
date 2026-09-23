@@ -16,6 +16,7 @@ import * as identitySchema from "./identity-schema.js";
 import * as tenantSchema from "./tenant-schema.js";
 import * as outboxSchema from "./outbox-schema.js";
 import * as policySchema from "./policy-schema.js";
+import * as regionalSchema from "./regional-schema.js";
 
 export * from "./access-schema.js";
 export * from "./audit-schema.js";
@@ -33,11 +34,12 @@ export * from "./sql-runner.js";
 export * from "./tenant-schema.js";
 export * from "./outbox-schema.js";
 export * from "./policy-schema.js";
+export * from "./regional-schema.js";
 export * from "./outbox.js";
 export * from "./inbox.js";
 export * from "./tenancy.js";
 
-const schema = { ...accessSchema, ...auditSchema, ...authSchema, ...artifactSchema, ...billingSchema, ...capabilitySchema, ...commercialSchema, ...communicationsSchema, ...emailSchema, ...identitySchema, ...tenantSchema, ...outboxSchema, ...policySchema };
+const schema = { ...accessSchema, ...auditSchema, ...authSchema, ...artifactSchema, ...billingSchema, ...capabilitySchema, ...commercialSchema, ...communicationsSchema, ...emailSchema, ...identitySchema, ...tenantSchema, ...outboxSchema, ...policySchema, ...regionalSchema };
 
 export type DatabaseDriver = "neon-http" | "neon-serverless" | "postgres-js";
 

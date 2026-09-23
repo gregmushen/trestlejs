@@ -150,17 +150,20 @@ describe("SetupPlan capability sections", () => {
     expect(converged.items.filter((item) => item.classification !== "already correct")).toEqual([]);
     expect(converged.items.map(({ id }) => id)).toEqual(expect.arrayContaining(["apps.admin", "providers", "access", "commercial"]));
 
-    const changed = { ...plan, providers: { email: "local" as const, payments: "local" as const }, artifacts: { storage: "r2" as const, retentionDays: 7 }, capabilities: { ...plan.capabilities, workflows: true } };
+    const changed = { ...plan, providers: { email: "local" as const, payments: "local" as const }, artifacts: { storage: "r2" as const, retentionDays: 7 }, capabilities: { ...plan.capabilities, workflows: true },
+      regional: { language: "en", locale: "en-GB", timeZone: "Europe/London", currency: "GBP", organizationSettings: true, i18n: { enabled: true, languages: ["en", "fr"] } } };
     const changedInput = JSON.stringify(changed);
     const diff = await diffSetupPlan(root, manifest, changed, changedInput);
     expect(diff.items).toContainEqual(expect.objectContaining({ id: "providers", classification: "update" }));
     expect(diff.items).toContainEqual(expect.objectContaining({ id: "artifacts", classification: "update" }));
+    expect(diff.items).toContainEqual(expect.objectContaining({ id: "regional", classification: "update" }));
     const applied = await applySetupPlan(root, manifest, changed, changedInput);
     expect(applied.operations.map(({ id }) => id)).toEqual(expect.arrayContaining(["providers", "artifacts", "capabilities"]));
     const updatedText = await readFile(path.join(root, ".trestle", "project.yaml"), "utf8");
     const updated = parseProjectManifest(updatedText);
     expect(updated.integrations).toEqual({ email: "local", payments: "local" });
     expect(updated.artifacts).toEqual({ storage: "r2", retentionDays: 7 });
+    expect(updated.regional).toEqual({ language: "en", locale: "en-GB", timeZone: "Europe/London", currency: "GBP", organizationSettings: true, i18n: { enabled: true, languages: ["en", "fr"] } });
     expect(updated.capabilities.workflows).toBe(true);
     expect(updatedText).toContain("RESEND_API_KEY");
     expect((await diffSetupPlan(root, updated, changed, changedInput)).converged).toBe(true);

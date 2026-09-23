@@ -246,3 +246,35 @@ This work began on alpha 8 and was ported onto alpha 31. What changed in the por
   - Billing services resolve lazily with admin price mappings.
   - The execution context authenticates before it loads the access catalog.
 
+## Regional settings
+
+This section maps [REGIONAL_SETTINGS_ADMIN_SPEC.md](REGIONAL_SETTINGS_ADMIN_SPEC.md) to code. The parent Locale, Time, Money, and i18n specification is not in this repository, so the substrate is minimal and built only to what the admin spec needs.
+
+| Spec | Implementation |
+| --- | --- |
+| §2, §19 application defaults | `regional:` in `.trestle/project.yaml`. It is validated by `regionalDeclarationSchema` (`packages/core/src/manifest.ts`), part of the SetupPlan, diffed and applied by `packages/cli/src/plan.ts`, and edited in the setup console's "Regional defaults" step. Deployed Workers read it with `declaredRegional` (`packages/platform`). Invalid values fall back safely and surface `pnpm exec trestle setup` repairs. |
+| §3, §5, §7, §8 organization Regional page | `apps/app/src/settings/regional.tsx` (`/settings/regional`): a searchable time-zone combobox, locale and currency pickers, a live preview, explicit Save, time-zone and currency warnings, and schedule impact. Server-side it uses `GET/PUT /api/tenant/regional` and `GET /api/tenant/regional/schedules` (`apps/worker/src/regional-routes.ts`). |
+| §4, §6 Language & Region | `/account/language-region`, backed by `GET/PUT /api/tenant/regional-preferences`. Users only; currency is not a user preference. Each value shows its provenance (Your preference, Organization default, or Application default). |
+| §6, §16 resolution and API | `resolveRegionalContext` (`packages/regional/src/resolve.ts`): operation override, then user, then organization, then application, with the source recorded per setting. `RegionalService` (`packages/domain/src/regional`) validates identifiers and composes audit. |
+| §7, §20 audit | `organization.regional_settings.updated`, `user.regional_preferences.updated`, and `platform.organization_regional_settings.recovered`. Summaries hold canonical before/after values and commit atomically with the change and its outbox event (`packages/data/src/regional`). |
+| §9, §11, §13 platform view | Organizations → Regional tab (`apps/admin/src/views/organizations/regional.tsx`). It shows application, organization, and effective values with sources, internationalization status, and a member resolver (`GET /api/admin/organizations/:id/regional[/resolve]`). |
+| §10 mutation policy | Viewing requires `platform.organizations.regional.read`. A change needs one of two routes. The first is `platform.organizations.regional.recover` with a reason and fresh step-up (`requireSensitive`); it writes through the tenant's forced-RLS role so tenant audit records the operator. The second is a support session whose profile grants `organization.settings.regional.manage` (the new `regional_support` profile). |
+| §12 schedules | `ScheduleDefinition` with an `organization` or `zoned` zone (`packages/regional/src/schedules.ts`). The application registry is `packages/domain/src/regional/schedules.ts`, empty by default. DST gaps move forward, and repeated local times resolve to the first occurrence. |
+| §15 permissions | `organization.settings.regional.read`/`.manage` go to members and billing admins (read) and owners and admins (both). `platform.organizations.regional.read` goes to support, billing operations, and platform operators; `.recover` goes to platform operators. |
+| §18 Needs attention | Organizations whose stored zone, locale, or currency no longer validate appear in the overview (`PostgresPlatformRepository.overviewExceptions`). |
+| Persistence | Migration `0016_regional_settings`. `organization_regional_settings` has forced tenant RLS. `user_regional_preference` has forced RLS on `app.user_id`, which is set only inside the reading or writing transaction. The platform role gets SELECT only. |
+
+Evidence:
+- `packages/regional/src/regional.test.ts`: identifiers, resolution, preview, money, zone search, schedules, and DST.
+- `packages/domain/src/regional/service.test.ts`
+- `packages/data/src/regional/postgres-regional-repository.integration.test.ts`: tenant and user RLS, platform write denial, and no historical rewrite.
+- `apps/worker/src/regional-routes.integration.test.ts`
+- `apps/admin/worker/regional.integration.test.ts`: read authorization, recovery reason and step-up, support-session authority, and Needs attention.
+- `packages/core/test/manifest.test.ts` and `packages/cli/test/capabilities.test.ts`: setup.
+
+Not yet done:
+- **Browser suites.** §21 asks for browser tests of both surfaces; there are none yet.
+- **Translation catalogs.** None exist, so i18n status lists declared languages without completeness percentages (§13).
+- **Scheduler.** No scheduler consumes `applicationSchedules` yet. The registry and impact preview are ready for one.
+- **Display-currency preference.** Not offered; it would need `userCurrency` in resolution.
+

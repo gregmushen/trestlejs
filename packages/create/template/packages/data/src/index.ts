@@ -14,3 +14,4 @@ export * from "./notifications/postgres-notification-repository.js";
 export * from "./notifications/stream-loader.js";
 export * from "./webhooks/postgres-webhook-repository.js";
 export * from "./billing/provider-mappings.js";
+export * from "./regional/postgres-regional-repository.js";

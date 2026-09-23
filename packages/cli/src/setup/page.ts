@@ -254,6 +254,22 @@ const script = String.raw`
         radios("artifacts", [["local", "Local", "filesystem adapter"], ["r2", "Cloudflare R2", "binding ARTIFACTS"]], function () { return a.storage; }, function (value) { a.storage = value; if (value === "r2") draft.capabilities.r2 = true; }),
         field("Retention (days)", h("input", { type: "number", min: "1", max: "3650", value: String(a.retentionDays), oninput: function (event) { a.retentionDays = Number(event.target.value); markDirty(); } }))];
     } },
+    { title: "Regional defaults", render: function () {
+      var r = ensure("regional", { language: "en", locale: "en-US", timeZone: "UTC", currency: "USD", organizationSettings: true, i18n: { enabled: false, languages: ["en"] } });
+      var zones = h("datalist", { id: "trestle-time-zones" }, (Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []).concat(["UTC"]).map(function (zone) { return h("option", { value: zone }); }));
+      function text(label, key, placeholder, extra) {
+        return field(label, h("input", Object.assign({ type: "text", value: r[key], placeholder: placeholder, oninput: function (event) { r[key] = event.target.value.trim(); markDirty(); } }, extra || {})));
+      }
+      return [h("p", { class: "lead", text: "Application defaults for language, formatting, time, and money. Organizations and users may override them in the app; historical timestamps and monetary values are never reinterpreted." }),
+        text("Application language", "language", "en"),
+        text("Default locale (BCP 47)", "locale", "en-US"),
+        zones, text("Default time zone (IANA)", "timeZone", "America/Los_Angeles", { list: "trestle-time-zones" }),
+        text("Default currency (ISO 4217)", "currency", "USD"),
+        h("div", { class: "choices" },
+          checkbox("Organization regional settings", function () { return r.organizationSettings; }, function (on) { r.organizationSettings = on; }, "organization administrators may override these defaults"),
+          checkbox("Internationalization", function () { return r.i18n.enabled; }, function (on) { r.i18n.enabled = on; if (r.i18n.languages.indexOf(r.language) < 0) r.i18n.languages.unshift(r.language); }, "translated application text")),
+        r.i18n.enabled ? field("Supported languages", h("input", { type: "text", value: r.i18n.languages.join(", "), placeholder: "en, es", oninput: function (event) { r.i18n.languages = event.target.value.split(",").map(function (value) { return value.trim().toLowerCase(); }).filter(Boolean); markDirty(); } })) : null];
+    } },
     { title: "Access control", render: function () {
       var a = ensure("access", { customRoles: false, serviceAccounts: false, apiKeys: false });
       return [h("p", { class: "lead", text: "Roles resolve to deterministic permissions. Service accounts are non-human principals; API keys only reduce their authority." }),

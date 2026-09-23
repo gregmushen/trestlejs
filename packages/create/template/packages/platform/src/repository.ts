@@ -1,5 +1,6 @@
 import type { ApplicationEnvironment } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { effectiveEntitlementStatements, overrideFromRow, planVersionFromRow, resolveEffectiveEntitlements, features, type EffectiveEntitlement, type PlanVersion, type SubscriptionOverride } from "@__TRESTLE_PROJECT_NAME__/billing";
+import { canonicalCurrency, canonicalLocale, canonicalTimeZone } from "@__TRESTLE_PROJECT_NAME__/regional";
 import { createSqlRunner, platformConnectionString, type DatabaseDriver, type SqlRow, type SqlRunner } from "@__TRESTLE_PROJECT_NAME__/db";
 import { sql, type SQL } from "drizzle-orm";
 
@@ -20,6 +21,7 @@ export type PlatformAudit = Readonly<{
 
 const iso = (value: unknown): string | null => value === null || value === undefined ? null : (value instanceof Date ? value : new Date(String(value))).toISOString();
 const json = (value: unknown): unknown => typeof value === "string" ? JSON.parse(value) : value ?? null;
+const nullableText = (value: unknown): string | null => value === null || value === undefined ? null : String(value);
 const textArray = (values: readonly string[]) => sql`${`{${values.map((value) => `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`).join(",")}}`}::text[]`;
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.map(String) : [];
 const splitRoles = (value: unknown): string[] => String(value ?? "").split(",").map((role) => role.trim()).filter(Boolean).sort();
@@ -126,6 +128,13 @@ export class PostgresPlatformRepository {
           where k.revoked_at is null and k.expires_at is not null and k.expires_at > ${now} and k.expires_at < ${new Date(now.getTime() + 7 * 24 * 3_600_000)} order by k.expires_at limit 5`);
         return rows.map((row): Item => ({ kind: "credential_expiring", severity: "warning", title: `API key ${String(row.display_prefix).slice(0, 12)}… expires within 7 days`, detail: `${row.organization_name ? String(row.organization_name) : String(row.organization_id)} · expires ${iso(row.expires_at)}`, href: `/access/api-keys?selected=${encodeURIComponent(String(row.id))}` }));
       }),
+      probe<Item>("regional settings", async () => {
+        // Stored values are validated on write; a runtime whose zone or currency data changed can still leave legacy values behind.
+        const rows = await this.db.query(sql`select r.organization_id, o.name as organization_name, r.language, r.locale, r.time_zone, r.currency
+          from organization_regional_settings r left join organization o on o.id = r.organization_id order by r.organization_id limit 1000`);
+        const invalid = rows.filter((row) => (row.time_zone && !canonicalTimeZone(row.time_zone)) || (row.locale && !canonicalLocale(row.locale)) || (row.currency && !canonicalCurrency(row.currency)));
+        return invalid.length ? [{ kind: "regional_invalid", severity: "warning", title: `${invalid.length} organization${invalid.length === 1 ? " has" : "s have"} invalid regional configuration`, detail: `e.g. ${String(invalid[0]!.organization_name ?? invalid[0]!.organization_id)}: a legacy time zone, locale, or currency is no longer recognized`, href: `/organizations/${String(invalid[0]!.organization_id)}?tab=regional`, count: invalid.length }] : [];
+      }),
     ]);
     return groups.flat() as Item[];
   }
@@ -159,6 +168,18 @@ export class PostgresPlatformRepository {
       organization: { id: String(organization.id), name: String(organization.name), slug: String(organization.slug), createdAt: iso(organization.created_at)!, members: members.length },
       members: members.map((row) => ({ memberId: String(row.id), userId: String(row.user_id), name: String(row.name), email: String(row.email), organizationRoles: splitRoles(row.role), applicationRoles: strings(row.application_roles) })),
     };
+  }
+
+  /** Stored organization regional defaults (read-only; recovery writes go through the tenant role). */
+  async organizationRegional(organizationId: string) {
+    const [row] = await this.db.query(sql`select language, locale, time_zone, currency from organization_regional_settings where organization_id = ${organizationId}`);
+    return row ? { language: nullableText(row.language), locale: nullableText(row.locale), timeZone: nullableText(row.time_zone), currency: nullableText(row.currency) } : null;
+  }
+
+  /** A user's own regional preferences, for explaining their effective context. */
+  async userRegional(userId: string) {
+    const [row] = await this.db.query(sql`select language, locale, time_zone from user_regional_preference where user_id = ${userId}`);
+    return row ? { language: nullableText(row.language), locale: nullableText(row.locale), timeZone: nullableText(row.time_zone) } : null;
   }
 
   async searchUsers(q?: string) {

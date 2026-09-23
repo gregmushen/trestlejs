@@ -46,6 +46,7 @@ import { adminRoutePolicies } from "./route-policies.js";
 import { registerSupportRoutes } from "./support.js";
 import { registerAuthPolicyRoutes } from "./auth-policy.js";
 import { registerBillingMappingRoutes, stripeRestCatalog, type StripeCatalog } from "./billing-mappings.js";
+import { registerRegionalRoutes } from "./regional.js";
 import { registerNotificationStreamRoutes } from "./streams.js";
 import { registerWebhookManagementRoutes } from "./webhooks.js";
 
@@ -630,6 +631,7 @@ registerCommunicationRoutes(admin as never, { repository: (environment) => admin
 registerWebhookManagementRoutes(admin as never, { repository: (environment) => adminDependencies.repository(environment as AdminEnvironment), now: () => adminDependencies.now() });
 registerAuthPolicyRoutes(admin as never, { repository: (environment) => adminDependencies.repository(environment as AdminEnvironment), audit: auditEntry as never, capabilities: (context) => capabilities(context as never) });
 registerBillingMappingRoutes(admin as never, { repository: (environment) => adminDependencies.repository(environment as AdminEnvironment), audit: auditEntry as never, stripe: (environment) => adminDependencies.stripe(environment as AdminEnvironment) });
+registerRegionalRoutes(admin as never, { repository: (environment) => adminDependencies.repository(environment as AdminEnvironment), now: () => adminDependencies.now() });
 registerNotificationStreamRoutes(admin as never, { repository: (environment) => adminDependencies.repository(environment as AdminEnvironment), audit: auditEntry as never, now: () => adminDependencies.now() });
 registerAccessRoutes(admin as never, {
   repository: (environment) => adminDependencies.repository(environment as AdminEnvironment), audit: auditEntry as never, now: () => adminDependencies.now(),

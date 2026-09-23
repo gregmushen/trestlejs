@@ -1,3 +1,4 @@
+import { applicationRegionalConfig, type RegionalConfigResult } from "@__TRESTLE_PROJECT_NAME__/regional";
 import { parse } from "yaml";
 
 export type CapabilityId = "email" | "payments" | "admin" | "queues" | "workflows" | "r2" | "durableObjects" | "plans" | "serviceAccounts" | "apiKeys" | "webhooks" | "notifications" | "supportSessions" | "passkeys" | "twoFactor" | "sso" | "directory" | "metering";
@@ -61,6 +62,13 @@ export const capabilityLabels: Readonly<Record<CapabilityId, string>> = {
 };
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+/** Application regional defaults from the project manifest, with any issues to repair through `trestle setup`. */
+export function declaredRegional(manifestText: string): RegionalConfigResult {
+  let document: Record<string, unknown> = {};
+  try { document = record(parse(manifestText)); } catch { document = {}; }
+  return applicationRegionalConfig(document.regional);
+}
 
 /** Reads declared capabilities from the project manifest (.trestle/project.yaml). Unknown shapes fail closed. */
 export function declaredCapabilities(manifestText: string): DeclaredCapabilities {

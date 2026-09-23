@@ -4,4 +4,5 @@ export type DomainId<Resource extends string> = string & {
 
 export * from "./access/index.js";
 export * from "./notifications/index.js";
+export * from "./regional/index.js";
 export * from "./webhooks/index.js";

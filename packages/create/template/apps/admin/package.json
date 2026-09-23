@@ -22,6 +22,7 @@
     "@__TRESTLE_PROJECT_NAME__/domain": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/events": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/platform": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/regional": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/theme": "workspace:*",
     "@better-auth/passkey": "1.7.5",
     "@cloudflare/kumo": "2.14.0",

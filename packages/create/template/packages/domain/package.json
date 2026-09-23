@@ -12,7 +12,8 @@
     "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/billing": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/contracts": "workspace:*",
-    "@__TRESTLE_PROJECT_NAME__/events": "workspace:*"
+    "@__TRESTLE_PROJECT_NAME__/events": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/regional": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "26.6.2"

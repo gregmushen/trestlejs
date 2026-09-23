@@ -18,12 +18,12 @@ export const organizationRoles = defineRoles(permissions, "organization", {
   billing_admin: {
     name: "Billing administrator",
     description: "Manages billing and reads plan usage",
-    permissions: ["organization.read", "organization.billing.read", "organization.billing.manage", "organization.entitlements.read"],
+    permissions: ["organization.read", "organization.billing.read", "organization.billing.manage", "organization.entitlements.read", "organization.settings.regional.read"],
   },
   member: {
     name: "Member",
     description: "Belongs to the organization and can see its members and plan",
-    permissions: ["organization.read", "organization.members.read", "organization.entitlements.read"],
+    permissions: ["organization.read", "organization.members.read", "organization.entitlements.read", "organization.settings.regional.read"],
   },
 });
 
@@ -43,17 +43,17 @@ export const platformRoles = defineRoles(permissions, "platform", {
   support: {
     name: "Support",
     description: "Finds customers and inspects sanitized state; may start audited support sessions",
-    permissions: ["platform.overview.read", "platform.organizations.read", "platform.users.read", "platform.subscriptions.read", "platform.email.read", "platform.jobs.read", "platform.support.enter_tenant", "platform.support.read", "platform.access.explain", "platform.webhooks.read", "platform.notifications.read", "platform.identity.read"],
+    permissions: ["platform.overview.read", "platform.organizations.read", "platform.users.read", "platform.subscriptions.read", "platform.email.read", "platform.jobs.read", "platform.support.enter_tenant", "platform.support.read", "platform.access.explain", "platform.webhooks.read", "platform.notifications.read", "platform.identity.read", "platform.organizations.regional.read"],
   },
   billing_operations: {
     name: "Billing operations",
     description: "Manages plans, subscriptions, overrides, and reconciliation",
-    permissions: ["platform.overview.read", "platform.organizations.read", "platform.plans.read", "platform.plans.manage", "platform.subscriptions.read", "platform.subscriptions.manage", "platform.reconciliation.run", "platform.audit.read"],
+    permissions: ["platform.overview.read", "platform.organizations.read", "platform.plans.read", "platform.plans.manage", "platform.subscriptions.read", "platform.subscriptions.manage", "platform.reconciliation.run", "platform.audit.read", "platform.organizations.regional.read"],
   },
   platform_operator: {
     name: "Platform operator",
     description: "Operates asynchronous work, artifacts, and runtime health",
-    permissions: [...readOnly(inPlane("platform")), "platform.jobs.redrive", "platform.support.enter_tenant", "platform.webhooks.disable", "platform.webhooks.replay", "platform.webhooks.manage", "platform.notifications.manage", "platform.notification_streams.manage"],
+    permissions: [...readOnly(inPlane("platform")), "platform.jobs.redrive", "platform.support.enter_tenant", "platform.webhooks.disable", "platform.webhooks.replay", "platform.webhooks.manage", "platform.notifications.manage", "platform.notification_streams.manage", "platform.organizations.regional.recover"],
   },
   security_admin: {
     name: "Security administrator",

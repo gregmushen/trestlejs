@@ -26,6 +26,8 @@ export const permissions = definePermissions({
   "organization.webhooks.replay": { plane: "organization", description: "Replay eligible webhook deliveries" },
   "organization.notifications.read": { plane: "organization", description: "Read organization-wide notification delivery history" },
   "organization.notifications.manage": { plane: "organization", description: "Set organization default notification preferences" },
+  "organization.settings.regional.read": { plane: "organization", description: "Read the organization's language, locale, time zone, and currency defaults" },
+  "organization.settings.regional.manage": { plane: "organization", description: "Change the organization's regional defaults; never rewrites historical data" },
   "organization.audit.read": { plane: "organization", description: "Read the organization audit history" },
   "organization.identity.read": { plane: "organization", description: "Read SSO connections, directory provisioning status, and group mappings" },
   "organization.identity.manage": { plane: "organization", description: "Configure SSO, SCIM credentials, and directory group-to-role mappings", secret: true },
@@ -42,6 +44,8 @@ export const permissions = definePermissions({
   // Platform plane: operating the SaaS across tenants.
   "platform.overview.read": { plane: "platform", description: "Read sanitized platform health and deployment state" },
   "platform.organizations.read": { plane: "platform", description: "Search organizations across tenants" },
+  "platform.organizations.regional.read": { plane: "platform", description: "Inspect an organization's regional configuration and explain a user's effective regional context" },
+  "platform.organizations.regional.recover": { plane: "platform", description: "Repair an organization's regional defaults with step-up, a reason, and audit" },
   "platform.users.read": { plane: "platform", description: "Search users and their assignments across tenants" },
   "platform.users.suspend": { plane: "platform", description: "Suspend and restore users" },
   "platform.sessions.revoke": { plane: "platform", description: "Revoke user sessions" },

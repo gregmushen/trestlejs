@@ -8,9 +8,10 @@ import { PlaneBadge } from "../../shell/roles";
 import { useStartSupportSession } from "../../shell/StartSupportSession";
 import { AdminDataTable, AdminEmpty, AdminFilter, AdminPageHeader, AdminQueryState, AdminSection, AdminStatus, formatDate } from "../../shell/ui";
 import { useViewSearch } from "../../shell/url-state";
+import { OrganizationRegional } from "./regional";
 
 function OrganizationDetail({ organization, onStart }: { organization: OrganizationSummary; onStart: (() => void) | undefined }) {
-  const { tenantContext } = useAdmin();
+  const { tenantContext, can } = useAdmin();
   const [search, update] = useViewSearch<{ tab?: string }>();
   const detail = useAdminQuery(["organization", organization.id], () => api.organization(organization.id));
   const active = tenantContext?.organizationId === organization.id;
@@ -18,9 +19,10 @@ function OrganizationDetail({ organization, onStart }: { organization: Organizat
   return <AdminSection title={organization.name} description={`Slug ${organization.slug} · created ${formatDate(organization.createdAt)}`}
     actions={active ? <AdminStatus variant="warning">in support session</AdminStatus> : onStart ? <Button variant="secondary" onClick={onStart}>Start support session</Button> : undefined}>
     <Tabs variant="underline" value={tab} onValueChange={(value) => update({ tab: String(value) === "members" ? undefined : String(value) }, { replace: true })}
-      tabs={[{ value: "members", label: "Members" }, { value: "summary", label: "Summary" }]} />
+      tabs={[{ value: "members", label: "Members" }, { value: "summary", label: "Summary" }, ...(can("platform.organizations.regional.read") ? [{ value: "regional", label: "Regional" }] : [])]} />
     <div className="mt-3">
-      {tab === "summary" ? <dl className="grid gap-2 text-sm sm:grid-cols-2">
+      {tab === "regional" && can("platform.organizations.regional.read") ? <OrganizationRegional organizationId={organization.id} organizationName={organization.name} />
+        : tab === "summary" ? <dl className="grid gap-2 text-sm sm:grid-cols-2">
         <div><dt className="text-kumo-subtle">Plan</dt><dd>{organization.plan ?? "none"}</dd></div>
         <div><dt className="text-kumo-subtle">Subscription</dt><dd>{organization.status ?? "—"}</dd></div>
         <div><dt className="text-kumo-subtle">Members</dt><dd>{organization.members}</dd></div>

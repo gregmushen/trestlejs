@@ -14,6 +14,9 @@ export const platformRoutePolicies = defineRoutePolicies(permissions, [
   platform("GET", "/api/admin/health", "platform.overview.read"),
   platform("GET", "/api/admin/organizations", "platform.organizations.read"),
   platform("GET", "/api/admin/organizations/:id", "platform.organizations.read"),
+  platform("GET", "/api/admin/organizations/:organizationId/regional", "platform.organizations.regional.read"),
+  platform("GET", "/api/admin/organizations/:organizationId/regional/resolve", "platform.organizations.regional.read"),
+  platform("PUT", "/api/admin/organizations/:organizationId/regional", "platform.organizations.regional.recover"),
   platform("GET", "/api/admin/support/profiles", "platform.support.enter_tenant"),
   platform("POST", "/api/admin/support/preview", "platform.support.enter_tenant"),
   platform("POST", "/api/admin/support/sessions", "platform.support.enter_tenant"),
@@ -135,6 +138,8 @@ export const platformRoutePolicies = defineRoutePolicies(permissions, [
  */
 export const supportRoutePolicies = defineRoutePolicies(permissions, [
   { method: "GET", path: "/api/admin/support/tenant/members", audience: "tenant", permission: "organization.members.read" },
+  { method: "GET", path: "/api/admin/support/tenant/regional", audience: "tenant", permission: "organization.settings.regional.read" },
+  { method: "PUT", path: "/api/admin/support/tenant/regional", audience: "tenant", permission: "organization.settings.regional.manage" },
   { method: "GET", path: "/api/admin/support/tenant/webhooks", audience: "tenant", permission: "organization.webhooks.read" },
   { method: "GET", path: "/api/admin/support/tenant/webhooks/:id", audience: "tenant", permission: "organization.webhooks.read" },
   { method: "POST", path: "/api/admin/support/tenant/webhooks/:id/pause", audience: "tenant", permission: "organization.webhooks.manage" },

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@__TRESTLE_PROJECT_NAME__/contracts": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/regional": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/theme": "workspace:*",
     "@better-auth/passkey": "1.7.5",
     "@better-auth/sso": "1.7.5",

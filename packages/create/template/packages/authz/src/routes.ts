@@ -98,5 +98,11 @@ export const customerRoutePolicies = defineRoutePolicies(permissions, [
   { method: "GET", path: "/api/tenant/notification-preferences", audience: "tenant", permission: "organization.read" },
   { method: "PUT", path: "/api/tenant/notification-preferences", audience: "tenant", permission: "organization.read" },
   { method: "PUT", path: "/api/tenant/notification-defaults", audience: "tenant", permission: "organization.notifications.manage" },
+  { method: "GET", path: "/api/tenant/regional", audience: "tenant", permission: "organization.settings.regional.read" },
+  { method: "PUT", path: "/api/tenant/regional", audience: "tenant", permission: "organization.settings.regional.manage" },
+  { method: "GET", path: "/api/tenant/regional/schedules", audience: "tenant", permission: "organization.settings.regional.read" },
+  // Each member reads and manages only their own language and region preferences.
+  { method: "GET", path: "/api/tenant/regional-preferences", audience: "tenant", permission: "organization.read" },
+  { method: "PUT", path: "/api/tenant/regional-preferences", audience: "tenant", permission: "organization.read" },
   { method: "GET", path: "/api/tenant/notification-deliveries", audience: "tenant", permission: "organization.notifications.read" },
 ]);

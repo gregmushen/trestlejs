@@ -2,13 +2,14 @@ import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { AccessDeniedError, publicDenial, validateApiKeyScopes } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { evaluateQuota, features, PostgresCommercialRepository, resolveEffectiveEntitlements, tenantCapabilityDocument, type QuotaState } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { PostgresTenantAccessRepository } from "@__TRESTLE_PROJECT_NAME__/data";
-import { AccessDomainError, ApplicationRoleService, NotificationError, OrganizationRoleService, ServiceAccountService, WebhookDomainError, type OperationContext, type TenantAccessRepository } from "@__TRESTLE_PROJECT_NAME__/domain";
+import { AccessDomainError, ApplicationRoleService, NotificationError, OrganizationRoleService, RegionalError, ServiceAccountService, WebhookDomainError, type OperationContext, type TenantAccessRepository } from "@__TRESTLE_PROJECT_NAME__/domain";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 
 import { requireExecutionContext, type AppExecutionContext, type AppVariables } from "./execution-context.js";
 import { registerIdentityRoutes } from "./identity-routes.js";
 import { registerNotificationRoutes } from "./notification-routes.js";
+import { registerRegionalRoutes } from "./regional-routes.js";
 import { operationContext, registerWebhookRoutes } from "./webhook-routes.js";
 
 type Environment = { Bindings: AuthEnvironment; Variables: AppVariables };
@@ -66,6 +67,7 @@ tenantRoutes.onError((error, context) => {
   if (error instanceof AccessDeniedError) return context.json(publicDenial(error.decision), error.status);
   if (error instanceof z.ZodError) return context.json({ error: "invalid", message: error.issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; ") }, 422);
   if (error instanceof WebhookDomainError || error instanceof NotificationError) return context.json({ error: error.code, message: error.message }, error.code === "not_found" ? 404 : error.code === "conflict" ? 409 : 422);
+  if (error instanceof RegionalError) return context.json({ error: error.code, message: error.message }, error.code === "not_enabled" ? 404 : 422);
   if (error instanceof AccessDomainError) {
     const status = error.code === "not_found" ? 404 : error.code === "conflict" ? 409 : error.code === "limit_exceeded" ? 409 : 422;
     return context.json({ error: error.code, message: error.message }, status);
@@ -283,4 +285,5 @@ tenantRoutes.get("/api/tenant/audit", async (context) => {
 
 registerWebhookRoutes(tenantRoutes);
 registerNotificationRoutes(tenantRoutes);
+registerRegionalRoutes(tenantRoutes);
 registerIdentityRoutes(tenantRoutes);

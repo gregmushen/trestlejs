@@ -17,6 +17,7 @@ packages:
   db: packages/db
   events: packages/events
   integrations: packages/integrations
+  regional: packages/regional
   theme: packages/theme
 site:
   framework: astro
@@ -71,6 +72,17 @@ commercial:
 artifacts:
   storage: local
   retentionDays: 30
+regional:
+  # Application defaults; organizations and users may override them in the app.
+  # Edit with `pnpm exec trestle setup`. Values are canonical identifiers.
+  language: en
+  locale: en-US
+  timeZone: UTC
+  currency: USD
+  organizationSettings: true
+  i18n:
+    enabled: false
+    languages: [en]
 environments:
   - local
   - preview

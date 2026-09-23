@@ -12,6 +12,7 @@
     "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/billing": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/regional": "workspace:*",
     "drizzle-orm": "0.45.3",
     "yaml": "2.9.1"
   },

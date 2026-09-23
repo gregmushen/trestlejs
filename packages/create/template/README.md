@@ -293,6 +293,27 @@ which `trestle dev` fires every few seconds, publishes committed events:
   records the version it resolved. Archived and unknown types throw.
   Code-defined types keep their keys; a stream cannot shadow them.
 
+## Regional settings
+
+Application defaults for language, locale, time zone, and currency live under
+`regional:` in `.trestle/project.yaml` and are edited with
+`pnpm exec trestle setup`. Organization administrators override them at
+`/settings/regional` (time zone, locale, default currency, and default language
+when `i18n` is enabled). Each member sets their own language, locale, and time
+zone at `/account/language-region`.
+
+Values resolve per setting: user preference, then organization default, then
+application default. Every effective value carries its source. Persisted values
+are canonical identifiers (IANA, BCP 47, ISO 4217), and `packages/regional` holds
+the browser-safe validation, resolution, formatting, and schedule helpers.
+Changing a setting affects future defaults and presentation only. It never
+rewrites stored timestamps, and money keeps its own currency (`Money` is minor
+units plus an ISO code).
+
+Recurring schedules that follow organization local time are declared in
+`packages/domain/src/regional/schedules.ts`, so a time-zone change can preview
+which schedules move. Explicitly zoned schedules never move.
+
 ## Platform admin
 
 The platform admin (`apps/admin`) is a separate SPA and Worker with its own

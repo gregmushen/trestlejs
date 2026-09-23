@@ -165,6 +165,7 @@ export async function diffSetupPlan(root: string, manifest: ProjectManifest, pla
   if (plan.commercial) compare("commercial", manifest.commercial, plan.commercial, `plans ${plan.commercial.plans}; usage ${plan.commercial.usage}`);
   if (plan.communications) compare("communications", manifest.communications, plan.communications, `webhooks ${plan.communications.webhooks}; notifications ${plan.communications.notifications}`);
   if (plan.artifacts) compare("artifacts", manifest.artifacts, plan.artifacts, `${plan.artifacts.storage} artifact storage retained ${plan.artifacts.retentionDays} days`);
+  if (plan.regional) compare("regional", manifest.regional, plan.regional, `${plan.regional.language}, ${plan.regional.locale}, ${plan.regional.timeZone}, ${plan.regional.currency}; i18n ${plan.regional.i18n.enabled ? plan.regional.i18n.languages.join("/") : "off"}`);
   compare("environments", manifest.environments, plan.environments, "declared environments match");
   for (const secret of plan.secrets) {
     const actual = manifest.secrets?.[secret.name];
@@ -235,7 +236,7 @@ export async function applySetupPlan(root: string, manifest: ProjectManifest, pl
   return state;
 }
 
-const MANIFEST_DECLARATIONS = new Set(["capabilities", "providers", "authentication", "identity", "access", "commercial", "communications", "artifacts"]);
+const MANIFEST_DECLARATIONS = new Set(["capabilities", "providers", "authentication", "identity", "access", "commercial", "communications", "artifacts", "regional"]);
 
 async function updateManifestDeclarations(root: string, plan: SetupPlan, ids: string[]): Promise<void> {
   const manifestPath = path.join(root, ".trestle", "project.yaml");
@@ -249,6 +250,7 @@ async function updateManifestDeclarations(root: string, plan: SetupPlan, ids: st
     else if (id === "access" && plan.access) document.set("access", { ...plan.access });
     else if (id === "commercial" && plan.commercial) document.set("commercial", { ...plan.commercial });
     else if (id === "artifacts" && plan.artifacts) document.set("artifacts", { ...plan.artifacts });
+    else if (id === "regional" && plan.regional) document.set("regional", { ...plan.regional, i18n: { ...plan.regional.i18n, languages: [...plan.regional.i18n.languages] } });
   }
   const result = projectManifestSchema.safeParse(document.toJS());
   if (!result.success) throw new CliFailure(`apply would produce an invalid manifest: ${result.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`);
@@ -277,6 +279,7 @@ export function planFromManifest(manifest: ProjectManifest, resources: SetupPlan
     ...(manifest.commercial ? { commercial: { ...manifest.commercial } } : {}),
     ...(manifest.communications ? { communications: { ...manifest.communications } } : {}),
     ...(manifest.artifacts ? { artifacts: { ...manifest.artifacts } } : {}),
+    ...(manifest.regional ? { regional: { ...manifest.regional, i18n: { ...manifest.regional.i18n, languages: [...manifest.regional.i18n.languages] } } } : {}),
     environments: [...manifest.environments],
     secrets: Object.entries(manifest.secrets ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([name, declaration]) => ({ name, target: declaration.target, required: [...declaration.required] })),
     resources: resources.map((resource) => ({ ...resource })),

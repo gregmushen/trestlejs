@@ -95,6 +95,33 @@ export const artifactsDeclarationSchema = z
   .object({ storage: z.enum(["local", "r2"]), retentionDays: z.number().int().min(1).max(3650) })
   .strict();
 
+const ianaTimeZone = (value: string): boolean => {
+  if (value !== "UTC" && !/^[A-Z][A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)+$/u.test(value)) return false;
+  try { new Intl.DateTimeFormat("en-US", { timeZone: value }); return true; } catch { return false; }
+};
+const canonicalLocaleTag = (value: string): boolean => {
+  try { return Intl.getCanonicalLocales(value)[0] === value && Intl.NumberFormat.supportedLocalesOf([value]).length > 0; } catch { return false; }
+};
+const languageCode = z.string().regex(/^[a-z]{2,3}$/u, "must be a lowercase two- or three-letter language code");
+
+/** Application regional defaults: IANA time zone, BCP 47 locale, ISO 4217 currency, and optional i18n. */
+export const regionalDeclarationSchema = z
+  .object({
+    language: languageCode,
+    locale: z.string().refine(canonicalLocaleTag, "must be a canonical BCP 47 locale this runtime can format, e.g. en-US"),
+    timeZone: z.string().refine(ianaTimeZone, "must be an IANA time zone such as America/Los_Angeles or UTC"),
+    currency: z.string().refine((value) => /^[A-Z]{3}$/u.test(value) && Intl.supportedValuesOf("currency").includes(value), "must be an ISO 4217 currency code such as USD"),
+    /** Organizations may override the defaults in Settings → Organization → Regional. */
+    organizationSettings: z.boolean().default(true),
+    i18n: z.object({ enabled: z.boolean(), languages: z.array(languageCode).min(1) }).strict().default({ enabled: false, languages: ["en"] }),
+  })
+  .strict()
+  .superRefine((regional, context) => {
+    if (regional.i18n.enabled && !regional.i18n.languages.includes(regional.language)) {
+      context.addIssue({ code: "custom", path: ["i18n", "languages"], message: "Supported languages must include the application language" });
+    }
+  });
+
 type OptionalDeclarations = {
   integrations?: z.infer<typeof integrationProvidersSchema> | undefined;
   access?: z.infer<typeof accessDeclarationSchema> | undefined;
@@ -196,6 +223,7 @@ export const projectManifestSchema = z
     commercial: commercialDeclarationSchema.optional(),
     communications: communicationsDeclarationSchema.optional(),
     artifacts: artifactsDeclarationSchema.optional(),
+    regional: regionalDeclarationSchema.optional(),
     environments: z.array(environmentNameSchema).min(1),
     secrets: z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/u), secretDeclarationSchema).optional(),
   })
