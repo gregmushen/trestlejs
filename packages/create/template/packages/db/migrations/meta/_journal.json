@@ -85,6 +85,13 @@
       "when": 1790294400003,
       "tag": "0011_dry_rage",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790294400004,
+      "tag": "0012_cuddly_makkari",
+      "breakpoints": true
     }
   ]
 }

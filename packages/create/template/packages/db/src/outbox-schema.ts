@@ -8,6 +8,7 @@ export const outboxMessage = pgTable("outbox_message", {
   occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
   resourceType: text("resource_type").notNull(),
   resourceId: text("resource_id").notNull(),
+  organizationId: text("organization_id"),
   correlationId: text("correlation_id").notNull(),
   causationId: text("causation_id"),
   idempotencyKey: text("idempotency_key").notNull(),

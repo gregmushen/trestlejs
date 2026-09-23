@@ -209,7 +209,8 @@ export class Postgres${n.className}Repository implements ${n.className}Repositor
         id: crypto.randomUUID(), eventName: "resource.${n.kebab}.created", schemaVersion: 1,
         occurredAt, resourceType: "${n.kebab}", resourceId: record.id,
         correlationId: this.correlationId, idempotencyKey: "resource.${n.kebab}.created:" + record.id,
-        payload: { organizationId: this.organizationId, resourceId: record.id }, availableAt: occurredAt,
+        organizationId: this.organizationId,
+        payload: { resourceId: record.id }, availableAt: occurredAt,
       });
       return record;
     });
@@ -382,7 +383,7 @@ export function create${n.className}Api(organizationId: string) {
   await writeGenerated(targets[10]!, `import { createLogger } from "@${project}/context";
 import type { EventDefinition, EventEnvelope } from "@${project}/events";
 
-export type ${n.className}CreatedPayload = { organizationId: string; resourceId: string };
+export type ${n.className}CreatedPayload = { resourceId: string };
 
 export const ${n.camel}CreatedEvent: EventDefinition<${n.className}CreatedPayload> = {
   name: "resource.${n.kebab}.created",
@@ -390,17 +391,16 @@ export const ${n.camel}CreatedEvent: EventDefinition<${n.className}CreatedPayloa
   parse(payload: unknown): ${n.className}CreatedPayload {
     if (!payload || typeof payload !== "object") throw new Error("Invalid ${n.className} created event payload");
     const value = payload as Record<string, unknown>;
-    if (typeof value.organizationId !== "string" || !value.organizationId || typeof value.resourceId !== "string" || !value.resourceId) {
+    if (typeof value.resourceId !== "string" || !value.resourceId) {
       throw new Error("Invalid ${n.className} created event payload");
     }
-    return { organizationId: value.organizationId, resourceId: value.resourceId };
+    return { resourceId: value.resourceId };
   },
 };
 
 // This application-owned handler records receipt. Add idempotent domain side effects here.
 export async function handle${n.className}Created(payload: ${n.className}CreatedPayload, envelope: EventEnvelope): Promise<void> {
   createLogger({ correlationId: envelope.correlationId }).info("resource.${n.kebab}.created.consumed", {
-    organizationId: payload.organizationId,
     resourceId: payload.resourceId,
     eventId: envelope.id,
   });

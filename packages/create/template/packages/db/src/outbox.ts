@@ -1,10 +1,10 @@
 import { eventEnvelopeSchema, safeErrorCategory, type EventEnvelope, type OutboxEntry, type OutboxStore } from "@__TRESTLE_PROJECT_NAME__/events";
 import postgres from "postgres";
 
-type Row = { id: string; event_name: string; schema_version: number; occurred_at: Date; resource_type: string; resource_id: string; correlation_id: string; causation_id: string | null; idempotency_key: string; payload: unknown; status: "pending" | "leased" | "succeeded" | "dead"; attempts: number; available_at: Date; leased_until: Date | null; last_error: string | null };
+type Row = { id: string; event_name: string; schema_version: number; occurred_at: Date; resource_type: string; resource_id: string; organization_id: string | null; correlation_id: string; causation_id: string | null; idempotency_key: string; payload: unknown; status: "pending" | "leased" | "succeeded" | "dead"; attempts: number; available_at: Date; leased_until: Date | null; last_error: string | null };
 
 function entry(row: Row): OutboxEntry {
-  return { id: row.id, message: eventEnvelopeSchema.parse({ id: row.id, name: row.event_name, schemaVersion: row.schema_version, occurredAt: row.occurred_at.toISOString(), resource: { type: row.resource_type, id: row.resource_id }, correlationId: row.correlation_id, ...(row.causation_id ? { causationId: row.causation_id } : {}), idempotencyKey: row.idempotency_key, payload: row.payload }), status: row.status, attempts: row.attempts, availableAt: row.available_at, ...(row.leased_until ? { leasedUntil: row.leased_until } : {}), ...(row.last_error ? { lastError: row.last_error } : {}) };
+  return { id: row.id, message: eventEnvelopeSchema.parse({ id: row.id, name: row.event_name, schemaVersion: row.schema_version, occurredAt: row.occurred_at.toISOString(), resource: { type: row.resource_type, id: row.resource_id }, correlationId: row.correlation_id, ...(row.causation_id ? { causationId: row.causation_id } : {}), idempotencyKey: row.idempotency_key, payload: row.payload }), ...(row.organization_id ? { organizationId: row.organization_id } : {}), status: row.status, attempts: row.attempts, availableAt: row.available_at, ...(row.leased_until ? { leasedUntil: row.leased_until } : {}), ...(row.last_error ? { lastError: row.last_error } : {}) };
 }
 
 export function outboxApplicationConnectionString(connectionString: string): string {
@@ -18,12 +18,20 @@ export class PostgresOutboxStore implements OutboxStore {
   private readonly sql;
   constructor(connectionString: string, options: { assumeApplicationRole?: boolean } = {}) { this.sql = postgres(options.assumeApplicationRole ? outboxApplicationConnectionString(connectionString) : connectionString, { max: 2, prepare: false }); }
   async close(): Promise<void> { await this.sql.end(); }
-  async append(message: EventEnvelope): Promise<OutboxEntry> {
+  async append(message: EventEnvelope, options: { organizationId?: string } = {}): Promise<OutboxEntry> {
     const parsed = eventEnvelopeSchema.parse(message);
-    const [inserted] = await this.sql<Row[]>`insert into outbox_message (id,event_name,schema_version,occurred_at,resource_type,resource_id,correlation_id,causation_id,idempotency_key,payload,available_at) values (${parsed.id},${parsed.name},${parsed.schemaVersion},${new Date(parsed.occurredAt)},${parsed.resource.type},${parsed.resource.id},${parsed.correlationId},${parsed.causationId ?? null},${parsed.idempotencyKey},${JSON.stringify(parsed.payload)},${new Date(parsed.occurredAt)}) on conflict (idempotency_key) do nothing returning *`;
+    if (options.organizationId !== undefined && !options.organizationId.trim()) throw new Error("Outbox organization ID must not be blank");
+    const [inserted] = await this.sql<Row[]>`insert into outbox_message (id,event_name,schema_version,occurred_at,resource_type,resource_id,organization_id,correlation_id,causation_id,idempotency_key,payload,available_at) values (${parsed.id},${parsed.name},${parsed.schemaVersion},${new Date(parsed.occurredAt)},${parsed.resource.type},${parsed.resource.id},${options.organizationId ?? null},${parsed.correlationId},${parsed.causationId ?? null},${parsed.idempotencyKey},${this.sql.json(parsed.payload as postgres.JSONValue)},${new Date(parsed.occurredAt)}) on conflict (idempotency_key) do nothing returning *`;
     if (inserted) return entry(inserted);
     const [existing] = await this.sql<Row[]>`select * from outbox_message where idempotency_key=${parsed.idempotencyKey}`;
-    if (!existing) throw new Error("Outbox idempotency lookup failed"); return entry(existing);
+    if (!existing) throw new Error("Outbox idempotency lookup failed");
+    if (existing.organization_id !== (options.organizationId ?? null)) throw new Error("Outbox idempotency key belongs to a different organization");
+    return entry(existing);
+  }
+  /** Resolve tenant provenance from the committed row; never infer it from Queue payloads. */
+  async findCommitted(id: string): Promise<OutboxEntry | null> {
+    const [row] = await this.sql<Row[]>`select * from outbox_message where id=${id}`;
+    return row ? entry(row) : null;
   }
   async lease(limit = 10, leaseMs = 30_000): Promise<OutboxEntry[]> {
     const rows = await this.sql.begin(async (transaction) => await transaction<Row[]>`with candidates as (select id from outbox_message where (status='pending' and available_at <= now()) or (status='leased' and leased_until <= now()) order by available_at for update skip locked limit ${limit}) update outbox_message set status='leased', leased_until=now()+(${leaseMs} * interval '1 millisecond') from candidates where outbox_message.id=candidates.id returning outbox_message.*`);

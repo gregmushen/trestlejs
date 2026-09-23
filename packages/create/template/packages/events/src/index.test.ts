@@ -13,6 +13,17 @@ describe("Alpha 8 asynchronous execution spine", () => {
     expect(() => registry.parse({ ...message("event-2"), schemaVersion: 2 })).toThrow("No event definition");
   });
   it("deduplicates outbox appends and recovers expired leases", () => { const outbox = new InMemoryOutbox(clock); const first = outbox.append(message("outbox-1")); expect(outbox.append({ ...first.message, id: crypto.randomUUID() })).toBe(first); expect(outbox.lease(1, 100)).toHaveLength(1); clock.current = new Date(now.getTime() + 101); expect(outbox.lease()).toHaveLength(1); });
+  it("keeps committed tenant provenance out of the Queue envelope", async () => {
+    const outbox = new InMemoryOutbox(clock);
+    const committed = outbox.append(message("tenant-event"), { organizationId: "org-trusted" });
+    expect(committed.organizationId).toBe("org-trusted");
+    expect(committed.message).not.toHaveProperty("organizationId");
+    expect(() => outbox.append(message("tenant-event"), { organizationId: "org-other" })).toThrow("different organization");
+    expect(() => outbox.append(message("blank-tenant"), { organizationId: " " })).toThrow("must not be blank");
+    const sent: unknown[] = [];
+    expect(await dispatchOutbox(outbox as unknown as OutboxStore, { send: async (event) => { sent.push(event); } })).toEqual({ sent: 1, failed: 0 });
+    expect(sent[0]).not.toHaveProperty("organizationId");
+  });
   it("backs off failures, dead-letters after the limit, and redrives explicitly", () => { const outbox = new InMemoryOutbox(clock); const entry = outbox.append(message("outbox-2")); for (let attempt = 1; attempt <= 3; attempt += 1) { outbox.lease(); outbox.fail(entry.id, new Error(`failure-${attempt}`), 3); clock.current = new Date(clock.current.getTime() + 2 ** (attempt - 1) * 1_000); } expect(outbox.list()[0]).toMatchObject({ status: "dead", attempts: 3, lastError: "Error" }); expect(outbox.redrive(entry.id).status).toBe("pending"); });
   it("does not persist sensitive outbox failure messages or arbitrary error names", () => { const outbox = new InMemoryOutbox(clock); const entry = outbox.append(message("outbox-sensitive")); outbox.lease(); const failure = new Error("sk_sensitive-provider-key"); failure.name = "Secret sk_sensitive-provider-key"; outbox.fail(entry.id, failure, 1); expect(outbox.list()[0]).toMatchObject({ status: "dead", lastError: "Error" }); expect(JSON.stringify(outbox.list())).not.toContain("sk_sensitive-provider-key"); });
   it("delivers each queue idempotency key once", async () => { const queue = new InMemoryQueue(); expect(await queue.send(message("queue-1"))).toBe(true); expect(await queue.send(message("queue-1"))).toBe(false); const handled: string[] = []; expect(await queue.drain(async (event) => { handled.push(event.idempotencyKey); })).toBe(1); expect(handled).toEqual(["queue-1"]); });

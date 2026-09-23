@@ -31,16 +31,21 @@ export class EventRegistry {
 }
 
 export type OutboxStatus = "pending" | "leased" | "succeeded" | "dead";
-export type OutboxEntry = { id: string; message: EventEnvelope; status: OutboxStatus; attempts: number; availableAt: Date; leasedUntil?: Date; lastError?: string };
+/** Organization provenance is committed metadata, never Queue payload authority. */
+export type OutboxEntry = { id: string; message: EventEnvelope; organizationId?: string; status: OutboxStatus; attempts: number; availableAt: Date; leasedUntil?: Date; lastError?: string };
 export type OutboxClock = { now(): Date };
 
 export class InMemoryOutbox {
   private readonly entries = new Map<string, OutboxEntry>();
   constructor(private readonly clock: OutboxClock = { now: () => new Date() }) {}
-  append(message: EventEnvelope): OutboxEntry {
+  append(message: EventEnvelope, options: { organizationId?: string } = {}): OutboxEntry {
+    if (options.organizationId !== undefined && !options.organizationId.trim()) throw new Error("Outbox organization ID must not be blank");
     const existing = [...this.entries.values()].find((entry) => entry.message.idempotencyKey === message.idempotencyKey);
-    if (existing) return existing;
-    const entry: OutboxEntry = { id: message.id, message, status: "pending", attempts: 0, availableAt: new Date(message.occurredAt) };
+    if (existing) {
+      if (existing.organizationId !== options.organizationId) throw new Error("Outbox idempotency key belongs to a different organization");
+      return existing;
+    }
+    const entry: OutboxEntry = { id: message.id, message, ...(options.organizationId ? { organizationId: options.organizationId } : {}), status: "pending", attempts: 0, availableAt: new Date(message.occurredAt) };
     this.entries.set(entry.id, entry); return entry;
   }
   lease(limit = 10, leaseMs = 30_000): OutboxEntry[] {
@@ -100,7 +105,7 @@ export class LocalWorkflowScheduler {
 }
 
 export interface OutboxStore {
-  append(message: EventEnvelope): Promise<OutboxEntry>;
+  append(message: EventEnvelope, options?: { organizationId?: string }): Promise<OutboxEntry>;
   lease(limit?: number, leaseMs?: number): Promise<OutboxEntry[]>;
   succeed(id: string): Promise<void>;
   fail(id: string, error: unknown, maxAttempts?: number): Promise<void>;

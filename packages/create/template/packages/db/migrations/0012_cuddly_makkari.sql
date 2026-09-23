@@ -1,0 +1,1 @@
+ALTER TABLE "outbox_message" ADD COLUMN "organization_id" text;
