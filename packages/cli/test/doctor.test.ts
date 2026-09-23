@@ -57,6 +57,31 @@ describe("remote provider preflight", () => {
     }
   });
 
+  it("reports disabled and invalid ready-object retention without silently enabling deletion", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const enabled = { ...manifest, capabilities: { ...manifest.capabilities, r2: true } };
+    const absent = await runDoctor(templateRoot, enabled, "preview");
+    expect(absent.checks).toContainEqual(expect.objectContaining({ id: "artifacts.ready_retention.configuration", status: "pass", message: expect.stringContaining("indefinitely") }));
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-retention-doctor-"));
+    try {
+      await mkdir(path.join(root, "apps", "worker"), { recursive: true });
+      await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ env: { preview: { vars: { ARTIFACT_READY_RETENTION_DAYS: "0" } } } }));
+      const invalid = await runDoctor(root, enabled, "preview");
+      expect(invalid.checks).toContainEqual(expect.objectContaining({ id: "artifacts.ready_retention.configuration", status: "fail" }));
+      await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ env: { preview: { vars: { ARTIFACT_READY_RETENTION_DAYS: 30 } } } }));
+      const nonString = await runDoctor(root, enabled, "preview");
+      expect(nonString.checks).toContainEqual(expect.objectContaining({ id: "artifacts.ready_retention.configuration", status: "fail" }));
+      await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ env: { preview: { vars: { ARTIFACT_READY_RETENTION_DAYS: "30" } } } }));
+      const unbound = await runDoctor(root, enabled, "preview");
+      expect(unbound.checks).toContainEqual(expect.objectContaining({ id: "artifacts.ready_retention.configuration", status: "fail", message: expect.stringContaining("requires an enabled R2 binding") }));
+      await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ env: { preview: { vars: { ARTIFACT_READY_RETENTION_DAYS: "30" }, r2_buckets: [{ binding: "TRESTLE_ARTIFACTS", bucket_name: "test-artifacts" }] } } }));
+      const ready = await runDoctor(root, enabled, "preview");
+      expect(ready.checks).toContainEqual(expect.objectContaining({ id: "artifacts.ready_retention.configuration", status: "pass", message: expect.stringContaining("30 days") }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("requires a nontrivial encrypted artifact signing key only for remote R2", async () => {
     const manifest = await loadProjectManifest(templateRoot);
     const enabled = { ...manifest, capabilities: { ...manifest.capabilities, r2: true } };

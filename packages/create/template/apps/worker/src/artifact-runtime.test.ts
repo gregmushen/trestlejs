@@ -25,4 +25,9 @@ describe("artifact runtime configuration", () => {
     expect(artifactRuntimeReady({ ...environment, TRESTLE_ARTIFACTS: { put: async () => undefined, get: async () => null, delete: async () => undefined } })).toBe(false);
     expect(artifactRuntimeReady({ ...environment, ARTIFACT_SIGNING_SECRET: "short", TRESTLE_ARTIFACTS: { put: async () => undefined, get: async () => null, delete: async () => undefined } })).toBe(false);
   });
+
+  it("does not silently ignore a retention policy without R2", () => {
+    expect(() => artifactStore({ ...base, APP_ENV: "local", ARTIFACT_READY_RETENTION_DAYS: "7" }, "org-a"))
+      .toThrow("requires the R2 binding");
+  });
 });

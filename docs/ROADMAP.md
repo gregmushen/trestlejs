@@ -62,7 +62,8 @@ beta is complete before the evidence gates pass.
   Alpha 63 audits ready PostgreSQL references against R2 metadata in bounded,
   tenant-scoped pages. Alpha 64 adds the inverse bounded, read-only R2 orphan
   audit. Alpha 65 adds provider-backed verification of every restored ready
-  reference. Ready-object retention remains.
+  reference. Alpha 67 adds opt-in ready-object retention with immediate read
+  denial, bounded tenant-scoped R2 cleanup, and durable retry on failed deletes.
 - [ ] Align Drizzle snapshots and make migration generation idempotent.
 - [ ] Add protected Resend/Stripe test-mode integration tests and staging
   recipient protection.
@@ -482,6 +483,11 @@ before claiming the storage recovery gate is met.
 Alpha 66 makes preview credential diagnostics distinguish a readable but
 incomplete encrypted file from an unreadable file. This does not satisfy
 missing provider credentials or the deployment gate.
+Alpha 67 adds an explicit `ARTIFACT_READY_RETENTION_DAYS` policy for R2-backed
+artifacts. A bounded scheduled sweep claims expired ready rows under tenant RLS,
+then deletes exact R2 keys; failures remain inaccessible and retry through the
+existing cleanup path. No ready objects are deleted unless an application
+explicitly configures a period. Hosted R2 retention remains unverified.
 A committed domain event remains authoritative;
 webhook failure must never undo its domain mutation.
 

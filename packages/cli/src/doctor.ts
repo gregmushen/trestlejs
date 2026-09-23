@@ -253,6 +253,19 @@ export async function runDoctor(
         ...(!configured ? { remediation: `Declare the ${capability} binding in ${workerPath ?? "apps/worker"}/wrangler.jsonc for ${environment}, or disable the capability in .trestle/project.yaml` } : {}),
       });
     }
+    const retention = wranglerStringVariable(block, "ARTIFACT_READY_RETENTION_DAYS");
+    const retentionDeclared = block.includes('"ARTIFACT_READY_RETENTION_DAYS"');
+    if (manifest.capabilities.r2 || retentionDeclared) {
+      const valid = retention === undefined ? !retentionDeclared : /^[1-9][0-9]{0,3}$/u.test(retention) && Number(retention) <= 3650;
+      const bound = retention === undefined || (manifest.capabilities.r2 && wranglerCapabilityBinding(block, "r2"));
+      checks.push({
+        id: "artifacts.ready_retention.configuration",
+        group: "architecture",
+        status: valid && bound ? "pass" : "fail",
+        message: !valid ? "ready artifact retention must be an integer from 1 to 3650 days" : !bound ? "ready artifact retention requires an enabled R2 binding" : retention === undefined ? "ready artifact retention is not configured; ready objects are kept indefinitely" : `ready artifact retention is configured for ${retention} days`,
+        ...(!valid || !bound ? { remediation: `Enable the ${environment} R2 binding and set ARTIFACT_READY_RETENTION_DAYS to 1–3650, or remove it to retain ready objects indefinitely` } : {}),
+      });
+    }
     if (wranglerStringVariable(block, "WEBHOOK_DELIVERY_MODE") === "native") {
       const declaration = manifest.secrets?.WEBHOOK_SECRET_KEY;
       const queueReady = manifest.capabilities.queues && wranglerCapabilityBinding(block, "queues");

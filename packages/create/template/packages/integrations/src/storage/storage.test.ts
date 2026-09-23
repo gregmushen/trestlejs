@@ -97,6 +97,29 @@ describe("tenant-owned artifact storage", () => {
     await expect(metadata.put({ id: "customer-delete", organizationId: "org-a", key: "reuse", contentType: "text/plain", size: 0, createdAt })).rejects.toThrow("unavailable");
   });
 
+  it("hides expired ready objects before the sweep and retries a failed retention delete", async () => {
+    const metadata = new InMemoryArtifactMetadataRepository();
+    const old = new Date("2026-01-01T00:00:00Z");
+    const recent = new Date("2026-01-29T00:00:00Z");
+    const now = new Date("2026-01-31T00:00:00Z");
+    await metadata.put({ id: "expired", organizationId: "org-a", key: "org-a/expired", contentType: "text/plain", size: 1, createdAt: old });
+    await metadata.complete("org-a", "expired", "org-a/expired");
+    await metadata.put({ id: "recent", organizationId: "org-a", key: "org-a/recent", contentType: "text/plain", size: 1, createdAt: recent });
+    await metadata.complete("org-a", "recent", "org-a/recent");
+    const deleted: string[] = [];
+    let fail = true;
+    const store = new CloudflareR2ArtifactStore({ put: async () => undefined, get: async () => ({ size: 1, arrayBuffer: async () => new Uint8Array([1]).buffer }), delete: async (key) => { deleted.push(key); if (fail) { fail = false; throw new Error("R2 unavailable"); } } }, metadata, { maxAgeDays: 7, now: () => now });
+    expect(await store.get("org-a", "expired")).toBeNull();
+    expect(await store.get("org-a", "recent")).not.toBeNull();
+    expect(await store.expireReady("org-b", new Date("2026-01-24T00:00:00Z"))).toEqual({ claimed: 0, retired: 0, failed: 0 });
+    expect(await store.expireReady("org-a", new Date("2026-01-24T00:00:00Z"))).toEqual({ claimed: 1, retired: 0, failed: 1 });
+    expect(await metadata.get("org-a", "expired")).toBeNull();
+    expect(await store.expireReady("org-a", new Date("2026-01-24T00:00:00Z"))).toEqual({ claimed: 0, retired: 0, failed: 0 });
+    expect(await store.recoverIncomplete("org-a", new Date("2026-01-24T00:00:00Z"))).toEqual({ claimed: 1, retired: 1, failed: 0 });
+    expect(deleted).toEqual(["org-a/expired", "org-a/expired"]);
+    expect(await store.get("org-a", "recent")).not.toBeNull();
+  });
+
   it("retries metadata finalization after R2 deletion was accepted", async () => {
     class FlakyMetadata extends InMemoryArtifactMetadataRepository {
       attempts = 0;

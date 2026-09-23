@@ -28,6 +28,7 @@ export interface AuthEnvironment {
   WEB_ORIGIN?: string;
   TRESTLE_ARTIFACTS?: R2BucketBinding;
   ARTIFACT_SIGNING_SECRET?: string;
+  ARTIFACT_READY_RETENTION_DAYS?: string;
 }
 
 export function createAuth(environment: AuthEnvironment) {
