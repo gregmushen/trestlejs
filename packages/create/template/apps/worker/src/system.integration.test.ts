@@ -1,5 +1,6 @@
+import { createAuth } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
-import { artifactMetadata, createDatabase, createTenantDatabase, eventInbox, hasArtifactStorageKey, organization, organizationEntitlement, organizationSubscription, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { activeApplicationRoles, artifactMetadata, createDatabase, createTenantDatabase, eventInbox, hasArtifactStorageKey, organization, organizationEntitlement, organizationSubscription, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { eq, sql } from "drizzle-orm";
@@ -31,6 +32,7 @@ suite("local product path", () => {
     const billingRepository = new PostgresBillingProjectionRepository(databaseUrl!, "postgres-js");
     let organizationId: string | undefined;
     let secondOrganizationId: string | undefined;
+    let joinerId: string | undefined;
     let articleId: string | undefined;
     let secondArticleId: string | undefined;
     let artifactId: string | undefined;
@@ -65,6 +67,19 @@ suite("local product path", () => {
       const created = await create.json() as { id: string };
       organizationId = created.id;
       expect(organizationId).toBeTruthy();
+
+      // The creator is the organization Owner and, by explicit membership policy, its application administrator.
+      const creatorAccess = await app.request("http://localhost:8787/api/tenant/access", { headers: { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": organizationId! } }, environment);
+      expect(creatorAccess.status).toBe(200);
+      await expect(creatorAccess.json()).resolves.toMatchObject({ organizationId, assignments: { organization: ["owner"], application: ["app_admin"] } });
+      // A member added later starts with the default application role; the creator keeps only its creation grant.
+      joinerId = `system-joiner-${crypto.randomUUID()}`;
+      await database.insert(user).values({ id: joinerId, name: "Joiner", email: `${joinerId}@example.test`, emailVerified: true, createdAt: new Date(), updatedAt: new Date() });
+      await createAuth(environment).api.addMember({ body: { userId: joinerId, organizationId: organizationId!, role: "member" } });
+      const tenantRoles = createTenantDatabase(databaseUrl!, "postgres-js", organizationId!);
+      expect(await activeApplicationRoles(tenantRoles, organizationId!, joinerId)).toEqual(["editor"]);
+      const [creator] = await database.select({ id: user.id }).from(user).where(eq(user.email, email)).limit(1);
+      expect(await activeApplicationRoles(tenantRoles, organizationId!, creator!.id)).toEqual(["app_admin"]);
 
       await billingRepository.put({ organizationId: organizationId!, provider: "local", plan: "starter", planVersion: 1, status: "active", cancelAtPeriodEnd: false, entitlements: ["article.basic"] });
 
@@ -262,6 +277,8 @@ suite("local product path", () => {
       if (organizationId) await database.delete(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId));
       if (secondOrganizationId) await database.delete(organization).where(eq(organization.id, secondOrganizationId));
       if (organizationId) await database.delete(organization).where(eq(organization.id, organizationId));
+      // Deleting users cascades their application-role assignments.
+      if (joinerId) await database.delete(user).where(eq(user.id, joinerId));
       await database.delete(user).where(eq(user.email, email));
       clearCapturedEmails();
     }

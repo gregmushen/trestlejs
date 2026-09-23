@@ -9,9 +9,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*",
-    "better-auth": "1.7.5"
+    "better-auth": "1.7.5",
+    "drizzle-orm": "0.45.3"
   },
   "devDependencies": {
     "@types/node": "26.6.2"

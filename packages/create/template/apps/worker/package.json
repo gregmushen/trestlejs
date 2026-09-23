@@ -10,9 +10,10 @@
   },
   "dependencies": {
     "@__TRESTLE_PROJECT_NAME__/auth": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/billing": "workspace:*",
-    "@__TRESTLE_PROJECT_NAME__/contracts": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/context": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/contracts": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/data": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/domain": "workspace:*",

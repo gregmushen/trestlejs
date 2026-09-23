@@ -1,4 +1,4 @@
-import { AccessDeniedError } from "@__TRESTLE_PROJECT_NAME__/context";
+import { AccessDeniedError, type AccessDecision } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { BillingProviderUnavailable, BillingRateLimited, BillingValidationError } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { describe, expect, it } from "vitest";
 import { mapHttpError } from "./http-errors.js";
@@ -11,7 +11,9 @@ describe("HTTP error normalization", () => {
   });
 
   it("does not expose permission or entitlement details", () => {
-    const error = new AccessDeniedError({ allowed: false, missing: ["permission", "entitlement"] });
-    expect(mapHttpError(error)).toMatchObject({ status: 403, code: "access_denied", message: "The requested operation is not permitted" });
+    const decision: AccessDecision = { allowed: false, reason: "entitlement_missing", principal: { type: "user", id: "user-1" }, entitlement: { code: "workflows.advanced", enabled: false }, permission: { code: "resource.write", plane: "application", granted: true, grantedBy: ["editor"] }, assignments: { organization: [], application: ["editor"], platform: [] }, constraints: [] };
+    const mapped = mapHttpError(new AccessDeniedError(decision));
+    expect(mapped).toMatchObject({ status: 403, code: "access_denied", message: "The requested operation is not permitted" });
+    expect(JSON.stringify(mapped)).not.toMatch(/workflows|editor|resource/u);
   });
 });

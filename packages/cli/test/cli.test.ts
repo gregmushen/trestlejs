@@ -72,13 +72,13 @@ function capture(root: string, input = "") {
 }
 
 describe("TrestleJS CLI", () => {
-  it("does not generate application routes against a legacy single-plane context", async () => {
+  it("does not generate application routes against a pre-registry authority model", async () => {
     const root = await fixture();
     await mkdir(path.join(root, "packages", "context", "src"), { recursive: true });
     await writeFile(path.join(root, "packages", "context", "src", "index.ts"), 'export const authority = { plane: "organization", permissions: new Set() };\n');
     const output = capture(root);
     expect(await executeCli(["generate", "resource", "Article"], output.runtime)).toBe(1);
-    expect(output.stderr()).toContain("migrate the legacy single-plane ExecutionContext");
+    expect(output.stderr()).toContain("authority model 3");
   });
 
   it("previews setup without creating or changing a plan", async () => {
@@ -333,9 +333,9 @@ describe("TrestleJS CLI", () => {
     expect(appSource).toContain('path: "/articles"');
     const routeSource = await readFile(path.join(root, "apps/worker/src/resources/article-routes.ts"), "utf8");
     expect(routeSource).toContain("requireExecutionContext");
-    expect(routeSource).toContain('plane: "application", permission: "resource:read"');
-    expect(routeSource).toContain('plane: "application", permission: "resource:write"');
-    expect(routeSource).not.toContain('plane: "organization", permission: "resource:write"');
+    expect(routeSource).toContain('access.require({ permission: "resource.read" })');
+    expect(routeSource).toContain('access.require({ permission: "resource.write" })');
+    expect(routeSource).not.toContain("organization.");
     expect(routeSource).toContain("new ArticleService(new PostgresArticleRepository");
     const eventSource = await readFile(path.join(root, "apps/worker/src/resources/article-events.ts"), "utf8");
     expect(eventSource).toContain('name: "resource.article.created"');

@@ -1,7 +1,9 @@
-import { createDatabase, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
+import { memberDefaultApplicationRoles, organizationCreatorApplicationRoles } from "@__TRESTLE_PROJECT_NAME__/authz";
+import { createDatabase, createTenantDatabase, grantApplicationRoles, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import * as schema from "@__TRESTLE_PROJECT_NAME__/db";
 import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate, type R2BucketBinding } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { betterAuth } from "better-auth";
+import { eq } from "drizzle-orm";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization } from "better-auth/plugins";
 
@@ -75,8 +77,33 @@ export function createAuth(environment: AuthEnvironment) {
         subject: `Join ${invitedOrganization.name}`,
         template: invitationTemplate({ organizationName: invitedOrganization.name, invitationUrl: `${baseURL}/accept-invitation?id=${id}` }),
       }, { idempotencyKey: `organization-invite:${id}` }); },
+      // Application roles are separate from membership; these one-time grants follow packages/authz/src/policies.ts.
+      organizationHooks: {
+        afterCreateOrganization: async ({ organization: created, user }) => {
+          await grantMembershipRoles(environment, created.id, user.id, organizationCreatorApplicationRoles, "policy:organization_creator");
+        },
+        afterAddMember: async ({ organization: joined, user }) => {
+          // Better Auth also adds the creator through this hook, before afterCreateOrganization;
+          // an organization's first member is always its creator, whose roles come from that hook.
+          if (await memberCount(environment, joined.id) <= 1) return;
+          await grantMembershipRoles(environment, joined.id, user.id, memberDefaultApplicationRoles, "policy:member_default");
+        },
+        afterAcceptInvitation: async ({ organization: joined, user }) => {
+          await grantMembershipRoles(environment, joined.id, user.id, memberDefaultApplicationRoles, "policy:member_default");
+        },
+      },
     })],
   });
+}
+
+async function memberCount(environment: AuthEnvironment, organizationId: string): Promise<number> {
+  const rows = await createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER).select({ id: schema.member.id }).from(schema.member).where(eq(schema.member.organizationId, organizationId)).limit(2);
+  return rows.length;
+}
+
+/** Writes on the restricted tenant connection, so forced RLS bounds the grant to this organization. */
+async function grantMembershipRoles(environment: AuthEnvironment, organizationId: string, userId: string, roles: readonly string[], grantedBy: string): Promise<void> {
+  await grantApplicationRoles(createTenantDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER, organizationId), { organizationId, userId, roles, grantedBy });
 }
 
 async function fingerprint(value: string): Promise<string> {

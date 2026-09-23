@@ -304,8 +304,8 @@ pnpm exec trestle generate resource Article \
   --field summary:text? \
   --field published:boolean? \
   --field authorId:relation?:Author:set-null \
-  --read-permission resource:read \
-  --write-permission resource:write
+  --read-permission resource.read \
+  --write-permission resource.write
 pnpm exec trestle resource add-field Article archived:boolean? --yes
 ```
 
@@ -319,12 +319,19 @@ every generated operation declares its application permission before reaching
 the repository. `resource add-field` refuses required additions: add, backfill,
 verify, and only then tighten a database constraint deliberately.
 
-Organization membership and product-resource access are separate authority
-planes. A new member receives the application's starter `contributor` role
-(resource read/write); changing the organization role does not change that
-application role. Clearing `member.application_role` revokes resource access
-without removing membership. Applications should replace this starter policy
-with domain-specific roles before granting sensitive product actions.
+Organization membership and product access are separate authority planes.
+Every permission is registered once, in one plane, in
+`packages/authz/src/permissions.ts`. Organization roles (`owner`, `admin`,
+`member`) come from membership and govern the account: billing, webhooks, and
+members. Application roles (`app_admin`, `editor`, `reader`) are stored
+separately in `application_role_assignment` and govern product actions, so an
+organization Owner has no product authority without one. Creating an
+organization makes you its `app_admin`, and members who join later start as
+`editor` (`packages/authz/src/policies.ts`). Application administrators change
+roles with `PUT /api/tenant/users/:userId/application-roles`, and
+`GET /api/tenant/access` explains your own effective access. Every Worker route
+declares its authority in `packages/authz/src/routes.ts`, and the middleware
+enforces it before the handler runs.
 
 Project upgrades are dry-run first and preserve application-owned source and
 custom skill guidance:
