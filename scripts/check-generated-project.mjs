@@ -39,6 +39,12 @@ try {
   manifest.pnpm = { ...(manifest.pnpm ?? {}), overrides: { ...(manifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await run("pnpm", ["install"], project);
+  const lockfilePath = path.join(project, "pnpm-lock.yaml");
+  const lockfile = await readFile(lockfilePath, "utf8");
+  await run("pnpm", ["install", "--frozen-lockfile"], project);
+  if (await readFile(lockfilePath, "utf8") !== lockfile) {
+    throw new Error("Frozen generated-project install changed its lockfile");
+  }
   const sourceDiff = JSON.parse(execFileSync("pnpm", ["exec", "trestle", "upgrade", "diff", "--json"], { cwd: project, encoding: "utf8" }));
   if (!sourceDiff.data.baselineTrusted || sourceDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
     throw new Error("Fresh generated project did not match its bundled target template");
