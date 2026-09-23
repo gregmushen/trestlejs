@@ -1,14 +1,38 @@
 import { useForm } from "@tanstack/react-form";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter, useNavigate } from "@tanstack/react-router";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { authClient } from "./auth-client";
+import { billingSubscriptionQueryKey } from "./tenant-query.js";
 import "./styles.css";
 
 const apiOrigin = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.replace(/\/$/u, "") ?? "";
 const api = (path: string) => `${apiOrigin}${path}`;
+
+function OrganizationSwitcher() {
+  const { data: session } = authClient.useSession();
+  const { data: organizations } = authClient.useListOrganizations();
+  const { data: activeOrganization } = authClient.useActiveOrganization();
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string>();
+  if (!session || !organizations?.length) return null;
+  return <label className="flex items-center gap-2 text-sm font-medium text-slate-600">Organization
+    <select aria-label="Active organization" className="rounded-lg border border-slate-300 px-2 py-1" value={activeOrganization?.id ?? ""} onChange={async (event) => {
+      const organizationId = event.target.value;
+      if (!organizationId) return;
+      setError(undefined);
+      const result = await authClient.organization.setActive({ organizationId });
+      if (result.error) { setError(result.error.message ?? "Could not switch organizations"); return; }
+      queryClient.clear();
+    }}>
+      <option value="">Select an organization</option>
+      {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}
+    </select>
+    {error && <span role="alert" className="text-red-700">{error}</span>}
+  </label>;
+}
 
 function Shell() {
   return <main className="mx-auto max-w-4xl px-6 py-12">
@@ -21,6 +45,7 @@ function Shell() {
         {/* trestle:resource-links */}
       </div>
     </nav>
+    <OrganizationSwitcher />
     <Outlet />
   </main>;
 }
@@ -46,6 +71,7 @@ function Field(props: { label: string; type: string; value: string; onChange: (v
 
 function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [error, setError] = useState<string>();
   const form = useForm({
     defaultValues: { name: "", email: "", password: "" },
@@ -55,6 +81,7 @@ function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
         ? await authClient.signUp.email({ name: value.name, email: value.email, password: value.password })
         : await authClient.signIn.email({ email: value.email, password: value.password });
       if (result.error) { setError(result.error.message ?? "Authentication failed"); return; }
+      queryClient.clear();
       await navigate({ to: mode === "sign-up" ? "/check-email" : "/dashboard" });
     },
   });
@@ -116,6 +143,7 @@ function AcceptInvitation() {
 
 function Dashboard() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data: session, isPending } = authClient.useSession();
   const [organizationName, setOrganizationName] = useState("");
   const [message, setMessage] = useState<string>();
@@ -127,7 +155,7 @@ function Dashboard() {
     const slug = organizationName.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
     const result = await authClient.organization.create({ name: organizationName, slug });
     setMessage(result.error ? result.error.message ?? "Could not create organization" : `Created ${organizationName}`);
-    if (!result.error) setOrganizationName("");
+    if (!result.error) { setOrganizationName(""); queryClient.clear(); }
   };
   return <section className="card p-8">
     <p className="eyebrow">Protected route</p>
@@ -142,16 +170,19 @@ function Dashboard() {
       {message && <p className="mt-3 text-sm text-slate-600">{message}</p>}
     </div>
     <div className="mt-8 border-t border-slate-200 pt-7"><h2 className="text-lg font-semibold">Invite a member</h2><div className="mt-3 flex gap-3"><input className="min-w-0 flex-1 rounded-xl border border-slate-300 px-4 py-3" type="email" placeholder="person@example.com" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /><button className="button" disabled={!inviteEmail} onClick={async () => { const result = await authClient.organization.inviteMember({ email: inviteEmail, role: "member" }); setMessage(result.error ? result.error.message ?? "Could not send invitation" : `Invited ${inviteEmail}`); if (!result.error) setInviteEmail(""); }}>Invite</button></div></div>
-    <button className="mt-8 text-sm font-semibold text-red-600" onClick={async () => { await authClient.signOut(); await navigate({ to: "/" }); }}>Sign out</button>
+    <button className="mt-8 text-sm font-semibold text-red-600" onClick={async () => { await authClient.signOut(); queryClient.clear(); await navigate({ to: "/" }); }}>Sign out</button>
   </section>;
 }
 
 function BillingSettings() {
-  const subscription = useQuery({ queryKey: ["billing-subscription"], queryFn: async () => { const response = await fetch(api("/api/billing/subscription"), { credentials: "include" }); if (!response.ok) throw new Error("Select an organization before managing billing"); return response.json() as Promise<{ subscription: null | { plan: string; planVersion: number; status: string; currentPeriodEnd?: string; cancelAtPeriodEnd: boolean; entitlements: string[]; effectiveEntitlements?: Array<{ code: string; enabled: boolean; source: string; inheritedFrom?: string }> }; usage: Array<{ meter: string; used: number; limit: number | null }> }>; } });
+  const { data: session } = authClient.useSession();
+  const { data: activeOrganization } = authClient.useActiveOrganization();
+  const organizationId = activeOrganization?.id;
+  const subscription = useQuery({ queryKey: billingSubscriptionQueryKey(session?.user.id, organizationId), enabled: Boolean(session?.user.id && organizationId), queryFn: async () => { const response = await fetch(api("/api/billing/subscription"), { credentials: "include", headers: { "x-trestle-tenant": organizationId! } }); if (!response.ok) throw new Error("Select an organization before managing billing"); return response.json() as Promise<{ subscription: null | { plan: string; planVersion: number; status: string; currentPeriodEnd?: string; cancelAtPeriodEnd: boolean; entitlements: string[]; effectiveEntitlements?: Array<{ code: string; enabled: boolean; source: string; inheritedFrom?: string }> }; usage: Array<{ meter: string; used: number; limit: number | null }> }>; } });
   const [message, setMessage] = useState<string>();
-  const manage = async () => { const response = await fetch(api("/api/billing/portal"), { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: crypto.randomUUID() }) }); const result = await response.json() as { url?: string; error?: string }; if (result.url) window.location.assign(result.url); else setMessage(result.error ?? "Unable to open billing portal"); };
+  const manage = async () => { if (!organizationId) return; const response = await fetch(api("/api/billing/portal"), { method: "POST", credentials: "include", headers: { "content-type": "application/json", "x-trestle-tenant": organizationId }, body: JSON.stringify({ requestId: crypto.randomUUID() }) }); const result = await response.json() as { url?: string; error?: string }; if (result.url) window.location.assign(result.url); else setMessage(result.error ?? "Unable to open billing portal"); };
   const included = subscription.data?.subscription?.effectiveEntitlements ?? subscription.data?.subscription?.entitlements.map((code) => ({ code, enabled: true, source: "plan" })) ?? [];
-  return <section className="card p-8"><p className="eyebrow">Settings</p><h1 className="mt-2 text-3xl font-semibold">Plan and usage</h1>{subscription.isPending ? <p className="mt-4">Loading…</p> : subscription.error ? <p className="mt-4 text-red-700">{subscription.error.message}</p> : subscription.data?.subscription ? <div className="mt-6 space-y-2"><p>Current plan: <strong>{subscription.data.subscription.plan}</strong> <span className="text-slate-500">version {subscription.data.subscription.planVersion}</span></p><p>Status: {subscription.data.subscription.status}</p><p>{subscription.data.subscription.cancelAtPeriodEnd ? "Cancels at period end" : "Renews automatically"}</p><div className="pt-4"><h2 className="font-semibold">Included capabilities</h2><ul className="mt-2 list-disc pl-5 text-sm text-slate-600">{included.filter((item) => item.enabled).map((item) => <li key={item.code}>{item.code} <span className="text-slate-400">({item.source}{"inheritedFrom" in item && item.inheritedFrom ? `: ${item.inheritedFrom}` : ""})</span></li>)}</ul></div><div className="pt-4"><h2 className="font-semibold">Usage</h2>{subscription.data.usage.length ? <ul className="mt-2 text-sm text-slate-600">{subscription.data.usage.map((meter) => <li key={meter.meter}>{meter.meter}: {meter.used}{meter.limit === null ? "" : ` / ${meter.limit}`}</li>)}</ul> : <p className="mt-2 text-sm text-slate-600">This plan has no metered usage.</p>}</div><button className="button mt-4" onClick={() => void manage()}>Manage billing</button></div> : <p className="mt-4">No active subscription.</p>}{message && <p className="mt-3 text-red-700">{message}</p>}</section>;
+  return <section className="card p-8"><p className="eyebrow">Settings</p><h1 className="mt-2 text-3xl font-semibold">Plan and usage</h1>{!organizationId ? <p className="mt-4">Select an organization to view billing.</p> : subscription.isPending ? <p className="mt-4">Loading…</p> : subscription.error ? <p className="mt-4 text-red-700">{subscription.error.message}</p> : subscription.data?.subscription ? <div className="mt-6 space-y-2"><p>Current plan: <strong>{subscription.data.subscription.plan}</strong> <span className="text-slate-500">version {subscription.data.subscription.planVersion}</span></p><p>Status: {subscription.data.subscription.status}</p><p>{subscription.data.subscription.cancelAtPeriodEnd ? "Cancels at period end" : "Renews automatically"}</p><div className="pt-4"><h2 className="font-semibold">Included capabilities</h2><ul className="mt-2 list-disc pl-5 text-sm text-slate-600">{included.filter((item) => item.enabled).map((item) => <li key={item.code}>{item.code} <span className="text-slate-400">({item.source}{"inheritedFrom" in item && item.inheritedFrom ? `: ${item.inheritedFrom}` : ""})</span></li>)}</ul></div><div className="pt-4"><h2 className="font-semibold">Usage</h2>{subscription.data.usage.length ? <ul className="mt-2 text-sm text-slate-600">{subscription.data.usage.map((meter) => <li key={meter.meter}>{meter.meter}: {meter.used}{meter.limit === null ? "" : ` / ${meter.limit}`}</li>)}</ul> : <p className="mt-2 text-sm text-slate-600">This plan has no metered usage.</p>}</div><button className="button mt-4" onClick={() => void manage()}>Manage billing</button></div> : <p className="mt-4">No active subscription.</p>}{message && <p className="mt-3 text-red-700">{message}</p>}</section>;
 }
 
 const rootRoute = createRootRoute({ component: Shell });

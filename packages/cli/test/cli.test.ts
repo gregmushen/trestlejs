@@ -331,7 +331,8 @@ describe("TrestleJS CLI", () => {
     expect(repositorySource).toContain("eq(article.organizationId, this.organizationId)");
     expect(repositorySource).toContain("organizationId: this.organizationId,\n        payload: { resourceId: record.id }");
     const screenSource = await readFile(path.join(root, "apps/app/src/resources/article.tsx"), "utf8");
-    expect(screenSource).toContain('const key = ["articles", organizationId] as const');
+    expect(screenSource).toContain('const key = ["articles", session?.user.id, organizationId] as const');
+    expect(screenSource).toContain('enabled: Boolean(session?.user.id && organizationId)');
     expect(screenSource).toContain("createArticleApi");
     const clientSource = await readFile(path.join(root, "apps/app/src/api/article.ts"), "utf8");
     expect(clientSource).toContain('method: "PATCH"');

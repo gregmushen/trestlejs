@@ -319,16 +319,17 @@ import { authClient } from "../auth-client.js";
 import { create${n.className}Api } from "../api/${n.kebab}.js";
 
 export function ${n.className}Screen() {
+  const { data: session } = authClient.useSession();
   const activeOrganization = authClient.useActiveOrganization();
   const organizationId = activeOrganization.data?.id;
-  const api = organizationId ? create${n.className}Api(organizationId) : undefined;
+  const api = session?.user.id && organizationId ? create${n.className}Api(organizationId) : undefined;
   const queryClient = useQueryClient();
-  const key = ["${n.pluralKebab}", organizationId] as const;
+  const key = ["${n.pluralKebab}", session?.user.id, organizationId] as const;
   const [editing, setEditing] = useState<${n.className} | null>(null);
   const [editingName, setEditingName] = useState("");
   const query = useQuery({
     queryKey: key,
-    enabled: Boolean(organizationId),
+    enabled: Boolean(session?.user.id && organizationId),
     queryFn: async () => (await api!.list()).items,
   });
   const create = useMutation({ mutationFn: async (input: unknown) => {
@@ -340,7 +341,7 @@ export function ${n.className}Screen() {
   const remove = useMutation({ mutationFn: async (id: string) => await api!.remove(id), onSuccess: async () => await queryClient.invalidateQueries({ queryKey: key }) });
   const form = useForm({ defaultValues: { name: "" }, onSubmit: async ({ value }) => { await create.mutateAsync(value); form.reset(); } });
   const error = query.error ?? create.error ?? update.error ?? remove.error;
-  if (!organizationId) return <section className="card p-8"><h1 className="text-3xl font-semibold">${n.className}</h1><p className="mt-4 text-slate-600">Select an organization before managing ${n.pluralKebab}.</p></section>;
+  if (!session?.user.id || !organizationId) return <section className="card p-8"><h1 className="text-3xl font-semibold">${n.className}</h1><p className="mt-4 text-slate-600">Sign in and select an organization before managing ${n.pluralKebab}.</p></section>;
   return <section className="card p-8">
     <h1 className="text-3xl font-semibold">${n.className}</h1>
     <form className="mt-6 flex gap-3" onSubmit={(event) => { event.preventDefault(); void form.handleSubmit(); }}>

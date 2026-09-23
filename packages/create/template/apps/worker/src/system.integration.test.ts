@@ -1,4 +1,5 @@
-import { artifactMetadata, createDatabase, eventInbox, organization, outboxMessage, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
+import { artifactMetadata, createDatabase, eventInbox, organization, organizationEntitlement, organizationSubscription, outboxMessage, user } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { eq, sql } from "drizzle-orm";
@@ -25,8 +26,11 @@ suite("local product path", () => {
       STRIPE_MODE: "local" as const,
     };
     const database = createDatabase(process.env.TRESTLE_SYSTEM_TEST_MIGRATION_URL ?? databaseUrl!, "postgres-js");
+    const billingRepository = new PostgresBillingProjectionRepository(databaseUrl!, "postgres-js");
     let organizationId: string | undefined;
+    let secondOrganizationId: string | undefined;
     let articleId: string | undefined;
+    let secondArticleId: string | undefined;
     let artifactId: string | undefined;
     let r2ArtifactId: string | undefined;
     clearCapturedEmails();
@@ -60,11 +64,13 @@ suite("local product path", () => {
       organizationId = created.id;
       expect(organizationId).toBeTruthy();
 
+      await billingRepository.put({ organizationId: organizationId!, provider: "local", plan: "starter", planVersion: 1, status: "active", cancelAtPeriodEnd: false, entitlements: ["article.basic"] });
+
       const billing = await app.request("http://localhost:8787/api/billing/subscription", {
         headers: { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": organizationId! },
       }, environment);
       expect(billing.status).toBe(200);
-      await expect(billing.json()).resolves.toHaveProperty("subscription");
+      await expect(billing.json()).resolves.toMatchObject({ subscription: { organizationId, plan: "starter" } });
       const artifactHeaders = { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": organizationId! };
       const upload = await app.request("http://localhost:8787/api/artifacts", {
         method: "POST", headers: { ...artifactHeaders, "content-type": "text/plain" }, body: "private artifact",
@@ -163,6 +169,44 @@ suite("local product path", () => {
         expect(invalidDelivery).toEqual(["retry"]);
         const [dispatched] = await database.select().from(outboxMessage).where(eq(outboxMessage.id, outbox!.id)).limit(1);
         expect(dispatched?.status).toBe("succeeded");
+        const second = await app.request("http://localhost:8787/api/auth/organization/create", {
+          method: "POST", headers: { "content-type": "application/json", origin: environment.WEB_ORIGIN, cookie: cookie! },
+          body: JSON.stringify({ name: "Second System Organization", slug: `second-${slug}` }),
+        }, environment);
+        expect(second.status).toBe(200);
+        secondOrganizationId = (await second.json() as { id: string }).id;
+        await billingRepository.put({ organizationId: secondOrganizationId!, provider: "local", plan: "pro", planVersion: 1, status: "active", cancelAtPeriodEnd: false, entitlements: ["article.basic", "workflows.advanced"] });
+        const secondHeaders = { ...headers, "x-trestle-tenant": secondOrganizationId };
+        const secondBilling = await app.request("http://localhost:8787/api/billing/subscription", { headers: secondHeaders }, environment);
+        await expect(secondBilling.json()).resolves.toMatchObject({ subscription: { organizationId: secondOrganizationId, plan: "pro" } });
+        const secondList = await app.request("http://localhost:8787/api/articles", { headers: secondHeaders }, environment);
+        expect(secondList.status).toBe(200);
+        expect((await secondList.json() as { articles: Array<{ id: string }> }).articles).toHaveLength(0);
+        expect((await app.request(`http://localhost:8787/api/articles/${article.id}`, { headers: secondHeaders }, environment)).status).toBe(404);
+        expect((await app.request(`http://localhost:8787/api/articles/${article.id}`, {
+          method: "PATCH", headers: secondHeaders, body: JSON.stringify({ summary: "Cross-tenant edit" }),
+        }, environment)).status).toBe(404);
+        expect((await app.request(`http://localhost:8787/api/articles/${article.id}`, { method: "DELETE", headers: secondHeaders }, environment)).status).toBe(404);
+        const createdSecondArticle = await app.request("http://localhost:8787/api/articles", {
+          method: "POST", headers: secondHeaders, body: JSON.stringify({ name: "Second Tenant Article", summary: "Private", published: false }),
+        }, environment);
+        expect(createdSecondArticle.status).toBe(201);
+        secondArticleId = (await createdSecondArticle.json() as { article: { id: string } }).article.id;
+        expect((await app.request(`http://localhost:8787/api/articles/${secondArticleId}`, { headers }, environment)).status).toBe(404);
+        const setActive = async (selected: string) => await app.request("http://localhost:8787/api/auth/organization/set-active", {
+          method: "POST", headers: { "content-type": "application/json", origin: environment.WEB_ORIGIN, cookie: cookie! },
+          body: JSON.stringify({ organizationId: selected }),
+        }, environment);
+        expect((await setActive(secondOrganizationId)).status).toBe(200);
+        const activeSecondBilling = await app.request("http://localhost:8787/api/billing/subscription", { headers: { origin: environment.WEB_ORIGIN, cookie: cookie! } }, environment);
+        await expect(activeSecondBilling.json()).resolves.toMatchObject({ subscription: { organizationId: secondOrganizationId, plan: "pro" } });
+        const activeSecond = await app.request("http://localhost:8787/api/articles", { headers: { origin: environment.WEB_ORIGIN, cookie: cookie! } }, environment);
+        expect((await activeSecond.json() as { articles: Array<{ id: string }> }).articles.map((item) => item.id)).toEqual([secondArticleId]);
+        expect((await setActive(organizationId!)).status).toBe(200);
+        const activeFirstBilling = await app.request("http://localhost:8787/api/billing/subscription", { headers: { origin: environment.WEB_ORIGIN, cookie: cookie! } }, environment);
+        await expect(activeFirstBilling.json()).resolves.toMatchObject({ subscription: { organizationId, plan: "starter" } });
+        const activeFirst = await app.request("http://localhost:8787/api/articles", { headers: { origin: environment.WEB_ORIGIN, cookie: cookie! } }, environment);
+        expect((await activeFirst.json() as { articles: Array<{ id: string }> }).articles.map((item) => item.id)).toEqual([article.id]);
         const listed = await app.request("http://localhost:8787/api/articles", { headers }, environment);
         expect(listed.status).toBe(200);
         expect((await listed.json() as { articles: Array<{ id: string }> }).articles.some((item) => item.id === article.id)).toBe(true);
@@ -175,6 +219,7 @@ suite("local product path", () => {
         expect(removed.status).toBe(204);
         const missing = await app.request(`http://localhost:8787/api/articles/${article.id}`, { headers }, environment);
         expect(missing.status).toBe(404);
+        expect((await app.request(`http://localhost:8787/api/articles/${secondArticleId}`, { method: "DELETE", headers: secondHeaders }, environment)).status).toBe(204);
       }
       const unjoined = await app.request("http://localhost:8787/api/billing/subscription", {
         headers: { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": crypto.randomUUID() },
@@ -183,8 +228,16 @@ suite("local product path", () => {
     } finally {
       if (r2ArtifactId) await database.delete(artifactMetadata).where(eq(artifactMetadata.id, r2ArtifactId));
       if (articleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${articleId}`));
+      if (secondArticleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${secondArticleId}`));
       if (articleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, articleId));
+      if (secondArticleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, secondArticleId));
       if (organizationId && process.env.TRESTLE_SYSTEM_TEST_ARTICLES === "1") await database.execute(sql`delete from article where organization_id = ${organizationId}`);
+      if (secondOrganizationId && process.env.TRESTLE_SYSTEM_TEST_ARTICLES === "1") await database.execute(sql`delete from article where organization_id = ${secondOrganizationId}`);
+      if (secondOrganizationId) await database.delete(organizationEntitlement).where(eq(organizationEntitlement.organizationId, secondOrganizationId));
+      if (secondOrganizationId) await database.delete(organizationSubscription).where(eq(organizationSubscription.organizationId, secondOrganizationId));
+      if (organizationId) await database.delete(organizationEntitlement).where(eq(organizationEntitlement.organizationId, organizationId));
+      if (organizationId) await database.delete(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId));
+      if (secondOrganizationId) await database.delete(organization).where(eq(organization.id, secondOrganizationId));
       if (organizationId) await database.delete(organization).where(eq(organization.id, organizationId));
       await database.delete(user).where(eq(user.email, email));
       clearCapturedEmails();

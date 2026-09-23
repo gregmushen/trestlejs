@@ -217,6 +217,15 @@ resource, run the complete local check, deploy staging, run the deployed
 system gate, and preserve non-secret evidence. This converts production
 compatibility from an assumption into a release artifact.
 
+Alpha 46 closes a local tenant-switching gap: the generated application
+exposes Better Auth's organization selector, scopes billing and generated
+resource query caches to both principal and organization, clears application
+queries on authentication or organization changes, and sends an explicit
+tenant header for billing operations. The clean-project PostgreSQL system
+test now creates two organizations, switches the active session organization,
+and denies cross-tenant Article reads and mutations. This is local system
+evidence; deployed browser and provider gates remain open.
+
 ### Alpha 7 acceptance criteria
 
 Alpha 7 is complete when this path succeeds without manual source repair:
