@@ -4,6 +4,7 @@ import { featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
+  activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportOrganizationView,
   listPlatformApiKeys, listPlatformWebhookEndpoints, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   type DatabaseDriver, type PlatformChangeContext,
 } from "@__TRESTLE_PROJECT_NAME__/db";
@@ -196,6 +197,44 @@ admin.post("/api/admin/commercial/subscriptions/:organizationId/overrides", asyn
 admin.post("/api/admin/commercial/subscriptions/:organizationId/overrides/:entitlement/revoke", async (context) => {
   await revokeEntitlementOverride(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), entitlement: context.req.param("entitlement") }, await actionContext(context));
   return context.json({ revoked: true, correlationId: context.get("correlationId") });
+});
+
+admin.get("/api/admin/support/sessions", async (context) => {
+  const database = platformDatabase(context.env);
+  const [sessions, organizations] = await Promise.all([listSupportSessions(database, { operatorId: context.get("operator").id }), listPlatformSubscriptions(database)]);
+  return context.json({
+    sessions: sessions.map((session) => ({ ...session, startedAt: session.startedAt.toISOString(), expiresAt: session.expiresAt.toISOString(), endedAt: iso(session.endedAt) })),
+    organizations: organizations.map((row) => ({ ...row, currentPeriodEnd: iso(row.currentPeriodEnd) })),
+  });
+});
+
+admin.post("/api/admin/support/sessions", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { organizationId?: unknown; durationMinutes?: unknown; reason?: unknown };
+  if (typeof body.organizationId !== "string") throw new PlatformOperationError("invalid", "Choose an organization");
+  const session = await startSupportSession(platformDatabase(context.env), { organizationId: body.organizationId, durationMinutes: typeof body.durationMinutes === "number" ? body.durationMinutes : 30 }, await actionContext(context, body));
+  return context.json({ id: session.id, organizationId: session.organizationId, expiresAt: session.expiresAt.toISOString(), correlationId: context.get("correlationId") }, 201);
+});
+
+admin.get("/api/admin/support/sessions/:id/organization", async (context) => {
+  const database = platformDatabase(context.env);
+  const operator = context.get("operator");
+  // Tenant data is readable only inside the operator's own open, unexpired session.
+  const session = await activeSupportSession(database, context.req.param("id"), operator.id);
+  if (!session) return context.json({ error: "forbidden", reason: "support_session_required", message: "Start a support session for this organization first" }, 403);
+  const view = await supportOrganizationView(database, session, { actor: { type: "platform_operator", id: operator.id }, environment: context.env.APP_ENV ?? "local", correlationId: context.get("correlationId") });
+  return context.json({
+    ...view,
+    organization: view.organization && { ...view.organization, createdAt: view.organization.createdAt.toISOString() },
+    members: view.members.map((person) => ({ ...person, joinedAt: person.joinedAt.toISOString() })),
+    subscription: view.subscription && { ...view.subscription, currentPeriodEnd: iso(view.subscription.currentPeriodEnd) },
+    recentAudit: view.recentAudit.map((event) => ({ ...event, occurredAt: event.occurredAt.toISOString() })),
+  });
+});
+
+admin.post("/api/admin/support/sessions/:id/end", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { reason?: unknown };
+  await endSupportSession(platformDatabase(context.env), context.req.param("id"), await actionContext(context, { reason: typeof body.reason === "string" ? body.reason : "" }));
+  return context.json({ ended: true, correlationId: context.get("correlationId") });
 });
 
 admin.get("/api/admin/security/api-keys", async (context) => {

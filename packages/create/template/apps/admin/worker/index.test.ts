@@ -76,6 +76,13 @@ describe("platform admin Worker", () => {
     expect(await call("POST", "/api/admin/security/api-keys/org-1/K000000000000000/revoke", { body: {} })).toMatchObject({ status: 400, body: { error: "invalid" } });
   });
 
+  it("requires the support permission and a reason to enter a support session", async () => {
+    state.roles = ["commercial_admin"];
+    expect((await call("POST", "/api/admin/support/sessions", { body: { organizationId: "org-1", reason: "x" } })).status).toBe(403);
+    state.roles = ["platform_operator"];
+    expect(await call("POST", "/api/admin/support/sessions", { body: { organizationId: "org-1" } })).toMatchObject({ status: 400, body: { error: "invalid" } });
+  });
+
   it("exposes no sign-up, organization, or unknown admin routes on the admin origin", async () => {
     expect((await call("POST", "/api/auth/sign-up/email")).status).toBe(404);
     expect((await call("POST", "/api/auth/organization/create")).status).toBe(404);

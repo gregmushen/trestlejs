@@ -64,6 +64,23 @@ suite("platform admin Worker against PostgreSQL", () => {
     await sql!`delete from outbox_message where id = ${eventId}`;
   });
 
+  it("enters and exits a support session over HTTP; tenant reads require the open session", async () => {
+    signedIn = operator;
+    const post = (path: string, body: unknown) => admin.request(path, { method: "POST", headers: { origin: "http://localhost:42070", "content-type": "application/json", "x-correlation-id": `${run}-corr` }, body: JSON.stringify(body) }, environment);
+    const started = await post("/api/admin/support/sessions", { organizationId: `${run}-org`, durationMinutes: 15, reason: "ticket 42" });
+    expect(started.status).toBe(201);
+    const { id } = await started.json() as { id: string };
+    const view = await admin.request(`/api/admin/support/sessions/${id}/organization`, undefined, environment);
+    expect(view.status).toBe(200);
+    await expect(view.json()).resolves.toMatchObject({ organization: { id: `${run}-org` }, members: [expect.objectContaining({ role: "owner" })] });
+    expect((await post(`/api/admin/support/sessions/${id}/end`, {})).status).toBe(200);
+    expect(await admin.request(`/api/admin/support/sessions/${id}/organization`, undefined, environment)).toHaveProperty("status", 403);
+    const events = await sql!`select name from audit_event where support_session_id = ${id} order by occurred_at`;
+    expect(events.map((event) => event.name)).toEqual(["platform.support_session.started", "platform.support_session.accessed", "platform.support_session.ended"]);
+    await sql!`delete from audit_event where support_session_id = ${id}`;
+    await sql!`delete from support_session where id = ${id}`;
+  });
+
   it("denies a tenant Owner with no platform role", async () => {
     signedIn = owner;
     const response = await admin.request("/api/admin/overview", undefined, environment);

@@ -31,6 +31,14 @@ An override grants or denies one entitlement the application defines in `package
 
 Overrides are never deleted; removal is a tombstone with its own reason. Tenant runtimes can read overrides but never write them. Customers see only that an entitlement comes from their contract, never the reason or author.
 
+## Support sessions
+
+An operator with `platform.support_sessions.use` starts a session in one organization, giving a reason and a duration of 5 to 240 minutes. For its duration, the operator can read that organization's profile, members, plan, and recent audit history.
+
+A session never signs the operator in as a customer and grants no tenant-application authority. Entry, each view, and exit are recorded on the organization's audit log with the session ID.
+
+An operator holds at most one open session. An expired session is closed, and that close is audited, before the next one starts.
+
 ## Machine access
 
 Organizations create service accounts and mint, rotate, and revoke scoped API keys through `/api/tenant/service-accounts` and `/api/tenant/api-keys/:id/*`. This requires `application.service_accounts.manage`, an application-plane permission, because a service account holds application roles; organization roles grant none of it.

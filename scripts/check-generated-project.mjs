@@ -64,6 +64,20 @@ try {
     }
   };
   const migrationNames = async () => (await readdir(migrationsPath)).filter((name) => name.endsWith(".sql")).sort();
+  // Every migration file needs its journal entry and snapshot, or drizzle-kit silently skips it.
+  const assertJournalMatchesFiles = async () => {
+    const journal = JSON.parse(await readFile(journalPath, "utf8"));
+    const tags = journal.entries.map((entry) => `${entry.tag}.sql`);
+    const files = await migrationNames();
+    if (JSON.stringify(tags) !== JSON.stringify(files)) throw new Error(`Migration journal does not match migration files: ${files.filter((file) => !tags.includes(file)).concat(tags.filter((tag) => !files.includes(tag))).join(", ")}`);
+    const snapshots = new Set((await readdir(path.join(migrationsPath, "meta"))).filter((name) => name.endsWith("_snapshot.json")));
+    // 0004 was published as hand-written SQL without a snapshot; published history is never rewritten.
+    const handWritten = new Set(["0004_async_outbox"]);
+    for (const entry of journal.entries) {
+      if (!handWritten.has(entry.tag) && !snapshots.has(`${String(entry.idx).padStart(4, "0")}_snapshot.json`)) throw new Error(`Migration ${entry.tag} has no Drizzle snapshot`);
+    }
+  };
+  await assertJournalMatchesFiles();
   const migrationsBeforeGenerate = await migrationNames();
   await run("pnpm", ["--filter", "./packages/db", "db:generate"], project, { DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/trestle_test" });
   const migrationsAfterGenerate = await migrationNames();
