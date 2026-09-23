@@ -148,6 +148,11 @@ not duplicate completed attempts. An advanceable-clock local flush processes
 later due retries without sleeping. Disabled mode is the default. Native and
 Svix modes fail closed until their delivery adapters ship. Local capture never
 sends a remote webhook request.
+Scheduled local maintenance erases public payloads and captured signed request
+material after 30 days for standard events or seven days for short events.
+Delivery and attempt status metadata remains; expired pending work is stopped,
+and an active delivery lease delays erasure until the lease ends. Applications
+should review these default retention periods against their own policy.
 When enabling outbound delivery, set the optional encrypted Worker credential
 `WEBHOOK_SECRET_KEY` to at least 32 random bytes per environment through
 `trestle secrets edit`; it encrypts endpoint secrets at rest. Endpoint secrets

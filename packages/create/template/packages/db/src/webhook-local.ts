@@ -98,9 +98,9 @@ export async function captureLocalWebhookDelivery(input: {
     if (!record) return { state: "not_found" };
     if (record.endpointProvider !== "local" || record.endpointEnvironment !== "local") return { state: "not_local" };
     if (record.endpointState !== "active" || record.endpointDeletedAt) return { state: "inactive" };
-    if (!record.envelope) throw new LocalWebhookError("Local delivery has no public payload");
     const due = record.delivery.nextAttemptAt && record.delivery.nextAttemptAt.getTime() <= now.getTime();
     if (!due || !["pending", "retry"].includes(record.delivery.state)) return { state: "not_due" };
+    if (!record.envelope) throw new LocalWebhookError("Local delivery has no public payload");
     const attemptNumber = record.delivery.attemptCount + 1;
     const simulated = evaluateScenario(input.scenario, attemptNumber);
     const retryable = simulated.status === null || simulated.status === 408 || simulated.status === 429 || simulated.status >= 500;

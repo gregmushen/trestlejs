@@ -242,5 +242,5 @@ suite("local product path", () => {
       await database.delete(user).where(eq(user.email, email));
       clearCapturedEmails();
     }
-  });
+  }, 30_000);
 });

@@ -3,12 +3,11 @@ import { artifactMaintenanceCursor } from "./artifact-maintenance-schema.js";
 import { organization } from "./auth-schema.js";
 import type { Database } from "./index.js";
 
-const cursorName = "incomplete-artifacts";
-
 /** Advance one bounded page of canonical organizations. The compare-and-swap
  * prevents overlapping cron invocations from moving the cursor backwards. */
-export async function nextArtifactMaintenanceOrganizations(database: Database, limit = 25): Promise<string[]> {
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid artifact maintenance page size");
+export async function nextMaintenanceOrganizations(database: Database, cursorName: string, limit = 25): Promise<string[]> {
+  if (!/^[a-z][a-z0-9-]{1,63}$/u.test(cursorName)) throw new Error("Invalid maintenance cursor name");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid maintenance page size");
   await database.insert(artifactMaintenanceCursor).values({ name: cursorName }).onConflictDoNothing();
   const [cursor] = await database.select().from(artifactMaintenanceCursor).where(eq(artifactMaintenanceCursor.name, cursorName)).limit(1);
   if (!cursor) throw new Error("Artifact maintenance cursor is unavailable");
@@ -23,4 +22,9 @@ export async function nextArtifactMaintenanceOrganizations(database: Database, l
     .where(and(eq(artifactMaintenanceCursor.name, cursorName), eq(artifactMaintenanceCursor.afterOrganizationId, cursor.afterOrganizationId)))
     .returning();
   return advanced.length > 0 ? page.map(({ id }) => id) : [];
+}
+
+export async function nextArtifactMaintenanceOrganizations(database: Database, limit = 25): Promise<string[]> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid artifact maintenance page size");
+  return nextMaintenanceOrganizations(database, "incomplete-artifacts", limit);
 }

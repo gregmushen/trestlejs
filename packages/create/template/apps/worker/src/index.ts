@@ -16,6 +16,7 @@ import { requireExecutionContext, type AppVariables } from "./execution-context.
 import { mapHttpError } from "./http-errors.js";
 import { createBillingService } from "./services.js";
 import { projectWebhookForEvent } from "./webhook-runtime.js";
+import { maintainWebhookPayloads } from "./webhook-retention.js";
 
 export const app = new Hono<{ Bindings: AuthEnvironment; Variables: AppVariables }>();
 export const eventConsumers = new EventConsumerRegistry<AuthEnvironment>(applicationEventCatalog);
@@ -281,7 +282,7 @@ export default {
     } finally { await Promise.all([inbox.close(), outbox.close()]); }
   },
   scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
-    if (!environment.TRESTLE_EVENTS && !environment.TRESTLE_ARTIFACTS) {
+    if (!environment.TRESTLE_EVENTS && !environment.TRESTLE_ARTIFACTS && environment.WEBHOOK_DELIVERY_MODE !== "local") {
       if (!environment.APP_ENV || environment.APP_ENV === "local") return;
       throw new Error("Remote scheduled work requires a Queue or R2 binding");
     }
@@ -298,6 +299,11 @@ export default {
       const result = await maintainArtifacts(environment);
       createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.maintenance.completed", result);
       if (result.failed > 0) throw new Error("Artifact maintenance left incomplete cleanup work");
+    }
+    if (environment.WEBHOOK_DELIVERY_MODE === "local") {
+      const result = await maintainWebhookPayloads(environment);
+      createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.retention.completed", result);
+      if (result.failed > 0) throw new Error("Webhook retention left incomplete cleanup work");
     }
   },
 };

@@ -354,6 +354,12 @@ for retry, duplicate Queue deliveries do not duplicate attempts, and a
 bounded, advanceable-clock flush processes later local retries. Native and
 Svix delivery remain disabled until their transport and provider contracts
 are complete.
+Alpha 51 adds bounded, tenant-scoped webhook payload retention. Scheduled
+local maintenance erases public envelopes and captured signed request
+material after the application defaults of 30 days (standard) or seven days
+(short), stops pending retries, and preserves status metadata. Active leases
+defer erasure until safe. Provider-specific effective retention and 90-day
+metadata pruning remain future work.
 Trestle does not yet deliver projected webhooks externally or provide
 customer inspection UI. The next slices are native Queue-backed delivery and
 recovery, then the optional Svix adapter. A committed domain event remains authoritative;

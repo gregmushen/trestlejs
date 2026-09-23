@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createDatabase, nextArtifactMaintenanceOrganizations } from "./index.js";
+import { createDatabase, nextArtifactMaintenanceOrganizations, nextMaintenanceOrganizations } from "./index.js";
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -18,6 +18,7 @@ suite("bounded artifact maintenance cursor", () => {
 
   afterAll(async () => {
     await sql!`delete from artifact_maintenance_cursor where name = 'incomplete-artifacts'`;
+    await sql!`delete from artifact_maintenance_cursor where name = 'webhook-payloads'`;
     await sql!`delete from organization where id in (${ids[0]}, ${ids[1]}, ${ids[2]})`;
     await sql!.end();
   });
@@ -25,8 +26,11 @@ suite("bounded artifact maintenance cursor", () => {
   it("pages through every organization, wraps, and rejects unbounded scans", async () => {
     const database = createDatabase(connectionString!, "postgres-js");
     expect(await nextArtifactMaintenanceOrganizations(database, 2)).toEqual(ids.slice(0, 2));
+    expect(await nextMaintenanceOrganizations(database, "webhook-payloads", 1)).toEqual(ids.slice(0, 1));
     expect(await nextArtifactMaintenanceOrganizations(database, 2)).toEqual(ids.slice(2));
+    expect(await nextMaintenanceOrganizations(database, "webhook-payloads", 1)).toEqual(ids.slice(1, 2));
     expect(await nextArtifactMaintenanceOrganizations(database, 2)).toEqual(ids.slice(0, 2));
     await expect(nextArtifactMaintenanceOrganizations(database, 101)).rejects.toThrow("Invalid artifact maintenance page size");
+    await expect(nextMaintenanceOrganizations(database, "invalid name", 1)).rejects.toThrow("Invalid maintenance cursor name");
   });
 });
