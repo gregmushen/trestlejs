@@ -57,6 +57,20 @@ describe("worker routes", () => {
     expect(body).not.toContain("sensitive");
   });
 
+  it("reports the deployed Queue binding independently of Workflow readiness", async () => {
+    const response = await app.request("/api/health/operational", undefined, {
+      ...environment,
+      APP_ENV: "preview" as const,
+      TRESTLE_EVENTS: { send: async () => undefined },
+      TRESTLE_WORKFLOWS_ENABLED: "true",
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ capabilities: {
+      queues: { configured: true },
+      workflows: { enabled: true, configured: false },
+    } });
+  });
+
   it("does not mistake generated placeholders for configured preview providers", async () => {
     const response = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "preview" as const, EMAIL_DELIVERY_MODE: "resend" as const, RESEND_API_KEY: "re_sensitive", EMAIL_FROM: "CHANGE_ME", EMAIL_STAGING_REDIRECT: "CHANGE_ME", STRIPE_MODE: "test" as const, STRIPE_SECRET_KEY: "sk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive", STRIPE_PUBLISHABLE_KEY: "CHANGE_ME", STRIPE_PRICES: "{}", BILLING_RETURN_URL: "CHANGE_ME" });
     expect(response.status).toBe(200);

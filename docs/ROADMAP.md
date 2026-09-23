@@ -573,6 +573,12 @@ release run passed this check alongside typecheck, tests, build, browser, and
 Worker dry-run checks. The clean-project and local-product gates are complete;
 deployed provider, staging, promotion, and asynchronous provider-backed gates
 remain open.
+Alpha 78 makes the deployed HTTP smoke compare the application's declared
+Queue, R2, and Workflow capabilities with the Worker's operational binding
+report. Missing and unexpected bindings fail closed; disabled capabilities
+must report as unavailable. This verifies deployment wiring once preview or
+staging reaches the smoke step, not actual Queue delivery, Workflow execution,
+or R2 persistence. The asynchronous provider-backed gate remains open.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

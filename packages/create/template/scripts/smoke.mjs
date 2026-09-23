@@ -1,9 +1,17 @@
+import { readFile } from "node:fs/promises";
+
+import { queuesEnabled, r2Enabled, workflowsEnabled } from "./queue-config.mjs";
+import { fetchSameOrigin } from "./smoke-http.mjs";
+import { assertOperationalHealth } from "./smoke-operational.mjs";
+
 const apiURL = process.env.API_URL;
 const appURL = process.env.APP_URL;
 const siteURL = process.env.SITE_URL;
 const deployEnvironment = process.env.TRESTLE_DEPLOY_ENV;
 if (!apiURL || !appURL) throw new Error("API_URL and APP_URL are required");
 if (!deployEnvironment || !["preview", "staging", "production"].includes(deployEnvironment)) throw new Error("TRESTLE_DEPLOY_ENV must identify the deployed environment");
+const manifest = await readFile(new URL("../.trestle/project.yaml", import.meta.url), "utf8");
+const declaredCapabilities = { queues: queuesEnabled(manifest), r2: r2Enabled(manifest), workflows: workflowsEnabled(manifest) };
 
 const health = await fetch(`${apiURL}/api/health`, { headers: { origin: appURL } });
 if (!health.ok) throw new Error(`API health failed: ${health.status}`);
@@ -13,7 +21,7 @@ if (health.headers.get("access-control-allow-origin") !== appURL) throw new Erro
 
 const operational = await fetch(`${apiURL}/api/health/operational`);
 if (!operational.ok) throw new Error(`Operational health failed: ${operational.status}`);
-assertOperationalHealth(await operational.json(), deployEnvironment);
+assertOperationalHealth(await operational.json(), deployEnvironment, declaredCapabilities);
 
 for (const route of ["/api/me", "/api/billing/subscription"]) {
   const response = await fetch(`${apiURL}${route}`, { headers: { origin: appURL } });
@@ -43,5 +51,3 @@ if (siteURL) {
 }
 
 console.log(`Smoke passed for ${[siteURL, appURL, apiURL].filter(Boolean).join(", ")}`);
-import { fetchSameOrigin } from "./smoke-http.mjs";
-import { assertOperationalHealth } from "./smoke-operational.mjs";
