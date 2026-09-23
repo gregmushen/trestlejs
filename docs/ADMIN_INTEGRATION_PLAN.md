@@ -13,8 +13,8 @@ This plan lands the optional platform admin on `main` in small slices, next to t
 
 | # | Slice | Status |
 | --- | --- | --- |
-| 1 | Security fixes: organization authority never implies application authority, including for artifacts; new members get no application role; override reasons are excluded from customer provenance | In review |
-| 2 | Permission registry and route policy: one registry across the organization, application, and platform planes; roles resolved from it; central route enforcement; cross-plane proofs | Next (reworks #105) |
+| 1 | Security fixes: organization authority never implies application authority, including for artifacts; new members get no application role; override reasons are excluded from customer provenance | Merged (#107) |
+| 2 | Permission registry and route policy: one registry across the organization, application, and platform planes; roles resolved from it; central route enforcement; cross-plane proofs | In review (supersedes #105) |
 | 3 | Persisted, redacted `audit_event` with correlation IDs for sensitive actions | Planned |
 | 4 | Optional admin shell (`capabilities.admin`): `apps/admin` on a separate origin, platform authentication, central view registry, Overview and Health, sanitized setup guidance | Planned |
 | 5 | Operations views over `main`'s async (DLQ redrive), artifacts, and webhooks (disable and replay), with audit | Planned |

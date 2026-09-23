@@ -1,11 +1,12 @@
 export type Principal = Readonly<{ id: string; kind: "user" | "system"; email?: string }>;
-export const AUTHORITY_MODEL_VERSION = 2;
+/**
+ * Authority model 3: a reviewed permission registry, organization roles from
+ * membership, and separately stored application-role assignments.
+ * `trestle upgrade` and `trestle generate resource` gate on it.
+ */
+export const AUTHORITY_MODEL_VERSION = 3;
 export type TenantIdentity = Readonly<{ organizationId: string; role?: string }>;
 export type Permissions = ReadonlySet<string>;
-export type AuthorityPlane = "organization" | "application" | "platform";
-export type AuthorityContext = Readonly<{
-  planes: Readonly<Partial<Record<AuthorityPlane, Permissions>>>;
-}>;
 export type EntitlementDecision = Readonly<{
   code: string;
   enabled: boolean;
@@ -18,46 +19,15 @@ export interface Entitlements {
   resolve(code: string): EntitlementDecision;
   has(code: string): boolean;
 }
-export type AccessRequirement = Readonly<{
-  plane: AuthorityPlane;
-  permission?: string;
-  entitlement?: string;
-}>;
-export type AccessDecision = Readonly<{
-  allowed: boolean;
-  missing: readonly ("permission" | "entitlement" | "authority_plane")[];
-  entitlement?: EntitlementDecision;
-}>;
 
-export class AccessDeniedError extends Error {
-  constructor(readonly decision: AccessDecision) {
-    super(`Access denied: ${decision.missing.join(", ")}`);
-    this.name = "AccessDeniedError";
-  }
-}
-
-export interface AccessController {
-  check(requirement: AccessRequirement): AccessDecision;
-  require(requirement: AccessRequirement): void;
-}
-
-export function createAccessController(authority: AuthorityContext, entitlements: Entitlements): AccessController {
-  const check = (requirement: AccessRequirement): AccessDecision => {
-    const missing: ("permission" | "entitlement" | "authority_plane")[] = [];
-    const permissions = authority.planes[requirement.plane];
-    if (!permissions) missing.push("authority_plane");
-    else if (requirement.permission && !permissions.has(requirement.permission)) missing.push("permission");
-    const entitlement = requirement.entitlement ? entitlements.resolve(requirement.entitlement) : undefined;
-    if (entitlement && !entitlement.enabled) missing.push("entitlement");
-    return { allowed: missing.length === 0, missing, ...(entitlement ? { entitlement } : {}) };
-  };
-  return {
-    check,
-    require(requirement) {
-      const decision = check(requirement);
-      if (!decision.allowed) throw new AccessDeniedError(decision);
-    },
-  };
+/**
+ * Structural view of the application's access evaluator (packages/authz), so
+ * this package stays dependency-free. `explain` returns the full decision.
+ */
+export interface AccessControl<Requirement = Readonly<{ permission?: string; entitlement?: string }>, Decision = unknown> {
+  check(requirement: Requirement): boolean;
+  require(requirement: Requirement): Decision;
+  explain(requirement: Requirement): Decision;
 }
 export type CorrelationContext = Readonly<{
   correlationId: string;
@@ -136,12 +106,13 @@ export interface Features {
   enabled(name: string, context?: Readonly<Record<string, unknown>>): boolean | Promise<boolean>;
 }
 
-export type ExecutionContext<Data, Services> = Readonly<{
+export type ExecutionContext<Data, Services, Access extends AccessControl = AccessControl> = Readonly<{
   principal: Principal;
   tenant: TenantIdentity;
-  authority: AuthorityContext;
+  /** Effective permission codes across the organization and application planes. */
+  permissions: Permissions;
   entitlements: Entitlements;
-  access: AccessController;
+  access: Access;
   correlation: CorrelationContext;
   data: Data;
   log: Logger;

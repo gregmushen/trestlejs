@@ -49,7 +49,8 @@ export async function planUpgrade(root: string): Promise<UpgradePlan> {
   const migrationDirectory = path.join(root, "packages", "db", "migrations");
   const migrationFiles = (await readdir(migrationDirectory).catch(() => [])).filter((file) => file.endsWith(".sql"));
   const migrations = (await Promise.all(migrationFiles.map((file) => optionalText(path.join(migrationDirectory, file))))).join("\n");
-  const authorityCurrent = Boolean(context?.includes("AUTHORITY_MODEL_VERSION = 2") && executionContext?.includes("applicationRole") && authSchema?.includes("applicationRole") && migrations.includes('ADD COLUMN "application_role"'));
+  // Authority model 3: a permission registry with separately stored application-role assignments.
+  const authorityCurrent = Boolean(context?.includes("AUTHORITY_MODEL_VERSION = 3") && executionContext?.includes("loadApplicationRoles") && migrations.includes('CREATE TABLE "application_role_assignment"'));
   const runtimeCurrent = Boolean(database?.includes("drizzle-orm/neon-serverless") && roles?.includes("verifyRuntimeRoleDataAccess") && billing?.includes("createTenantDatabase") && neonPreview?.includes("connectionUri(runtimeRole, false)"));
   const marker = `<!-- trestle-managed-guidance:${MANAGED_GUIDANCE_VERSION} -->`;
   return {

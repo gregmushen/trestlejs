@@ -141,6 +141,13 @@
       "when": 1790294400011,
       "tag": "0019_remarkable_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790294400012,
+      "tag": "0020_amused_santa_claus",
+      "breakpoints": true
     }
   ]
 }

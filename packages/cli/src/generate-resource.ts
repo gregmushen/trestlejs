@@ -74,8 +74,8 @@ async function appendExport(target: string, exportLine: string): Promise<void> {
 
 export async function generateResource(root: string, manifest: ProjectManifest, resource: SetupResource): Promise<string[]> {
   const contextSource = await readFile(path.join(root, manifest.packages.context ?? "packages/context", "src", "index.ts"), "utf8").catch(() => undefined);
-  if (contextSource && !/export const AUTHORITY_MODEL_VERSION\s*=\s*2\s*;/u.test(contextSource)) {
-    throw new CliFailure("resource generation requires independent application authority; migrate the legacy single-plane ExecutionContext before generating new routes");
+  if (contextSource && !/export const AUTHORITY_MODEL_VERSION\s*=\s*(?:[3-9]|\d{2,})\s*;/u.test(contextSource)) {
+    throw new CliFailure("resource generation requires independent application authority; migrate to the permission-registry ExecutionContext (authority model 3) before generating new routes");
   }
   if (!resource.tenant || !resource.crud) throw new CliFailure("the v1 resource generator requires --tenant and --crud");
   const n = names(resource.name);
@@ -105,7 +105,7 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
   if (collisions.length && !declarationExists) throw new CliFailure(`resource ${resource.name} collides with existing files: ${collisions.join(", ")}`);
   if (declarationExists) {
     const current = JSON.parse(await readFile(declarationPath, "utf8")) as { name?: string; tenant?: boolean; crud?: boolean; fields?: unknown; authorization?: unknown; pagination?: unknown };
-    const intended = { fields: resource.fields, authorization: resource.authorization ?? { read: "resource:read", write: "resource:write" }, pagination: resource.pagination };
+    const intended = { fields: resource.fields, authorization: resource.authorization ?? { read: "resource.read", write: "resource.write" }, pagination: resource.pagination };
     if (current.name !== resource.name || current.tenant !== resource.tenant || current.crud !== resource.crud || JSON.stringify({ fields: current.fields, authorization: current.authorization, pagination: current.pagination }) !== JSON.stringify(intended)) {
       throw new CliFailure(`resource ${resource.name} already exists with a different declaration`);
     }
@@ -119,8 +119,8 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     created.push(path.relative(root, target));
   };
   const routePath = `/api/${n.pluralKebab}`;
-  const readPermission = resource.authorization?.read ?? "resource:read";
-  const writePermission = resource.authorization?.write ?? "resource:write";
+  const readPermission = resource.authorization?.read ?? "resource.read";
+  const writePermission = resource.authorization?.write ?? "resource.write";
 
   const declaration = {
     schemaVersion: 2,
@@ -274,7 +274,7 @@ async function operation<T>(execution: AppVariables["execution"], event: string,
 }
 ${n.camel}Routes.get("${routePath}", async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "application", permission: "${readPermission}" });
+  execution.access.require({ permission: "${readPermission}" });
   const cursor = context.req.query("cursor");
   const requestedLimit = Number(context.req.query("limit") ?? "${resource.pagination.defaultLimit}");
   if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > ${resource.pagination.maxLimit}) return context.json({ error: "validation_failed", message: "limit must be between 1 and ${resource.pagination.maxLimit}" }, 400);
@@ -286,12 +286,12 @@ ${n.camel}Routes.post("${routePath}", async (context) => {
   const parsed = ${n.camel}CreateSchema.safeParse(await context.req.json());
   if (!parsed.success) return context.json({ error: "validation_failed", issues: parsed.error.issues }, 400);
   const execution = context.get("execution");
-  execution.access.require({ plane: "application", permission: "${writePermission}" });
+  execution.access.require({ permission: "${writePermission}" });
   return context.json({ ${n.camel}: await operation(execution, "resource.${n.kebab}.create", () => service(execution).create(parsed.data)) }, 201);
 });
 ${n.camel}Routes.get("${routePath}/:id", async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "application", permission: "${readPermission}" });
+  execution.access.require({ permission: "${readPermission}" });
   const record = await operation(execution, "resource.${n.kebab}.read", () => service(execution).get(context.req.param("id")));
   return record ? context.json({ ${n.camel}: record }) : context.json({ error: "Not found" }, 404);
 });
@@ -299,13 +299,13 @@ ${n.camel}Routes.patch("${routePath}/:id", async (context) => {
   const parsed = ${n.camel}UpdateSchema.safeParse(await context.req.json());
   if (!parsed.success) return context.json({ error: "validation_failed", issues: parsed.error.issues }, 400);
   const execution = context.get("execution");
-  execution.access.require({ plane: "application", permission: "${writePermission}" });
+  execution.access.require({ permission: "${writePermission}" });
   const updated = await operation(execution, "resource.${n.kebab}.update", () => service(execution).update(context.req.param("id"), parsed.data));
   return updated ? context.json({ ${n.camel}: updated }) : context.json({ error: "Not found" }, 404);
 });
 ${n.camel}Routes.delete("${routePath}/:id", async (context) => {
   const execution = context.get("execution");
-  execution.access.require({ plane: "application", permission: "${writePermission}" });
+  execution.access.require({ permission: "${writePermission}" });
   return await operation(execution, "resource.${n.kebab}.delete", () => service(execution).remove(context.req.param("id"))) ? context.body(null, 204) : context.json({ error: "Not found" }, 404);
 });
 `);

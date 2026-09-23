@@ -1,6 +1,6 @@
 import { createAuth } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
-import { artifactMetadata, createDatabase, createTenantDatabase, eventInbox, hasArtifactStorageKey, organization, organizationEntitlement, organizationSubscription, member, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
+import { activeApplicationRoles, grantApplicationRoles, replaceApplicationRoles, artifactMetadata, createDatabase, createTenantDatabase, eventInbox, hasArtifactStorageKey, organization, organizationEntitlement, organizationSubscription, outboxMessage, PostgresArtifactMetadataRepository, user } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq, sql } from "drizzle-orm";
@@ -68,20 +68,24 @@ suite("local product path", () => {
       organizationId = created.id;
       expect(organizationId).toBeTruthy();
 
-      // Only the creator is bootstrapped with product access; members added later start with none.
-      const [creatorMembership] = await database.select({ userId: member.userId, applicationRole: member.applicationRole }).from(member).where(eq(member.organizationId, organizationId!));
-      expect(creatorMembership?.applicationRole).toBe("contributor");
+      // The creator is the organization Owner and, by explicit bootstrap policy, its application administrator.
+      const creatorAccess = await app.request("http://localhost:8787/api/tenant/access", { headers: { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": organizationId! } }, environment);
+      expect(creatorAccess.status).toBe(200);
+      await expect(creatorAccess.json()).resolves.toMatchObject({ organizationId, assignments: { organization: ["owner"], application: ["app_admin"] } });
+      // Members added later start with no application role, whatever their organization role.
       joinerId = `system-joiner-${crypto.randomUUID()}`;
       await database.insert(user).values({ id: joinerId, name: "Joiner", email: `${joinerId}@example.test`, emailVerified: true, createdAt: new Date(), updatedAt: new Date() });
       await createAuth(environment).api.addMember({ body: { userId: joinerId, organizationId: organizationId!, role: "admin" } });
-      const [joinerMembership] = await database.select({ applicationRole: member.applicationRole }).from(member).where(eq(member.userId, joinerId));
-      expect(joinerMembership).toEqual({ applicationRole: null });
+      const tenantRoles = createTenantDatabase(databaseUrl!, "postgres-js", organizationId!);
+      expect(await activeApplicationRoles(tenantRoles, organizationId!, joinerId)).toEqual([]);
+      const [creator] = await database.select({ id: user.id }).from(user).where(eq(user.email, email)).limit(1);
+      expect(await activeApplicationRoles(tenantRoles, organizationId!, creator!.id)).toEqual(["app_admin"]);
 
       // Organization ownership alone never reaches product resources such as artifacts.
-      await database.update(member).set({ applicationRole: null }).where(and(eq(member.organizationId, organizationId!), eq(member.userId, creatorMembership!.userId)));
+      await replaceApplicationRoles(tenantRoles, { organizationId: organizationId!, userId: creator!.id, roles: [], actor: "test", now: new Date() });
       const ownerOnlyUpload = await app.request("http://localhost:8787/api/artifacts", { method: "POST", headers: { origin: environment.WEB_ORIGIN, cookie: cookie!, "x-trestle-tenant": organizationId!, "content-type": "text/plain" }, body: "owner only" }, environment);
       expect(ownerOnlyUpload.status).toBe(403);
-      await database.update(member).set({ applicationRole: "contributor" }).where(and(eq(member.organizationId, organizationId!), eq(member.userId, creatorMembership!.userId)));
+      await grantApplicationRoles(tenantRoles, { organizationId: organizationId!, userId: creator!.id, roles: ["app_admin"], grantedBy: "test" });
 
       await billingRepository.put({ organizationId: organizationId!, provider: "local", plan: "starter", planVersion: 1, status: "active", cancelAtPeriodEnd: false, entitlements: ["article.basic"] });
 
@@ -279,6 +283,7 @@ suite("local product path", () => {
       if (organizationId) await database.delete(organizationSubscription).where(eq(organizationSubscription.organizationId, organizationId));
       if (secondOrganizationId) await database.delete(organization).where(eq(organization.id, secondOrganizationId));
       if (organizationId) await database.delete(organization).where(eq(organization.id, organizationId));
+      // Deleting users cascades their application-role assignments.
       if (joinerId) await database.delete(user).where(eq(user.id, joinerId));
       await database.delete(user).where(eq(user.email, email));
       clearCapturedEmails();
