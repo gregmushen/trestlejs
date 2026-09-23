@@ -8,6 +8,14 @@ import { afterEach, describe, expect, it } from "vitest";
 const execute = promisify(execFile);
 const servers: Server[] = [];
 const smokeScript = path.resolve("packages/create/template/scripts/smoke.mjs");
+const deployedCapabilities = {
+  database: { configured: true },
+  email: { mode: "resend", configured: true, stagingProtected: true },
+  billing: { mode: "test", configured: true },
+  queues: { configured: false },
+  artifacts: { mode: "unavailable", configured: false },
+  workflows: { enabled: false, configured: false },
+};
 
 async function listen(handler: RequestListener): Promise<string> {
   const server = createServer(handler);
@@ -22,7 +30,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map(async (server) => await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))));
 });
 
-async function surfaces(webhookStatus = 400, operational = { status: "ok", environment: "staging", capabilities: { database: { configured: true }, email: { mode: "resend", configured: true, stagingProtected: true }, billing: { mode: "test", configured: true } } }): Promise<{ apiURL: string; appURL: string; siteURL: string }> {
+async function surfaces(webhookStatus = 400, operational = { status: "ok", environment: "staging", capabilities: deployedCapabilities }): Promise<{ apiURL: string; appURL: string; siteURL: string }> {
   let appURL = "";
   const apiURL = await listen((request, response) => {
     response.setHeader("access-control-allow-origin", appURL);
@@ -73,7 +81,7 @@ describe("deployed smoke gate", () => {
   });
 
   it("fails when the deployed Worker reports the wrong environment or provider mode", async () => {
-    const urls = await surfaces(400, { status: "ok", environment: "preview", capabilities: { database: { configured: true }, email: { mode: "resend", configured: true, stagingProtected: true }, billing: { mode: "test", configured: true } } });
+    const urls = await surfaces(400, { status: "ok", environment: "preview", capabilities: deployedCapabilities });
     await expect(execute(process.execPath, [smokeScript], { env: { ...process.env, TRESTLE_DEPLOY_ENV: "staging", API_URL: urls.apiURL, APP_URL: urls.appURL, SITE_URL: urls.siteURL } })).rejects.toMatchObject({ stderr: expect.stringContaining("operational environment") });
   });
 
@@ -83,8 +91,13 @@ describe("deployed smoke gate", () => {
     { field: "recipient", override: { email: { mode: "resend", configured: true, stagingProtected: false } }, expected: "recipient protection" },
     { field: "billing", override: { billing: { mode: "live", configured: true } }, expected: "Stripe test" },
   ])("fails when operational $field is unsafe", async ({ override, expected }) => {
-    const capabilities = { database: { configured: true }, email: { mode: "resend", configured: true, stagingProtected: true }, billing: { mode: "test", configured: true }, ...override };
+    const capabilities = { ...deployedCapabilities, ...override };
     const urls = await surfaces(400, { status: "ok", environment: "staging", capabilities });
     await expect(execute(process.execPath, [smokeScript], { env: { ...process.env, TRESTLE_DEPLOY_ENV: "staging", API_URL: urls.apiURL, APP_URL: urls.appURL, SITE_URL: urls.siteURL } })).rejects.toMatchObject({ stderr: expect.stringContaining(expected) });
+  });
+
+  it("rejects an undeclared deployed Queue binding", async () => {
+    const urls = await surfaces(400, { status: "ok", environment: "staging", capabilities: { ...deployedCapabilities, queues: { configured: true } } });
+    await expect(execute(process.execPath, [smokeScript], { env: { ...process.env, TRESTLE_DEPLOY_ENV: "staging", API_URL: urls.apiURL, APP_URL: urls.appURL, SITE_URL: urls.siteURL } })).rejects.toMatchObject({ stderr: expect.stringContaining("Queue binding does not match declared staging capability") });
   });
 });
