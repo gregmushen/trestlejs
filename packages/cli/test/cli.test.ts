@@ -176,6 +176,15 @@ describe("TrestleJS CLI", () => {
     expect(mixed.stderr()).toContain("different authority planes");
   });
 
+  it("refuses platform admin operations until the admin capability is enabled", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["admin", "grant", "ops@example.test", "security_admin", "--env", "local", "--reason", "bootstrap"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("platform admin is not enabled");
+    const missingReason = capture(root);
+    expect(await executeCli(["admin", "revoke", "ops@example.test", "security_admin", "--env", "local"], missingReason.runtime)).toBe(1);
+  });
+
   it("validates outbox retention cutoffs and limits before reading secrets", async () => {
     const root = await fixture();
     const local = capture(root);

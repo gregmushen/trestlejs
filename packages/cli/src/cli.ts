@@ -611,6 +611,37 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(`${options.apply ? "Pruned" : "Eligible"} ${summary.count} succeeded outbox record(s) in ${options.env} before ${options.before}${options.apply ? ` (limit ${limit})` : " (dry run)"}\n`);
     });
 
+  const admin = program.command("admin").description("bootstrap and manage platform admin operators");
+  const platformAdmin = async (command: Command, env: ReturnType<typeof environment>, args: string[]) => {
+    const context = await projectContext(command, runtime);
+    if (!context.manifest.capabilities.admin) throw new CliFailure("The platform admin is not enabled; set capabilities.admin with trestle setup first");
+    const values = await readSecrets(context.root, env, selectedMasterKey(runtime));
+    const connection = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
+    if (!connection) throw new CliFailure(`DATABASE_MIGRATION_URL or DATABASE_URL is not set for ${env}`);
+    const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/platform-admin.ts", ...args], { cwd: context.root, env: { ...process.env, DATABASE_MIGRATION_URL: connection, TRESTLE_ENV: env }, stdio: "pipe" });
+    return JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}") as unknown;
+  };
+  for (const operation of ["grant", "revoke"] as const) {
+    admin.command(operation)
+      .description(`${operation} a platform role; the change and its reason are recorded in audit_event`)
+      .argument("<email>", "the operator's account email; they must have signed up")
+      .argument("<role>", "platform role key, e.g. security_admin")
+      .requiredOption("--env <environment>", "target environment", environment)
+      .requiredOption("--reason <reason>", "why this access is being changed")
+      .action(async (email: string, role: string, options: { env: ReturnType<typeof environment>; reason: string }, command: Command) => {
+        if (!options.reason.trim() || options.reason.length > 500) throw new CliFailure("--reason must be 1 to 500 characters");
+        const outcome = await platformAdmin(command, options.env, [operation, email, role, options.reason]) as { correlationId: string };
+        runtime.stdout(`${operation === "grant" ? "Granted" : "Revoked"} platform role ${role} ${operation === "grant" ? "to" : "from"} ${email} in ${options.env} (audit correlation ${outcome.correlationId})\n`);
+      });
+  }
+  admin.command("list")
+    .description("list active platform-role assignments")
+    .requiredOption("--env <environment>", "target environment", environment)
+    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
+      const grants = await platformAdmin(command, options.env, ["list"]) as Array<{ userId: string; role: string; grantedBy: string }>;
+      runtime.stdout(grants.length ? `${grants.map((grant) => `${grant.userId}\t${grant.role}\t${grant.grantedBy}`).join("\n")}\n` : "No platform-role assignments\n");
+    });
+
   const workflow = program.command("workflow").description("inspect and retry Cloudflare Workflow instances");
   workflow.command("list")
     .argument("<name>", "workflow name")
