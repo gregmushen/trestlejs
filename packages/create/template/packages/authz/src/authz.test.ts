@@ -63,6 +63,13 @@ describe("access evaluation", () => {
     expect(subject(["member"], ["editor"]).explain({ permission: "resource.write" })).toMatchObject({ allowed: true, permission: { grantedBy: ["editor"] } });
   });
 
+  it("grants customer webhook replay only to organization administrators", () => {
+    expect(subject(["owner"], []).check({ permission: "organization.webhooks.replay" })).toBe(true);
+    expect(subject(["admin"], []).check({ permission: "organization.webhooks.replay" })).toBe(true);
+    expect(subject(["member"], ["app_admin"]).check({ permission: "organization.webhooks.replay" })).toBe(false);
+    expect(policyFor("POST", "/api/developer/webhooks/deliveries/whd_replay_123/replay")?.permission).toBe("organization.webhooks.replay");
+  });
+
   it("gives a platform role alone no tenant authority, and tenant roles no platform authority", () => {
     const operator = new AccessEvaluator(permissions, {
       principal: { type: "user", id: "operator-1" }, tenant: { organizationId: "org-a" },

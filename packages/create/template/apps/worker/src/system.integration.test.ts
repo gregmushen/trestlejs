@@ -333,6 +333,23 @@ suite("local product path", () => {
           expect(deliveries.filter((delivery) => messages.some((message) => message.id === delivery.messageId))).toHaveLength(2);
           const attempts = await database.select().from(webhookAttempt).where(eq(webhookAttempt.organizationId, organizationId!));
           expect(attempts).toHaveLength(2);
+          const updateDelivery = deliveries.find((delivery) => delivery.messageId === messages.find((message) => message.publicEventType === "resource.article.updated")?.id);
+          if (!updateDelivery) throw new Error("Updated article webhook delivery missing");
+          await database.update(webhookDelivery).set({ state: "dead", terminalReason: "system_test_failure", completedAt: new Date() }).where(eq(webhookDelivery.id, updateDelivery.id));
+          const replayUrl = `http://localhost:8787/api/developer/webhooks/deliveries/${updateDelivery.id}/replay`;
+          expect((await app.request(replayUrl, { method: "POST", headers: { ...headers, origin: "https://wrong.example.test" } }, webhookEnvironment)).status).toBe(403);
+          expect((await app.request(replayUrl, { method: "POST", headers: secondHeaders }, webhookEnvironment)).status).toBe(404);
+          const replayResponse = await app.request(replayUrl, { method: "POST", headers }, webhookEnvironment);
+          expect(replayResponse.status).toBe(202);
+          const replayBody = await replayResponse.json() as { state: string; replayDeliveryId: string; created: boolean };
+          expect(replayBody).toMatchObject({ state: "queued", created: true });
+          expect(replayBody.replayDeliveryId).toMatch(/^whd_replay_[0-9a-f]{32}$/u);
+          expect((await app.request(replayUrl, { method: "POST", headers }, webhookEnvironment)).status).toBe(200);
+          const replayAttempts = await app.request(`http://localhost:8787/api/developer/webhooks/deliveries/${replayBody.replayDeliveryId}/attempts`, { headers }, webhookEnvironment);
+          expect(replayAttempts.status).toBe(200);
+          expect(await replayAttempts.json()).toEqual({ attempts: [] });
+          const replayInspection = await app.request(`http://localhost:8787/api/developer/webhooks/endpoints/${webhookEndpointId}/deliveries`, { headers }, webhookEnvironment);
+          expect(await replayInspection.json()).toMatchObject({ deliveries: expect.arrayContaining([expect.objectContaining({ id: updateDelivery.id, activeReplayId: replayBody.replayDeliveryId, replayable: false })]) });
         }
         const removed = await app.request(`http://localhost:8787/api/articles/${article.id}`, { method: "DELETE", headers }, environment);
         expect(removed.status).toBe(204);

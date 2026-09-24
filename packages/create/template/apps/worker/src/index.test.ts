@@ -91,7 +91,8 @@ describe("worker routes", () => {
     const replace = await app.request(`/api/developer/webhooks/endpoints/${crypto.randomUUID()}/subscriptions`, { method: "PATCH", headers: { origin: "http://localhost:42069", "content-type": "application/json" }, body: '{"subscriptions":[]}' }, environment);
     const deliveries = await app.request(`/api/developer/webhooks/endpoints/${crypto.randomUUID()}/deliveries`, undefined, environment);
     const attempts = await app.request(`/api/developer/webhooks/deliveries/whd_${"a".repeat(64)}/attempts`, undefined, environment);
-    expect([endpoint.status, events.status, create.status, stateChange.status, subscriptions.status, replace.status, deliveries.status, attempts.status]).toEqual([401, 401, 401, 401, 401, 401, 401, 401]);
+    const replay = await app.request(`/api/developer/webhooks/deliveries/whd_${"a".repeat(64)}/replay`, { method: "POST", headers: { origin: "http://localhost:42069" } }, environment);
+    expect([endpoint.status, events.status, create.status, stateChange.status, subscriptions.status, replace.status, deliveries.status, attempts.status, replay.status]).toEqual([401, 401, 401, 401, 401, 401, 401, 401, 401]);
   });
 
   it("rejects anonymous artifact uploads and invalid signed access", async () => {

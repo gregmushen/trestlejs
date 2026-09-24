@@ -50,6 +50,7 @@ export const customerRoutePolicies = defineRoutePolicies(permissions, [
   { method: "PATCH", path: "/api/developer/webhooks/endpoints/:id/subscriptions", audience: "tenant", permission: "organization.webhooks.manage" },
   { method: "GET", path: "/api/developer/webhooks/endpoints/:id/deliveries", audience: "tenant", permission: "organization.webhooks.deliveries.read" },
   { method: "GET", path: "/api/developer/webhooks/deliveries/:id/attempts", audience: "tenant", permission: "organization.webhooks.deliveries.read" },
+  { method: "POST", path: "/api/developer/webhooks/deliveries/:id/replay", audience: "tenant", permission: "organization.webhooks.replay" },
 
   // Artifacts are product resources: only application-plane authority grants them.
   { method: "POST", path: "/api/artifacts", audience: "tenant", permission: "resource.write" },

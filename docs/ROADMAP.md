@@ -633,6 +633,16 @@ function performs the validated insert. The customer inspection model exposes
 the replay link, and platform operations show when a replay is already queued.
 This is a local and database-backed recovery contract, not deployed native
 egress proof or Svix provider reconciliation.
+Alpha 86 adds customer-initiated replay of a failed outbound webhook under a
+distinct organization permission. The Worker checks session authority, request
+origin, environment, and delivery mode; forced tenant RLS and a PostgreSQL
+transaction validate the retained message and active endpoint, serialize
+concurrent requests, queue one linked delivery, and record an audit event.
+The original terminal delivery and attempts remain unchanged. Customer
+inspection shows replay state and supports inspecting the new attempt ID;
+the application exposes a replay action without revealing payloads or secrets.
+Local signed-delivery and database tests are required; remote provider delivery
+and the configured Resend/Stripe preview gate remain beta work.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

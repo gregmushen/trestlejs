@@ -5,7 +5,7 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
-import { billingProviderEvent, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, PostgresEventInbox, PostgresOutboxStore, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
+import { billingProviderEvent, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -72,6 +72,10 @@ function inspectionPageSize(value: string | undefined): number | null {
   if (!/^[1-9][0-9]{0,2}$/u.test(value)) return null;
   const size = Number(value);
   return size <= 100 ? size : null;
+}
+
+function validWebhookDeliveryId(value: string): boolean {
+  return /^whd_(?:[0-9a-f]{64}|replay_[0-9a-f]{32})$/u.test(value);
 }
 
 const webhookSubscriptionsSchema = z.array(z.object({ type: z.string(), version: z.number().int().positive() }).strict()).min(1).max(100);
@@ -229,7 +233,7 @@ app.get("/api/developer/webhooks/endpoints/:id/deliveries", requireExecutionCont
   if (!limit) return context.json({ error: "Invalid page size" }, 400);
   return context.json({ deliveries: await listWebhookDeliveries({
     organizationId: execution.tenant.organizationId, environment: context.env.APP_ENV ?? "local",
-    endpointId, tenantDatabase: () => execution.data, limit,
+    endpointId, tenantDatabase: () => execution.data, limit, deliveryMode: context.env.WEBHOOK_DELIVERY_MODE ?? "disabled",
   }) });
 });
 
@@ -237,13 +241,38 @@ app.get("/api/developer/webhooks/deliveries/:id/attempts", requireExecutionConte
   const execution = context.get("execution");
   execution.access.require({ permission: "organization.webhooks.deliveries.read" });
   const deliveryId = context.req.param("id");
-  if (!/^whd_[0-9a-f]{64}$/u.test(deliveryId)) return context.json({ error: "Invalid delivery ID" }, 400);
+  if (!validWebhookDeliveryId(deliveryId)) return context.json({ error: "Invalid delivery ID" }, 400);
   const limit = inspectionPageSize(context.req.query("limit"));
   if (!limit) return context.json({ error: "Invalid page size" }, 400);
   return context.json({ attempts: await listWebhookAttempts({
     organizationId: execution.tenant.organizationId, environment: context.env.APP_ENV ?? "local",
     deliveryId, tenantDatabase: () => execution.data, limit,
   }) });
+});
+
+app.post("/api/developer/webhooks/deliveries/:id/replay", requireExecutionContext, async (context) => {
+  const execution = context.get("execution");
+  execution.access.require({ permission: "organization.webhooks.replay", rejectApiKeys: true });
+  const expectedOrigin = context.env.WEB_ORIGIN ?? context.env.BETTER_AUTH_URL ?? "http://localhost:42069";
+  if (context.req.header("origin") !== expectedOrigin) return context.json({ error: "Invalid request origin" }, 403);
+  const deliveryId = context.req.param("id");
+  if (!validWebhookDeliveryId(deliveryId)) return context.json({ error: "Invalid delivery ID" }, 400);
+  const environment = context.env.APP_ENV ?? "local";
+  const expectedMode = environment === "local" ? "local" : "native";
+  if (context.env.WEBHOOK_DELIVERY_MODE !== expectedMode) return context.json({ error: "Webhook replay is unavailable in this environment" }, 503);
+  const result = await replayTenantWebhookDelivery({
+    organizationId: execution.tenant.organizationId, environment,
+    deliveryId, actorId: execution.principal.id, correlationId: execution.correlation.correlationId,
+    database: execution.data, now: execution.clock.now(),
+  });
+  if (result.state === "not_found") return context.json({ error: "Delivery not found" }, 404);
+  if (result.state === "not_terminal") return context.json({ error: "Only failed deliveries can be replayed" }, 409);
+  if (result.state === "payload_gone") return context.json({ error: "The event payload is no longer retained" }, 409);
+  if (result.state === "endpoint_inactive") return context.json({ error: "The endpoint must be active" }, 409);
+  if (result.state === "already_succeeded") return context.json({ error: "A replay has already succeeded" }, 409);
+  if (!("deliveryId" in result)) throw new Error("Unexpected webhook replay result");
+  execution.log.info("webhooks.delivery.replay_queued", { sourceDeliveryId: deliveryId, replayDeliveryId: result.deliveryId, created: result.state === "created" });
+  return context.json({ state: "queued", replayDeliveryId: result.deliveryId, created: result.state === "created" }, result.state === "created" ? 202 : 200);
 });
 
 app.get("/api/dev/emails", (context) => {

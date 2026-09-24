@@ -34,6 +34,11 @@ type Delivery = {
   createdAt: string;
   completedAt: string | null;
   payloadAvailable: boolean;
+  replayOfDeliveryId: string | null;
+  activeReplayId: string | null;
+  successfulReplayId: string | null;
+  replayable: boolean;
+  replayUnavailableReason: "not_failed" | "payload_expired" | "resolved" | "endpoint_inactive" | "provider_unavailable" | "replay_pending" | null;
   correlationId: string | null;
 };
 
@@ -92,6 +97,17 @@ async function updateSubscriptions(organizationId: string, endpointId: string, s
     const result = await response.json().catch(() => ({})) as { error?: string };
     throw new Error(result.error ?? "Webhook subscriptions could not be saved.");
   }
+}
+
+async function replayDelivery(organizationId: string, deliveryId: string) {
+  const response = await fetch(`${apiOrigin}/api/developer/webhooks/deliveries/${encodeURIComponent(deliveryId)}/replay`, {
+    method: "POST", credentials: "include", headers: { "x-trestle-tenant": organizationId },
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(result.error ?? "The delivery could not be queued for replay.");
+  }
+  return response.json() as Promise<{ state: "queued"; replayDeliveryId: string; created: boolean }>;
 }
 
 function WebhookSubscriptions({ organizationId, endpointId, userId, events }: { organizationId: string; endpointId: string; userId: string; events: PublicEvent[] }) {
@@ -186,6 +202,14 @@ export function WebhookInspection() {
     retry: false,
     queryFn: () => inspect<{ attempts: Attempt[] }>(`/api/developer/webhooks/deliveries/${encodeURIComponent(deliveryId!)}/attempts`, organizationId!),
   });
+  const selectedDelivery = deliveries.data?.deliveries.find((delivery) => delivery.id === deliveryId);
+  const replay = useMutation({
+    mutationFn: (sourceId: string) => replayDelivery(organizationId!, sourceId),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["webhook-inspection", session?.user.id, organizationId, "deliveries", endpointId] });
+      setDeliveryId(result.replayDeliveryId);
+    },
+  });
   useEffect(() => {
     if (endpoints.error) { setEndpointId(undefined); setDeliveryId(undefined); }
   }, [endpoints.error]);
@@ -234,6 +258,15 @@ export function WebhookInspection() {
       </div>}
 
       {deliveryId && <div className="mt-8 border-t border-slate-200 pt-6"><h2 className="text-xl font-semibold">Attempts</h2><p className="mt-1 text-sm text-slate-500">Showing up to 50 most recent attempts.</p>
+        {selectedDelivery?.replayOfDeliveryId && <p className="mt-2 text-sm text-slate-600">Replay of {selectedDelivery.replayOfDeliveryId}. The original delivery and its attempts remain unchanged.</p>}
+        {selectedDelivery?.replayable && <button type="button" className="mt-3 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium" disabled={replay.isPending} onClick={() => void replay.mutateAsync(deliveryId).catch(() => undefined)}>{replay.isPending ? "Queuing replay…" : "Replay failed delivery"}</button>}
+        {selectedDelivery?.replayUnavailableReason === "replay_pending" && <p className="mt-2 text-sm text-slate-600">A replay is already queued.</p>}
+        {selectedDelivery?.replayUnavailableReason === "resolved" && <p className="mt-2 text-sm text-slate-600">A replay of this message has succeeded.</p>}
+        {selectedDelivery?.replayUnavailableReason === "payload_expired" && <p className="mt-2 text-sm text-slate-600">The payload is no longer retained, so this delivery cannot be replayed.</p>}
+        {selectedDelivery?.replayUnavailableReason === "endpoint_inactive" && <p className="mt-2 text-sm text-slate-600">Activate this endpoint before replaying.</p>}
+        {selectedDelivery?.replayUnavailableReason === "provider_unavailable" && <p className="mt-2 text-sm text-slate-600">Webhook delivery is unavailable in this environment.</p>}
+        {replay.error && <p className="mt-2 text-sm text-red-700" role="alert">{replay.error.message}</p>}
+        {replay.isSuccess && <p className="mt-2 text-sm text-green-700" role="status">Replay queued. This does not mean it has reached the destination.</p>}
         {attempts.isPending ? <p className="mt-3">Loading attempts…</p> : attempts.error ? <p className="mt-3 text-red-700" role="alert">{attempts.error.message}</p> : attempts.data?.attempts?.length ? <ol className="mt-3 space-y-2">{attempts.data.attempts.map((attempt) => <li className="rounded-xl border border-slate-200 p-4" key={attempt.id}>
           <p className="font-semibold">Attempt {attempt.attemptNumber}: {attempt.outcome}</p>
           <p className="text-sm text-slate-600">{attempt.resultCategory ?? "No result category"} · HTTP {attempt.responseStatus ?? "—"} · <UtcTime value={attempt.attemptedAt} /></p>

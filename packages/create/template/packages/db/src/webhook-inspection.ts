@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
 import type { Database } from "./index.js";
 import { webhookAttempt } from "./webhook-attempt-schema.js";
@@ -67,6 +67,7 @@ export async function listWebhookDeliveries(input: {
   endpointId: string;
   tenantDatabase: (organizationId: string) => Database;
   limit?: number;
+  deliveryMode?: "disabled" | "local" | "native" | "svix";
 }) {
   const limit = inspectionLimit(input.limit ?? 50);
   const rows = await input.tenantDatabase(input.organizationId).select({
@@ -74,9 +75,13 @@ export async function listWebhookDeliveries(input: {
     eventVersion: webhookMessage.publicVersion, occurredAt: webhookMessage.occurredAt,
     state: webhookDelivery.state, attemptCount: webhookDelivery.attemptCount,
     replayOfDeliveryId: webhookDelivery.replayOfDeliveryId,
+    activeReplayId: sql<string | null>`(select replay.id from webhook_delivery replay where replay.organization_id = ${input.organizationId} and replay.replay_of_delivery_id = coalesce(${webhookDelivery.replayOfDeliveryId}, ${webhookDelivery.id}) and replay.state in ('pending', 'leased', 'retry') limit 1)`,
+    successfulReplayId: sql<string | null>`(select replay.id from webhook_delivery replay where replay.organization_id = ${input.organizationId} and replay.replay_of_delivery_id = coalesce(${webhookDelivery.replayOfDeliveryId}, ${webhookDelivery.id}) and replay.state = 'succeeded' limit 1)`,
     nextAttemptAt: webhookDelivery.nextAttemptAt, terminalReason: webhookDelivery.terminalReason,
     createdAt: webhookDelivery.createdAt, completedAt: webhookDelivery.completedAt,
     payloadDeletedAt: webhookMessage.payloadDeletedAt, messageStatus: webhookMessage.status,
+    payloadPresent: sql<boolean>`${webhookMessage.envelope} IS NOT NULL`,
+    endpointState: webhookEndpoint.state, endpointProvider: webhookEndpoint.provider,
     correlationId: webhookMessage.correlationId,
   }).from(webhookDelivery)
     .innerJoin(webhookMessage, and(eq(webhookMessage.id, webhookDelivery.messageId), eq(webhookMessage.organizationId, webhookDelivery.organizationId)))
@@ -85,9 +90,18 @@ export async function listWebhookDeliveries(input: {
       eq(webhookDelivery.organizationId, input.organizationId), eq(webhookDelivery.endpointId, input.endpointId),
       eq(webhookEndpoint.environment, input.environment), isNull(webhookEndpoint.deletedAt),
     )).orderBy(desc(webhookDelivery.createdAt), desc(webhookDelivery.id)).limit(limit);
-  return rows.map(({ payloadDeletedAt, messageStatus, ...row }) => ({
-    ...row, payloadAvailable: !payloadDeletedAt && messageStatus === "ready",
-  }));
+  return rows.map(({ payloadDeletedAt, messageStatus, payloadPresent, endpointState, endpointProvider, ...row }) => {
+    const payloadAvailable = !payloadDeletedAt && messageStatus === "ready" && payloadPresent;
+    const expectedMode = input.environment === "local" ? "local" : "native";
+    const providerReady = endpointProvider === expectedMode && (input.deliveryMode === undefined || input.deliveryMode === expectedMode);
+    const replayUnavailableReason = row.state !== "dead" && row.state !== "exhausted" ? "not_failed"
+      : !payloadAvailable ? "payload_expired"
+      : row.successfulReplayId ? "resolved"
+      : endpointState !== "active" ? "endpoint_inactive"
+      : !providerReady ? "provider_unavailable"
+      : row.activeReplayId ? "replay_pending" : null;
+    return { ...row, payloadAvailable, replayable: replayUnavailableReason === null, replayUnavailableReason };
+  });
 }
 
 export async function listWebhookAttempts(input: {
