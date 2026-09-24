@@ -765,6 +765,13 @@ original recipient without forwarding to it. Local mode cannot opt into
 direct Resend delivery, and only production can send provider email without
 redirection. Factory-level tests and CI contract checks protect these rules.
 The canary preview must pick up this source fix before Resend is enabled.
+Alpha 100 adds a protected, real Resend acceptance gate. The staging email
+service sends a harmless message addressed to a unique `example.test` identity,
+retries with the same idempotency key, and reads the provider receipt to assert
+that only the configured staging mailbox was addressed. The authorized canary
+Resend key passed this test. Provider acceptance and recipient metadata do not
+prove inbox delivery or webhook processing; deployed sign-up, verification,
+and delivery-event evidence remain beta gates.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
