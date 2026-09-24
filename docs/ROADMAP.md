@@ -673,6 +673,17 @@ the Subscription. Generated PostgreSQL and signed Worker-route tests cover
 retries, concurrency, duplicate events, and the rule that Checkout completion
 alone does not grant paid access. Live Stripe test-mode evidence, event-order
 reconciliation, and billing event/outbox publication remain beta work.
+Alpha 90 adds an authenticated, provider-backed staging browser gate. The
+generated staging deployment now creates a unique test account, verifies its
+email through a safely redirected Resend message, signs in, creates two
+organizations, checks the active session tenant and organization-scoped billing
+UI, and rejects a non-member tenant ID. Preview and
+production retain read-only browser checks; neither creates test accounts.
+Resend list/read permissions and a configured staging redirect are required.
+This is a generated, deterministic gate, not yet live staging evidence: the
+isolated canary still lacks its actual Resend/Stripe environment values.
+Tenant resource CRUD, forced RLS, deployed billing Checkout/webhooks, and
+provider delivery evidence remain open beta gates.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

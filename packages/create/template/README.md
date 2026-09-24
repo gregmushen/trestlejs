@@ -38,12 +38,16 @@ The test starts its own Worker and app on ports 8787 and 42069; it refuses to
 reuse an unrelated service already listening on either port. It is separate
 from `pnpm check` because it requires a real browser and database.
 The same browser suite also loads the Astro site and follows its sign-in and
-pricing links into the hydrated React application. Preview, staging, and
-production deploy workflows run `pnpm test:deployed` against their actual
-HTTPS URLs after the existing HTTP smoke gate. The deployed browser test is
-read-only and checks public navigation, API access from the app origin, and
-an application deep link; it does not claim to verify deployed sign-up or
-provider email delivery, which remain separate beta gates.
+pricing links into the hydrated React application. Preview and production
+deploy workflows run the read-only `pnpm test:deployed` against their actual
+HTTPS URLs. Staging runs `pnpm test:staging`: it signs up with a unique
+`example.test` address, locates only that account's redirected verification
+message through Resend's sent-email API, verifies the link without printing
+the token, signs in, and checks that two organizations stay distinct. This
+requires a staging Resend key with sent-email list/read access. The test
+confirms provider acceptance and redirection, not inbox delivery; staging
+canary accounts remain in the staging database until the application's
+retention policy removes them. Production never runs this mutating test.
 
 ```yaml
 BETTER_AUTH_SECRET: <randomly generated>

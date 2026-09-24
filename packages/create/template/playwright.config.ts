@@ -20,12 +20,13 @@ if (deployed) {
 
 export default defineConfig({
   testDir: "./tests/browser",
+  testMatch: "**/*.spec.ts",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
   workers: 1,
   reporter: process.env.CI ? "github" : "list",
-  use: { ...devices["Desktop Chrome"], baseURL: deployed ? process.env.APP_URL! : "http://localhost:42069", trace: "retain-on-failure" },
+  use: { ...devices["Desktop Chrome"], baseURL: deployed ? process.env.APP_URL! : "http://localhost:42069", trace: deployed ? "off" : "retain-on-failure" },
   ...(deployed ? {} : { webServer: [
     {
       name: "Worker",

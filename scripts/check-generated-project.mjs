@@ -171,6 +171,12 @@ try {
       APP_URL: "https://app.example.test",
       API_URL: "https://api.example.test",
     });
+    await run("pnpm", ["exec", "playwright", "test", "tests/browser/deployed-product.spec.ts", "--list"], project, {
+      TRESTLE_BROWSER_MODE: "deployed",
+      SITE_URL: "https://site.example.test",
+      APP_URL: "https://app.example.test",
+      API_URL: "https://api.example.test",
+    });
   }
   const generatedProjectManifest = path.join(project, ".trestle", "project.yaml");
   const manifestSource = await readFile(generatedProjectManifest, "utf8");
