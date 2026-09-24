@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { readStagingProviderVariables } from "./provider-staging-config.js";
+import { StripeBillingAdapter } from "./payments/adapters/stripe.js";
 
 const enabled = process.env.TRESTLE_PROVIDER_INTEGRATION_TESTS === "1";
 const provider = enabled ? describe : describe.skip;
@@ -31,5 +32,25 @@ provider("protected staging providers", () => {
       expect(result.object).toBe("list");
       expect(Array.isArray(result.data)).toBe(true);
     }
+  });
+
+  it("creates one test-mode Checkout session across an idempotent retry", async () => {
+    const key = process.env.STRIPE_SECRET_KEY;
+    const staging = await readStagingProviderVariables();
+    expect(key).toMatch(/^(?:sk|rk)_test_[A-Za-z0-9_]+$/u);
+    expect(staging.STRIPE_MODE).toBe("test");
+    const prices = JSON.parse(staging.STRIPE_PRICES ?? "{}") as Record<string, string>;
+    expect(prices.starter).toMatch(/^price_[A-Za-z0-9]+$/u);
+    expect(staging.BILLING_RETURN_URL).toMatch(/^https:\/\//u);
+    const adapter = new StripeBillingAdapter({
+      secretKey: key!, prices, returnUrl: staging.BILLING_RETURN_URL!,
+      repository: { get: async () => null, put: async () => undefined },
+    });
+    const input = { organizationId: `provider-gate-${crypto.randomUUID()}`, plan: "starter", requestId: crypto.randomUUID() };
+    const first = await adapter.createCheckoutSession(input);
+    const retry = await adapter.createCheckoutSession(input);
+    expect(first.id).toMatch(/^cs_test_/u);
+    expect(first.url).toMatch(/^https:\/\/checkout\.stripe\.com\//u);
+    expect(retry.id).toBe(first.id);
   });
 });

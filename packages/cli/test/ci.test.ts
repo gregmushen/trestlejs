@@ -57,6 +57,20 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.providers.encrypted-secrets", status: "fail" }));
   });
 
+  it("requires a protected test-mode Checkout write and idempotent retry", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const sourcePath = path.join(templateRoot, "packages", "integrations", "src", "provider.integration.test.ts");
+    const targetPath = path.join(root, "packages", "integrations", "src", "provider.integration.test.ts");
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(targetPath, source);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.checkout-write", status: "pass" }));
+    await writeFile(targetPath, source.replace("    const retry = await adapter.createCheckoutSession(input);", "    const retry = first;"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.checkout-write", status: "fail" }));
+  });
+
   it("rejects omission of the local product system test", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
