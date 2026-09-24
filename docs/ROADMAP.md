@@ -342,6 +342,11 @@ and fresh DNS resolution on every attempt. It deliberately does not enable
 native sending: Cloudflare Workers cannot pin an arbitrary `fetch` request to
 the address it just approved. A transport with that guarantee (or a trusted
 egress gateway) is required before native mode can be activated.
+Known issue, deferred by product decision: live Cloudflare testing found that
+Workers cannot use the current IP-pinned socket transport for ordinary HTTPS
+destinations on port 443. DNS prechecks followed by Workers `fetch` would not
+preserve the approved-address guarantee. Keep remote native mode fail-closed
+until an egress design is selected and verified on Cloudflare.
 Alpha 43 adds tenant-scoped native delivery leases, a database-enforced lease
 invariant, and atomic duplicate-claim and expired-lease recovery. PostgreSQL
 tests cover competing workers, tenant isolation, inactive endpoints, and
@@ -713,9 +718,17 @@ webhooks do not publish twice; failed event validation rolls the projection
 back for safe retry. Billing payloads omit provider customer/subscription IDs,
 and internal billing events are not customer webhook products. PostgreSQL and
 signed Worker tests cover atomicity, deduplication, redaction, and correlation.
-Checkout and invoice notifications still need a deliberate tenant-resolution
-policy before they can become domain events. Live Stripe test-mode and deployed
-Resend evidence remain beta gates.
+Alpha 94 resolves Checkout and invoice notifications through the immutable
+local subscription-owner binding before publishing private, provider-neutral
+domain events. An earlier notification receives a retryable response rather
+than being acknowledged without an event. Paid entitlements still come only
+from the subscription projection, never a Checkout success or invoice event.
+Signed Worker and PostgreSQL tests cover event ordering, tenant isolation,
+duplicate delivery, failed payloads, and transactional outbox publication.
+Notifications acknowledged by pre-94 installations without domain events need
+explicit provider replay or reconciliation; this release cannot reconstruct
+those historical events from a receipt alone. Live Stripe test-mode and
+deployed Resend evidence remain beta gates.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

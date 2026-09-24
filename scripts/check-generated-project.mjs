@@ -169,6 +169,9 @@ try {
       "supersedes a slow stale lookup while a newer subscription reconciliation commits",
       "retries a failed reconciliation with a fresh generation",
       "assigns distinct generations to concurrent events for one subscription",
+      "retries an early invoice and publishes exactly once after ownership is established",
+      "rejects cross-tenant and changed subscription identities without publishing",
+      "rolls back invalid invoice payloads and leaves their receipt retryable",
     ]);
     await run("pnpm", ["--filter", "./packages/data", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
@@ -176,7 +179,8 @@ try {
     await requireScenarios(project, "./apps/worker", ["src/billing-webhook.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "activates entitlements from a signed subscription once and acknowledges duplicates",
       "rejects a signed subscription lacking tenant or plan metadata without an event receipt",
-      "records Checkout completion without granting paid entitlements before a subscription event",
+      "retries Checkout until subscription ownership exists and never grants access from Checkout alone",
+      "publishes invoice payment outcomes only for a locally owned subscription",
       "reconciles a signed but stale active event against the current cancelled Stripe subscription",
       "keeps a provider lookup failure retryable without exposing the provider response",
       "recovers subscription identity from current Stripe state when the signed snapshot lacks metadata",

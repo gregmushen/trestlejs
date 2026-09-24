@@ -22,4 +22,18 @@ describe("internal billing events", () => {
     expect(() => applicationEventCatalog.parse("billing.subscription.updated", 1, { ...payload, entitlements: [""] }))
       .toThrow("Internal event payload fails its schema");
   });
+
+  it("keeps Checkout and invoice notifications private and provider-neutral", () => {
+    const checkout = { organizationId: "org-1", currentSubscription: true, paymentStatus: "paid" };
+    expect(applicationEventCatalog.parse("billing.checkout.completed", 1, checkout)).toEqual(checkout);
+    expect(applicationEventCatalog.project("billing.checkout.completed", 1, checkout)).toBeNull();
+    for (const name of ["billing.invoice.paid", "billing.invoice.payment_failed"]) {
+      const invoice = { organizationId: "org-1", currentSubscription: false, amountMinor: 2500, currency: "usd" };
+      expect(applicationEventCatalog.resource(name, 1, invoice)).toEqual({ type: "organization", id: "org-1" });
+      expect(applicationEventCatalog.project(name, 1, invoice)).toBeNull();
+      expect(() => applicationEventCatalog.parse(name, 1, { ...invoice, currency: "invalid" }))
+        .toThrow("Internal event payload fails its schema");
+    }
+    expect(applicationEventCatalog.publicEvents().filter((event) => event.type.startsWith("billing."))).toEqual([]);
+  });
 });

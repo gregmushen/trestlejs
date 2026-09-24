@@ -5,7 +5,7 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, planEntitlements, plans } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
-import { applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
+import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, retrieveCurrentStripeSubscription, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -343,6 +343,25 @@ app.post("/webhooks/stripe", async (context) => {
         provider: "stripe", providerEventId: event.id }).catch(() => undefined);
       throw error;
     }
+  }
+  if (event.type === "BillingCheckoutCompleted" || event.type === "InvoicePaid" || event.type === "InvoicePaymentFailed") {
+    const result = await applyBillingNotificationEvent({ databaseUrl: context.env.DATABASE_URL,
+      ...(context.env.DATABASE_DRIVER ? { driver: context.env.DATABASE_DRIVER } : {}),
+      provider: "stripe", providerEventId: event.id, providerSubscriptionId: event.providerSubscriptionId!,
+      ...(event.providerCustomerId ? { providerCustomerId: event.providerCustomerId } : {}),
+      type: event.type, ...(event.organizationId ? { organizationId: event.organizationId } : {}),
+      correlationId: context.get("correlationId"), occurredAt: event.occurredAt,
+      ...(event.paymentStatus ? { paymentStatus: event.paymentStatus } : {}),
+      ...(event.amountMinor !== undefined ? { amountMinor: event.amountMinor } : {}),
+      ...(event.currency ? { currency: event.currency } : {}),
+    });
+    if (result.unresolved) {
+      log.warn("billing.webhook.ownership_unresolved", { providerEventId: event.id, type: event.type });
+      return context.json({ error: "billing_ownership_unresolved", retryable: true }, 503);
+    }
+    log.info(result.duplicate ? "billing.webhook.duplicate" : "billing.webhook.processed",
+      { providerEventId: event.id, type: event.type, organizationId: event.organizationId });
+    return context.json({ duplicate: result.duplicate, ...(result.duplicate ? {} : { event }) }, result.duplicate ? 200 : 202);
   }
   const plan = event.plan ? getPlan(event.plan) : undefined;
   if (subscriptionEvent && (!event.organizationId || !event.status || !plan)) {

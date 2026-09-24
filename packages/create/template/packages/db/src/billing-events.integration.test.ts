@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { applyBillingProviderEvent, beginBillingSubscriptionReconciliation, type BillingWebhookProjection } from "./billing-events.js";
+import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, type BillingWebhookProjection } from "./billing-events.js";
 import { outboxApplicationConnectionString } from "./outbox.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
@@ -58,6 +58,60 @@ suite("billing provider event atomicity", () => {
     expect(await applyBillingProviderEvent({ ...input, projection: { ...input.projection, plan: "starter", entitlements: [] } })).toEqual({ duplicate: true });
     expect((await sql!`select plan from organization_subscription where organization_id=${input.projection.organizationId}`)[0]?.plan).toBe("pro");
     expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${input.providerEventId}`}`).toHaveLength(1);
+  });
+
+  it("retries an early invoice and publishes exactly once after ownership is established", async () => {
+    const subscription = fixture();
+    const providerEventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    eventIds.push(providerEventId);
+    const notification = { databaseUrl: databaseUrl!, driver: "postgres-js" as const, provider: "stripe",
+      providerEventId, providerSubscriptionId: subscription.projection.providerSubscriptionId!,
+      providerCustomerId: "cus_test", organizationId: subscription.projection.organizationId,
+      type: "InvoicePaid" as const, amountMinor: 2500, currency: "usd", correlationId: "invoice-request",
+      occurredAt: new Date() };
+    expect(await applyBillingNotificationEvent(notification)).toEqual({ duplicate: false, unresolved: true });
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${providerEventId}`}`).toHaveLength(0);
+    expect(await applyBillingProviderEvent(subscription)).toEqual({ duplicate: false });
+    expect((await Promise.all([applyBillingNotificationEvent(notification), applyBillingNotificationEvent(notification)]))
+      .map((result) => result.duplicate).sort()).toEqual([false, true]);
+    expect((await sql!`select event_name, payload, correlation_id from outbox_message where idempotency_key=${`billing:stripe:${providerEventId}`}`)[0])
+      .toMatchObject({ event_name: "billing.invoice.paid", payload: { organizationId: notification.organizationId,
+        currentSubscription: true, amountMinor: 2500, currency: "usd" }, correlation_id: "invoice-request" });
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${providerEventId}`}`).toHaveLength(1);
+  });
+
+  it("rejects cross-tenant and changed subscription identities without publishing", async () => {
+    const subscription = fixture();
+    const other = fixture();
+    expect(await applyBillingProviderEvent(subscription)).toEqual({ duplicate: false });
+    const providerEventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    eventIds.push(providerEventId);
+    const notification = { databaseUrl: databaseUrl!, driver: "postgres-js" as const, provider: "stripe",
+      providerEventId, providerSubscriptionId: subscription.projection.providerSubscriptionId!,
+      organizationId: other.projection.organizationId, type: "BillingCheckoutCompleted" as const,
+      paymentStatus: "paid" as const, correlationId: providerEventId, occurredAt: new Date() };
+    expect(await applyBillingNotificationEvent(notification)).toEqual({ duplicate: false, unresolved: true });
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${providerEventId}`}`).toHaveLength(0);
+    await expect(applyBillingNotificationEvent({ ...notification, organizationId: subscription.projection.organizationId,
+      providerSubscriptionId: other.projection.providerSubscriptionId! })).rejects.toThrow("identity changed");
+    expect(await applyBillingNotificationEvent({ ...notification, organizationId: subscription.projection.organizationId }))
+      .toEqual({ duplicate: false });
+  });
+
+  it("rolls back invalid invoice payloads and leaves their receipt retryable", async () => {
+    const subscription = fixture();
+    expect(await applyBillingProviderEvent(subscription)).toEqual({ duplicate: false });
+    const providerEventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    eventIds.push(providerEventId);
+    const notification = { databaseUrl: databaseUrl!, driver: "postgres-js" as const, provider: "stripe",
+      providerEventId, providerSubscriptionId: subscription.projection.providerSubscriptionId!,
+      organizationId: subscription.projection.organizationId, type: "InvoicePaymentFailed" as const,
+      amountMinor: 3000, currency: "invalid", correlationId: providerEventId, occurredAt: new Date() };
+    await expect(applyBillingNotificationEvent(notification)).rejects.toThrow();
+    expect((await sql!`select status from billing_provider_event where provider_event_id=${providerEventId}`)[0]?.status).toBe("failed");
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${providerEventId}`}`).toHaveLength(0);
+    expect(await applyBillingNotificationEvent({ ...notification, currency: "usd" })).toEqual({ duplicate: false });
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${providerEventId}`}`).toHaveLength(1);
   });
 
   it("rolls back an invalid entitlement projection, records failure, then safely retries", async () => {
