@@ -813,6 +813,12 @@ Stripe configuration issue (for example an invalid webhook-secret shape or
 missing test publishable key). It keeps arbitrary exception evidence out of
 human output, so deployment failures are actionable without printing secret
 values. This does not relax the provider-readiness gate.
+Alpha 107 corrects the generated GitHub Deployment recorder: pull-request
+previews are transient, staging is persistent and non-production, and
+production is persistent and production-classified. Status descriptions now
+name the actual environment; cleanup can deactivate only pull-request
+previews. Request-level tests verify the records and guardrails, but this is
+not evidence that a hosted staging or production deployment has passed.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
