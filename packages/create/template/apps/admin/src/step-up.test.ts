@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { authErrorMessage, confirmStepUpIdentity, stepUpMethods, stepUpRequirement } from "./step-up";
-import { beginStepUp, setSignInNotice, signInNotice, stepUpInProgress } from "./step-up-state";
 
 describe("step-up", () => {
   it("reads the required level from a Better Auth 428 and ignores other errors", () => {
     expect(stepUpRequirement({ status: 428, error: "step_up_required", required: "phishing_resistant", message: "x" })).toBe("phishing_resistant");
     expect(stepUpRequirement({ status: 428, required: "mfa" })).toBe("mfa");
-    // An unknown or missing level still asks for step-up; the server re-checks after it.
-    expect(stepUpRequirement({ status: 428, required: "retina" })).toBe("password");
+    // An unknown or missing level asks for the strongest, so the UI never offers a weaker path.
+    expect(stepUpRequirement({ status: 428, required: "retina" })).toBe("phishing_resistant");
+    expect(stepUpRequirement({ status: 428 })).toBe("phishing_resistant");
     expect(stepUpRequirement({ status: 403, error: "forbidden", reason: "no_platform_roles" })).toBeNull();
     expect(stepUpRequirement(null)).toBeNull();
     expect(stepUpRequirement(undefined)).toBeNull();
@@ -38,20 +38,10 @@ describe("step-up", () => {
     expect(signedOut).toBe(1);
     // No session after the step-up also fails closed.
     expect((await confirmStepUpIdentity("op-1", "password", as(null))).ok).toBe(false);
-    expect((await confirmStepUpIdentity("op-1", "password", { currentUserId: async () => { throw new Error("offline"); }, signOut: async () => undefined })).ok).toBe(false);
-  });
-
-  it("holds the shell while any step-up is in progress and ends each exactly once", () => {
-    expect(stepUpInProgress()).toBe(false);
-    const first = beginStepUp();
-    const second = beginStepUp();
-    first(); first();
-    expect(stepUpInProgress()).toBe(true);
-    second();
-    expect(stepUpInProgress()).toBe(false);
-    setSignInNotice("Verification cancelled. Sign in again to continue.");
-    expect(signInNotice()).toMatch(/cancelled/u);
-    setSignInNotice(null);
-    expect(signInNotice()).toBeNull();
+    const unreadable = await confirmStepUpIdentity("op-1", "password", { currentUserId: async () => { throw new Error("offline"); }, signOut: async () => undefined });
+    expect(!unreadable.ok && unreadable.error).toMatch(/Could not confirm which account/u);
+    // A sign-out that fails says so, rather than claiming the account is gone.
+    const stuck = await confirmStepUpIdentity("op-1", "passkey", { currentUserId: async () => "op-2", signOut: async () => { throw new Error("offline"); } });
+    expect(!stuck.ok && stuck.error).toBe("Could not sign that account out; close this browser tab.");
   });
 });

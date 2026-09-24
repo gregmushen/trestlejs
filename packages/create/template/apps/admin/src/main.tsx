@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { PermissionDenied, api, errorMessage, sessionQueryKey, Unauthenticated } from "./api";
 import { reauthenticateWithPasskey, reauthenticateWithPassword, verifySecondFactor, type ReauthResult } from "./auth-client";
 import { viewAvailability, type AdminViewDescriptor } from "./registry";
+import { shouldHoldShell } from "./step-up-machine";
 import { setSignInNotice, useSignInNotice, useStepUpInProgress } from "./step-up-state";
 import { CommandIntent, CommandLayer, CommandProvider } from "./shell/commands";
 import { AdminProvider, useAdmin, useNow } from "./shell/context";
@@ -36,6 +37,7 @@ function SignIn(props: { notice?: string }) {
   const [codeKind, setCodeKind] = useState<"totp" | "backup">("totp");
   const [error, setError] = useState<string>();
   const [working, setWorking] = useState(false);
+  const [passkeyWorking, setPasskeyWorking] = useState(false);
   const local = ["localhost", "127.0.0.1"].includes(window.location.hostname);
   // Explains a sign-out a step-up caused (a cancelled code prompt, or a different account's passkey).
   const stepUpNotice = useSignInNotice();
@@ -61,7 +63,7 @@ function SignIn(props: { notice?: string }) {
         <p className="text-sm text-kumo-subtle">Access requires an assigned platform role. Organization and application roles grant no platform authority.</p>
         {notice && <Banner variant="alert" size="sm" description={notice} />}
         {stage === "password" ? <>
-          <Input label="Email or username" autoComplete="username webauthn" required value={email} onChange={(event) => setEmail(event.target.value)} />
+          <Input label="Email or username" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} />
           <SensitiveInput label="Password" autoComplete="current-password" required value={password} onChange={(event: { target: { value: string } }) => setPassword(event.target.value)} />
         </> : <>
           <p className="text-sm text-kumo-default">Enter the {codeKind === "totp" ? "6-digit code from your authenticator app" : "backup code"}.</p>
@@ -69,8 +71,8 @@ function SignIn(props: { notice?: string }) {
           <Button variant="ghost" size="sm" onClick={() => setCodeKind(codeKind === "totp" ? "backup" : "totp")}>{codeKind === "totp" ? "Use a backup code" : "Use an authenticator code"}</Button>
         </>}
         {error && <Banner variant="error" size="sm" description={error} />}
-        <Button type="submit" variant="primary" loading={working}>{stage === "code" ? "Verify" : "Sign in"}</Button>
-        {stage === "password" && <Button variant="secondary" onClick={() => { setError(undefined); setWorking(true); void reauthenticateWithPasskey().then(done); }}>Sign in with a passkey</Button>}
+        <Button type="submit" variant="primary" loading={working && !passkeyWorking} disabled={working}>{stage === "code" ? "Verify" : "Sign in"}</Button>
+        {stage === "password" && <Button variant="secondary" loading={passkeyWorking} disabled={working} onClick={() => { setError(undefined); setWorking(true); setPasskeyWorking(true); void reauthenticateWithPasskey().then(done).finally(() => setPasskeyWorking(false)); }}>Sign in with a passkey</Button>}
       </form>
       {local && <Banner className="mt-6" variant="secondary" size="sm" title="Local development only" description="Username admin, password admin. This account is refused outside local." />}
     </LayerCard.Primary></LayerCard>
@@ -154,11 +156,11 @@ function App() {
   // Polled so a revoked or expired support session is noticed without a reload.
   const session = useQuery({ queryKey: sessionQueryKey, queryFn: api.session, retry: false, enabled: !steppingUp, refetchInterval: steppingUp ? false : 30_000 });
   if (session.isPending) return <div role="status" className="grid min-h-screen place-items-center bg-kumo-canvas text-kumo-subtle"><span className="flex items-center gap-2"><Loader />Checking your operator session</span></div>;
-  const held = steppingUp && session.data !== undefined;
+  const held = shouldHoldShell(steppingUp, session.data !== undefined);
   if (session.error instanceof Unauthenticated && !held) return <SignIn />;
   // A signed-in account without a platform role can switch to an operator account here.
   if (session.error instanceof PermissionDenied && !held) return <SignIn notice="This account has no platform role. Sign in as a platform operator." />;
-  if (session.error && !held) return <main className="bg-kumo-canvas p-8"><AdminError error={session.error} retry={() => void session.refetch()} /><p className="mt-3 text-sm text-kumo-subtle">{errorMessage(session.error)}</p></main>;
+  if ((session.error && !held) || !session.data) return <main className="bg-kumo-canvas p-8"><AdminError error={session.error} retry={() => void session.refetch()} /><p className="mt-3 text-sm text-kumo-subtle">{errorMessage(session.error)}</p></main>;
   return <AdminProvider session={session.data} registry={adminRegistry}><CommandProvider><RouterProvider router={router} /></CommandProvider></AdminProvider>;
 }
 

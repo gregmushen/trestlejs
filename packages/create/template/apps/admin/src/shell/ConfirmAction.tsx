@@ -38,6 +38,8 @@ export function useConfirmAction() {
   const { environment } = useAdmin();
   const toast = useAdminToast();
   const [config, setConfig] = useState<ConfirmConfig | null>(null);
+  // The open dialog's config; a retry after step-up reads it here, so an action never runs after its dialog closed.
+  const current = useRef<ConfirmConfig | null>(null);
   const [reason, setReason] = useState("");
   const [stage, setStage] = useState<"reason" | "step-up" | "working" | "partial">("reason");
   const [required, setRequired] = useState<AssuranceLevel>("password");
@@ -55,9 +57,11 @@ export function useConfirmAction() {
     origin.current = focused ?? document.querySelector<HTMLElement>("tr[data-active]");
     steppedUp.current = false;
     setReason(""); setStage("reason"); setError(undefined); setFailures([]); setSucceeded([]);
+    current.current = next;
     setConfig(next);
   }, []);
   const close = useCallback(() => {
+    current.current = null;
     setConfig(null);
     // Focus returns to the control (or row) that opened the dialog.
     const target = origin.current;
@@ -65,6 +69,7 @@ export function useConfirmAction() {
   }, []);
 
   const run = async () => {
+    const config = current.current;
     if (!config) return;
     const parsed = reasonSchema.safeParse(reason);
     if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? "A reason is required"); return; }
@@ -74,10 +79,13 @@ export function useConfirmAction() {
       const result = await config.onConfirm(parsed.data);
       const outcome = outcomeOf(result);
       config.onDone?.(result);
+      // Closed while the request was in flight: the result still refreshes the page, but the dialog stays closed.
+      if (current.current !== config) return;
       if (outcome?.failed?.length) { setFailures(outcome.failed); setSucceeded(outcome.succeeded ?? []); setStage("partial"); return; }
       toast.success(config.successMessage ?? `${config.confirmLabel}: done`);
       close();
     } catch (caught) {
+      if (current.current !== config) return;
       if (caught instanceof StepUpRequired) {
         setRequired(caught.required);
         setChallenge((current) => ({ count: current.count + 1, ...(steppedUp.current ? { notice: "That verification was not strong enough for this action. Try another method." } : {}) }));

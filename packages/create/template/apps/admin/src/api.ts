@@ -3,6 +3,7 @@ import type { EffectiveEntitlement, Feature, PlanVersion, PlanVersionState, Priv
 import { z } from "zod";
 
 import { mainBackend } from "./main-backend";
+import { assuranceLevelOf } from "./step-up";
 import type { CapabilityId, CapabilityState, Environment } from "./registry";
 
 /** The admin API has its own origin when deployed; in local development Vite proxies /api to it. */
@@ -224,7 +225,7 @@ export type { EffectiveEntitlement, Feature, PlanVersionState, QuotaState };
 
 /* Errors */
 
-const errorEnvelope = z.object({ error: z.string(), reason: z.string().optional(), message: z.string().optional(), required: z.enum(["password", "mfa", "phishing_resistant"]).optional() }).passthrough();
+const errorEnvelope = z.object({ error: z.string(), reason: z.string().optional(), message: z.string().optional(), required: z.string().optional() }).passthrough();
 
 export class AdminApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly reason?: string) {
@@ -254,7 +255,7 @@ export class Unauthenticated extends AdminApiError {
 export async function toApiError(response: Response): Promise<AdminApiError> {
   const parsed = errorEnvelope.safeParse(await response.json().catch(() => null));
   const body = parsed.success ? parsed.data : undefined;
-  if (response.status === 428 || body?.error === "step_up_required") return new StepUpRequired(body?.message, body?.required ?? "password");
+  if (response.status === 428 || body?.error === "step_up_required") return new StepUpRequired(body?.message, assuranceLevelOf(body?.required));
   if (response.status === 401) return new Unauthenticated();
   if (response.status === 403) return new PermissionDenied(body?.reason);
   return new AdminApiError(response.status, body?.error ?? "request_failed", body?.message ?? `Request failed (${response.status})`, body?.reason);

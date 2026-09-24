@@ -7,6 +7,14 @@ export type AssuranceLevel = "password" | "mfa" | "phishing_resistant";
 
 const levels: readonly AssuranceLevel[] = ["password", "mfa", "phishing_resistant"];
 
+/** The level a 428 names. An unknown or missing level asks for the strongest, so a UI never offers a weaker path than the server wants. */
+export function assuranceLevelOf(value: unknown): AssuranceLevel {
+  return levels.includes(value as AssuranceLevel) ? value as AssuranceLevel : "phishing_resistant";
+}
+
+/** Shown whenever a request could not reach the admin Worker at all. */
+export const networkErrorMessage = "Could not reach the server. Try again.";
+
 /** Better Auth client errors carry the Worker's JSON body plus the HTTP status. */
 type AuthError = { status?: number; error?: string; reason?: string; message?: string; required?: string } | null | undefined;
 
@@ -14,7 +22,7 @@ type AuthError = { status?: number; error?: string; reason?: string; message?: s
 export function stepUpRequirement(error: unknown): AssuranceLevel | null {
   const value = error as AuthError;
   if (!value || typeof value !== "object" || (value.status !== 428 && value.error !== "step_up_required")) return null;
-  return levels.includes(value.required as AssuranceLevel) ? value.required as AssuranceLevel : "password";
+  return assuranceLevelOf(value.required);
 }
 
 /**
@@ -36,16 +44,24 @@ export function authErrorMessage(error: unknown, fallback: string): string {
   return value?.message || fallback;
 }
 
-export type StepUpIdentity = Readonly<{ currentUserId: () => Promise<string | null>; signOut: () => Promise<unknown> }>;
+export type StepUpIdentity = Readonly<{
+  currentUserId: () => Promise<string | null>;
+  /** Resolves when the session is gone; rejects when it could not be signed out. */
+  signOut: () => Promise<void>;
+}>;
 
 /**
  * Confirms a step-up signed in the operator who started it. A passkey is
  * discoverable, so it can sign in a different account; that session is signed
- * out and the action is never retried as that account.
+ * out and the action is never retried as that account. When the account cannot
+ * be confirmed at all, the session is signed out too (fail closed).
  */
 export async function confirmStepUpIdentity(operatorId: string, method: "passkey" | "password", identity: StepUpIdentity): Promise<{ ok: true } | { ok: false; error: string }> {
-  const current = await identity.currentUserId().catch(() => null);
+  let current: string | null;
+  let lookupFailed = false;
+  try { current = await identity.currentUserId(); } catch { current = null; lookupFailed = true; }
   if (current === operatorId) return { ok: true };
-  await identity.signOut().catch(() => undefined);
+  try { await identity.signOut(); } catch { return { ok: false, error: "Could not sign that account out; close this browser tab." }; }
+  if (lookupFailed) return { ok: false, error: "Could not confirm which account signed in, so you have been signed out. Sign in again." };
   return { ok: false, error: `That ${method === "passkey" ? "passkey" : "sign-in"} belongs to a different account, so you have been signed out. Sign in again as yourself.` };
 }
