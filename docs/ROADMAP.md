@@ -1072,14 +1072,17 @@ Alpha 132 provisions a test-mode Stripe webhook endpoint for each isolated
 pull-request preview, binds its one-time signing secret directly to that
 preview Worker, replaces only endpoints at the exact same preview URL on
 redeploy, and removes them on preview cleanup. This closes the missing-endpoint
-configuration gap observed in canary PR 11, but a successful deployed webhook
-and entitlement projection are still required as evidence.
+configuration gap observed in canary PR 11.
 The first live PR 11 run created the endpoint but placed its signing secret on
 an unintended `-preview` Worker variant, so Stripe signatures were rejected
 by the deployed Worker. The binding command now targets the exact PR Worker
 without an environment suffix. The unintended secret-only Worker was deleted;
 the intended preview Worker remained healthy. The corrected end-to-end gate
-must still pass before this is counted as complete.
+passed in [canary run 36068738916](https://github.com/gregmushen/trestlejs-canary/actions/runs/36068738916):
+signed Stripe subscription events returned HTTP 202 and the browser observed
+the paid entitlement. One earlier notification returned retryable HTTP 503
+while ownership was not yet projected; eventual retry/reconciliation coverage
+remains a separate beta hardening item.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.
