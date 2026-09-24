@@ -997,3 +997,75 @@ services. Provider free tiers change; confirm them before scheduling.
 
 - **An MCP server for the tenant API,** authorized by scoped API keys, so
   customers' agents act within the existing plane and scope boundaries.
+
+### Admin follow-ups from the spec review (not yet fixed)
+
+- **Unenforced platform permissions.** No admin route requires
+  `platform.organizations.read`, `platform.roles.read`, or
+  `platform.roles.manage`. Platform-role changes run only through the CLI as a
+  system actor. Either add the views that use them or remove them from the
+  registry.
+- **Unenforced registry flags.** `secret` on permissions and `revealsSecret` on
+  route policies are documented as refused in support sessions, but nothing
+  reads them.
+- **Dead code.** The custom-role code (`RoleCatalog.withCustomRoles`, the
+  `tenant` role source) is never called.
+- **Legacy column.** `member.application_role` is kept only for rollback from
+  authority model 2. Drop it in a later migration.
+- **One name for the platform database URL.** `trestle console
+  --platform-admin` uses `DATABASE_PLATFORM_URL`; everything else uses
+  `DATABASE_ADMIN_URL`.
+- **Narrower sign-in login for the admin Worker.** The admin Worker receives
+  the tenant runtime `DATABASE_URL` for Better Auth tables. Give it a narrower
+  login, so a compromised admin holds only platform authority.
+- **A database-level bound on support reads.** Support-session reads run on
+  `trestle_platform`, and the Worker's session check is the only boundary. A
+  policy tied to an open `support_session` would enforce it in PostgreSQL.
+- **Transactional webhook audit.** Tenant webhook endpoint changes are audited
+  after commit, not in the same transaction.
+- **API-key controls.**
+  - CIDR allowlists; the `network_denied` credential status exists but nothing
+    produces it.
+  - Scope profiles.
+  - Last-used tracking.
+
+### Deferred admin scope (from `ADMIN_SPEC.md` and `ADMIN_ADDITIONS_SPEC.md`)
+
+- **An Effective Access Explorer route and UI.** The explanation exists only as
+  a library function.
+- **More admin views and navigation:**
+  - Organizations, Users, Plans, Permissions, Email, and Audit views;
+  - global search, breadcrumbs, and a tenant-context indicator.
+- **Application-owned admin views** discovered by file convention, with a
+  generator.
+- **Custom and resource-scoped application roles.**
+- **Step-up authentication** for sensitive platform actions.
+- **Commercial depth:**
+  - stored plan versions and lifecycle transitions;
+  - admin plan editing;
+  - typed privilege values;
+  - entitlement compare and simulate;
+  - reconciliation records.
+- **Support sessions:** revocation by another operator, a banner that persists
+  across views, and access profiles.
+- **Regional settings:** user preferences, i18n language configuration in the
+  manifest, and the setup-wizard steps.
+- **Domain events for administrative mutations.** Today they produce audit rows
+  only.
+- **Customer webhook management:** edit, delete, test event, and secret
+  rotation where they are not yet generated.
+
+### Operations and cost watch-points
+
+- **The first deployed run of the admin staging path.** It needs an
+  admin-enabled staging project with isolated resources; see
+  `ADMIN_INTEGRATION_PLAN.md`.
+- **Neon compute.** Expect compute cost once steady traffic keeps it from
+  scaling to zero. Hyperdrive and caching reduce it.
+- **Per-PR preview teardown.** Every preview creates Neon branches, Workers,
+  Pages projects, and R2 buckets. Keep teardown reliable and audited so
+  orphaned resources never accrue cost.
+- **Breadth versus upgrade safety.** Each optional capability multiplies the
+  combinations that `trestle upgrade` and the canary must cover. Prefer
+  hardening and canary coverage of existing capabilities over adding new ones.
+- **Housekeeping.** Close #54 and #57; the merged admin slices supersede them.
