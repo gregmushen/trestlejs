@@ -422,6 +422,15 @@ export function formatDoctorHuman(report: DoctorReport): string {
     lines.push("", group[0]?.toUpperCase() + group.slice(1));
     for (const check of checks) {
       lines.push(`${check.status === "pass" ? "✓" : "✗"} ${check.message}`);
+      // These issue lists are produced by validators that report field names
+      // and expected shapes, never credential values. Other evidence may be
+      // an arbitrary thrown error and must remain JSON-only.
+      if (check.status === "fail" && check.evidence && (
+        (check.id === "email.provider.configuration" && check.message === `${report.environment} email provider configuration is incomplete`)
+        || (check.id === "billing.stripe.configuration" && check.message === `${report.environment} Stripe configuration is incomplete`)
+      )) {
+        for (const issue of check.evidence.split("; ")) lines.push(`  Issue: ${issue}`);
+      }
       if (check.status === "fail" && check.remediation) {
         lines.push(`  Fix: ${check.remediation}`);
       }
