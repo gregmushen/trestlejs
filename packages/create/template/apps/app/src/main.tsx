@@ -84,7 +84,11 @@ function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
         : await authClient.signIn.email({ email: value.email, password: value.password });
       if (result.error) { setError(result.error.message ?? "Authentication failed"); return; }
       queryClient.clear();
-      await navigate({ to: mode === "sign-up" ? "/check-email" : "/dashboard" });
+      if (mode === "sign-in") {
+        window.location.assign("/dashboard");
+        return;
+      }
+      await navigate({ to: "/check-email" });
     },
   });
   return <section className="card mx-auto max-w-lg p-8">

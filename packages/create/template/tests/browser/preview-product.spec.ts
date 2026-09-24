@@ -8,7 +8,8 @@ test("preview verifies redirected email and tenant-safe test Checkout", async ({
   test.setTimeout(180_000);
   const apiKey = process.env.RESEND_API_KEY;
   const apiOrigin = process.env.API_URL;
-  if (!apiKey || !apiOrigin) throw new Error("Preview product verification requires RESEND_API_KEY and API_URL");
+  const appOrigin = process.env.APP_URL;
+  if (!apiKey || !apiOrigin || !appOrigin) throw new Error("Preview product verification requires RESEND_API_KEY, API_URL, and APP_URL");
   const nonce = crypto.randomUUID().slice(0, 12);
   const email = `trestle-preview-${nonce}@example.test`;
   const password = `Preview-test-${nonce}!`;
@@ -45,12 +46,12 @@ test("preview verifies redirected email and tenant-safe test Checkout", async ({
   const switched = page.waitForResponse((response) => response.url().includes("/api/auth/organization/set-active") && response.request().method() === "POST");
   await selector.selectOption(firstId!);
   expect((await switched).status()).toBe(200);
-  const me = await page.context().request.get(`${apiOrigin}/api/me`);
+  const me = await page.context().request.get(`${appOrigin}/api/me`);
   expect((await me.json() as { session: { activeOrganizationId?: string } }).session.activeOrganizationId).toBe(firstId);
 
   const headers = { "content-type": "application/json", "x-trestle-tenant": firstId! };
   const input = { plan: "pro", requestId: `preview-${nonce}` };
-  const checkoutRequest = () => page.context().request.post(`${apiOrigin}/api/billing/checkout`, { headers, data: input });
+  const checkoutRequest = () => page.context().request.post(`${appOrigin}/api/billing/checkout`, { headers, data: input });
   const checkoutResponse = await checkoutRequest();
   expect(checkoutResponse.status()).toBe(200);
   const checkout = await checkoutResponse.json() as { id: string; url: string };
@@ -59,10 +60,10 @@ test("preview verifies redirected email and tenant-safe test Checkout", async ({
   const checkoutRetry = await checkoutRequest();
   expect(checkoutRetry.status()).toBe(200);
   expect((await checkoutRetry.json() as { id: string }).id).toBe(checkout.id);
-  const subscription = await page.context().request.get(`${apiOrigin}/api/billing/subscription`, { headers });
+  const subscription = await page.context().request.get(`${appOrigin}/api/billing/subscription`, { headers });
   expect(subscription.status()).toBe(200);
   expect((await subscription.json() as { subscription: unknown }).subscription).toBeNull();
-  const forged = await page.context().request.post(`${apiOrigin}/api/billing/checkout`, {
+  const forged = await page.context().request.post(`${appOrigin}/api/billing/checkout`, {
     headers: { ...headers, "x-trestle-tenant": crypto.randomUUID() }, data: input,
   });
   expect(forged.status()).toBe(404);

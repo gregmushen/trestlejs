@@ -40,6 +40,16 @@ async function api(handler: (request: IncomingMessage, response: ServerResponse)
 }
 
 describe("preview lifecycle", () => {
+  it("deploys the application through a same-origin API binding in every environment", async () => {
+    const preview = await readFile(path.join(template, ".github/workflows/preview.yml"), "utf8");
+    const deploy = await readFile(path.join(template, ".github/workflows/deploy.yml"), "utf8");
+    expect(preview.indexOf("cloudflare-pages.mjs bind-service")).toBeGreaterThan(preview.indexOf("command: deploy --config .trestle-queues.wrangler.jsonc --env preview"));
+    expect(preview.indexOf("cloudflare-pages.mjs bind-service")).toBeLessThan(preview.indexOf("VITE_API_ORIGIN=\"${{ steps.preview.outputs.app_url }}\""));
+    expect(deploy).toContain("cloudflare-pages.mjs bind-service __TRESTLE_PROJECT_NAME__-staging __TRESTLE_PROJECT_NAME__-worker-staging");
+    expect(deploy).toContain("cloudflare-pages.mjs bind-service __TRESTLE_PROJECT_NAME__ __TRESTLE_PROJECT_NAME__-worker");
+    expect((deploy.match(/VITE_API_ORIGIN="\$\{\{ vars\.APP_URL \}\}"/gu) ?? [])).toHaveLength(2);
+  });
+
   it("runs provider preflight before Neon or staging/production database mutations", async () => {
     const preview = await readFile(path.join(template, ".github/workflows/preview.yml"), "utf8");
     const deploy = await readFile(path.join(template, ".github/workflows/deploy.yml"), "utf8");
@@ -171,6 +181,52 @@ describe("preview lifecycle", () => {
       CLOUDFLARE_API_BASE: base,
     });
     expect(result).toMatchObject({ code: 0, stdout: "clearclose-app-pr-42 already absent\n", stderr: "" });
+  });
+
+  it("binds the Pages app to the exact Worker without losing existing services", async () => {
+    const requests: Array<{ method: string; body: string }> = [];
+    let services: Record<string, { service: string }> = { EXISTING: { service: "other-worker" } };
+    const base = await api((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => { body += String(chunk); });
+      request.on("end", () => {
+        requests.push({ method: request.method ?? "", body });
+        if (request.method === "PATCH") services = (JSON.parse(body) as { deployment_configs: { production: { services: typeof services } } }).deployment_configs.production.services;
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ success: true, result: { deployment_configs: { production: { services } } } }));
+      });
+    });
+    const environment = { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base };
+    const first = await run("cloudflare-pages.mjs", ["bind-service", "clearclose-app-pr-42", "clearclose-worker-pr-42"], environment);
+    const second = await run("cloudflare-pages.mjs", ["bind-service", "clearclose-app-pr-42", "clearclose-worker-pr-42"], environment);
+    expect(first.code).toBe(0);
+    expect(second.code).toBe(0);
+    expect(requests.map(({ method }) => method)).toEqual(["GET", "PATCH", "GET", "GET"]);
+    expect(services).toEqual({ EXISTING: { service: "other-worker" }, TRESTLE_API: { service: "clearclose-worker-pr-42" } });
+    expect(`${first.stdout}${first.stderr}${second.stdout}${second.stderr}`).not.toContain("top-secret");
+  });
+
+  it("fails closed when a Pages service binding is not persisted", async () => {
+    const base = await api((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end('{"success":true,"result":{"deployment_configs":{"production":{"services":{}}}}}');
+    });
+    const result = await run("cloudflare-pages.mjs", ["bind-service", "clearclose-app-pr-42", "clearclose-worker-pr-42"], {
+      CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("was not persisted");
+    expect(result.stderr).not.toContain("top-secret");
+  });
+
+  it("routes the generated Pages API Function through its bound Worker", async () => {
+    const { onRequest } = await import("../template/apps/app/functions/api/[[path]].js");
+    const request = new Request("https://app.example.test/api/health");
+    const forwarded: Request[] = [];
+    const response = await onRequest({ request, env: { TRESTLE_API: { fetch: async (input: Request) => { forwarded.push(input); return new Response("ok"); } } } });
+    expect(response.status).toBe(200);
+    expect(forwarded).toEqual([request]);
+    expect((await onRequest({ request, env: {} })).status).toBe(503);
   });
 
   it("deletes the isolated Worker through an idempotent authenticated request", async () => {

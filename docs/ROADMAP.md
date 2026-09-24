@@ -900,6 +900,16 @@ app origin in `WEB_ORIGIN`.
 The published Alpha 114 → 115 upgrade rehearsal narrowly reviews the three
 preview secret-target changes against the recorded Alpha 114 workflow hash;
 unrelated protected workflow edits remain manual-review gates.
+Alpha 117 routes generated preview, staging, and production application API
+requests through a same-origin Pages Function and a bound API Worker. This
+avoids third-party session-cookie loss between `pages.dev` and `workers.dev`;
+the browser sign-in transition also performs a full navigation so the new
+session is read before dashboard guards run. The isolated canary preview
+[passed its hosted deployment and Chromium product gate](https://github.com/gregmushen/trestlejs-canary/actions/runs/36015119039):
+redirected verification email, sign-in, two-organization switching,
+test-mode Stripe Checkout, idempotent retry, and cross-tenant denial. This is
+preview evidence, not a completed staging run, signed Stripe webhook, or
+cron-enabled async-delivery proof; those beta gates remain open.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
