@@ -158,6 +158,8 @@ try {
     await requireScenarios(project, "./packages/db", ["src/billing-events.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "commits the receipt, subscription, and entitlements together and ignores a duplicate",
       "rolls back an invalid entitlement projection, records failure, then safely retries",
+      "rolls back the projection and receipt finalization when a domain event is invalid",
+      "publishes normalized plan, past-due, and cancellation transitions with request correlation",
       "serializes concurrent duplicate deliveries so the projection runs once",
       "never transfers one provider subscription to a second organization",
       "does not grant the application role permission to rewrite ownership",

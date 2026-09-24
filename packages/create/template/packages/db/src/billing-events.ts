@@ -1,8 +1,9 @@
 import { and, eq, notInArray, sql } from "drizzle-orm";
+import { applicationEventCatalog, eventEnvelopeSchema } from "@__TRESTLE_PROJECT_NAME__/events";
 
 import { billingProviderEvent, billingSubscriptionOwnership, billingSubscriptionReconciliation, organizationEntitlement, organizationSubscription } from "./billing-schema.js";
 import { createDatabase, createTenantDatabase, type DatabaseDriver } from "./index.js";
-import { outboxApplicationConnectionString } from "./outbox.js";
+import { outboxApplicationConnectionString, outboxStatement } from "./outbox.js";
 
 export type BillingWebhookProjection = {
   organizationId: string;
@@ -70,6 +71,7 @@ export async function applyBillingProviderEvent(input: {
   provider: string;
   providerEventId: string;
   type: string;
+  correlationId?: string;
   projection?: BillingWebhookProjection;
   reconciliation?: { providerSubscriptionId: string; generation: number };
 }): Promise<{ duplicate: boolean; superseded?: boolean }> {
@@ -115,7 +117,8 @@ export async function applyBillingProviderEvent(input: {
           .from(billingSubscriptionOwnership).where(ownershipKey).limit(1);
         if (!owner || owner.organizationId !== value.organizationId) throw new Error("Billing subscription ownership conflict");
         const [current] = await transaction.select({ provider: organizationSubscription.provider,
-          providerSubscriptionId: organizationSubscription.providerSubscriptionId, status: organizationSubscription.status })
+          providerSubscriptionId: organizationSubscription.providerSubscriptionId, status: organizationSubscription.status,
+          plan: organizationSubscription.plan })
           .from(organizationSubscription).where(eq(organizationSubscription.organizationId, value.organizationId)).for("update").limit(1);
         if (current?.providerSubscriptionId && (current.provider !== input.provider || current.providerSubscriptionId !== providerSubscriptionId)) {
           if (inserted.length === 0) {
@@ -142,6 +145,21 @@ export async function applyBillingProviderEvent(input: {
         } });
         await transaction.delete(organizationEntitlement).where(eq(organizationEntitlement.organizationId, value.organizationId));
         if (value.entitlements.length > 0) await transaction.insert(organizationEntitlement).values(value.entitlements.map((entitlement) => ({ organizationId: value.organizationId, entitlement })));
+        const name = value.status === "cancelled" ? "billing.subscription.cancelled"
+          : value.status === "past_due" ? "billing.subscription.past_due"
+          : input.type === "SubscriptionActivated" ? "billing.subscription.activated" : "billing.subscription.updated";
+        const payload = applicationEventCatalog.parse(name, 1, {
+          organizationId: value.organizationId, plan: value.plan, planVersion: value.planVersion,
+          status: value.status, entitlements: [...value.entitlements],
+          ...(current ? { previousPlan: current.plan, previousStatus: current.status } : {}),
+          cancelAtPeriodEnd: value.cancelAtPeriodEnd ?? value.status === "cancelled",
+          ...(value.currentPeriodEnd ? { currentPeriodEnd: value.currentPeriodEnd.toISOString() } : {}),
+        });
+        const envelope = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name, schemaVersion: 1,
+          occurredAt: updatedAt.toISOString(), resource: applicationEventCatalog.resource(name, 1, payload),
+          correlationId: input.correlationId ?? input.providerEventId, causationId: input.providerEventId,
+          idempotencyKey: `billing:${input.provider}:${input.providerEventId}`, payload });
+        await transaction.execute(outboxStatement(envelope, value.organizationId));
       }
       await transaction.update(billingProviderEvent).set({ status: "processed", processedAt: new Date(), error: null }).where(key);
       return { duplicate: false };

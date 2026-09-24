@@ -259,6 +259,10 @@ The provider subscription ID is also bound permanently to one organization.
 Another tenant cannot claim it through webhook metadata, an active subscription
 cannot be silently replaced by a second ID, and late events from a canceled
 subscription cannot reactivate it after a replacement.
+Verified subscription changes also append an internal billing event in the
+same PostgreSQL transaction as the subscription, entitlements, and processed
+webhook receipt. These events carry normalized plan and status, not Stripe
+customer IDs or credentials, and are not public outbound webhooks.
 
 Validate the checked-in delivery contract locally with:
 

@@ -1,4 +1,4 @@
-import { defineEvent, defineEventCatalog, eventEnvelopeSchema, InMemoryEventInbox, LocalWorkflowScheduler } from "@__TRESTLE_PROJECT_NAME__/events";
+import { applicationEventCatalog, defineEvent, defineEventCatalog, eventEnvelopeSchema, InMemoryEventInbox, LocalWorkflowScheduler } from "@__TRESTLE_PROJECT_NAME__/events";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
@@ -9,6 +9,19 @@ const envelope = () => eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name
 describe("Worker Queue consumer", () => {
   it("validates, dispatches, preserves correlation, and acknowledges a registered versioned event", async () => { const handled: string[] = []; const registry = new EventConsumerRegistry<{ marker: string }>(); registry.register({ name: "article.published", schemaVersion: 1, parse: (payload) => payload as { title: string } }, async (payload, event, environment) => { handled.push(`${environment.marker}:${payload.title}:${event.correlationId}`); }); const states: string[] = []; const result = await createQueueConsumer(registry, new InMemoryEventInbox())({ messages: [{ body: envelope(), ack: () => states.push("ack"), retry: () => states.push("retry") }] }, { marker: "worker" }); expect(result).toEqual({ acknowledged: 1, retried: 0 }); expect(states).toEqual(["ack"]); expect(handled).toEqual(["worker:Hello:correlation-1"]); });
   it("retries unknown and invalid messages", async () => { const registry = new EventConsumerRegistry(); const states: string[] = []; const result = await createQueueConsumer(registry, new InMemoryEventInbox())({ messages: [{ body: envelope(), ack: () => states.push("ack"), retry: () => states.push("retry") }, { body: {}, ack: () => states.push("ack"), retry: () => states.push("retry") }] }, {}); expect(result).toEqual({ acknowledged: 0, retried: 2 }); expect(states).toEqual(["retry", "retry"]); });
+  it("acknowledges internal billing events without publishing a customer webhook", async () => {
+    const payload = { organizationId: "org-billing", plan: "pro", planVersion: 1, status: "active",
+      entitlements: ["article.basic"], cancelAtPeriodEnd: false };
+    const event = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "billing.subscription.activated", schemaVersion: 1,
+      occurredAt: new Date().toISOString(), resource: { type: "organization", id: payload.organizationId },
+      correlationId: "billing-correlation", idempotencyKey: "billing:stripe:evt_one", payload });
+    const states: string[] = [];
+    const consumer = createQueueConsumer(new EventConsumerRegistry(applicationEventCatalog), new InMemoryEventInbox(),
+      async (message) => { expect(applicationEventCatalog.project(message.name, message.schemaVersion, message.payload)).toBeNull(); });
+    expect(await consumer({ messages: [{ body: event, ack: () => states.push("ack"), retry: () => states.push("retry") }] }, {}))
+      .toEqual({ acknowledged: 1, retried: 0 });
+    expect(states).toEqual(["ack"]);
+  });
   it("skips completed duplicate logical events and retries transient handler failures", async () => {
     const registry = new EventConsumerRegistry();
     const inbox = new InMemoryEventInbox();

@@ -37,6 +37,7 @@ suite("signed Stripe webhook route", () => {
       await sql!`delete from organization_subscription where organization_id = any(${organizationIds})`;
     }
     if (eventIds.length) await sql!`delete from billing_provider_event where provider='stripe' and provider_event_id = any(${eventIds})`;
+    if (eventIds.length) await sql!`delete from outbox_message where idempotency_key = any(${eventIds.map((id) => `billing:stripe:${id}`)})`;
     if (subscriptionIds.length) await sql!`delete from billing_subscription_reconciliation where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
     if (subscriptionIds.length) await sql!`delete from billing_subscription_ownership where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
     vi.unstubAllGlobals();
@@ -51,9 +52,13 @@ suite("signed Stripe webhook route", () => {
     const first = await deliver({ eventId, organizationId, plan: "pro" });
     expect(first.status).toBe(202);
     await expect(first.json()).resolves.toMatchObject({ duplicate: false, event: { type: "SubscriptionActivated", organizationId, status: "active" } });
+    expect((await sql!`select event_name, correlation_id, organization_id, payload from outbox_message where idempotency_key=${`billing:stripe:${eventId}`}`)[0])
+      .toMatchObject({ event_name: "billing.subscription.activated", correlation_id: first.headers.get("x-correlation-id"),
+        organization_id: organizationId, payload: { organizationId, status: "active" } });
     const duplicate = await deliver({ eventId, organizationId, plan: "pro" });
     expect(duplicate.status).toBe(200);
     await expect(duplicate.json()).resolves.toEqual({ duplicate: true });
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${eventId}`}`).toHaveLength(1);
     expect((await sql!`select plan, status, cancel_at_period_end, current_period_start, current_period_end from organization_subscription where organization_id=${organizationId}`)[0]).toEqual({ plan: "pro", status: "active", cancel_at_period_end: true, current_period_start: new Date(1_790_000_000_000), current_period_end: new Date(1_792_592_000_000) });
     expect((await sql!`select entitlement from organization_entitlement where organization_id=${organizationId} order by entitlement`).map((row) => row.entitlement)).toEqual(["article.basic", "members.unlimited", "workflows.advanced", "workspace.single"]);
   });

@@ -352,7 +352,7 @@ app.post("/webhooks/stripe", async (context) => {
   try {
     const result = await applyBillingProviderEvent({ databaseUrl: context.env.DATABASE_URL,
       ...(context.env.DATABASE_DRIVER ? { driver: context.env.DATABASE_DRIVER } : {}),
-      provider: "stripe", providerEventId: event.id, type: event.type,
+      provider: "stripe", providerEventId: event.id, type: event.type, correlationId: context.get("correlationId"),
       ...(generation !== undefined && event.providerSubscriptionId ? { reconciliation: { providerSubscriptionId: event.providerSubscriptionId, generation } } : {}),
       ...(subscriptionEvent && event.organizationId && event.status && event.plan && plan ? { projection: {
         organizationId: event.organizationId,
