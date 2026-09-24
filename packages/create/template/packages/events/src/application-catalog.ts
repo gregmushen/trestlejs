@@ -27,11 +27,31 @@ export const billingSubscriptionUpdatedEvent = billingSubscriptionEvent("billing
 export const billingSubscriptionCancelledEvent = billingSubscriptionEvent("billing.subscription.cancelled", "An organization subscription was cancelled");
 export const billingSubscriptionPastDueEvent = billingSubscriptionEvent("billing.subscription.past_due", "An organization subscription became past due");
 
+const billingCheckoutPayload = z.object({ organizationId: z.string().min(1), currentSubscription: z.boolean(),
+  paymentStatus: z.enum(["paid", "unpaid", "no_payment_required"]).optional() });
+export const billingCheckoutCompletedEvent = defineEvent({ name: "billing.checkout.completed", schemaVersion: 1,
+  description: "A verified subscription Checkout session completed", sensitivity: "confidential",
+  resource: { type: "organization", id: (payload: z.infer<typeof billingCheckoutPayload>) => payload.organizationId },
+  payload: billingCheckoutPayload });
+
+const billingInvoicePayload = z.object({ organizationId: z.string().min(1), currentSubscription: z.boolean(),
+  amountMinor: z.number().int(), currency: z.string().regex(/^[a-z]{3}$/u) });
+function billingInvoiceEvent(name: string, description: string) {
+  return defineEvent({ name, schemaVersion: 1, description, sensitivity: "confidential",
+    resource: { type: "organization", id: (payload: z.infer<typeof billingInvoicePayload>) => payload.organizationId },
+    payload: billingInvoicePayload });
+}
+export const billingInvoicePaidEvent = billingInvoiceEvent("billing.invoice.paid", "A subscription invoice was paid");
+export const billingInvoicePaymentFailedEvent = billingInvoiceEvent("billing.invoice.payment_failed", "A subscription invoice payment failed");
+
 // trestle:resource-event-definitions
 export const applicationEventCatalog = defineEventCatalog([
   billingSubscriptionActivatedEvent,
   billingSubscriptionUpdatedEvent,
   billingSubscriptionCancelledEvent,
   billingSubscriptionPastDueEvent,
+  billingCheckoutCompletedEvent,
+  billingInvoicePaidEvent,
+  billingInvoicePaymentFailedEvent,
   // trestle:resource-event-list
 ]);

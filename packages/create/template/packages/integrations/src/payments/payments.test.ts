@@ -21,6 +21,29 @@ describe("payments boundary", () => {
     expect(() => verifyAndNormalizeStripeEvent(`${payload} `, signature, secret)).toThrow();
   });
 
+  it("normalizes Checkout and invoice notifications from subscription identity, not invoice metadata", () => {
+    const secret = "whsec_notifications";
+    const normalize = (type: string, object: unknown) => {
+      const payload = JSON.stringify({ id: `evt_${type.replaceAll(".", "_")}`, object: "event", created: 1_790_000_000,
+        data: { object }, livemode: false, pending_webhooks: 1, request: null, type });
+      const signature = Stripe.webhooks.generateTestHeaderString({ payload, secret, timestamp: Math.floor(Date.now() / 1000) });
+      return verifyAndNormalizeStripeEvent(payload, signature, secret);
+    };
+    expect(normalize("checkout.session.completed", { id: "cs_1", object: "checkout.session", mode: "subscription",
+      subscription: "sub_1", customer: "cus_1", payment_status: "paid", metadata: { organizationId: "org-1" } }))
+      .toMatchObject({ type: "BillingCheckoutCompleted", organizationId: "org-1", providerSubscriptionId: "sub_1", paymentStatus: "paid" });
+    const invoice = { id: "in_1", object: "invoice", customer: "cus_1", amount_paid: 2500, amount_due: 3000,
+      currency: "usd", metadata: { organizationId: "wrong-tenant" },
+      parent: { type: "subscription_details", subscription_details: { subscription: "sub_1", metadata: { organizationId: "org-1" } } } };
+    expect(normalize("invoice.paid", invoice)).toMatchObject({ type: "InvoicePaid", organizationId: "org-1",
+      providerSubscriptionId: "sub_1", amountMinor: 2500, currency: "usd" });
+    expect(normalize("invoice.payment_failed", invoice)).toMatchObject({ type: "InvoicePaymentFailed", organizationId: "org-1",
+      amountMinor: 3000, currency: "usd" });
+    expect(() => normalize("invoice.paid", { ...invoice, parent: null, subscription: null })).toThrow("no subscription identity");
+    expect(() => normalize("checkout.session.completed", { id: "cs_2", mode: "payment", subscription: null }))
+      .toThrow("not a subscription completion");
+  });
+
   it("uses current subscription state instead of an older signed snapshot", async () => {
     const event: NormalizedBillingEvent = { id: "evt_old", type: "SubscriptionActivated", providerSubscriptionId: "sub_1",
       organizationId: "org-1", plan: "pro", status: "active", occurredAt: new Date("2026-09-24T00:00:00Z") };

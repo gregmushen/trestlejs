@@ -209,8 +209,13 @@ address families anew for each attempt. It rejects the entire response if any
 address is non-public. A future transport must connect only to an approved
 address while using the original hostname for TLS verification. The included
 pinned HTTPS transport has bounded timeouts and headers and never follows
-redirects. Native Queue dispatch is wired but remains opt-in; live Cloudflare
-egress and deployed delivery still require separate verification.
+redirects. Native Queue dispatch is wired but remains opt-in. Known issue:
+Cloudflare Workers cannot use this project's IP-pinned socket transport for
+ordinary HTTPS destinations on port 443, while Workers `fetch` cannot
+guarantee that the approved DNS address is the one contacted. Native
+production delivery therefore remains fail-closed; a verified egress design
+is deferred. Do not enable native mode for production until that guarantee is
+implemented and tested on Cloudflare.
 When enabling outbound delivery, set the optional encrypted Worker credential
 `WEBHOOK_SECRET_KEY` to at least 32 random bytes per environment through
 `trestle secrets edit`; it encrypts endpoint secrets at rest. Endpoint secrets

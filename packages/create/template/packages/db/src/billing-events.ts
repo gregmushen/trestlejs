@@ -170,3 +170,86 @@ export async function applyBillingProviderEvent(input: {
     throw error;
   }
 }
+
+/** Checkout and invoice notifications may arrive before the subscription
+ * webhook. Their metadata is only a tenant candidate: the immutable local
+ * binding must confirm it before an internal event can be acknowledged. */
+export async function applyBillingNotificationEvent(input: {
+  databaseUrl: string;
+  driver?: DatabaseDriver;
+  provider: string;
+  providerEventId: string;
+  providerSubscriptionId: string;
+  providerCustomerId?: string;
+  type: "BillingCheckoutCompleted" | "InvoicePaid" | "InvoicePaymentFailed";
+  organizationId?: string;
+  correlationId: string;
+  occurredAt: Date;
+  paymentStatus?: "paid" | "unpaid" | "no_payment_required";
+  amountMinor?: number;
+  currency?: string;
+}): Promise<{ duplicate: boolean; unresolved?: boolean }> {
+  if (!input.provider || !input.providerEventId || !input.providerSubscriptionId.startsWith("sub_")
+    || !input.correlationId.trim() || !Number.isFinite(input.occurredAt.getTime())) throw new Error("Invalid billing notification identity");
+  const database = createDatabase(outboxApplicationConnectionString(input.databaseUrl), input.driver);
+  const key = and(eq(billingProviderEvent.provider, input.provider), eq(billingProviderEvent.providerEventId, input.providerEventId));
+  await database.insert(billingProviderEvent).values({ provider: input.provider, providerEventId: input.providerEventId,
+    providerSubscriptionId: input.providerSubscriptionId, type: input.type }).onConflictDoNothing();
+  if (!input.organizationId || !/^[A-Za-z0-9_-]+$/u.test(input.organizationId)) {
+    const [existing] = await database.select({ status: billingProviderEvent.status,
+      providerSubscriptionId: billingProviderEvent.providerSubscriptionId }).from(billingProviderEvent).where(key).limit(1);
+    if (existing?.providerSubscriptionId !== input.providerSubscriptionId) throw new Error("Billing notification identity changed");
+    if (existing.status === "processed") return { duplicate: true };
+    await database.update(billingProviderEvent).set({ status: "failed", error: "ownership_unresolved" })
+      .where(and(key, notInArray(billingProviderEvent.status, ["processed", "superseded"])));
+    return { duplicate: false, unresolved: true };
+  }
+  try {
+    const scoped = createTenantDatabase(input.databaseUrl, input.driver, input.organizationId);
+    return await scoped.transaction(async (transaction) => {
+      await transaction.execute(sql`select set_config('app.organization_id', ${input.organizationId}, true)`);
+      const [receipt] = await transaction.select({ status: billingProviderEvent.status,
+        providerSubscriptionId: billingProviderEvent.providerSubscriptionId })
+        .from(billingProviderEvent).where(key).for("update").limit(1);
+      if (!receipt || receipt.providerSubscriptionId !== input.providerSubscriptionId) {
+        throw new Error("Billing notification identity changed");
+      }
+      if (receipt.status === "processed") return { duplicate: true };
+      const [owner] = await transaction.select({ organizationId: billingSubscriptionOwnership.organizationId })
+        .from(billingSubscriptionOwnership).where(and(eq(billingSubscriptionOwnership.provider, input.provider),
+          eq(billingSubscriptionOwnership.providerSubscriptionId, input.providerSubscriptionId))).limit(1);
+      if (!owner || owner.organizationId !== input.organizationId) {
+        await transaction.update(billingProviderEvent).set({ status: "failed", error: "ownership_unresolved" }).where(key);
+        return { duplicate: false, unresolved: true };
+      }
+      const [current] = await transaction.select({ provider: organizationSubscription.provider,
+        providerSubscriptionId: organizationSubscription.providerSubscriptionId,
+        providerCustomerId: organizationSubscription.providerCustomerId })
+        .from(organizationSubscription).where(eq(organizationSubscription.organizationId, input.organizationId)).for("update").limit(1);
+      const currentSubscription = current?.provider === input.provider && current.providerSubscriptionId === input.providerSubscriptionId;
+      if (currentSubscription && input.providerCustomerId && current?.providerCustomerId
+        && current.providerCustomerId !== input.providerCustomerId) {
+        await transaction.update(billingProviderEvent).set({ status: "failed", error: "ownership_unresolved" }).where(key);
+        return { duplicate: false, unresolved: true };
+      }
+      const name = input.type === "BillingCheckoutCompleted" ? "billing.checkout.completed"
+        : input.type === "InvoicePaid" ? "billing.invoice.paid" : "billing.invoice.payment_failed";
+      const payload = applicationEventCatalog.parse(name, 1, input.type === "BillingCheckoutCompleted"
+        ? { organizationId: input.organizationId, currentSubscription,
+          ...(input.paymentStatus ? { paymentStatus: input.paymentStatus } : {}) }
+        : { organizationId: input.organizationId, currentSubscription,
+          amountMinor: input.amountMinor, currency: input.currency });
+      const envelope = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name, schemaVersion: 1,
+        occurredAt: input.occurredAt.toISOString(), resource: applicationEventCatalog.resource(name, 1, payload),
+        correlationId: input.correlationId, causationId: input.providerEventId,
+        idempotencyKey: `billing:${input.provider}:${input.providerEventId}`, payload });
+      await transaction.execute(outboxStatement(envelope, input.organizationId));
+      await transaction.update(billingProviderEvent).set({ status: "processed", processedAt: new Date(), error: null }).where(key);
+      return { duplicate: false };
+    });
+  } catch (error) {
+    await database.update(billingProviderEvent).set({ status: "failed", error: "notification_failed" })
+      .where(and(key, notInArray(billingProviderEvent.status, ["processed", "superseded"]))).catch(() => undefined);
+    throw error;
+  }
+}

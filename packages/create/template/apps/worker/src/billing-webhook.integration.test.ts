@@ -12,15 +12,21 @@ const eventIds: string[] = [];
 const subscriptionIds: string[] = [];
 const secret = "whsec_billing_webhook_integration";
 
-async function deliver(input: { eventId: string; organizationId?: string; plan?: string; kind?: "subscription" | "checkout"; remote?: boolean; subscriptionId?: string }) {
+async function deliver(input: { eventId: string; organizationId?: string; plan?: string; kind?: "subscription" | "checkout" | "invoice_paid" | "invoice_failed"; remote?: boolean; subscriptionId?: string; customerId?: string }) {
   const subscriptionId = input.subscriptionId ?? `sub_${input.eventId}`;
   subscriptionIds.push(subscriptionId);
   const metadata = { ...(input.organizationId ? { organizationId: input.organizationId } : {}), ...(input.plan ? { plan: input.plan } : {}) };
   const checkout = input.kind === "checkout";
+  const invoice = input.kind === "invoice_paid" || input.kind === "invoice_failed";
   const payload = JSON.stringify({ id: input.eventId, object: "event", api_version: "2026-08-27.basil", created: Math.floor(Date.now() / 1000), data: {
-    object: checkout ? { id: "cs_test_atomic", object: "checkout.session", customer: "cus_test_atomic", subscription: subscriptionId, metadata }
+    object: checkout ? { id: `cs_${input.eventId}`, object: "checkout.session", mode: "subscription", customer: input.customerId ?? "cus_test_atomic", subscription: subscriptionId, payment_status: "paid", metadata }
+      : invoice ? { id: `in_${input.eventId}`, object: "invoice", customer: input.customerId ?? "cus_test_atomic",
+        amount_paid: 2500, amount_due: 3000, currency: "usd",
+        parent: { type: "subscription_details", subscription_details: { subscription: subscriptionId, metadata } } }
       : { id: subscriptionId, object: "subscription", customer: "cus_test_atomic", status: "active", cancel_at_period_end: true, items: { data: [{ current_period_start: 1_790_000_000, current_period_end: 1_792_592_000 }] }, metadata },
-  }, livemode: false, pending_webhooks: 1, request: null, type: checkout ? "checkout.session.completed" : "customer.subscription.created" });
+  }, livemode: false, pending_webhooks: 1, request: null, type: checkout ? "checkout.session.completed"
+    : input.kind === "invoice_paid" ? "invoice.paid" : input.kind === "invoice_failed" ? "invoice.payment_failed"
+      : "customer.subscription.created" });
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = `t=${timestamp},v1=${createHmac("sha256", secret).update(`${timestamp}.${payload}`).digest("hex")}`;
   return app.request("/webhooks/stripe", { method: "POST", headers: { "stripe-signature": signature, "content-type": "application/json" }, body: payload }, {
@@ -71,17 +77,66 @@ suite("signed Stripe webhook route", () => {
     expect(await sql!`select provider_event_id from billing_provider_event where provider='stripe' and provider_event_id=${eventId}`).toHaveLength(0);
   });
 
-  it("records Checkout completion without granting paid entitlements before a subscription event", async () => {
+  it("retries Checkout until subscription ownership exists and never grants access from Checkout alone", async () => {
     const organizationId = `billing_checkout_${crypto.randomUUID().replaceAll("-", "")}`;
     const eventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionEventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
     organizationIds.push(organizationId);
-    eventIds.push(eventId);
-    const response = await deliver({ eventId, organizationId, plan: "pro", kind: "checkout" });
-    expect(response.status).toBe(202);
-    await expect(response.json()).resolves.toMatchObject({ duplicate: false, event: { type: "BillingCheckoutCompleted" } });
+    eventIds.push(eventId, subscriptionEventId);
+    const early = await deliver({ eventId, organizationId, plan: "pro", kind: "checkout", subscriptionId });
+    expect(early.status).toBe(503);
+    await expect(early.json()).resolves.toMatchObject({ error: "billing_ownership_unresolved", retryable: true });
     expect(await sql!`select organization_id from organization_subscription where organization_id=${organizationId}`).toHaveLength(0);
     expect(await sql!`select organization_id from organization_entitlement where organization_id=${organizationId}`).toHaveLength(0);
-    expect((await sql!`select status from billing_provider_event where provider='stripe' and provider_event_id=${eventId}`)[0]?.status).toBe("processed");
+    expect((await sql!`select status, error from billing_provider_event where provider='stripe' and provider_event_id=${eventId}`)[0])
+      .toEqual({ status: "failed", error: "ownership_unresolved" });
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${eventId}`}`).toHaveLength(0);
+    expect((await deliver({ eventId: subscriptionEventId, organizationId, plan: "pro", subscriptionId })).status).toBe(202);
+    const entitlements = await sql!`select entitlement from organization_entitlement where organization_id=${organizationId} order by entitlement`;
+    const response = await deliver({ eventId, organizationId, plan: "pro", kind: "checkout", subscriptionId });
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ duplicate: false, event: { type: "BillingCheckoutCompleted" } });
+    expect((await sql!`select event_name, organization_id, correlation_id, payload from outbox_message where idempotency_key=${`billing:stripe:${eventId}`}`)[0])
+      .toMatchObject({ event_name: "billing.checkout.completed", organization_id: organizationId,
+        correlation_id: response.headers.get("x-correlation-id"), payload: { organizationId, currentSubscription: true, paymentStatus: "paid" } });
+    expect((await deliver({ eventId, organizationId, plan: "pro", kind: "checkout", subscriptionId })).status).toBe(200);
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${eventId}`}`).toHaveLength(1);
+    expect(await sql!`select entitlement from organization_entitlement where organization_id=${organizationId} order by entitlement`).toEqual(entitlements);
+  });
+
+  it("publishes invoice payment outcomes only for a locally owned subscription", async () => {
+    const organizationId = `billing_invoice_${crypto.randomUUID().replaceAll("-", "")}`;
+    const wrongOrganizationId = `billing_wrong_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
+    const activatedId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const paidId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const failedId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const wrongId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const missingId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const customerMismatchId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    organizationIds.push(organizationId, wrongOrganizationId);
+    eventIds.push(activatedId, paidId, failedId, wrongId, missingId, customerMismatchId);
+    expect((await deliver({ eventId: paidId, organizationId, kind: "invoice_paid", subscriptionId })).status).toBe(503);
+    expect((await deliver({ eventId: activatedId, organizationId, plan: "pro", subscriptionId })).status).toBe(202);
+    const entitlements = await sql!`select entitlement from organization_entitlement where organization_id=${organizationId} order by entitlement`;
+    expect((await deliver({ eventId: paidId, organizationId, kind: "invoice_paid", subscriptionId })).status).toBe(202);
+    expect((await sql!`select event_name, payload from outbox_message where idempotency_key=${`billing:stripe:${paidId}`}`)[0])
+      .toMatchObject({ event_name: "billing.invoice.paid", payload: { organizationId, currentSubscription: true, amountMinor: 2500, currency: "usd" } });
+    expect((await deliver({ eventId: paidId, organizationId, kind: "invoice_paid", subscriptionId })).status).toBe(200);
+    expect((await deliver({ eventId: failedId, organizationId, kind: "invoice_failed", subscriptionId })).status).toBe(202);
+    expect((await sql!`select event_name, payload from outbox_message where idempotency_key=${`billing:stripe:${failedId}`}`)[0])
+      .toMatchObject({ event_name: "billing.invoice.payment_failed", payload: { organizationId, currentSubscription: true, amountMinor: 3000, currency: "usd" } });
+    expect((await deliver({ eventId: wrongId, organizationId: wrongOrganizationId, kind: "invoice_paid", subscriptionId })).status).toBe(503);
+    expect((await deliver({ eventId: missingId, kind: "invoice_paid", subscriptionId })).status).toBe(503);
+    expect((await deliver({ eventId: customerMismatchId, organizationId, kind: "invoice_paid", subscriptionId,
+      customerId: "cus_wrong" })).status).toBe(503);
+    for (const id of [wrongId, missingId, customerMismatchId]) {
+      expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${id}`}`).toHaveLength(0);
+      expect((await sql!`select status from billing_provider_event where provider_event_id=${id}`)[0]?.status).toBe("failed");
+    }
+    expect(await sql!`select entitlement from organization_entitlement where organization_id=${organizationId} order by entitlement`).toEqual(entitlements);
+    expect(await sql!`select organization_id from organization_subscription where organization_id=${wrongOrganizationId}`).toHaveLength(0);
   });
 
   it("reconciles a signed but stale active event against the current cancelled Stripe subscription", async () => {
