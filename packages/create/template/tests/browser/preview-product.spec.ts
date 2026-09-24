@@ -70,9 +70,11 @@ test("preview verifies redirected email, tenant-safe test Checkout, and webhook 
 
   await page.goto(checkout.url);
   const cardChoice = page.getByRole("radio", { name: "Card", exact: true });
-  await cardChoice.waitFor({ state: "visible", timeout: 30_000 });
-  await cardChoice.check({ force: true });
-  await page.locator('input[name="cardNumber"]').fill("4242424242424242");
+  const cardNumber = page.locator('input[name="cardNumber"]');
+  // Stripe may show Card as a choice or select it without a radio control.
+  await expect.poll(async () => await cardChoice.isVisible() || await cardNumber.isVisible(), { timeout: 30_000 }).toBe(true);
+  if (await cardChoice.isVisible()) await cardChoice.check({ force: true });
+  await cardNumber.fill("4242424242424242");
   await page.locator('input[name="cardExpiry"]').fill("12/34");
   await page.locator('input[name="cardCvc"]').fill("123");
   await page.locator('input[name="billingName"]').fill("Trestle Preview Test");

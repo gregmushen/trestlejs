@@ -1004,6 +1004,13 @@ isolated Pages app at Worker deployment time. The generated CI contract now
 rejects a preview workflow missing the binding. The protected Alpha 127 → 128
 workflow edit is narrowly encoded for the next published-adjacent rehearsal;
 Alpha 128's rehearsal covers the already-published Alpha 126 → 127 pair.
+Alpha 129 tolerates Stripe Checkout's card-only presentation as well as its
+explicit Card selector in the deployed preview browser gate. The Alpha 127
+canary's staging deployment and two deployed browser tests passed after a new
+isolated Neon database was created for its divergent migration history; the
+previous staging database was retained. Preview PR 10 has a separately
+configured signed Stripe test webhook, but automatic per-preview endpoint
+provisioning and cleanup are still required for a repeatable beta gate.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
