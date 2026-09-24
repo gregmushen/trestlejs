@@ -21,4 +21,6 @@ export const applicationRoleAssignment = pgTable("application_role_assignment", 
   uniqueIndex("application_role_assignment_active_uidx").on(table.organizationId, table.userId, table.role).where(sql`${table.revokedAt} is null`),
   index("application_role_assignment_user_idx").on(table.organizationId, table.userId),
   pgPolicy("application_role_assignment_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
+  // The platform admin reads assignments to explain access and list role holders; it never changes them.
+  pgPolicy("application_role_assignment_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
 ]).enableRLS();

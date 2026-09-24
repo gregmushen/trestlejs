@@ -1,8 +1,11 @@
 import { and, asc, count, desc, eq, ilike, inArray, isNull, or, type SQL } from "drizzle-orm";
 
+import { applicationRoleAssignment } from "./access-schema.js";
 import { auditEvent } from "./audit-schema.js";
+import { emailDeliveryEvent } from "./email-schema.js";
 import { member, organization, user } from "./auth-schema.js";
 import type { Database } from "./index.js";
+import { serviceAccount } from "./machine-access-schema.js";
 import { platformRoleAssignment } from "./platform-schema.js";
 
 /**
@@ -98,4 +101,67 @@ export async function listPlatformRoleAssignments(database: Database, options: R
   }).from(platformRoleAssignment).leftJoin(user, eq(user.id, platformRoleAssignment.userId))
     .where(options.history ? undefined : isNull(platformRoleAssignment.revokedAt))
     .orderBy(desc(platformRoleAssignment.grantedAt)).limit(500);
+}
+
+export type PlatformRoleHolder = Readonly<{ kind: "member" | "user" | "service_account"; id: string; organizationId: string; organizationName: string; principalId: string; name: string; detail: string; role: string; email?: string; grantedAt?: Date; grantedBy?: string }>;
+
+/** Organization roles are stored on the membership, comma-separated; parsed exactly as authz parseMembershipRoles does. */
+const membershipRoles = (value: string | null) => [...new Set((value ?? "").split(",").map((role) => role.trim()).filter(Boolean))].sort();
+
+/** Who holds organization or application roles, optionally for one role. Active application assignments only. */
+export async function listPlatformRoleHolders(database: Database, plane: "organization" | "application", role?: string): Promise<PlatformRoleHolder[]> {
+  if (plane === "organization") {
+    const rows = await database.select({ id: member.id, organizationId: member.organizationId, organizationName: organization.name, userId: member.userId, name: user.name, email: user.email, roles: member.role })
+      .from(member).innerJoin(user, eq(user.id, member.userId)).innerJoin(organization, eq(organization.id, member.organizationId)).limit(2000);
+    return rows.flatMap((row) => membershipRoles(row.roles).filter((key) => !role || key === role).map((key): PlatformRoleHolder => ({ kind: "member", id: `${row.id}:${key}`, organizationId: row.organizationId, organizationName: row.organizationName, principalId: row.userId, name: row.name, detail: `${row.email} · ${key}`, role: key, email: row.email })));
+  }
+  const [users, accounts] = await Promise.all([
+    database.select({ id: applicationRoleAssignment.id, organizationId: applicationRoleAssignment.organizationId, organizationName: organization.name, userId: applicationRoleAssignment.userId, name: user.name, email: user.email, role: applicationRoleAssignment.role, grantedAt: applicationRoleAssignment.grantedAt, grantedBy: applicationRoleAssignment.grantedBy })
+      .from(applicationRoleAssignment).innerJoin(user, eq(user.id, applicationRoleAssignment.userId)).innerJoin(organization, eq(organization.id, applicationRoleAssignment.organizationId))
+      .where(and(isNull(applicationRoleAssignment.revokedAt), role ? eq(applicationRoleAssignment.role, role) : undefined)).limit(2000),
+    database.select({ id: serviceAccount.id, organizationId: serviceAccount.organizationId, organizationName: organization.name, name: serviceAccount.name, roles: serviceAccount.applicationRoles, status: serviceAccount.status })
+      .from(serviceAccount).innerJoin(organization, eq(organization.id, serviceAccount.organizationId)).limit(2000),
+  ]);
+  return [
+    ...users.map((row): PlatformRoleHolder => ({ kind: "user", id: row.id, organizationId: row.organizationId, organizationName: row.organizationName, principalId: row.userId, name: row.name, detail: `${row.email} · ${row.role}`, role: row.role, email: row.email, grantedAt: row.grantedAt, grantedBy: row.grantedBy })),
+    ...accounts.flatMap((row) => row.roles.filter((key) => !role || key === role).map((key): PlatformRoleHolder => ({ kind: "service_account", id: `${row.id}:${key}`, organizationId: row.organizationId, organizationName: row.organizationName, principalId: row.id, name: row.name, detail: `service account · ${row.status} · ${key}`, role: key }))),
+  ];
+}
+
+export type PlatformServiceAccount = Readonly<{ id: string; organizationId: string; organizationName: string; name: string; applicationRoles: string[]; status: string; createdAt: Date }>;
+
+export async function listPlatformServiceAccounts(database: Database, organizationId?: string): Promise<PlatformServiceAccount[]> {
+  return await database.select({ id: serviceAccount.id, organizationId: serviceAccount.organizationId, organizationName: organization.name, name: serviceAccount.name, applicationRoles: serviceAccount.applicationRoles, status: serviceAccount.status, createdAt: serviceAccount.createdAt })
+    .from(serviceAccount).innerJoin(organization, eq(organization.id, serviceAccount.organizationId))
+    .where(organizationId ? eq(serviceAccount.organizationId, organizationId) : undefined).orderBy(asc(organization.name), asc(serviceAccount.name)).limit(500);
+}
+
+export type PlatformAccessAssignments = Readonly<{ organizationName: string; principalName: string; organizationRoles: string[]; applicationRoles: string[]; member: boolean; status?: string }>;
+
+/** The assignments a user or service account holds in one organization, for access explanation. */
+export async function platformAccessAssignments(database: Database, organizationId: string, principal: Readonly<{ type: "user" | "service_account"; id: string }>): Promise<PlatformAccessAssignments | null> {
+  const [found] = await database.select({ name: organization.name }).from(organization).where(eq(organization.id, organizationId)).limit(1);
+  if (!found) return null;
+  if (principal.type === "service_account") {
+    const [account] = await database.select({ name: serviceAccount.name, roles: serviceAccount.applicationRoles, status: serviceAccount.status }).from(serviceAccount)
+      .where(and(eq(serviceAccount.id, principal.id), eq(serviceAccount.organizationId, organizationId))).limit(1);
+    return account ? { organizationName: found.name, principalName: account.name, organizationRoles: [], applicationRoles: account.roles, member: true, status: account.status } : null;
+  }
+  const [person] = await database.select({ name: user.name, email: user.email }).from(user).where(eq(user.id, principal.id)).limit(1);
+  if (!person) return null;
+  const [membership, assignments] = await Promise.all([
+    database.select({ roles: member.role }).from(member).where(and(eq(member.userId, principal.id), eq(member.organizationId, organizationId))).limit(1),
+    database.select({ role: applicationRoleAssignment.role }).from(applicationRoleAssignment)
+      .where(and(eq(applicationRoleAssignment.userId, principal.id), eq(applicationRoleAssignment.organizationId, organizationId), isNull(applicationRoleAssignment.revokedAt))),
+  ]);
+  return { organizationName: found.name, principalName: `${person.name} <${person.email}>`, organizationRoles: membership[0] ? membershipRoles(membership[0].roles) : [], applicationRoles: assignments.map((row) => row.role), member: Boolean(membership[0]) };
+}
+
+export type PlatformEmailEvent = Readonly<{ id: string; emailDeliveryId: string; status: string; occurredAt: Date; receivedAt: Date }>;
+
+/** Provider delivery-status events, newest first. The table holds no bodies, recipients, or templates. */
+export async function listPlatformEmailEvents(database: Database, options: Readonly<{ status?: string; limit?: number }> = {}): Promise<PlatformEmailEvent[]> {
+  return await database.select({ id: emailDeliveryEvent.id, emailDeliveryId: emailDeliveryEvent.emailDeliveryId, status: emailDeliveryEvent.status, occurredAt: emailDeliveryEvent.occurredAt, receivedAt: emailDeliveryEvent.receivedAt })
+    .from(emailDeliveryEvent).where(options.status ? eq(emailDeliveryEvent.status, options.status) : undefined)
+    .orderBy(desc(emailDeliveryEvent.occurredAt), desc(emailDeliveryEvent.id)).limit(pageSize(options.limit, 100, 500));
 }

@@ -1,8 +1,10 @@
 import type {
-  ActionOutcome, AuditEvent, OrganizationMember, PlatformRoleAssignment, RoleJson, ServiceAccountDetail, UserSummary, AdminSession, ApiKeyMetadata, AuditEventJson, CapabilityStatus, DeadLetter, HealthCheck, OrganizationSummary, Overview, OverviewException,
+  ActionOutcome, ApplicationRoleAssignmentJson, AuditEvent, CatalogPermissionJson, CatalogRoleJson, EmailDelivery, EmailDeliveryDetail, ExplainRequest, ExplainResponse, OrganizationMember, PermissionJson, RoleAssignmentJson, RoutePolicyJson, ServiceAccount, PlatformRoleAssignment, RoleJson, ServiceAccountDetail, UserSummary, AdminSession, ApiKeyMetadata, AuditEventJson, CapabilityStatus, DeadLetter, HealthCheck, OrganizationSummary, Overview, OverviewException,
   SubscriptionDetail, SubscriptionSummary, SupportActivity, SupportPermissionPreview, SupportProfile, SupportSession, SupportSessionSummary, WebhookEndpointDetail, WebhookEndpointSummary,
 } from "./api";
 import { features } from "./billing-model";
+import { adminViews } from "./api-registry";
+import { applicationRoles, customerRoutePolicies, organizationRoles, permissions, platformRoles, type AuthorityPlane } from "@__TRESTLE_PROJECT_NAME__/authz";
 
 /**
  * Adapts the admin UI's client to the admin Worker's API. The UI keeps its
@@ -48,6 +50,9 @@ type WirePlatformRoles = {
   assignments: Array<{ id: string; userId: string; email: string | null; name: string | null; role: string; grantedAt: string; grantedBy: string; reason: string; revokedAt: string | null; revokedBy: string | null; revocationReason: string | null }>;
   roles: Array<{ key: string; name: string; description: string; permissions: string[] }>;
 };
+type WireRoleHolders = { assignments: Array<{ kind: "member" | "user" | "service_account"; id: string; organizationId: string; organizationName: string; principalId: string; name: string; detail: string; role: string; email?: string; grantedAt?: string; grantedBy?: string }> };
+type WireServiceAccounts = { serviceAccounts: Array<{ id: string; organizationId: string; organizationName: string; name: string; applicationRoles: string[]; status: string; createdAt: string }> };
+type WireEmail = { events: Array<{ id: string; emailDeliveryId: string; status: string; occurredAt: string; receivedAt: string }> };
 type WireApiKeys = { keys: Array<{ id: string; organizationId: string; serviceAccountId: string; serviceAccountName: string; name: string; environment: string; displayPrefix: string; scopes: string[]; expiresAt: string | null; createdAt: string; rotatedFrom: string | null; revokedAt: string | null; revocationReason: string | null }> };
 
 /** What a read-only support session can see: the organization's profile, members, plan, regional settings, and recent audit. */
@@ -166,9 +171,82 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
   });
   const platformRoleState = async (history: boolean) => await request<WirePlatformRoles>("GET", "platform-roles", undefined, { history: history ? "1" : undefined });
 
+  /** Where each permission is enforced: the customer Worker's route policies and the admin registry. */
+  const enforcement = (): RoutePolicyJson[] => [
+    ...customerRoutePolicies.map((policy) => ({ method: policy.method, path: policy.path, audience: policy.audience, ...(policy.public ? { public: true } : {}), ...(policy.permission ? { permission: policy.permission } : {}), ...(policy.entitlement ? { entitlement: policy.entitlement } : {}), ...(policy.principals ? { principals: [...policy.principals] } : {}) })),
+    ...adminViews.flatMap((view) => view.api.map((route) => ({ method: route.method, path: route.path, audience: "platform", permission: route.permission ?? view.permission }))),
+  ];
+  const roleHolders = async (plane: "organization" | "application", role?: string) => (await request<WireRoleHolders>("GET", "access/role-assignments", undefined, { plane, role })).assignments;
+  const catalog = async (): Promise<{ permissions: CatalogPermissionJson[]; roles: { organization: CatalogRoleJson[]; application: CatalogRoleJson[] } }> => {
+    const routes = enforcement();
+    const [organizationHolders, applicationHolders] = await Promise.all([roleHolders("organization").catch(() => []), roleHolders("application").catch(() => [])]);
+    const catalogs = { organization: organizationRoles, application: applicationRoles, platform: platformRoles } as const;
+    const rolesFor = (code: string) => (Object.entries(catalogs) as Array<[AuthorityPlane, typeof organizationRoles]>).flatMap(([plane, entries]) => entries.list().filter((role) => role.permissions.includes(code)).map((role) => ({ plane, key: role.key, name: role.name })));
+    const roleJson = (plane: "organization" | "application", holders: typeof organizationHolders) => catalogs[plane].list().map((role): CatalogRoleJson => ({
+      key: role.key, name: role.name, description: role.description, plane, permissions: [...role.permissions], custom: false, source: "builtin", archived: false, basedOn: null,
+      assignments: holders.filter((holder) => holder.role === role.key).length,
+    }));
+    return {
+      // Permissions and roles are reviewed source; the admin reads them and never edits them at runtime.
+      permissions: permissions.list().map((permission): CatalogPermissionJson => ({
+        code: permission.code, name: permission.name ?? permission.description, description: permission.description, plane: permission.plane, principals: [...permission.principals],
+        entitlement: permission.entitlement ?? null, origin: "code", state: permission.deprecated ? "deprecated" : "active", secret: Boolean(permission.secret), protected: true,
+        roles: rolesFor(permission.code), enforcedBy: routes.filter((route) => route.permission === permission.code).map((route) => `${route.method} ${route.path}`), createdAt: null, createdBy: null,
+      })),
+      roles: { organization: roleJson("organization", organizationHolders), application: roleJson("application", applicationHolders) },
+    };
+  };
+  const emailEvents = async (status?: string) => (await request<WireEmail>("GET", "email", undefined, { status })).events;
+
   return {
     session,
     capabilities,
+    catalog,
+    routePolicies: async () => ({ routes: enforcement() }),
+    permissions: async (): Promise<{ permissions: PermissionJson[] }> => ({ permissions: (await catalog()).permissions.map((permission) => ({ code: permission.code, description: permission.description, principals: permission.principals, plane: permission.plane, ...(permission.entitlement ? { entitlement: permission.entitlement } : {}), group: permission.code.split(".").slice(0, -1).join("."), enforcedBy: permission.enforcedBy })) }),
+    roleAssignments: async (plane: "organization" | "application", key: string): Promise<{ assignments: RoleAssignmentJson[] }> => ({
+      assignments: (await roleHolders(plane, key)).map((holder) => ({ kind: holder.kind, id: holder.id, organizationId: holder.organizationId, organizationName: holder.organizationName, principalId: holder.principalId, name: holder.name, detail: holder.detail })),
+    }),
+    applicationRoleAssignments: async (organizationId?: string): Promise<{ assignments: ApplicationRoleAssignmentJson[] }> => ({
+      assignments: (await roleHolders("application")).filter((holder) => holder.kind === "user" && (!organizationId || holder.organizationId === organizationId))
+        .map((holder) => ({ organizationId: holder.organizationId, organizationName: holder.organizationName, userId: holder.principalId, name: holder.name, ...(holder.email ? { email: holder.email } : {}), role: holder.role, grantedAt: holder.grantedAt ?? "", grantedBy: holder.grantedBy ?? "" })),
+    }),
+    explainAccess: async (input: ExplainRequest): Promise<ExplainResponse> => await request<ExplainResponse>("POST", "access/explain", input),
+    serviceAccounts: async (organizationId?: string): Promise<{ serviceAccounts: ServiceAccount[] }> => ({
+      serviceAccounts: (await request<WireServiceAccounts>("GET", "service-accounts", undefined, { organizationId })).serviceAccounts.map((account) => ({ id: account.id, organizationId: account.organizationId, organizationName: account.organizationName, name: account.name, status: account.status as ServiceAccount["status"], applicationRoles: account.applicationRoles, createdAt: account.createdAt })),
+    }),
+    serviceAccount: async (id: string): Promise<ServiceAccountDetail> => {
+      const [accounts, keys] = await Promise.all([request<WireServiceAccounts>("GET", "service-accounts"), apiKeyList().catch(() => [] as ApiKeyMetadata[])]);
+      const account = accounts.serviceAccounts.find((item) => item.id === id);
+      if (!account) throw new Error("Service account not found");
+      const resolved = applicationRoles.resolve(account.applicationRoles);
+      return {
+        account: { id: account.id, organizationId: account.organizationId, organizationName: account.organizationName, name: account.name, status: account.status as ServiceAccount["status"], applicationRoles: account.applicationRoles, createdAt: account.createdAt, description: "", suspendedAt: null, suspensionReason: null, deletedAt: null, deletedBy: null, deletionReason: null },
+        keys: keys.filter((key) => key.serviceAccountId === id),
+        effectivePermissions: [...resolved.permissions.entries()].map(([code, via]) => ({ code, via: [...via] })),
+        unknownRoles: resolved.unknownRoles,
+        usage: {}, audit: [],
+        availableRoles: applicationRoles.list().map((role) => ({ key: role.key, name: role.name, source: "builtin" })),
+      };
+    },
+    email: async (status?: string): Promise<{ deliveries: EmailDelivery[] }> => {
+      const events = await emailEvents(status);
+      const byDelivery = new Map<string, typeof events>();
+      for (const event of events) byDelivery.set(event.emailDeliveryId, [...(byDelivery.get(event.emailDeliveryId) ?? []), event]);
+      return { deliveries: [...byDelivery.entries()].map(([id, group]) => {
+        const latest = [...group].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))[0]!;
+        return { id, provider: "resend", template: "", recipient: "", status: latest.status, correlationId: "", occurredAt: latest.occurredAt, events: group.length };
+      }) };
+    },
+    emailDelivery: async (id: string): Promise<EmailDeliveryDetail> => {
+      const events = (await emailEvents()).filter((event) => event.emailDeliveryId === id).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
+      if (events.length === 0) throw new Error("Email delivery not found");
+      return {
+        delivery: { id, provider: "resend", template: "", recipient: "", recipientCount: 1, status: events.at(-1)!.status, failureCategory: null, correlationId: null, organizationId: null, organizationName: null, createdAt: events[0]!.occurredAt },
+        events: events.map((event) => ({ status: event.status, occurredAt: event.occurredAt, receivedAt: event.receivedAt })),
+        notification: null,
+      };
+    },
     organization: async (id: string): Promise<{ organization: OrganizationSummary & { regional?: WireOrganizationDetail["regional"] }; members: OrganizationMember[] }> => {
       const wire = await request<WireOrganizationDetail>("GET", `organizations/${encodeURIComponent(id)}`);
       return {

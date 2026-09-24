@@ -89,6 +89,19 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "POST", path: "/api/admin/platform-roles", permission: "platform.roles.manage" },
     { method: "POST", path: "/api/admin/platform-roles/:userId/:role/revoke", permission: "platform.roles.manage" },
   ] },
+  { id: "organization-roles", path: "/access/organization-roles", label: "Organization Roles", group: "Access", permission: "platform.roles.read", api: [
+    { method: "GET", path: "/api/admin/access/role-assignments" },
+  ] },
+  { id: "application-roles", path: "/access/application-roles", label: "Application Roles", group: "Access", permission: "platform.roles.read", api: [
+    { method: "GET", path: "/api/admin/access/role-assignments" },
+  ] },
+  { id: "permissions", path: "/access/permissions", label: "Permissions", group: "Access", permission: "platform.roles.read", api: [
+    { method: "POST", path: "/api/admin/access/explain", permission: "platform.roles.read" },
+  ] },
+  { id: "service-accounts", path: "/access/service-accounts", label: "Service Accounts", group: "Access", permission: "platform.machine_access.read", api: [
+    { method: "GET", path: "/api/admin/service-accounts" },
+  ] },
+  { id: "email", path: "/communications/email", label: "Email", group: "Communications", permission: "platform.operations.read", capability: "email", api: [{ method: "GET", path: "/api/admin/email" }] },
   { id: "support-sessions", path: "/support/sessions", label: "Support Sessions", group: "Customers", permission: "platform.support_sessions.use", api: [
     { method: "GET", path: "/api/admin/support/sessions" },
     { method: "POST", path: "/api/admin/support/sessions", permission: "platform.support_sessions.use" },

@@ -1,11 +1,11 @@
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { AccessDeniedError, platformAccess, platformRoles, publicDenial, type AccessEvaluator } from "@__TRESTLE_PROJECT_NAME__/authz";
-import { featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
+import { AccessDeniedError, applicationRoles, evaluateAccess, formatAccessExplanation, organizationRoles, permissions, platformAccess, platformRoles, publicDenial, type AccessEvaluator } from "@__TRESTLE_PROJECT_NAME__/authz";
+import { Entitlements, featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportableOrganizations, supportOrganizationView,
-  grantPlatformRole, listPlatformAuditEvents, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
+  grantPlatformRole, listPlatformAuditEvents, listPlatformEmailEvents, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
   listPlatformApiKeys, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   type DatabaseDriver, type PlatformChangeContext,
 } from "@__TRESTLE_PROJECT_NAME__/db";
@@ -287,6 +287,58 @@ admin.post("/api/admin/platform-roles/:userId/:role/revoke", async (context) => 
   if (context.req.param("userId") === context.get("operator").id) throw new PlatformOperationError("invalid", "Ask another security administrator to revoke your own platform role");
   await revokePlatformRole(platformDatabase(context.env), { userId: context.req.param("userId"), role: context.req.param("role") }, await actionContext(context));
   return context.json({ revoked: true, correlationId: context.get("correlationId") });
+});
+
+admin.get("/api/admin/access/role-assignments", async (context) => {
+  const plane = context.req.query("plane");
+  if (plane !== "organization" && plane !== "application") throw new PlatformOperationError("invalid", "Choose the organization or application plane");
+  return context.json({ assignments: await listPlatformRoleHolders(platformDatabase(context.env), plane, context.req.query("role") || undefined) });
+});
+
+admin.get("/api/admin/service-accounts", async (context) => {
+  const accounts = await listPlatformServiceAccounts(platformDatabase(context.env), context.req.query("organizationId") || undefined);
+  return context.json({ serviceAccounts: accounts.map((account) => ({ ...account, createdAt: account.createdAt.toISOString() })) });
+});
+
+/**
+ * Explains a principal's access in one organization with the same policy the
+ * customer Worker enforces: each plane resolves only from its own assignments,
+ * and entitlements come from the plan and active overrides. It never performs
+ * the protected action.
+ */
+admin.post("/api/admin/access/explain", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { organizationId?: unknown; principal?: { type?: unknown; id?: unknown }; permission?: unknown; entitlement?: unknown };
+  const type = body.principal?.type;
+  if (typeof body.organizationId !== "string" || (type !== "user" && type !== "service_account") || typeof body.principal?.id !== "string") throw new PlatformOperationError("invalid", "Choose an organization and an identity");
+  if (body.permission !== undefined && (typeof body.permission !== "string" || !permissions.has(body.permission))) throw new PlatformOperationError("invalid", "Choose a registered permission");
+  if (body.entitlement !== undefined && (typeof body.entitlement !== "string" || !Object.hasOwn(featureDefinitions, body.entitlement))) throw new PlatformOperationError("invalid", "Choose an entitlement the application defines");
+  const database = platformDatabase(context.env);
+  const [subject, commercial] = await Promise.all([
+    platformAccessAssignments(database, body.organizationId, { type, id: body.principal.id }),
+    platformCommercialDetail(database, body.organizationId),
+  ]);
+  if (!subject) throw new PlatformOperationError("not_found", "That identity is not found in this organization");
+  const organization = organizationRoles.resolve(subject.organizationRoles);
+  const application = applicationRoles.resolve(subject.applicationRoles);
+  const now = new Date();
+  const entitlements = new Entitlements(new Set(commercial.planEntitlements), {
+    ...(commercial.subscription ? { plan: commercial.subscription.plan, planVersion: commercial.subscription.planVersion } : {}), now,
+    overrides: commercial.overrides.filter((override) => !override.removedAt).map((override) => ({ code: override.entitlement, enabled: override.enabled, reason: override.reason, authorId: override.authorId, effectiveAt: override.effectiveAt, ...(override.expiresAt ? { expiresAt: override.expiresAt } : {}) })),
+  });
+  const decision = evaluateAccess(permissions, {
+    principal: { type, id: body.principal.id, label: subject.principalName },
+    tenant: { organizationId: body.organizationId, label: subject.organizationName },
+    authority: subject.member ? { organization: organization.permissions, application: application.permissions } : {},
+    assignments: { organization: subject.organizationRoles, application: subject.applicationRoles },
+    entitlements: { get: (code) => { const resolved = entitlements.resolve(code); return { code, enabled: resolved.enabled, source: resolved.source, ...(resolved.inheritedFrom ? { inheritedFrom: resolved.inheritedFrom } : {}) }; } },
+    ...(subject.status && subject.status !== "active" ? { constraints: [{ name: "service account status", expected: "active", actual: subject.status, satisfied: false }] } : {}),
+  }, { ...(typeof body.permission === "string" ? { permission: body.permission } : {}), ...(typeof body.entitlement === "string" ? { entitlement: body.entitlement } : {}) });
+  return context.json({ decision, explanation: formatAccessExplanation(decision) });
+});
+
+admin.get("/api/admin/email", async (context) => {
+  const events = await listPlatformEmailEvents(platformDatabase(context.env), { ...(context.req.query("status") ? { status: context.req.query("status")! } : {}) });
+  return context.json({ events: events.map((event) => ({ ...event, occurredAt: event.occurredAt.toISOString(), receivedAt: event.receivedAt.toISOString() })) });
 });
 
 admin.get("/api/admin/support/sessions", async (context) => {
