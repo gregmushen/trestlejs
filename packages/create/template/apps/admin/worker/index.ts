@@ -5,13 +5,13 @@ import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportableOrganizations, supportOrganizationView,
-  listPlatformApiKeys, listPlatformWebhookEndpoints, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
+  listPlatformApiKeys, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   type DatabaseDriver, type PlatformChangeContext,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 
-import { adminViews, type AdminCapability } from "../src/registry.js";
+import { adminViews, type AdminCapability } from "../src/api-registry.js";
 import { databaseReachable, overview, platformRolesFor } from "./data.js";
 import { adminPolicyFor } from "./route-policies.js";
 
@@ -31,6 +31,9 @@ export type AdminEnvironment = {
 };
 
 type Session = { user: { id: string; email: string; name?: string } };
+
+/** The local-only default operator seeded by `trestle dev` (packages/auth/src/local-admin.ts). */
+const localAdminEmail = "admin@trestle.local";
 type Variables = { correlationId: string; operator: Session["user"]; access: AccessEvaluator; roles: string[] };
 
 /** Replaceable in tests. */
@@ -98,6 +101,8 @@ admin.use("/api/admin/*", async (context, next) => {
   try {
     const session = await adminDependencies.session(context.env, context.req.raw.headers);
     if (!session) return context.json({ error: "unauthorized", message: "Sign in to the platform admin" }, 401);
+    // The seeded local operator (admin/admin) can never operate a deployed platform.
+    if (session.user.email === localAdminEmail && (context.env.APP_ENV ?? "local") !== "local") return context.json({ error: "forbidden", reason: "local_account", message: "The default local admin account cannot be used outside local development" }, 403);
     const roles = await adminDependencies.platformRoles(context.env, session.user.id);
     const { access, unknownRoles } = platformAccess(session.user.id, roles);
     if (unknownRoles.length) log.warn("admin.roles.unknown", { unknownRoles });
@@ -116,12 +121,32 @@ admin.use("/api/admin/*", async (context, next) => {
   }
 });
 
-admin.get("/api/admin/session", (context) => {
+admin.get("/api/admin/session", async (context) => {
   const access = context.get("access");
+  const operator = context.get("operator");
+  const environment = context.env.APP_ENV ?? "local";
+  const database = platformDatabase(context.env);
+  // Display context only: authority is checked on every request, so a failed lookup shows no support banner rather than failing sign-in.
+  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" });
+  const [sessions, organizations, status] = await Promise.all([
+    listSupportSessions(database, { operatorId: operator.id, limit: 5 }).catch((error: unknown) => { log.warn("admin.session.support_lookup_failed", { errorName: error instanceof Error ? error.name : "unknown" }); return []; }),
+    supportableOrganizations(database).catch(() => []),
+    adminDependencies.operationalStatus(context.env).catch(() => undefined),
+  ]);
+  const now = Date.now();
+  const open = sessions.find((session) => !session.endedAt && session.expiresAt.getTime() > now);
   return context.json({
-    operator: { id: context.get("operator").id, email: context.get("operator").email },
+    operator: { id: operator.id, email: operator.email, name: operator.name ?? operator.email },
     roles: context.get("roles"),
     permissions: access.permitted(),
+    environment,
+    capabilities: shellCapabilities(status, environment),
+    supportSession: open ? {
+      id: open.id, operatorId: open.operatorId, organizationId: open.organizationId,
+      organizationName: organizations.find((item) => item.organizationId === open.organizationId)?.organizationName ?? open.organizationId,
+      reason: open.reason, ticket: null, profile: "Read-only support",
+      startedAt: open.startedAt.toISOString(), expiresAt: open.expiresAt.toISOString(), endedAt: null, endedBy: null,
+    } : null,
     views: adminViews.map((view) => ({ id: view.id, path: view.path, label: view.label, group: view.group, capability: view.capability ?? null, allowed: access.check({ permission: view.permission }) })),
   });
 });
@@ -140,8 +165,14 @@ async function actionContext(context: AdminContext, body?: { reason?: unknown })
 const iso = (value: Date | null) => value?.toISOString() ?? null;
 
 admin.get("/api/admin/operations/outbox", async (context) => {
-  const events = await listDeadOutboxEvents(platformDatabase(context.env), { limit: Number(context.req.query("limit") ?? 50) });
-  return context.json({ dead: events.map((event) => ({ ...event, createdAt: event.createdAt.toISOString() })) });
+  const database = platformDatabase(context.env);
+  const [events, counts] = await Promise.all([listDeadOutboxEvents(database, { limit: Number(context.req.query("limit") ?? 50) }), outboxStatusCounts(database)]);
+  return context.json({ counts, dead: events.map((event) => ({ ...event, createdAt: event.createdAt.toISOString() })) });
+});
+
+admin.get("/api/admin/organizations", async (context) => {
+  const organizations = await listPlatformOrganizations(platformDatabase(context.env), { query: context.req.query("q") ?? "" });
+  return context.json({ organizations: organizations.map((item) => ({ ...item, slug: item.slug ?? "", createdAt: item.createdAt.toISOString() })) });
 });
 
 admin.post("/api/admin/operations/outbox/:id/redrive", async (context) => {
@@ -251,6 +282,35 @@ admin.get("/api/admin/operations/artifacts", async (context) => {
   // Pending uploads older than a day are stale; the artifact maintenance job cleans them up.
   return context.json(await artifactOperations(platformDatabase(context.env), { staleBefore: new Date(Date.now() - 86_400_000) }));
 });
+
+type ShellCapabilityState = "disabled" | "declared" | "configured";
+type ReportedCapability = { configured?: unknown; enabled?: unknown; mode?: unknown };
+
+/**
+ * Capability lifecycle for the admin shell. Queues, R2, and Workflows exist only
+ * when declared in .trestle/project.yaml, and the customer Worker carries their
+ * bindings only then, so an absent binding means the capability is not
+ * declared and its views are hidden. Email and billing are always part of the
+ * application, so an unconfigured provider needs setup rather than hiding.
+ */
+export function shellCapabilities(status: unknown, environment: string) {
+  const reported = (status && typeof status === "object" ? (status as { capabilities?: Record<string, ReportedCapability> }).capabilities : undefined) ?? {};
+  const repair = `pnpm exec trestle setup --env ${environment}`;
+  const entry = (id: string, label: string, state: ShellCapabilityState, source?: ReportedCapability) => {
+    const mode = typeof source?.mode === "string" && /^[a-z0-9-]{1,32}$/u.test(source.mode) ? source.mode : undefined;
+    return { id, label, state, healthy: state !== "declared", ...(mode ? { mode } : {}), ...(state === "declared" ? { message: `${label} is not configured for ${environment}.`, repair } : {}) };
+  };
+  const always = (id: string, label: string, source: ReportedCapability | undefined) => entry(id, label, source?.configured === true ? "configured" : "declared", source);
+  const optional = (id: string, label: string, source: ReportedCapability | undefined, declared: boolean) => entry(id, label, !declared ? "disabled" : source?.configured === true ? "configured" : "declared", source);
+  return [
+    entry("admin", "Platform admin", "configured"),
+    always("email", "Email", reported.email),
+    always("payments", "Billing", reported.billing),
+    optional("queues", "Queues", reported.queues, reported.queues?.configured === true),
+    optional("r2", "Artifacts (R2)", reported.artifacts, reported.artifacts?.configured === true),
+    optional("workflows", "Workflows", reported.workflows, reported.workflows?.enabled === true),
+  ];
+}
 
 const capabilityLabels: Record<AdminCapability, string> = { database: "Database", email: "Email", billing: "Billing", queues: "Queues", artifacts: "Artifacts", workflows: "Workflows" };
 

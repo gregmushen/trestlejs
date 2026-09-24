@@ -1,4 +1,6 @@
 import { createDatabase, member, organization, tenantRecord, user, type DatabaseDriver } from "../packages/db/src/index.js";
+import { existsSync } from "node:fs";
+
 import { seedScenarios, type SeedScenarioName } from "./scenarios.js";
 
 export async function applySeedScenario(name: SeedScenarioName, connectionString: string, driver: DatabaseDriver = "postgres-js"): Promise<void> {
@@ -22,4 +24,10 @@ if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
   if (!connectionString) throw new Error("DATABASE_URL is required");
   await applySeedScenario(name, connectionString, (process.env.DATABASE_DRIVER ?? "postgres-js") as DatabaseDriver);
   process.stdout.write(`Seeded ${name}\n`);
+  // Projects with the platform admin get the local-only operator admin/admin.
+  if (existsSync(new URL("../apps/admin", import.meta.url))) {
+    const { localAdmin, seedLocalAdmin } = await import("../packages/auth/src/local-admin.js");
+    await seedLocalAdmin(connectionString);
+    process.stdout.write(`Platform admin: username "${localAdmin.username}", password "${localAdmin.password}" (local only)\n`);
+  }
 }

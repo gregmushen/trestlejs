@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { adminViews } from "../src/registry.js";
+import { adminViews } from "../src/api-registry.js";
 import { admin, adminDependencies, capabilityGuidance, type AdminEnvironment } from "./index.js";
 import { adminRoutePolicies } from "./route-policies.js";
 

@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 
 import { artifactMetadata } from "./artifact-schema.js";
+import { member, organization } from "./auth-schema.js";
 import { recordAuditEvent } from "./audit.js";
 import type { Database } from "./index.js";
 import { outboxMessage } from "./outbox-schema.js";
@@ -45,6 +46,28 @@ export async function listDeadOutboxEvents(database: Database, options: Readonly
     id: outboxMessage.id, eventName: outboxMessage.eventName, organizationId: outboxMessage.organizationId, correlationId: outboxMessage.correlationId,
     attempts: outboxMessage.attempts, lastError: outboxMessage.lastError, createdAt: outboxMessage.createdAt,
   }).from(outboxMessage).where(eq(outboxMessage.status, "dead")).orderBy(asc(outboxMessage.availableAt), asc(outboxMessage.id)).limit(pageSize(options.limit));
+}
+
+export type OutboxStatusCounts = Readonly<Record<"pending" | "leased" | "succeeded" | "dead", number>>;
+
+/** Outbox totals by delivery status, from the granted status column only. */
+export async function outboxStatusCounts(database: Database): Promise<OutboxStatusCounts> {
+  const rows = await database.select({ status: outboxMessage.status, total: count() }).from(outboxMessage).groupBy(outboxMessage.status);
+  const totals = { pending: 0, leased: 0, succeeded: 0, dead: 0 };
+  for (const row of rows) if (row.status in totals) totals[row.status as keyof typeof totals] = Number(row.total);
+  return totals;
+}
+
+export type PlatformOrganization = Readonly<{ id: string; name: string; slug: string | null; createdAt: Date; members: number }>;
+
+/** Organizations across tenants with their member counts; names and slugs only, never tenant data. */
+export async function listPlatformOrganizations(database: Database, options: Readonly<{ query?: string; limit?: number }> = {}): Promise<PlatformOrganization[]> {
+  const query = options.query?.trim().toLowerCase();
+  const rows = await database.select({ id: organization.id, name: organization.name, slug: organization.slug, createdAt: organization.createdAt, members: count(member.id) })
+    .from(organization).leftJoin(member, eq(member.organizationId, organization.id))
+    .where(query ? sql`(lower(${organization.name}) like ${`%${query}%`} or lower(${organization.slug}) like ${`%${query}%`})` : undefined)
+    .groupBy(organization.id).orderBy(asc(organization.name), asc(organization.id)).limit(Math.min(Math.max(Math.trunc(options.limit ?? 200), 1), 500));
+  return rows.map((row) => ({ ...row, members: Number(row.members) }));
 }
 
 /** Returns one dead outbox event to pending, as `trestle queue dlq redrive` does, and audits it. */

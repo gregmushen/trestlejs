@@ -4,10 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
     <title>__TRESTLE_PROJECT_NAME__ admin</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- The app root is its own stacking context; Kumo overlays portal into #admin-overlays above it. -->
+    <div id="root" class="isolate"></div>
+    <div id="admin-overlays" class="isolate"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
