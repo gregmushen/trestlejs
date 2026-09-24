@@ -1024,6 +1024,37 @@ lost the active organization after navigation. A rerun reached the final R2
 checks and then received HTTP 500 while switching organizations. The earlier
 manual staging run passed on the same source commit, so deployed browser
 reliability is an unresolved beta gate rather than a passed production signal.
+On 2026-09-24, a cache-disabled Hyperdrive configuration was created for the
+canary staging Worker's restricted Neon runtime role, using Neon's direct
+(non-pooler) endpoint and a five-connection origin limit. An isolated remote
+Worker probe confirmed that explicit transaction-local `SET ROLE trestle_app`
+and `app.organization_id` activate RLS, and that the login role and tenant
+setting reset after the transaction. Crucially, appending Trestle's existing
+tenant `options` to the Hyperdrive binding connection string did **not** set
+either value: the query remained under `trestle_runtime_sql`. A direct binding
+swap would therefore bypass the intended tenant connection model and is not
+permitted. Hyperdrive's default query cache must remain disabled for auth,
+permissions, billing, and other tenant-sensitive reads.
+A staging-only trial routed Better Auth's unscoped tables through Hyperdrive
+while tenant-owned tables stayed on the existing Neon driver. Typechecks and
+three targeted unit tests passed; one deployed product gate and three of five
+repeated product gates passed, while two repeats still failed at signup and
+`/api/me`. The staging Worker was rolled back to its previous version
+`5d57ad67-1972-4f1e-ae71-cd7ec888688e`; the Hyperdrive configuration remains
+unattached for further work. This trial is neither a reliability fix nor a
+full migration. Before any cutover, implement a tenant-scoped query/transaction
+adapter that sets the role and organization on every transaction, prove
+cross-tenant denial against Hyperdrive, and rerun the deployed gate repeatedly
+with diagnostic error classification.
+Alpha 131 adds bounded, message-free error names and known SQLSTATE/transport
+codes to generated HTTP failure logs, and a Better Auth error hook that reports
+unexpected server failures while suppressing ordinary authentication denials.
+The generated-project canary typecheck and tests cover malformed error objects
+and credential-bearing messages. This is diagnostic coverage, not a claim that
+the intermittent staging failure or Hyperdrive tenant migration is fixed.
+The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
+protected preview-cleanup command against the recorded baseline before applying
+the source upgrade; the two-tenant database and RLS rehearsal passes.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

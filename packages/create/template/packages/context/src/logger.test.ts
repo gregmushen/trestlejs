@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createLogger, createMetrics, loggerSecretsFromEnvironment, type LogRecord } from "./index.js";
+import { createLogger, createMetrics, loggerSecretsFromEnvironment, safeErrorDiagnostic, type LogRecord } from "./index.js";
 
 describe("semantic logger", () => {
   it("emits context and redacts sensitive values recursively", () => {
@@ -55,5 +55,17 @@ describe("semantic logger", () => {
     log.info("large.payload", Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`field${index}`, "x".repeat(900)])));
     expect(records[0]).toMatchObject({ event: "large.payload", truncated: true });
     expect(JSON.stringify(records[0]).length).toBeLessThan(500);
+  });
+
+  it("classifies nested errors without logging messages, URLs, or unsafe codes", () => {
+    const cause = Object.assign(new Error("password=private DATABASE_URL=postgres://secret"), { name: "PostgresError", code: "08006" });
+    const error = Object.assign(new Error("https://app.test/reset?token=private", { cause }), { name: "RequestError", code: "ECONNRESET" });
+    expect(safeErrorDiagnostic(error)).toEqual({ errorName: "RequestError", errorCode: "ECONNRESET", causeName: "PostgresError", causeCode: "08006" });
+    expect(JSON.stringify(safeErrorDiagnostic(error))).not.toMatch(/private|secret|postgres:\/\/|app\.test|token=/iu);
+    expect(safeErrorDiagnostic(Object.assign(new Error("private"), { name: "Bad Name private", code: "private-token" }))).toEqual({ errorName: "UnknownError" });
+    expect(safeErrorDiagnostic("private")).toEqual({ errorName: "UnknownError" });
+    const hostile = new Error("private");
+    Object.defineProperty(hostile, "code", { get: () => { throw new Error("private"); } });
+    expect(safeErrorDiagnostic(hostile)).toEqual({ errorName: "UnknownError" });
   });
 });

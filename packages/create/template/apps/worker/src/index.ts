@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { getPlan, planEntitlements, plans } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
-import { createLogger, createMetrics, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, createMetrics, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
 import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, retrieveCurrentStripeSubscription, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
@@ -438,7 +438,7 @@ app.post("/api/dev/billing", requireExecutionContext, async (context) => {
 });
 
 app.on(["GET", "POST"], "/api/auth/*", (context) =>
-  createAuth(context.env).handler(context.req.raw),
+  createAuth(context.env, context.get("correlationId")).handler(context.req.raw),
 );
 
 app.route("/", accessRoutes);
@@ -446,7 +446,7 @@ app.route("/", machineAccessRoutes);
 app.route("/", regionalRoutes);
 
 app.get("/api/me", async (context) => {
-  const session = await createAuth(context.env).api.getSession({ headers: context.req.raw.headers });
+  const session = await createAuth(context.env, context.get("correlationId")).api.getSession({ headers: context.req.raw.headers });
   if (!session) return context.json({ error: "Unauthorized" }, 401);
 
   return context.json({ user: session.user, session: session.session });
@@ -542,7 +542,7 @@ app.get("/artifacts/:id", async (context) => {
 
 app.onError((error, context) => {
   const mapped = mapHttpError(error);
-  createLogger({ correlationId: context.get("correlationId") }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("http.request.failed", { code: mapped.code, retryable: mapped.retryable, durationMs: Date.now() - context.get("requestStartedAt") });
+  createLogger({ correlationId: context.get("correlationId") }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("http.request.failed", { code: mapped.code, retryable: mapped.retryable, durationMs: Date.now() - context.get("requestStartedAt"), ...safeErrorDiagnostic(error) });
   return context.json({ error: mapped.code, message: mapped.message, retryable: mapped.retryable }, mapped.status);
 });
 

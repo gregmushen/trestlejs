@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@__TRESTLE_PROJECT_NAME__/authz": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/context": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*",
     "better-auth": "1.7.5",

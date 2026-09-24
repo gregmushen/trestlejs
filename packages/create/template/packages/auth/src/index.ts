@@ -1,4 +1,5 @@
 import { memberDefaultApplicationRoles, organizationCreatorApplicationRoles } from "@__TRESTLE_PROJECT_NAME__/authz";
+import { createLogger, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
 import { createDatabase, createTenantDatabase, grantApplicationRoles, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import * as schema from "@__TRESTLE_PROJECT_NAME__/db";
 import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate, type R2BucketBinding } from "@__TRESTLE_PROJECT_NAME__/integrations";
@@ -33,7 +34,7 @@ export interface AuthEnvironment {
   ARTIFACT_READY_RETENTION_DAYS?: string;
 }
 
-export function createAuth(environment: AuthEnvironment) {
+export function createAuth(environment: AuthEnvironment, correlationId?: string) {
   const baseURL = environment.BETTER_AUTH_URL ?? "http://localhost:42069";
   const webOrigin = environment.WEB_ORIGIN ?? baseURL;
   const email = createEmailService({
@@ -49,6 +50,13 @@ export function createAuth(environment: AuthEnvironment) {
     baseURL,
     secret: environment.BETTER_AUTH_SECRET,
     trustedOrigins: [baseURL, webOrigin],
+    onAPIError: {
+      onError: (error) => {
+        if (!shouldLogAuthError(error)) return;
+        createLogger(correlationId ? { correlationId } : {}, undefined, { secretValues: loggerSecretsFromEnvironment(environment) })
+          .error("auth.request.failed", safeErrorDiagnostic(error));
+      },
+    },
     database: drizzleAdapter(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), {
       provider: "pg",
       schema,
@@ -95,6 +103,17 @@ export function createAuth(environment: AuthEnvironment) {
       },
     })],
   });
+}
+
+/** Expected authentication denials are not infrastructure failures. */
+export function shouldLogAuthError(error: unknown): boolean {
+  try {
+    if (!error || typeof error !== "object") return true;
+    const status = (error as { status?: unknown }).status;
+    return !["BAD_REQUEST", "UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND", "CONFLICT", 400, 401, 403, 404, 409].includes(status as string | number);
+  } catch {
+    return true;
+  }
 }
 
 async function memberCount(environment: AuthEnvironment, organizationId: string): Promise<number> {
