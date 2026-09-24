@@ -14,10 +14,10 @@ describe("payments boundary", () => {
   });
 
   it("accepts a valid raw-body Stripe signature and rejects a modified body", () => {
-    const payload = JSON.stringify({ id: "evt_1", object: "event", api_version: "2026-08-27.basil", created: 1_790_000_000, data: { object: { id: "sub_1", object: "subscription", customer: "cus_1", status: "active", metadata: { organizationId: "org-1", plan: "pro" } } }, livemode: false, pending_webhooks: 1, request: null, type: "customer.subscription.created" });
+    const payload = JSON.stringify({ id: "evt_1", object: "event", api_version: "2026-08-27.basil", created: 1_790_000_000, data: { object: { id: "sub_1", object: "subscription", customer: "cus_1", status: "active", cancel_at_period_end: true, items: { data: [{ current_period_start: 1_790_000_000, current_period_end: 1_792_592_000 }] }, metadata: { organizationId: "org-1", plan: "pro" } } }, livemode: false, pending_webhooks: 1, request: null, type: "customer.subscription.created" });
     const secret = "whsec_test";
     const signature = Stripe.webhooks.generateTestHeaderString({ payload, secret, timestamp: Math.floor(Date.now() / 1000) });
-    expect(verifyAndNormalizeStripeEvent(payload, signature, secret)).toMatchObject({ type: "SubscriptionActivated", organizationId: "org-1", plan: "pro", status: "active" });
+    expect(verifyAndNormalizeStripeEvent(payload, signature, secret)).toMatchObject({ type: "SubscriptionActivated", organizationId: "org-1", plan: "pro", status: "active", cancelAtPeriodEnd: true, currentPeriodStart: new Date(1_790_000_000_000), currentPeriodEnd: new Date(1_792_592_000_000) });
     expect(() => verifyAndNormalizeStripeEvent(`${payload} `, signature, secret)).toThrow();
   });
 });

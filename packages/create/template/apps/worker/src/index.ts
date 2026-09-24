@@ -2,10 +2,10 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
+import { getPlan, planEntitlements, plans } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
-import { billingProviderEvent, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
+import { applyBillingProviderEvent, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -324,21 +324,30 @@ app.post("/webhooks/stripe", async (context) => {
   let event: ReturnType<typeof verifyAndNormalizeStripeEvent>;
   try { event = verifyAndNormalizeStripeEvent(await context.req.text(), signature, context.env.STRIPE_WEBHOOK_SECRET); }
   catch { log.warn("billing.webhook.rejected", { reason: "invalid_signature_or_payload" }); return context.json({ error: "Invalid Stripe webhook" }, 400); }
-  const database = createDatabase(context.env.DATABASE_URL, context.env.DATABASE_DRIVER);
+  const subscriptionEvent = event.type.startsWith("Subscription");
+  const plan = event.plan ? getPlan(event.plan) : undefined;
+  if (subscriptionEvent && (!event.organizationId || !event.status || !plan)) {
+    log.error("billing.webhook.unresolved_subscription", { providerEventId: event.id, type: event.type });
+    return context.json({ error: "Subscription webhook lacks a known organization or plan" }, 422);
+  }
   try {
-    const inserted = await database.insert(billingProviderEvent).values({ provider: "stripe", providerEventId: event.id, type: event.type }).onConflictDoNothing().returning();
-    if (inserted.length === 0) {
-      const [existing] = await database.select().from(billingProviderEvent).where(and(eq(billingProviderEvent.provider, "stripe"), eq(billingProviderEvent.providerEventId, event.id))).limit(1);
-      if (existing?.status === "processed") { log.info("billing.webhook.duplicate", { providerEventId: event.id, type: event.type }); return context.json({ duplicate: true }, 200); }
-    }
-    if (event.organizationId && event.status && event.plan) {
-      await new PostgresBillingProjectionRepository(context.env.DATABASE_URL, context.env.DATABASE_DRIVER).put({ organizationId: event.organizationId, provider: "stripe", ...(event.providerCustomerId ? { providerCustomerId: event.providerCustomerId } : {}), ...(event.providerSubscriptionId ? { providerSubscriptionId: event.providerSubscriptionId } : {}), plan: event.plan, planVersion: getPlan(event.plan)?.version ?? 1, status: event.status, cancelAtPeriodEnd: event.status === "cancelled", entitlements: event.status === "active" || event.status === "trialing" ? [...(planEntitlements[event.plan as keyof typeof planEntitlements] ?? [])] : [] });
-    }
-    await database.update(billingProviderEvent).set({ status: "processed", processedAt: new Date() }).where(and(eq(billingProviderEvent.provider, "stripe"), eq(billingProviderEvent.providerEventId, event.id)));
-    log.info("billing.webhook.processed", { providerEventId: event.id, type: event.type, organizationId: event.organizationId });
-    return context.json({ duplicate: false, event }, 202);
+    const result = await applyBillingProviderEvent({ databaseUrl: context.env.DATABASE_URL,
+      ...(context.env.DATABASE_DRIVER ? { driver: context.env.DATABASE_DRIVER } : {}),
+      provider: "stripe", providerEventId: event.id, type: event.type,
+      ...(subscriptionEvent && event.organizationId && event.status && event.plan && plan ? { projection: {
+        organizationId: event.organizationId,
+        ...(event.providerCustomerId ? { providerCustomerId: event.providerCustomerId } : {}),
+        ...(event.providerSubscriptionId ? { providerSubscriptionId: event.providerSubscriptionId } : {}),
+        plan: event.plan, planVersion: plan.version, status: event.status,
+        ...(event.cancelAtPeriodEnd !== undefined ? { cancelAtPeriodEnd: event.cancelAtPeriodEnd } : {}),
+        ...(event.currentPeriodStart ? { currentPeriodStart: event.currentPeriodStart } : {}),
+        ...(event.currentPeriodEnd ? { currentPeriodEnd: event.currentPeriodEnd } : {}),
+        entitlements: event.status === "active" || event.status === "trialing" ? [...(planEntitlements[event.plan as keyof typeof planEntitlements] ?? [])] : [],
+      } } : {}),
+    });
+    log.info(result.duplicate ? "billing.webhook.duplicate" : "billing.webhook.processed", { providerEventId: event.id, type: event.type, organizationId: event.organizationId });
+    return context.json({ duplicate: result.duplicate, ...(result.duplicate ? {} : { event }) }, result.duplicate ? 200 : 202);
   } catch (error) {
-    await database.update(billingProviderEvent).set({ status: "failed", error: error instanceof Error ? error.message.slice(0, 500) : "processing failed" }).where(and(eq(billingProviderEvent.provider, "stripe"), eq(billingProviderEvent.providerEventId, event.id))).catch(() => undefined);
     log.error("billing.webhook.failed", { providerEventId: event.id, type: event.type });
     throw error;
   }

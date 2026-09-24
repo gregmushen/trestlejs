@@ -661,6 +661,18 @@ closed when native delivery is enabled. See
 decision and deployed successful delivery are deferred known issues, not
 completed Alpha 88 claims. The beta candidate can proceed with optional
 remote native delivery disabled and this limitation disclosed.
+Alpha 89 repairs the Stripe subscription handoff and webhook transaction
+boundary. Checkout now copies organization and plan metadata onto the
+underlying Subscription, not only the Session. Signed subscription events
+fail closed if that identity is missing or the plan is unknown. A durable
+provider-event receipt is locked for duplicate suppression; subscription and
+entitlement projections commit with its processed status in one PostgreSQL
+transaction. Failed projections retain a retryable receipt without partial
+entitlements. Period dates and end-of-period cancellation are projected from
+the Subscription. Generated PostgreSQL and signed Worker-route tests cover
+retries, concurrency, duplicate events, and the rule that Checkout completion
+alone does not grant paid access. Live Stripe test-mode evidence, event-order
+reconciliation, and billing event/outbox publication remain beta work.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

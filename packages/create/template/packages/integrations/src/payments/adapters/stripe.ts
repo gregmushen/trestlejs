@@ -17,7 +17,8 @@ export class StripeBillingAdapter implements BillingService {
   async createCheckoutSession(input: CreateCheckoutInput): Promise<CheckoutSession> {
     const price = this.options.prices[input.plan]; if (!price) throw new BillingPlanUnavailable(`no Stripe price is mapped for ${input.plan}`);
     try {
-      const session = await this.stripe.checkout.sessions.create({ mode: "subscription", line_items: [{ price, quantity: 1 }], success_url: input.successUrl ?? `${this.options.returnUrl}?checkout=success`, cancel_url: input.cancelUrl ?? `${this.options.returnUrl}?checkout=cancelled`, ...(input.customerEmail ? { customer_email: input.customerEmail } : {}), metadata: { organizationId: input.organizationId, plan: input.plan } }, { idempotencyKey: `checkout:${input.organizationId}:${input.plan}:${input.requestId}` });
+      const metadata = { organizationId: input.organizationId, plan: input.plan };
+      const session = await this.stripe.checkout.sessions.create({ mode: "subscription", line_items: [{ price, quantity: 1 }], success_url: input.successUrl ?? `${this.options.returnUrl}?checkout=success`, cancel_url: input.cancelUrl ?? `${this.options.returnUrl}?checkout=cancelled`, ...(input.customerEmail ? { customer_email: input.customerEmail } : {}), metadata, subscription_data: { metadata } }, { idempotencyKey: `checkout:${input.organizationId}:${input.plan}:${input.requestId}` });
       if (!session.url) throw new BillingProviderUnavailable("Stripe did not return a Checkout URL");
       return { id: session.id, url: session.url, ...(session.expires_at ? { expiresAt: new Date(session.expires_at * 1000) } : {}) };
     } catch (error) { throw normalized(error); }
