@@ -72,6 +72,31 @@ suite("native webhook delivery leases", () => {
       clock: { now: () => initialTime }, maxActivePerEndpoint: 0 })).rejects.toThrow("endpoint concurrency limit");
   });
 
+  it("bounds one tenant across competing endpoints without throttling another tenant", async () => {
+    const organizationId = "claim-tenant-capacity";
+    const deliveries = await Promise.all(Array.from({ length: 5 }, () => fixture(organizationId)));
+    const other = await fixture("claim-other-capacity");
+    const clock = { now: () => initialTime };
+    const claim = (deliveryId: string, tenant = organizationId) => claimNativeWebhookDelivery({
+      organizationId: tenant, deliveryId, tenantDatabase, clock, maxActivePerTenant: 2,
+    });
+    const results = await Promise.all([...deliveries.map(({ deliveryId }) => claim(deliveryId)), claim(other.deliveryId, "claim-other-capacity")]);
+    expect(results.slice(0, 5).filter((result) => result.state === "leased")).toHaveLength(2);
+    expect(results.slice(0, 5).filter((result) => result.state === "capacity")).toHaveLength(3);
+    expect(results[5]?.state).toBe("leased");
+    const [active] = await sql!<{ active: number }[]>`select count(*)::int as active from webhook_delivery where organization_id=${organizationId} and state='leased'`;
+    expect(active?.active).toBe(2);
+    const winner = results.slice(0, 5).find((result) => result.state === "leased");
+    const waiting = results.slice(0, 5).findIndex((result) => result.state === "capacity");
+    if (winner?.state !== "leased" || waiting < 0) throw new Error("Expected leased and deferred tenant deliveries");
+    await settleNativeWebhookAttempt({ organizationId, deliveryId: winner.deliveryId, leaseToken: winner.leaseToken, tenantDatabase,
+      clock: { now: () => new Date(initialTime.getTime() + 1) }, result: { kind: "response", status: 204 }, durationMs: 1 });
+    expect((await claimNativeWebhookDelivery({ organizationId, deliveryId: deliveries[waiting]!.deliveryId, tenantDatabase,
+      clock: { now: () => new Date(initialTime.getTime() + 1) }, maxActivePerTenant: 2 })).state).toBe("leased");
+    await expect(claimNativeWebhookDelivery({ organizationId, deliveryId: deliveries[waiting]!.deliveryId, tenantDatabase,
+      clock, maxActivePerTenant: 0 })).rejects.toThrow("tenant concurrency limit");
+  });
+
   it("recovers due work and expired leases without crossing tenant or environment", async () => {
     const organizationId = "claim-recovery";
     const due = await fixture(organizationId);

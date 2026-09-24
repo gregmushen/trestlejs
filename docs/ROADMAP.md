@@ -643,6 +643,15 @@ inspection shows replay state and supports inspecting the new attempt ID;
 the application exposes a replay action without revealing payloads or secrets.
 Local signed-delivery and database tests are required; remote provider delivery
 and the configured Resend/Stripe preview gate remain beta work.
+Alpha 87 extends native webhook claim backpressure from one endpoint to the
+whole organization. A tenant-scoped PostgreSQL advisory lock serializes claims
+across different endpoints before counting live leases; the default ceiling is
+16 concurrent attempts per tenant alongside the existing four-per-endpoint
+limit. Capacity denial does not mutate a delivery or consume an attempt, and
+other tenants remain independent. PostgreSQL contention tests verify the
+limit, isolation, and reuse of capacity after settlement. Global worker
+concurrency, throughput quotas, and deployed Cloudflare delivery evidence
+remain separate beta work.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
