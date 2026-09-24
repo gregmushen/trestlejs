@@ -49,6 +49,9 @@ export function securityEventForEndpoint(path: string): string | null {
 
 export type AssuranceRequirement = Readonly<{ level: AssuranceLevel; maxAgeMinutes: number }>;
 
+/** How long a verification stays fresh for step-up. */
+export const stepUpWindowMinutes = 15;
+
 export function meetsRequirement(assurance: AuthenticationAssurance | null, requirement: AssuranceRequirement, now: Date): { ok: true } | { ok: false; reason: "missing" | "insufficient_level" | "stale" } {
   if (!assurance) return { ok: false, reason: "missing" };
   if (assuranceRank[assurance.level] < assuranceRank[requirement.level]) return { ok: false, reason: "insufficient_level" };
@@ -65,6 +68,6 @@ const phishingResistantPermissions: ReadonlySet<PermissionCode> = new Set(["plat
  * grant or revoke authority require phishing-resistant evidence (a passkey).
  */
 export function platformAssuranceRequirement(permission: string, environment: ApplicationEnvironment): AssuranceRequirement {
-  if (environment === "local") return { level: "password", maxAgeMinutes: 15 };
-  return { level: (phishingResistantPermissions as ReadonlySet<string>).has(permission) ? "phishing_resistant" : "mfa", maxAgeMinutes: 15 };
+  if (environment === "local") return { level: "password", maxAgeMinutes: stepUpWindowMinutes };
+  return { level: (phishingResistantPermissions as ReadonlySet<string>).has(permission) ? "phishing_resistant" : "mfa", maxAgeMinutes: stepUpWindowMinutes };
 }

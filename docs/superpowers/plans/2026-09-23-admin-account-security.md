@@ -522,14 +522,24 @@ stepUpRequiredAfter: new Date((assurance?.verifiedAt.getTime() ?? 0) + 15 * 60_0
 
 - [ ] **Step 3b: Step-up for factor management**
 
-Better Auth's factor endpoints (`/two-factor/enable`, `/two-factor/disable`, `/two-factor/generate-backup-codes`, `/passkey/generate-register-options`, `/passkey/verify-registration`, `/passkey/delete-passkey`) require only a password or a session. Without a gate, someone holding only the password could replace an operator's factors and then sign in at a higher level. In the admin Worker, before forwarding any of these to Better Auth:
+Better Auth's factor endpoints (`/two-factor/enable`, `/two-factor/disable`, `/two-factor/generate-backup-codes`, `/passkey/generate-register-options`, `/passkey/verify-registration`, `/passkey/delete-passkey`) require only a password or a session. Without a gate, someone holding only the password could replace an operator's factors and then sign in at a higher level. The same holds one level up: someone with the password and a phished TOTP code could register their own passkey, sign in with it as `phishing_resistant`, and use `platform.roles.manage`, or delete the real passkeys. In the admin Worker, before forwarding any of these to Better Auth:
 
-1. Resolve the session (`adminDependencies.session`) and its assurance; no session → 401.
-2. If the user has any factor enrolled (`user.two_factor_enabled` or at least one `passkey` row, read through the auth database), require `platformAssuranceRequirement`-style evidence of at least `mfa`, fresh within 15 minutes, in every environment (including local, once a factor exists).
-3. If the user has no factor yet (first enrollment), require a fresh password (15 minutes).
+1. Resolve the session (`adminDependencies.session`); no session → 401.
+2. Restrict the endpoints to platform operators: apply the admin middleware's local-account rule (the seeded `admin@trestle.local` account gets 403 `local_account` outside local development), then return 403 `no_platform_roles` when `adminDependencies.platformRoles` is empty.
+3. Require the strongest factor the account already has, fresh within `stepUpWindowMinutes` (15), in every environment. `adminDependencies.enrolledFactor` returns `"phishing_resistant"` when any `passkey` row exists, `"mfa"` when `user.two_factor_enabled` is set, and `null` otherwise, read through one auth-database handle shared with the assurance lookup. With no factor yet (first enrollment), require a fresh password. An operator with only TOTP can still add a first passkey with fresh `mfa`.
 4. Otherwise respond 428 `step_up_required` with the same body shape as Step 3.
 
-Add tests: an operator with a factor and only password assurance gets 428 on `/api/auth/two-factor/disable` and `/api/auth/passkey/generate-register-options`; with fresh mfa assurance the request is forwarded; an operator without factors and a fresh password can start enrollment.
+The other factor endpoints on the admin origin:
+- `GET /passkey/list-user-passkeys`: operator check only; a read needs no step-up.
+- `POST /two-factor/verify-totp` with a session (completing enrollment, whose enable step was already stepped up): operator check only. Without a session it is a sign-in or step-up challenge and stays open.
+- `verify-backup-code`, `generate-authenticate-options`, `verify-authentication`: open, because sign-in needs them.
+
+Add tests:
+- a table over the six gated paths: insufficient evidence gets 428, sufficient evidence is forwarded, at each enrolled level (none → password, TOTP → mfa, passkey → phishing_resistant);
+- an operator with a passkey and fresh mfa gets 428 `required: "phishing_resistant"`;
+- an operator with only TOTP and fresh mfa can register a first passkey;
+- a signed-in non-operator gets 403 on enable and generate-register-options;
+- the seeded local account gets 403 outside local development.
 
 - [ ] **Step 4: Run to verify it passes**, plus the whole admin suite (`pnpm exec vitest run`); the `beforeEach` fixture from Step 1 keeps the existing action tests passing.
 

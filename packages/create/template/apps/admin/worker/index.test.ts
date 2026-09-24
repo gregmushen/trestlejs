@@ -5,7 +5,14 @@ import { admin, adminDependencies, capabilityGuidance, type AdminEnvironment } f
 import { adminRoutePolicies } from "./route-policies.js";
 
 const environment: AdminEnvironment = { DATABASE_URL: "postgres://user:password@127.0.0.1:1/unused", DATABASE_DRIVER: "postgres-js", BETTER_AUTH_SECRET: "test-secret-at-least-32-characters", APP_ENV: "local" };
-const state = { userId: "" as string, roles: [] as string[] };
+const state = { userId: "" as string, roles: [] as string[], forwarded: 0 };
+type Level = "password" | "mfa" | "phishing_resistant";
+const methods = { password: "password", mfa: "totp", phishing_resistant: "passkey" } as const;
+
+/** The signed-in session's recorded evidence, verified `minutesAgo`. */
+function assured(level: Level | null, minutesAgo = 0) {
+  adminDependencies.assurance = async () => level ? { sessionId: "session-1", userId: state.userId, level, method: methods[level], verifiedAt: new Date(Date.now() - minutesAgo * 60_000) } : null;
+}
 
 async function call(method: string, path: string, init: { origin?: string; body?: unknown } = {}, env: AdminEnvironment = environment) {
   const headers: Record<string, string> = { origin: init.origin ?? "http://localhost:42070" };
@@ -19,9 +26,10 @@ describe("platform admin Worker", () => {
     state.userId = "operator-1";
     state.roles = ["platform_operator"];
     adminDependencies.session = async () => state.userId ? { user: { id: state.userId, email: `${state.userId}@example.test` }, session: { id: "session-1" } } : null;
-    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "password", method: "password", verifiedAt: new Date() });
-    adminDependencies.enrolledFactor = async () => false;
-    adminDependencies.forwardAuth = async () => new Response(JSON.stringify({ forwarded: true }), { headers: { "content-type": "application/json" } });
+    state.forwarded = 0;
+    assured("password");
+    adminDependencies.enrolledFactor = async () => null;
+    adminDependencies.forwardAuth = async () => { state.forwarded += 1; return new Response(JSON.stringify({ forwarded: true }), { headers: { "content-type": "application/json" } }); };
     adminDependencies.platformRoles = async () => state.roles;
     adminDependencies.operationalStatus = async () => ({ capabilities: { database: { configured: true }, email: { configured: false, mode: "resend" }, billing: { configured: true, mode: "local" }, queues: { configured: false } } });
   });
@@ -102,28 +110,104 @@ describe("platform admin Worker", () => {
     expect(Date.parse(session.body.stepUpRequiredAfter)).toBeGreaterThan(Date.now());
   });
 
-  it("requires a fresh second factor to change an enrolled operator's factors", async () => {
-    adminDependencies.enrolledFactor = async () => true;
-    const disable = await call("POST", "/api/auth/two-factor/disable", { body: { password: "x" } });
-    expect(disable).toMatchObject({ status: 428, body: { error: "step_up_required", required: "mfa", reason: "insufficient_level" } });
-    expect(await call("GET", "/api/auth/passkey/generate-register-options")).toMatchObject({ status: 428, body: { required: "mfa" } });
+  const gatedFactorPaths = [
+    ["POST", "/api/auth/two-factor/enable"], ["POST", "/api/auth/two-factor/disable"], ["POST", "/api/auth/two-factor/generate-backup-codes"],
+    ["GET", "/api/auth/passkey/generate-register-options"], ["POST", "/api/auth/passkey/verify-registration"], ["POST", "/api/auth/passkey/delete-passkey"],
+  ] as const;
 
-    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "mfa", method: "totp", verifiedAt: new Date(Date.now() - 20 * 60_000) });
-    expect(await call("POST", "/api/auth/passkey/delete-passkey", { body: { id: "pk-1" } })).toMatchObject({ status: 428, body: { reason: "stale" } });
-
-    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "mfa", method: "totp", verifiedAt: new Date() });
-    expect(await call("POST", "/api/auth/two-factor/disable", { body: { password: "x" } })).toMatchObject({ status: 200, body: { forwarded: true } });
-    expect(await call("GET", "/api/auth/passkey/generate-register-options")).toMatchObject({ status: 200, body: { forwarded: true } });
+  it.each(gatedFactorPaths)("requires fresh evidence at the strongest enrolled factor for %s %s", async (method, path) => {
+    const send = async () => await call(method, path, method === "POST" ? { body: {} } : {});
+    const cases: Array<{ enrolled: "mfa" | "phishing_resistant" | null; weak: [Level, number]; strong: Level; required: Level; reason: string }> = [
+      { enrolled: null, weak: ["password", 20], strong: "password", required: "password", reason: "stale" },
+      { enrolled: "mfa", weak: ["password", 0], strong: "mfa", required: "mfa", reason: "insufficient_level" },
+      // A phished TOTP code must not add or remove passkeys once the account has one.
+      { enrolled: "phishing_resistant", weak: ["mfa", 0], strong: "phishing_resistant", required: "phishing_resistant", reason: "insufficient_level" },
+    ];
+    for (const { enrolled, weak, strong, required, reason } of cases) {
+      adminDependencies.enrolledFactor = async () => enrolled;
+      assured(...weak);
+      expect(await send()).toMatchObject({ status: 428, body: { error: "step_up_required", required, reason, maxAgeMinutes: 15 } });
+      expect(state.forwarded).toBe(0);
+      assured(strong);
+      expect(await send()).toMatchObject({ status: 200, body: { forwarded: true } });
+      state.forwarded = 0;
+    }
+    assured(null);
+    expect(await send()).toMatchObject({ status: 428, body: { reason: "missing" } });
   });
 
-  it("lets an operator without factors start enrollment with a fresh password, and nobody without a session", async () => {
-    expect(await call("POST", "/api/auth/two-factor/enable", { body: { password: "x" } })).toMatchObject({ status: 200, body: { forwarded: true } });
-    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "password", method: "password", verifiedAt: new Date(Date.now() - 20 * 60_000) });
-    expect(await call("POST", "/api/auth/two-factor/enable", { body: { password: "x" } })).toMatchObject({ status: 428, body: { required: "password", reason: "stale" } });
-    state.userId = "";
-    expect((await call("POST", "/api/auth/two-factor/enable", { body: { password: "x" } })).status).toBe(401);
-    // Proving a factor is how a person signs in or steps up, so it needs no session.
+  it("lets an operator with only TOTP add a first passkey with a fresh second factor", async () => {
+    adminDependencies.enrolledFactor = async () => "mfa";
+    assured("mfa");
+    expect(await call("POST", "/api/auth/passkey/verify-registration", { body: {} })).toMatchObject({ status: 200, body: { forwarded: true } });
+  });
+
+  it("reads assurance and enrolled factors through one auth database handle", async () => {
+    const seen: unknown[] = [];
+    adminDependencies.assurance = async (database) => { seen.push(database); return null; };
+    adminDependencies.enrolledFactor = async (database) => { seen.push(database); return null; };
+    await call("POST", "/api/auth/two-factor/enable", { body: {} });
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(seen[1]);
+  });
+
+  it("serves factor endpoints only to platform operators, and leaves sign-in challenges open", async () => {
+    state.roles = [];
+    expect(await call("POST", "/api/auth/two-factor/enable", { body: { password: "x" } })).toMatchObject({ status: 403, body: { reason: "no_platform_roles" } });
+    expect(await call("GET", "/api/auth/passkey/generate-register-options")).toMatchObject({ status: 403, body: { reason: "no_platform_roles" } });
+    expect(await call("GET", "/api/auth/passkey/list-user-passkeys")).toMatchObject({ status: 403 });
+    // Completing enrollment verifies a code on an existing session.
+    expect(await call("POST", "/api/auth/two-factor/verify-totp", { body: { code: "000000" } })).toMatchObject({ status: 403 });
+    expect(state.forwarded).toBe(0);
+
+    state.roles = ["platform_operator"];
+    assured("password", 60);
+    expect(await call("GET", "/api/auth/passkey/list-user-passkeys")).toMatchObject({ status: 200, body: { forwarded: true } });
     expect(await call("POST", "/api/auth/two-factor/verify-totp", { body: { code: "000000" } })).toMatchObject({ status: 200, body: { forwarded: true } });
+
+    // A sign-in or step-up challenge has no session yet.
+    state.userId = "";
+    state.forwarded = 0;
+    expect((await call("POST", "/api/auth/two-factor/enable", { body: { password: "x" } })).status).toBe(401);
+    for (const [method, path] of [["POST", "/api/auth/two-factor/verify-totp"], ["POST", "/api/auth/two-factor/verify-backup-code"], ["GET", "/api/auth/passkey/generate-authenticate-options"], ["POST", "/api/auth/passkey/verify-authentication"]] as const) {
+      expect(await call(method, path, method === "POST" ? { body: {} } : {})).toMatchObject({ status: 200, body: { forwarded: true } });
+    }
+    expect(state.forwarded).toBe(4);
+  });
+
+  it("refuses the seeded local admin's factor changes outside local development", async () => {
+    adminDependencies.session = async () => ({ user: { id: "local-admin", email: "admin@trestle.local" }, session: { id: "session-1" } });
+    const production = { ...environment, APP_ENV: "production" as const, DATABASE_ADMIN_URL: environment.DATABASE_URL };
+    expect(await call("POST", "/api/auth/two-factor/enable", { body: {} }, production)).toMatchObject({ status: 403, body: { reason: "local_account" } });
+    expect(await call("POST", "/api/auth/two-factor/enable", { body: {} })).toMatchObject({ status: 200 });
+  });
+
+  it("checks assurance only where it is needed and fails closed", async () => {
+    // Reads never require step-up, and do not look assurance up.
+    adminDependencies.assurance = async () => { throw new Error("assurance lookup failed"); };
+    expect((await call("GET", "/api/admin/health")).status).toBe(200);
+    expect((await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "retry" } })).status).toBe(500);
+    expect((await call("POST", "/api/auth/two-factor/enable", { body: {} })).status).toBe(500);
+    expect(state.forwarded).toBe(0);
+
+    assured("password", 60);
+    expect((await call("GET", "/api/admin/session")).status).toBe(200);
+    assured(null);
+    expect(await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "retry" } })).toMatchObject({ status: 428, body: { reason: "missing" } });
+    const session = await call("GET", "/api/admin/session");
+    expect(session.body).toMatchObject({ assurance: null, stepUpRequiredAfter: null });
+
+    // Granting authority needs a passkey in every deployed environment.
+    state.roles = ["security_admin"];
+    assured("mfa");
+    const staging = { ...environment, APP_ENV: "staging" as const, DATABASE_ADMIN_URL: environment.DATABASE_URL };
+    expect(await call("POST", "/api/admin/platform-roles", { body: { userId: "u-2", role: "platform_operator", reason: "x" } }, staging)).toMatchObject({ status: 428, body: { required: "phishing_resistant" } });
+
+    // An unset APP_ENV is treated as deployed.
+    state.roles = ["platform_operator"];
+    assured("password");
+    const { APP_ENV: _unset, ...unset } = environment;
+    expect(await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "retry" } }, { ...unset, DATABASE_ADMIN_URL: environment.DATABASE_URL })).toMatchObject({ status: 428, body: { required: "mfa" } });
   });
 
   it("exposes no sign-up, organization, or unknown admin routes on the admin origin", async () => {

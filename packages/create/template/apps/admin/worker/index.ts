@@ -1,7 +1,7 @@
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import {
   AccessDeniedError, applicationRoles, evaluateAccess, formatAccessExplanation, meetsRequirement, organizationRoles, permissions, platformAccess, platformAssuranceRequirement, platformRoles, publicDenial,
-  type AccessEvaluator, type AssuranceLevel, type AssuranceRequirement,
+  stepUpWindowMinutes, type AccessEvaluator, type AssuranceLevel, type AssuranceRequirement,
 } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { Entitlements, featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
@@ -10,13 +10,13 @@ import {
   activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportableOrganizations, supportOrganizationView,
   grantPlatformRole, listPlatformAuditEvents, listPlatformEmailEvents, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
   listPlatformApiKeys, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
-  sessionAssurance, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
+  sessionAssurance, type Database, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 
 import { adminViews, type AdminCapability } from "../src/api-registry.js";
-import { databaseReachable, hasEnrolledFactor, overview, platformRolesFor } from "./data.js";
+import { databaseReachable, overview, platformRolesFor, strongestEnrolledFactor } from "./data.js";
 import { adminPolicyFor } from "./route-policies.js";
 
 export type AdminEnvironment = {
@@ -44,8 +44,8 @@ type Variables = { correlationId: string; operator: Session["user"]; access: Acc
 export const adminDependencies = {
   session: async (environment: AdminEnvironment, headers: Headers): Promise<Session | null> => await adminAuth(environment).api.getSession({ headers }) as Session | null,
   platformRoles: async (environment: AdminEnvironment, userId: string): Promise<string[]> => await platformRolesFor(platformDatabase(environment), userId),
-  assurance: async (environment: AdminEnvironment, sessionId: string): Promise<SessionAssurance | null> => await sessionAssurance(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), sessionId),
-  enrolledFactor: async (environment: AdminEnvironment, userId: string): Promise<boolean> => await hasEnrolledFactor(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), userId),
+  assurance: async (database: Database, sessionId: string): Promise<SessionAssurance | null> => await sessionAssurance(database, sessionId),
+  enrolledFactor: async (database: Database, userId: string): Promise<"phishing_resistant" | "mfa" | null> => await strongestEnrolledFactor(database, userId),
   forwardAuth: async (environment: AdminEnvironment, request: Request): Promise<Response> => await adminAuth(environment).handler(request),
   operationalStatus: async (environment: AdminEnvironment): Promise<unknown> => {
     const response = await fetch(new URL("/api/health/operational", environment.API_URL ?? "http://127.0.0.1:8787"), { headers: { accept: "application/json" } });
@@ -57,6 +57,16 @@ export const adminDependencies = {
 function adminAuth(environment: AdminEnvironment) {
   // The same accounts sign in on a separate origin with separate cookies; customer sessions never reach the admin.
   return createAuth({ ...environment, BETTER_AUTH_URL: environment.ADMIN_API_URL ?? "http://localhost:8788", WEB_ORIGIN: environment.ADMIN_ORIGIN ?? "http://localhost:42070", EMAIL_DELIVERY_MODE: "local" } as AuthEnvironment, { factors: true });
+}
+
+/** Better Auth's own tables (sessions, assurance, factors); one handle serves a request's lookups. */
+function authDatabase(environment: AdminEnvironment): Database {
+  return createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER);
+}
+
+/** Step-up fails closed: a Worker without APP_ENV is treated as deployed. */
+function assuranceEnvironment(environment: AdminEnvironment) {
+  return environment.APP_ENV ?? "production";
 }
 
 function platformConnection(environment: AdminEnvironment): string {
@@ -95,9 +105,6 @@ admin.use("/api/admin/*", async (context, next) => {
   await next();
 });
 
-/** How long a verification counts as fresh for step-up. */
-const stepUpWindowMinutes = 15;
-
 const stepUpMessages: Record<AssuranceLevel, string> = {
   phishing_resistant: "Re-authenticate with a passkey to perform this action",
   mfa: "Re-authenticate with a second factor to perform this action",
@@ -108,37 +115,49 @@ function stepUpRequired(context: AdminContext, requirement: AssuranceRequirement
   return context.json({ error: "step_up_required", required: requirement.level, maxAgeMinutes: requirement.maxAgeMinutes, reason, message: stepUpMessages[requirement.level] }, 428);
 }
 
-/** Better Auth changes factors with only a password or a session; these need step-up first. */
-const factorManagement = new Set(["/api/auth/two-factor/enable", "/api/auth/two-factor/disable", "/api/auth/two-factor/generate-backup-codes", "/api/auth/passkey/generate-register-options", "/api/auth/passkey/verify-registration", "/api/auth/passkey/delete-passkey"]);
+/** The seeded local operator (admin/admin) can never operate a deployed platform. */
+function localAccountDenied(context: AdminContext, session: Session): Response | null {
+  return session.user.email === localAdminEmail && (context.env.APP_ENV ?? "local") !== "local" ? context.json({ error: "forbidden", reason: "local_account", message: "The default local admin account cannot be used outside local development" }, 403) : null;
+}
 
 /**
- * Once a person has a factor, changing factors needs a fresh second factor in
- * every environment, so a stolen password cannot replace them and then sign in
- * at a higher level. The first enrollment needs a fresh password.
+ * How the admin guards a Better Auth endpoint before forwarding it:
+ * - `open`: sign-in and step-up challenges, which have no session yet;
+ * - `operator`: a signed-in platform operator;
+ * - `operator_if_signed_in`: open without a session (a sign-in challenge), operator-only with one (enrollment);
+ * - `step_up`: an operator with fresh evidence at the strongest factor the account has, or a fresh
+ *   password before the first enrollment, so neither a stolen password nor a phished TOTP code can
+ *   replace stronger factors. Better Auth itself asks only for a password or a session.
  */
-async function factorChangeDenied(context: AdminContext): Promise<Response | null> {
+type AuthGate = "open" | "operator" | "operator_if_signed_in" | "step_up";
+
+async function authGateDenied(context: AdminContext, gate: AuthGate): Promise<Response | null> {
+  if (gate === "open") return null;
   const session = await adminDependencies.session(context.env, context.req.raw.headers);
-  if (!session) return context.json({ error: "unauthorized", message: "Sign in to the platform admin" }, 401);
-  const [assurance, enrolled] = await Promise.all([adminDependencies.assurance(context.env, session.session.id), adminDependencies.enrolledFactor(context.env, session.user.id)]);
-  const requirement: AssuranceRequirement = { level: enrolled ? "mfa" : "password", maxAgeMinutes: stepUpWindowMinutes };
+  if (!session) return gate === "operator_if_signed_in" ? null : context.json({ error: "unauthorized", message: "Sign in to the platform admin" }, 401);
+  const local = localAccountDenied(context, session);
+  if (local) return local;
+  // Tenant membership or ownership never grants access to the admin's factor endpoints.
+  if ((await adminDependencies.platformRoles(context.env, session.user.id)).length === 0) return context.json({ error: "forbidden", reason: "no_platform_roles", message: "This account has no platform role" }, 403);
+  if (gate !== "step_up") return null;
+  const database = authDatabase(context.env);
+  const [assurance, enrolled] = await Promise.all([adminDependencies.assurance(database, session.session.id), adminDependencies.enrolledFactor(database, session.user.id)]);
+  const requirement: AssuranceRequirement = { level: enrolled ?? "password", maxAgeMinutes: stepUpWindowMinutes };
   const result = meetsRequirement(assurance, requirement, new Date());
   return result.ok ? null : stepUpRequired(context, requirement, result.reason);
 }
 
 // Only sign-in, session, sign-out, and the operator's own factors are exposed; sign-up and organization endpoints do not exist here.
-for (const [method, path] of [
-  ["POST", "/api/auth/sign-in/email"], ["POST", "/api/auth/sign-out"], ["GET", "/api/auth/get-session"],
-  ["POST", "/api/auth/two-factor/enable"], ["POST", "/api/auth/two-factor/disable"], ["POST", "/api/auth/two-factor/verify-totp"], ["POST", "/api/auth/two-factor/verify-backup-code"], ["POST", "/api/auth/two-factor/generate-backup-codes"],
-  ["GET", "/api/auth/passkey/list-user-passkeys"], ["GET", "/api/auth/passkey/generate-register-options"], ["POST", "/api/auth/passkey/verify-registration"],
-  ["GET", "/api/auth/passkey/generate-authenticate-options"], ["POST", "/api/auth/passkey/verify-authentication"], ["POST", "/api/auth/passkey/delete-passkey"],
-] as const) {
-  admin.on(method, path, async (context) => {
-    if (factorManagement.has(path)) {
-      const denied = await factorChangeDenied(context);
-      if (denied) return denied;
-    }
-    return await adminDependencies.forwardAuth(context.env, context.req.raw);
-  });
+const authRoutes: ReadonlyArray<readonly ["GET" | "POST", string, AuthGate]> = [
+  ["POST", "/api/auth/sign-in/email", "open"], ["POST", "/api/auth/sign-out", "open"], ["GET", "/api/auth/get-session", "open"],
+  ["POST", "/api/auth/two-factor/enable", "step_up"], ["POST", "/api/auth/two-factor/disable", "step_up"], ["POST", "/api/auth/two-factor/generate-backup-codes", "step_up"],
+  // With a session, verify-totp completes an enrollment whose enable step was already stepped up.
+  ["POST", "/api/auth/two-factor/verify-totp", "operator_if_signed_in"], ["POST", "/api/auth/two-factor/verify-backup-code", "open"],
+  ["GET", "/api/auth/passkey/list-user-passkeys", "operator"], ["GET", "/api/auth/passkey/generate-register-options", "step_up"], ["POST", "/api/auth/passkey/verify-registration", "step_up"],
+  ["POST", "/api/auth/passkey/delete-passkey", "step_up"], ["GET", "/api/auth/passkey/generate-authenticate-options", "open"], ["POST", "/api/auth/passkey/verify-authentication", "open"],
+];
+for (const [method, path, gate] of authRoutes) {
+  admin.on(method, path, async (context) => (await authGateDenied(context, gate)) ?? await adminDependencies.forwardAuth(context.env, context.req.raw));
 }
 
 /** Platform authentication and authority for every admin API route. */
@@ -149,8 +168,8 @@ admin.use("/api/admin/*", async (context, next) => {
   try {
     const session = await adminDependencies.session(context.env, context.req.raw.headers);
     if (!session) return context.json({ error: "unauthorized", message: "Sign in to the platform admin" }, 401);
-    // The seeded local operator (admin/admin) can never operate a deployed platform.
-    if (session.user.email === localAdminEmail && (context.env.APP_ENV ?? "local") !== "local") return context.json({ error: "forbidden", reason: "local_account", message: "The default local admin account cannot be used outside local development" }, 403);
+    const local = localAccountDenied(context, session);
+    if (local) return local;
     const roles = await adminDependencies.platformRoles(context.env, session.user.id);
     const { access, unknownRoles } = platformAccess(session.user.id, roles);
     if (unknownRoles.length) log.warn("admin.roles.unknown", { unknownRoles });
@@ -158,11 +177,12 @@ admin.use("/api/admin/*", async (context, next) => {
     if (roles.length === 0) return context.json({ error: "forbidden", reason: "no_platform_roles", message: "This account has no platform role" }, 403);
     if (!policy) return context.json({ error: "not_found" }, 404);
     if (policy.permission) access.require({ permission: policy.permission });
-    const assurance = await adminDependencies.assurance(context.env, session.session.id);
+    // Every platform change needs recent authentication at the environment's level; reads do not.
+    const change = Boolean(policy.permission) && context.req.method !== "GET" && context.req.method !== "HEAD";
+    const assurance = change || context.req.path === "/api/admin/session" ? await adminDependencies.assurance(authDatabase(context.env), session.session.id) : null;
     context.set("assurance", assurance);
-    // Every platform change needs recent authentication at the environment's level.
-    if (policy.permission && context.req.method !== "GET" && context.req.method !== "HEAD") {
-      const requirement = platformAssuranceRequirement(policy.permission, context.env.APP_ENV ?? "local");
+    if (change) {
+      const requirement = platformAssuranceRequirement(policy.permission!, assuranceEnvironment(context.env));
       const result = meetsRequirement(assurance, requirement, new Date());
       if (!result.ok) return stepUpRequired(context, requirement, result.reason);
     }
@@ -199,7 +219,7 @@ admin.get("/api/admin/session", async (context) => {
     environment,
     capabilities: shellCapabilities(status, environment),
     assurance: assurance ? { level: assurance.level, method: assurance.method, verifiedAt: assurance.verifiedAt.toISOString() } : null,
-    stepUpRequiredAfter: new Date((assurance?.verifiedAt.getTime() ?? 0) + stepUpWindowMinutes * 60_000).toISOString(),
+    stepUpRequiredAfter: assurance ? new Date(assurance.verifiedAt.getTime() + stepUpWindowMinutes * 60_000).toISOString() : null,
     supportSession: open ? {
       id: open.id, operatorId: open.operatorId, organizationId: open.organizationId,
       organizationName: organizations.find((item) => item.organizationId === open.organizationId)?.organizationName ?? open.organizationId,
@@ -515,6 +535,7 @@ admin.get("/api/admin/health", async (context) => {
 const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const;
 
 admin.onError((error, context) => {
+  if (error instanceof AdminConfigurationError) return context.json({ error: "not_configured", message: error.message, repair: `pnpm exec trestle setup --env ${context.env.APP_ENV ?? "local"}` }, 503);
   if (error instanceof PlatformOperationError || error instanceof MachineAccessError || error instanceof PlatformRoleError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code as keyof typeof operationStatus] ?? 400);
   createLogger({ correlationId: context.get("correlationId"), surface: "admin" }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);

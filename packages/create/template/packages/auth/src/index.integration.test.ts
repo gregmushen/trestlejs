@@ -77,13 +77,15 @@ function totp(uri: string, now = Date.now()): string {
 suite("auth hooks against PostgreSQL", () => {
   const plain = `${run}-plain`;
   const operator = `${run}-operator`;
-  const users = [plain, operator];
+  const rotated = `${run}-rotated`;
+  const users = [plain, operator, rotated];
   let operatorEmail = "";
   let totpUri = "";
 
   beforeAll(async () => {
     await createUser(plain);
     operatorEmail = await createUser(operator);
+    await createUser(rotated);
   });
 
   afterAll(async () => {
@@ -98,6 +100,18 @@ suite("auth hooks against PostgreSQL", () => {
     const signIn = await post(createAuth(environment), "/sign-in/email", { email: `${plain}@example.test`, password }, jar);
     expect(signIn.status).toBe(200);
     expect(await liveAssurance(plain)).toEqual([{ sessionId: await sessionIdFor(String(signIn.body.token)), level: "password", method: "password" }]);
+  });
+
+  it("leaves a rotated session without assurance when its prior session had none", async () => {
+    const auth = createAuth(environment);
+    const jar = new Map<string, string>();
+    await post(auth, "/sign-in/email", { email: `${rotated}@example.test`, password }, jar);
+    await database!.execute(sql`delete from authentication_assurance where user_id = ${rotated}`);
+    // Changing the password with revokeOtherSessions replaces the session from inside the old one.
+    const changed = await post(auth, "/change-password", { currentPassword: password, newPassword: `${password}!`, revokeOtherSessions: true }, jar);
+    expect(changed.status).toBe(200);
+    expect(await liveSessionIds(rotated)).toEqual([await sessionIdFor(String(changed.body.token))]);
+    expect(await liveAssurance(rotated)).toEqual([]);
   });
 
   it("keeps an enrollment session at its prior assurance, then records MFA only for a second-factor sign-in", async () => {

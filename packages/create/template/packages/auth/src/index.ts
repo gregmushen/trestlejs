@@ -150,12 +150,18 @@ export function createAuth(environment: AuthEnvironment, options: AuthOptions = 
  * replaces an authenticated one (two-factor enrollment or disable, which need
  * only the password) inherits the prior session's evidence and its time, so
  * enrolling an authenticator never upgrades or refreshes a password-only session.
+ * When the prior session has no evidence, the new one gets none either.
  */
 async function recordSessionAssurance(database: Database, created: Readonly<{ id: string; userId: string }>, prior: Readonly<{ id: string; userId: string }> | null, path: string): Promise<void> {
   try {
-    const carried = prior && prior.userId === created.userId && prior.id !== created.id ? await sessionAssurance(database, prior.id) : null;
-    const evidence = carried ?? (prior ? { level: "password", method: "password" } as const : assuranceForEndpoint(path));
-    await recordAssurance(database, { sessionId: created.id, userId: created.userId, level: evidence.level, method: evidence.method, ...(carried ? { verifiedAt: carried.verifiedAt } : {}) });
+    if (prior) {
+      const carried = prior.userId === created.userId && prior.id !== created.id ? await sessionAssurance(database, prior.id) : null;
+      // Fail closed: with nothing to carry, the new session stays "missing" until the person verifies again.
+      if (carried) await recordAssurance(database, { sessionId: created.id, userId: created.userId, level: carried.level, method: carried.method, verifiedAt: carried.verifiedAt });
+      return;
+    }
+    const evidence = assuranceForEndpoint(path);
+    await recordAssurance(database, { sessionId: created.id, userId: created.userId, level: evidence.level, method: evidence.method });
   } catch (error) {
     // Fail closed: the session stays usable for ordinary work, but with no assurance row
     // every step-up check reports "missing" and asks the person to verify again.

@@ -22,6 +22,9 @@ type WireSession = {
   environment: AdminSession["environment"];
   capabilities: CapabilityStatus[];
   supportSession: { id: string; operatorId: string; organizationId: string; organizationName: string; reason: string; startedAt: string; expiresAt: string } | null;
+  assurance: { level: "password" | "mfa" | "phishing_resistant"; method: string; verifiedAt: string } | null;
+  /** Null when the session has no recorded assurance. */
+  stepUpRequiredAfter: string | null;
 };
 type WireOverview = { organizations: number; users: number; operators: number; recentAudit: Array<{ name: string; occurredAt: string; actorType: string; organizationId: string | null; outcome: string; correlationId: string }> };
 type WireHealth = { environment: string; platformDatabase: { reachable: boolean; distinctLogin: boolean }; application: { reachable: boolean } };
