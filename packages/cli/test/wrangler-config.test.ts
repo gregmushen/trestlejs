@@ -13,6 +13,12 @@ describe("Wrangler environment inspection", () => {
     expect(wranglerStringVariable(wranglerEnvironmentBlock(source, "production"), "MODE")).toBe("live");
   });
 
+  it("decodes JSON-valued string variables without truncating escaped quotes", () => {
+    const config = JSON.stringify({ env: { staging: { vars: { STRIPE_PRICES: JSON.stringify({ starter: "price_123", pro: "price_456" }) } } } });
+    expect(wranglerStringVariable(wranglerEnvironmentBlock(config, "staging"), "STRIPE_PRICES"))
+      .toBe('{"starter":"price_123","pro":"price_456"}');
+  });
+
   it("recognizes only the configured binding in the selected environment", () => {
     const bindings = JSON.stringify({ env: {
       preview: { queues: { producers: [{ binding: "TRESTLE_EVENTS", queue: "events-preview" }], consumers: [{ queue: "events-preview", dead_letter_queue: "events-dlq-preview" }] }, r2_buckets: [{ binding: "TRESTLE_ARTIFACTS", bucket_name: "artifacts-preview" }], workflows: [{ binding: "TRESTLE_WORKFLOW", name: "workflow-preview", class_name: "TrestleWorkflow" }], durable_objects: { bindings: [{ name: "TRESTLE_STATE", class_name: "TrestleState" }] } },

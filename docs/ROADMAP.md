@@ -729,6 +729,14 @@ Notifications acknowledged by pre-94 installations without domain events need
 explicit provider replay or reconciliation; this release cannot reconstruct
 those historical events from a receipt alone. Live Stripe test-mode and
 deployed Resend evidence remain beta gates.
+Alpha 95 hardens Stripe deployment readiness. `trestle doctor` and
+`trestle payments stripe doctor` now reject malformed or incomplete plan-price
+maps, wrong test/live publishable keys, and unsafe return URLs; the Worker
+operational health endpoint applies the same fail-closed criteria. The CLI
+correctly decodes JSON-valued Wrangler strings instead of truncating escaped
+quotes. Tests cover every declared plan, duplicate or unknown mappings,
+environment separation, and redacted diagnostics. This makes readiness
+claims more trustworthy but is not live Stripe integration evidence.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
