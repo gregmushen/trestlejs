@@ -123,7 +123,12 @@ jobs:
           packageManager: pnpm
           workingDirectory: apps/worker
           command: deploy --config .trestle-queues.wrangler.jsonc --env staging --var WEB_ORIGIN:${{ vars.APP_URL }}
-      - run: VITE_API_ORIGIN="${{ vars.API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
+      - name: Bind staging Pages app to API Worker
+        run: node scripts/cloudflare-pages.mjs bind-service __TRESTLE_PROJECT_NAME__-staging __TRESTLE_PROJECT_NAME__-worker-staging
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+      - run: VITE_API_ORIGIN="${{ vars.APP_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
@@ -305,7 +310,12 @@ jobs:
           packageManager: pnpm
           workingDirectory: apps/worker
           command: deploy --config .trestle-queues.wrangler.jsonc --env production --var WEB_ORIGIN:${{ vars.APP_URL }}
-      - run: VITE_API_ORIGIN="${{ vars.API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
+      - name: Bind production Pages app to API Worker
+        run: node scripts/cloudflare-pages.mjs bind-service __TRESTLE_PROJECT_NAME__ __TRESTLE_PROJECT_NAME__-worker
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+      - run: VITE_API_ORIGIN="${{ vars.APP_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"

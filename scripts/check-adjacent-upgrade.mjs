@@ -227,6 +227,32 @@ try {
     await writeFile(workflowPath, target);
     console.log("Reviewed the known Alpha 114 → 115 protected preview secret-target transition; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.115" && after === "0.1.0-alpha.116") {
+    // Alpha 116 moves preview verification links to the API and adds a
+    // credential-backed browser gate. Verify the pristine protected workflow
+    // and apply only these exact published changes for the rehearsal.
+    const relative = ".github/workflows/preview.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 115 preview workflow differs from its recorded baseline");
+    }
+    let reviewed = replaceExactlyOnce(source,
+      "      - name: Bind Better Auth to the isolated preview application\n",
+      "      - name: Bind Better Auth to the isolated preview API\n");
+    reviewed = replaceExactlyOnce(reviewed,
+      '          BETTER_AUTH_URL: "${{ steps.preview.outputs.app_url }}"\n',
+      '          BETTER_AUTH_URL: "${{ steps.preview.outputs.api_url }}"\n');
+    reviewed = replaceExactlyOnce(reviewed,
+      "      - name: Verify deployed site and application in Chromium\n        run: pnpm test:deployed\n        env:\n",
+      "      - name: Verify deployed site and application in Chromium\n        run: |\n          export RESEND_API_KEY=\"$(pnpm exec trestle secrets get RESEND_API_KEY --env preview --raw)\"\n          echo \"::add-mask::$RESEND_API_KEY\"\n          pnpm test:deployed\n        env:\n          TRESTLE_MASTER_KEY: \"${{ secrets.TRESTLE_MASTER_KEY }}\"\n");
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 116 preview workflow differs from the narrowly reviewed transition");
+    await writeFile(workflowPath, target);
+    console.log("Reviewed the known Alpha 115 → 116 protected preview auth and browser-gate transition; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });

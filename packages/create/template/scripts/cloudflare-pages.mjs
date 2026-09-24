@@ -1,10 +1,11 @@
-const [operation, project] = process.argv.slice(2);
+const [operation, project, worker] = process.argv.slice(2);
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID ?? "";
 const token = process.env.CLOUDFLARE_API_TOKEN ?? "";
 const apiBase = (process.env.CLOUDFLARE_API_BASE ?? "https://api.cloudflare.com/client/v4").replace(/\/$/u, "");
 
-if (!['ensure', 'delete'].includes(operation ?? '')) throw new Error("expected ensure or delete");
+if (!['ensure', 'delete', 'bind-service'].includes(operation ?? '')) throw new Error("expected ensure, delete, or bind-service");
 if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(project ?? "")) throw new Error("invalid Pages project name");
+if (operation === "bind-service" && !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(worker ?? "")) throw new Error("invalid bound Worker name");
 if (!accountId || !token) throw new Error("Cloudflare account ID and API token are required");
 
 const endpoint = `${apiBase}/accounts/${encodeURIComponent(accountId)}/pages/projects/${encodeURIComponent(project)}`;
@@ -27,7 +28,26 @@ async function request(url, options = {}, retries = 2) {
   }
 }
 
-if (operation === "ensure") {
+if (operation === "bind-service") {
+  const existing = await request(endpoint);
+  if (existing.status === 404) throw new Error(`Pages project ${project} does not exist`);
+  const document = await existing.json();
+  if (!document.success || !document.result?.deployment_configs?.production) throw new Error("Cloudflare Pages project response is invalid");
+  const services = document.result.deployment_configs.production.services ?? {};
+  const expected = { service: worker };
+  if (services.TRESTLE_API?.service === worker) {
+    process.stdout.write(`Bound ${project} to ${worker}\n`);
+  } else {
+    await request(endpoint, {
+      method: "PATCH",
+      body: JSON.stringify({ deployment_configs: { production: { services: { ...services, TRESTLE_API: expected } } } }),
+    }, 0);
+    const verified = await request(endpoint);
+    const result = await verified.json();
+    if (result.result?.deployment_configs?.production?.services?.TRESTLE_API?.service !== worker) throw new Error("Pages service binding was not persisted");
+    process.stdout.write(`Bound ${project} to ${worker}\n`);
+  }
+} else if (operation === "ensure") {
   const existing = await request(endpoint);
   if (existing.status === 404) {
     try {

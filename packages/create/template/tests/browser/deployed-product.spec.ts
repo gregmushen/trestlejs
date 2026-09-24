@@ -20,7 +20,8 @@ test("staging signs up through redirected Resend verification and switches organ
   test.setTimeout(450_000);
   const apiKey = process.env.RESEND_API_KEY;
   const apiOrigin = process.env.API_URL;
-  if (!apiKey || !apiOrigin) throw new Error("The deployed product gate requires RESEND_API_KEY and API_URL");
+  const appOrigin = process.env.APP_URL;
+  if (!apiKey || !apiOrigin || !appOrigin) throw new Error("The deployed product gate requires RESEND_API_KEY, API_URL, and APP_URL");
   const nonce = crypto.randomUUID().slice(0, 12);
   const email = `trestle-staging-${nonce}@example.test`;
   const password = `Staging-test-${nonce}!`;
@@ -66,13 +67,13 @@ test("staging signs up through redirected Resend verification and switches organ
     await selector.selectOption(organizationId);
     expect((await changed).status()).toBe(200);
     await expect(selector).toHaveValue(organizationId);
-    const me = await page.context().request.get(`${apiOrigin}/api/me`);
+    const me = await page.context().request.get(`${appOrigin}/api/me`);
     expect(me.status()).toBe(200);
     expect((await me.json() as { session: { activeOrganizationId?: string } }).session.activeOrganizationId).toBe(organizationId);
     await page.goto("/settings/billing");
     await expect(page.getByText("No active subscription.")).toBeVisible();
   }
-  const outsider = await page.context().request.get(`${apiOrigin}/api/billing/subscription`, {
+  const outsider = await page.context().request.get(`${appOrigin}/api/billing/subscription`, {
     headers: { "x-trestle-tenant": crypto.randomUUID() },
   });
   expect(outsider.status()).toBe(404);
@@ -89,7 +90,7 @@ test("staging signs up through redirected Resend verification and switches organ
   await switchOrganization(firstId!);
   const checkoutInput = { plan: "pro", requestId: `staging-${nonce}` };
   const checkoutHeaders = { "content-type": "application/json", "x-trestle-tenant": firstId! };
-  const checkoutRequest = () => page.context().request.post(`${apiOrigin}/api/billing/checkout`, {
+  const checkoutRequest = () => page.context().request.post(`${appOrigin}/api/billing/checkout`, {
     headers: checkoutHeaders,
     data: checkoutInput,
   });
@@ -101,10 +102,10 @@ test("staging signs up through redirected Resend verification and switches organ
   const checkoutRetry = await checkoutRequest();
   expect(checkoutRetry.status()).toBe(200);
   expect((await checkoutRetry.json() as { id: string }).id).toBe(checkout.id);
-  const beforePayment = await page.context().request.get(`${apiOrigin}/api/billing/subscription`, { headers: { "x-trestle-tenant": firstId! } });
+  const beforePayment = await page.context().request.get(`${appOrigin}/api/billing/subscription`, { headers: { "x-trestle-tenant": firstId! } });
   expect(beforePayment.status()).toBe(200);
   expect((await beforePayment.json() as { subscription: unknown }).subscription).toBeNull();
-  const forgedCheckout = await page.context().request.post(`${apiOrigin}/api/billing/checkout`, {
+  const forgedCheckout = await page.context().request.post(`${appOrigin}/api/billing/checkout`, {
     headers: { ...checkoutHeaders, "x-trestle-tenant": crypto.randomUUID() }, data: checkoutInput,
   });
   expect(forgedCheckout.status()).toBe(404);
@@ -123,7 +124,7 @@ test("staging signs up through redirected Resend verification and switches organ
     await page.getByRole("textbox", { name: "Edit Article name" }).fill(editedName);
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("listitem").getByText(editedName)).toBeVisible();
-    const firstList = await page.context().request.get(`${apiOrigin}/api/articles`, { headers: { "x-trestle-tenant": firstId! } });
+    const firstList = await page.context().request.get(`${appOrigin}/api/articles`, { headers: { "x-trestle-tenant": firstId! } });
     expect(firstList.status()).toBe(200);
     const firstArticle = ((await firstList.json()) as { articles: Array<{ id: string; name: string }> }).articles.find((article) => article.name === editedName);
     expect(firstArticle?.id).toBeTruthy();
@@ -181,9 +182,9 @@ test("staging signs up through redirected Resend verification and switches organ
     await switchOrganization(secondId!);
     await expect(page.getByRole("listitem").getByText(editedName)).toHaveCount(0);
     const secondHeaders = { "x-trestle-tenant": secondId! };
-    expect((await page.context().request.get(`${apiOrigin}/api/articles/${firstArticle.id}`, { headers: secondHeaders })).status()).toBe(404);
-    expect((await page.context().request.patch(`${apiOrigin}/api/articles/${firstArticle.id}`, { headers: secondHeaders, data: { name: "Cross-tenant edit" } })).status()).toBe(404);
-    expect((await page.context().request.delete(`${apiOrigin}/api/articles/${firstArticle.id}`, { headers: secondHeaders })).status()).toBe(404);
+    expect((await page.context().request.get(`${appOrigin}/api/articles/${firstArticle.id}`, { headers: secondHeaders })).status()).toBe(404);
+    expect((await page.context().request.patch(`${appOrigin}/api/articles/${firstArticle.id}`, { headers: secondHeaders, data: { name: "Cross-tenant edit" } })).status()).toBe(404);
+    expect((await page.context().request.delete(`${appOrigin}/api/articles/${firstArticle.id}`, { headers: secondHeaders })).status()).toBe(404);
     await page.getByRole("textbox", { name: "New Article name" }).fill(secondName);
     await page.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page.getByRole("listitem").getByText(secondName)).toBeVisible();
@@ -191,7 +192,7 @@ test("staging signs up through redirected Resend verification and switches organ
     await switchOrganization(firstId!);
     await expect(page.getByRole("listitem").getByText(editedName)).toBeVisible();
     await expect(page.getByRole("listitem").getByText(secondName)).toHaveCount(0);
-    expect((await page.context().request.delete(`${apiOrigin}/api/articles/${firstArticle.id}`, { headers: { "x-trestle-tenant": firstId! } })).status()).toBe(204);
+    expect((await page.context().request.delete(`${appOrigin}/api/articles/${firstArticle.id}`, { headers: { "x-trestle-tenant": firstId! } })).status()).toBe(204);
     await page.reload();
     await expect(page.getByRole("listitem").getByText(editedName)).toHaveCount(0);
     await switchOrganization(secondId!);
@@ -202,13 +203,13 @@ test("staging signs up through redirected Resend verification and switches organ
     await switchOrganization(firstId!);
     const artifactBody = `Staging artifact ${nonce}`;
     const firstHeaders = { "x-trestle-tenant": firstId! };
-    const upload = await page.context().request.post(`${apiOrigin}/api/artifacts`, {
+    const upload = await page.context().request.post(`${appOrigin}/api/artifacts`, {
       headers: { ...firstHeaders, "content-type": "text/plain" }, data: artifactBody,
     });
     expect(upload.status()).toBe(201);
     const artifactId = (await upload.json() as { artifact: { id: string } }).artifact.id;
     expect(artifactId).toBeTruthy();
-    const access = await page.context().request.get(`${apiOrigin}/api/artifacts/${artifactId}/access`, { headers: firstHeaders });
+    const access = await page.context().request.get(`${appOrigin}/api/artifacts/${artifactId}/access`, { headers: firstHeaders });
     expect(access.status()).toBe(200);
     const signedUrl = (await access.json() as { url: string }).url;
     expect(new URL(signedUrl).origin).toBe(new URL(apiOrigin).origin);
@@ -220,9 +221,9 @@ test("staging signs up through redirected Resend verification and switches organ
     forged.searchParams.set("organization", secondId!);
     expect((await page.context().request.get(forged.toString())).status()).toBe(404);
     await switchOrganization(secondId!);
-    expect((await page.context().request.get(`${apiOrigin}/api/artifacts/${artifactId}/access`, { headers: { "x-trestle-tenant": secondId! } })).status()).toBe(404);
+    expect((await page.context().request.get(`${appOrigin}/api/artifacts/${artifactId}/access`, { headers: { "x-trestle-tenant": secondId! } })).status()).toBe(404);
     await switchOrganization(firstId!);
-    expect((await page.context().request.delete(`${apiOrigin}/api/artifacts/${artifactId}`, { headers: firstHeaders })).status()).toBe(204);
+    expect((await page.context().request.delete(`${appOrigin}/api/artifacts/${artifactId}`, { headers: firstHeaders })).status()).toBe(204);
     expect((await page.context().request.get(signedUrl)).status()).toBe(404);
   }
 });

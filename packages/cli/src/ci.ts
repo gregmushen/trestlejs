@@ -117,6 +117,8 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     && preview.includes("--worker-config .trestle-queues.wrangler.jsonc")
     && preview.includes("secret put DATABASE_URL --env preview --config .trestle-queues.wrangler.jsonc")
     && preview.includes("secret put BETTER_AUTH_URL --env preview --config .trestle-queues.wrangler.jsonc"), "preview secrets and deployment target the same isolated Worker configuration"));
+  checks.push(check("ci.preview.same-origin-api", preview.includes("cloudflare-pages.mjs bind-service")
+    && preview.includes('VITE_API_ORIGIN="${{ steps.preview.outputs.app_url }}"'), "preview app routes authenticated API calls through its own Pages origin"));
   checks.push(check("ci.preview.cleanup", preview.includes("types: [opened, synchronize, reopened, closed]") && preview.includes("cloudflare-worker.mjs delete") && preview.includes("cloudflare-pages.mjs delete"), "closed pull requests clean up isolated Cloudflare resources"));
   checks.push(check("ci.preview.dynamic-smoke", preview.includes("steps.preview.outputs.api_url") && preview.includes("steps.preview.outputs.app_url") && preview.includes("steps.preview.outputs.site_url"), "preview smoke tests use derived per-PR URLs"));
   checks.push(check("ci.preview.operational-smoke", preview.includes("TRESTLE_DEPLOY_ENV: preview"), "preview smoke verifies the Worker operational environment"));
@@ -143,6 +145,10 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.preview.r2", preview.includes("cloudflare-r2.mjs ensure") && preview.includes("cloudflare-r2.mjs delete-preview") && occursInOrder(preview, "Prepare isolated preview Queue bindings", "Provision isolated preview R2 bucket") && occursInOrder(preview, "Provision isolated preview R2 bucket", "Provision isolated Neon branch"), "preview prepares an opt-in isolated R2 bucket and cleans up only empty buckets"));
 
   const deploy = sources.get("deploy.yml") ?? "";
+  checks.push(check("ci.deploy.same-origin-api", /bind-service [a-zA-Z0-9_-]+-staging [a-zA-Z0-9_-]+-worker-staging/u.test(deploy)
+    && /bind-service [a-zA-Z0-9_-]+ [a-zA-Z0-9_-]+-worker\n/u.test(deploy)
+    && (deploy.match(/VITE_API_ORIGIN="\$\{\{ vars\.APP_URL \}\}"/gu) ?? []).length === 2,
+  "staging and production app APIs use their own Pages origins"));
   checks.push(check("ci.deploy.serialized", deploy.includes("cancel-in-progress: false"), "staging and production deployment is serialized"));
   checks.push(check("ci.deploy.promotion-gate", /production:[\s\S]*?needs:\s*staging/u.test(deploy), "production requires the staging job"));
   checks.push(check("ci.deploy.smoke", (deploy.match(/scripts\/smoke\.mjs/gu) ?? []).length >= 2, "staging and production run deployed smoke tests"));
