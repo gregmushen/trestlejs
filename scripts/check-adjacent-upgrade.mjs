@@ -138,6 +138,40 @@ try {
     await writeFile(workflowPath, target);
     console.log("Reviewed the known Alpha 109 → 110 protected deployment workflow transition; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.112" && after === "0.1.0-alpha.113") {
+    // Alpha 113 added a read-only Resend/Stripe preflight to protected
+    // deployment workflows. Confirm the exact published Alpha 112 baseline
+    // and narrowly review only those inserted steps before source-apply.
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    const preflight = (environment, mode) =>
+      `      - name: Verify ${environment} Resend and Stripe credentials before provisioning\n`
+      + `        run: |\n`
+      + `          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env ${environment} --raw)"\n`
+      + `          echo "::add-mask::$RESEND_API_KEY"\n`
+      + `          export STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env ${environment} --raw)"\n`
+      + `          echo "::add-mask::$STRIPE_SECRET_KEY"\n`
+      + `          node scripts/transactional-provider-preflight.mjs\n`
+      + `        env:\n`
+      + `          TRESTLE_MASTER_KEY: "${'${{ secrets.TRESTLE_MASTER_KEY }}'}"\n`
+      + `          TRESTLE_STRIPE_MODE: ${mode}\n`;
+    for (const [relative, insertions] of [
+      [".github/workflows/preview.yml", [["      - name: Provision isolated preview Queues\n", preflight("preview", "test")]]],
+      [".github/workflows/deploy.yml", [["      - name: Provision staging Queues\n", preflight("staging", "test")], ["      - name: Provision production Queues\n", preflight("production", "live")]]],
+    ]) {
+      const workflowPath = path.join(project, relative);
+      const source = await readFile(workflowPath, "utf8");
+      if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+        throw new Error(`Published Alpha 112 ${relative} differs from its recorded baseline`);
+      }
+      let reviewed = source;
+      for (const [anchor, addition] of insertions) reviewed = replaceExactlyOnce(reviewed, anchor, `${addition}${anchor}`);
+      const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+      const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+      if (reviewed !== target) throw new Error(`Published Alpha 113 ${relative} differs from the narrowly reviewed transition`);
+      await writeFile(workflowPath, target);
+    }
+    console.log("Reviewed the known Alpha 112 → 113 protected deployment workflow transitions; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });

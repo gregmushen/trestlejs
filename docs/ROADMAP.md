@@ -864,6 +864,15 @@ currently rejected by Resend, and its Stripe test restricted key is rejected
 by Stripe (HTTP 401); these external credentials must be replaced before the
 deployed beta gates can pass. A live Stripe publishable key does not satisfy
 the required staging `pk_test_` configuration.
+Alpha 114 makes those deployment preflights also check that the configured
+Resend sender domain is verified in the selected account. Its staging browser
+test probes the generated Article table through the restricted runtime database
+role, requiring forced PostgreSQL RLS and verifying that switching tenant
+context hides another organization's row. These checks prepare the deployed
+beta gate; they cannot replace its first successful staging run.
+The published Alpha 112 → 113 upgrade rehearsal narrowly reviews the two
+protected deployment workflow additions against their recorded baseline;
+application-owned workflows still require review during real upgrades.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

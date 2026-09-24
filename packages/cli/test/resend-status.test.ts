@@ -13,6 +13,12 @@ describe("Resend sender reconciliation", () => {
     expect(await inspectResendSender("re_redacted", "noreply@example.com", request)).toMatchObject({ found: true, verified: false, providerStatus: "pending" });
   });
 
+  it("does not accept a valid key from an account without the configured sender domain", async () => {
+    const request = vi.fn(async () => new Response(JSON.stringify({ data: [{ name: "other.example", status: "verified" }] }))) as unknown as typeof fetch;
+    expect(await inspectResendSender("re_redacted", "Paper Route <noreply@paper-route.com>", request))
+      .toMatchObject({ domain: "paper-route.com", found: false, verified: false });
+  });
+
   it("requires Resend mode and recipient protection in preview and staging", () => {
     const ready = { environment: "preview" as const, mode: "resend", apiKey: "re_redacted", webhookSecret: "whsec_redacted", sender: "Product <noreply@example.com>", recipientRedirect: "safe@example.com" };
     expect(emailDeploymentIssues(ready)).toEqual([]);

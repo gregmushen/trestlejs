@@ -270,7 +270,9 @@ Cloudflare and Neon access independently before Doctor or resource creation.
 Doctor then requires real Resend and Stripe test-mode configuration before the
 preview can deploy. A read-only provider preflight checks that the encrypted
 Resend and Stripe keys are active and have the required read access before
-provisioning; provider access alone does not mark a preview as ready.
+provisioning; the email doctor also verifies that the configured sender domain
+belongs to and is verified in the chosen Resend account. Provider access alone
+does not mark a preview as ready.
 Stripe readiness requires a price ID for every declared plan, a matching
 test/live publishable key, and a safe HTTPS billing return URL. An empty or
 partial `STRIPE_PRICES` map is not deployment-ready. `trestle payments stripe
