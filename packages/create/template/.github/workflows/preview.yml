@@ -190,7 +190,7 @@ jobs:
         run: |
           export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env preview --raw)"
           echo "::add-mask::$RESEND_API_KEY"
-          pnpm test:deployed
+          pnpm test:preview
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           SITE_URL: "${{ steps.preview.outputs.site_url }}"

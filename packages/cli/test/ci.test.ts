@@ -23,6 +23,17 @@ describe("generated CI deployment contract", () => {
     expect(report.checks.filter(({ id }) => id.endsWith("project-cli")).every(({ status }) => status === "pass")).toBe(true);
   });
 
+  it("rejects a production smoke command that includes the preview Checkout test", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await cp(path.join(templateRoot, "tests/browser/preview-product.spec.ts"), path.join(root, "tests/browser/preview-product.spec.ts"), { recursive: true });
+    const manifest = JSON.parse(await readFile(path.join(templateRoot, "package.json"), "utf8")) as { scripts: Record<string, string> };
+    manifest.scripts["test:deployed"] += " tests/browser/preview-product.spec.ts";
+    await writeFile(path.join(root, "package.json"), JSON.stringify(manifest));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.browser.preview-only-billing", status: "fail" }));
+  });
+
   it("rejects mutable Action references", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);

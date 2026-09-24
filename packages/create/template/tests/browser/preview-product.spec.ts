@@ -2,10 +2,10 @@ import { expect, test } from "@playwright/test";
 
 import { waitForStagingVerificationLink } from "../../scripts/staging-email.js";
 
-test.skip(process.env.TRESTLE_BROWSER_MODE !== "deployed", "Deployed preview only");
+test.skip(process.env.TRESTLE_BROWSER_MODE !== "deployed" || process.env.TRESTLE_DEPLOY_ENV !== "preview", "Deployed preview only");
 
-test("preview verifies redirected email and tenant-safe test Checkout", async ({ page }) => {
-  test.setTimeout(180_000);
+test("preview verifies redirected email, tenant-safe test Checkout, and webhook entitlements", async ({ page }) => {
+  test.setTimeout(240_000);
   const apiKey = process.env.RESEND_API_KEY;
   const apiOrigin = process.env.API_URL;
   const appOrigin = process.env.APP_URL;
@@ -67,4 +67,25 @@ test("preview verifies redirected email and tenant-safe test Checkout", async ({
     headers: { ...headers, "x-trestle-tenant": crypto.randomUUID() }, data: input,
   });
   expect(forged.status()).toBe(404);
+
+  await page.goto(checkout.url);
+  const cardChoice = page.getByRole("radio", { name: "Card", exact: true });
+  await cardChoice.waitFor({ state: "visible", timeout: 30_000 });
+  await cardChoice.check({ force: true });
+  await page.locator('input[name="cardNumber"]').fill("4242424242424242");
+  await page.locator('input[name="cardExpiry"]').fill("12/34");
+  await page.locator('input[name="cardCvc"]').fill("123");
+  await page.locator('input[name="billingName"]').fill("Trestle Preview Test");
+  await page.locator('input[name="billingPostalCode"]').fill("94105");
+  await page.getByRole("checkbox", { name: "Save my information for faster checkout" }).uncheck();
+  await page.getByRole("button", { name: "Subscribe", exact: true }).click();
+  await page.waitForURL((url) => url.origin === appOrigin && url.pathname === "/settings/billing" && url.searchParams.get("checkout") === "success", { timeout: 60_000 });
+  await expect.poll(async () => {
+    const response = await page.context().request.get(`${appOrigin}/api/billing/subscription`, { headers });
+    if (!response.ok()) return `HTTP ${response.status()}`;
+    const body = await response.json() as { subscription: { status?: string } | null };
+    return body.subscription?.status ?? "none";
+  }, { timeout: 60_000, intervals: [1000, 2000, 5000] }).toBe("active");
+  const paid = await page.context().request.get(`${appOrigin}/api/billing/subscription`, { headers });
+  expect(await paid.json()).toMatchObject({ subscription: { provider: "stripe", plan: "pro", entitlements: expect.arrayContaining(["workflows.advanced"]) } });
 });

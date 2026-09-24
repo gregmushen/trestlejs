@@ -322,8 +322,8 @@ app.post("/webhooks/stripe", async (context) => {
   if (!context.env.STRIPE_WEBHOOK_SECRET) return context.json({ error: "Stripe webhook is not configured" }, 503);
   const signature = context.req.header("stripe-signature");
   if (!signature) return context.json({ error: "Missing Stripe signature" }, 400);
-  let event: ReturnType<typeof verifyAndNormalizeStripeEvent>;
-  try { event = verifyAndNormalizeStripeEvent(await context.req.text(), signature, context.env.STRIPE_WEBHOOK_SECRET); }
+  let event: Awaited<ReturnType<typeof verifyAndNormalizeStripeEvent>>;
+  try { event = await verifyAndNormalizeStripeEvent(await context.req.text(), signature, context.env.STRIPE_WEBHOOK_SECRET); }
   catch { log.warn("billing.webhook.rejected", { reason: "invalid_signature_or_payload" }); return context.json({ error: "Invalid Stripe webhook" }, 400); }
   const subscriptionEvent = event.type.startsWith("Subscription");
   let generation: number | undefined;
