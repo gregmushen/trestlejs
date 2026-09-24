@@ -38,6 +38,15 @@ suite("production PostgreSQL runtime role", () => {
     expect(inspected).toEqual(configured);
     expect(() => assertRuntimeRole(inspected, runtimeRole)).not.toThrow();
     await expect(verifyRuntimeRoleDataAccess(url.toString())).resolves.toBeUndefined();
+    const [grants] = await admin!<{ two_factor: boolean; passkey: boolean; assurance: boolean; security_event: boolean; audit_insert: boolean; tenant_security_event: boolean }[]>`
+      select has_table_privilege(${runtimeRole}, 'two_factor', 'SELECT,INSERT,UPDATE,DELETE') as two_factor,
+             has_table_privilege(${runtimeRole}, 'passkey', 'SELECT,INSERT,UPDATE,DELETE') as passkey,
+             has_table_privilege(${runtimeRole}, 'authentication_assurance', 'SELECT,INSERT,UPDATE') as assurance,
+             has_function_privilege(${runtimeRole}, 'trestle_record_security_event(text, text, text, text)', 'EXECUTE') as security_event,
+             has_table_privilege(${runtimeRole}, 'audit_event', 'INSERT') as audit_insert,
+             has_function_privilege('trestle_app', 'trestle_record_security_event(text, text, text, text)', 'EXECUTE') as tenant_security_event`;
+    // The login records security events only through the function; tenant code cannot call it at all.
+    expect(grants).toEqual({ two_factor: true, passkey: true, assurance: true, security_event: true, audit_insert: false, tenant_security_event: false });
   });
 
   it("rejects privileged or malformed runtime roles", async () => {
