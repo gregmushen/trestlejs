@@ -46,8 +46,10 @@ message through Resend's sent-email API, verifies the link without printing
 the token, signs in, and checks that two organizations stay distinct. When the
 application declares an Article resource, staging also creates, edits, reads,
 and deletes one through the deployed app and API, checks cross-tenant
-read/write denial, and verifies each organization's list remains isolated. This
-requires a staging Resend key with sent-email list/read access. The test
+read/write denial, and verifies each organization's list remains isolated. If
+R2 is declared, staging also uploads an artifact, reads a signed URL, rejects
+a forged tenant and cross-tenant access, and verifies deletion revokes that
+URL. This requires a staging Resend key with sent-email list/read access. The test
 confirms provider acceptance and redirection, not inbox delivery; staging
 canary accounts remain in the staging database until the application's
 retention policy removes them. Production never runs this mutating test.

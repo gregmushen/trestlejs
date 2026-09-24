@@ -830,6 +830,11 @@ when pnpm reformats package.json. Alpha 108 recognizes older pristine
 byte-preserving baselines too; the published Alpha 106 → 107 rehearsal uses a
 strictly reviewed package-script transition because Alpha 107's CLI cannot
 apply that specific change automatically.
+Alpha 109 adds a conditional deployed R2 artifact smoke to staging: a signed
+URL must return the uploaded bytes, a forged tenant and cross-tenant access
+must fail, and deletion must revoke the URL. Existing local R2/system tests
+cover these mechanics before release; live provider evidence remains open
+until staging deploys and runs the browser gate.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

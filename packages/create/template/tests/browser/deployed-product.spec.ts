@@ -1,9 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { waitForStagingVerificationLink } from "../../scripts/staging-email.js";
 
 const articleDeclared = existsSync(new URL("../../.trestle/resources/article.json", import.meta.url));
+const r2Declaration = /^  r2: (true|false)$/mu.exec(readFileSync(new URL("../../.trestle/project.yaml", import.meta.url), "utf8"));
+if (!r2Declaration) throw new Error("The generated project must declare its R2 capability");
+const r2Declared = r2Declaration[1] === "true";
 
 test.skip(process.env.TRESTLE_BROWSER_MODE !== "deployed", "Staging-only provider test");
 
@@ -69,13 +72,13 @@ test("staging signs up through redirected Resend verification and switches organ
   await page.goto("/settings/billing");
   await expect(page.getByText("No active subscription.")).toBeVisible();
 
+  const switchOrganization = async (organizationId: string) => {
+    const changed = page.waitForResponse((response) => response.url().includes("/api/auth/organization/set-active") && response.request().method() === "POST");
+    await selector.selectOption(organizationId);
+    expect((await changed).status()).toBe(200);
+    await expect(selector).toHaveValue(organizationId);
+  };
   if (articleDeclared) {
-    const switchOrganization = async (organizationId: string) => {
-      const changed = page.waitForResponse((response) => response.url().includes("/api/auth/organization/set-active") && response.request().method() === "POST");
-      await selector.selectOption(organizationId);
-      expect((await changed).status()).toBe(200);
-      await expect(selector).toHaveValue(organizationId);
-    };
     const firstName = `Staging first ${nonce}`;
     const editedName = `Staging edited ${nonce}`;
     const secondName = `Staging second ${nonce}`;
@@ -113,5 +116,33 @@ test("staging signs up through redirected Resend verification and switches organ
     await expect(page.getByRole("listitem").getByText(editedName)).toHaveCount(0);
     await switchOrganization(secondId!);
     await expect(page.getByRole("listitem").getByText(secondName)).toBeVisible();
+  }
+
+  if (r2Declared) {
+    await switchOrganization(firstId!);
+    const artifactBody = `Staging artifact ${nonce}`;
+    const firstHeaders = { "x-trestle-tenant": firstId! };
+    const upload = await page.context().request.post(`${apiOrigin}/api/artifacts`, {
+      headers: { ...firstHeaders, "content-type": "text/plain" }, data: artifactBody,
+    });
+    expect(upload.status()).toBe(201);
+    const artifactId = (await upload.json() as { artifact: { id: string } }).artifact.id;
+    expect(artifactId).toBeTruthy();
+    const access = await page.context().request.get(`${apiOrigin}/api/artifacts/${artifactId}/access`, { headers: firstHeaders });
+    expect(access.status()).toBe(200);
+    const signedUrl = (await access.json() as { url: string }).url;
+    expect(new URL(signedUrl).origin).toBe(new URL(apiOrigin).origin);
+    const downloaded = await page.context().request.get(signedUrl);
+    expect(downloaded.status()).toBe(200);
+    expect(await downloaded.text()).toBe(artifactBody);
+    expect(downloaded.headers()["cache-control"]).toBe("private, no-store");
+    const forged = new URL(signedUrl);
+    forged.searchParams.set("organization", secondId!);
+    expect((await page.context().request.get(forged.toString())).status()).toBe(404);
+    await switchOrganization(secondId!);
+    expect((await page.context().request.get(`${apiOrigin}/api/artifacts/${artifactId}/access`, { headers: { "x-trestle-tenant": secondId! } })).status()).toBe(404);
+    await switchOrganization(firstId!);
+    expect((await page.context().request.delete(`${apiOrigin}/api/artifacts/${artifactId}`, { headers: firstHeaders })).status()).toBe(204);
+    expect((await page.context().request.get(signedUrl)).status()).toBe(404);
   }
 });
