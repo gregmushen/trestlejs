@@ -225,7 +225,7 @@ export type { EffectiveEntitlement, Feature, PlanVersionState, QuotaState };
 
 /* Errors */
 
-const errorEnvelope = z.object({ error: z.string(), reason: z.string().optional(), message: z.string().optional(), required: z.string().optional() }).passthrough();
+const errorEnvelope = z.object({ error: z.string(), reason: z.string().optional(), message: z.string().optional(), required: z.string().optional(), scope: z.string().optional() }).passthrough();
 
 export class AdminApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly reason?: string) {
@@ -239,6 +239,24 @@ export class StepUpRequired extends AdminApiError {
     this.name = "StepUpRequired";
   }
 }
+/**
+ * The session is below the admin's minimum sign-in level: the account has a second factor or passkey
+ * but the session proves only a password. Signing in again (with the factor) is the only way on.
+ */
+export class SignInRequired extends AdminApiError {
+  constructor(message = "This account has a second factor. Sign in with it or with a passkey.") {
+    super(428, "sign_in_required", message);
+    this.name = "SignInRequired";
+  }
+}
+
+const signInListeners = new Set<() => void>();
+/** Called whenever an admin API call meets SignInRequired, so the shell can re-read the session; returns an unsubscribe. */
+export function onSignInRequired(listener: () => void): () => void {
+  signInListeners.add(listener);
+  return () => { signInListeners.delete(listener); };
+}
+
 export class PermissionDenied extends AdminApiError {
   constructor(reason?: string) {
     super(403, "forbidden", "Your platform role does not permit this action. Ask a security administrator for the required platform permission.", reason);
@@ -255,6 +273,7 @@ export class Unauthenticated extends AdminApiError {
 export async function toApiError(response: Response): Promise<AdminApiError> {
   const parsed = errorEnvelope.safeParse(await response.json().catch(() => null));
   const body = parsed.success ? parsed.data : undefined;
+  if ((response.status === 428 || body?.error === "step_up_required") && body?.scope === "session") return new SignInRequired();
   if (response.status === 428 || body?.error === "step_up_required") return new StepUpRequired(body?.message, assuranceLevelOf(body?.required));
   if (response.status === 401) return new Unauthenticated();
   if (response.status === 403) return new PermissionDenied(body?.reason);
@@ -303,7 +322,11 @@ export function createAdminApi(options: { baseUrl?: string; fetch?: typeof fetch
       headers: { accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (!response.ok) throw await toApiError(response);
+    if (!response.ok) {
+      const error = await toApiError(response);
+      if (error instanceof SignInRequired) for (const listener of signInListeners) listener();
+      throw error;
+    }
     if (response.status === 204) return undefined as T;
     return await response.json() as T;
   }

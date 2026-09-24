@@ -149,6 +149,11 @@ describe("platform admin Worker", () => {
     await call("POST", "/api/auth/two-factor/enable", { body: {} });
     expect(seen).toHaveLength(2);
     expect(seen[0]).toBe(seen[1]);
+    // The admin API's minimum sign-in level uses one handle too.
+    seen.length = 0;
+    await call("GET", "/api/admin/session");
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(seen[1]);
   });
 
   it("serves factor endpoints only to platform operators, and leaves sign-in challenges open", async () => {
@@ -158,6 +163,7 @@ describe("platform admin Worker", () => {
     expect(await call("GET", "/api/auth/passkey/list-user-passkeys")).toMatchObject({ status: 403 });
     // Completing enrollment verifies a code on an existing session.
     expect(await call("POST", "/api/auth/two-factor/verify-totp", { body: { code: "000000" } })).toMatchObject({ status: 403 });
+    expect(await call("POST", "/api/auth/two-factor/verify-backup-code", { body: { code: "0000-0000" } })).toMatchObject({ status: 403 });
     expect(state.forwarded).toBe(0);
 
     state.roles = ["platform_operator"];
@@ -195,10 +201,10 @@ describe("platform admin Worker", () => {
     expect(await call("GET", "/api/admin/session", {}, unset)).toMatchObject({ status: 503, body: { error: "not_configured", repair: "pnpm exec trestle setup --env production" } });
   });
 
-  it("checks assurance only where it is needed and fails closed", async () => {
-    // Reads never require step-up, and do not look assurance up.
+  it("checks assurance on every admin request and fails closed", async () => {
+    // Every request reads the session's evidence for the minimum sign-in level; a failed lookup refuses rather than admits.
     adminDependencies.assurance = async () => { throw new Error("assurance lookup failed"); };
-    expect((await call("GET", "/api/admin/health")).status).toBe(200);
+    expect((await call("GET", "/api/admin/health")).status).toBe(500);
     expect((await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "retry" } })).status).toBe(500);
     expect((await call("POST", "/api/auth/two-factor/enable", { body: {} })).status).toBe(500);
     expect(state.forwarded).toBe(0);
@@ -221,6 +227,70 @@ describe("platform admin Worker", () => {
     assured("password");
     const { APP_ENV: _unset, ...unset } = environment;
     expect(await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "retry" } }, { ...unset, DATABASE_ADMIN_URL: environment.DATABASE_URL })).toMatchObject({ status: 428, body: { required: "mfa" } });
+  });
+
+  it("requires a second-factor sign-in for every admin request once the operator has a factor", async () => {
+    const signIn = { error: "step_up_required", required: "mfa", scope: "session", message: "Sign in with your second factor or passkey" };
+    // A TOTP operator whose session proves only a password (an admin password sign-in, or a replayed tenant-app session).
+    adminDependencies.enrolledFactor = async () => "mfa";
+    assured("password");
+    expect(await call("GET", "/api/admin/session")).toMatchObject({ status: 428, body: { ...signIn, reason: "insufficient_level" } });
+    expect(await call("GET", "/api/admin/health")).toMatchObject({ status: 428, body: { ...signIn, reason: "insufficient_level" } });
+    const staging = { ...environment, APP_ENV: "staging" as const, DATABASE_ADMIN_URL: environment.DATABASE_URL };
+    expect(await call("GET", "/api/admin/health", {}, staging)).toMatchObject({ status: 428, body: { scope: "session" } });
+    assured(null);
+    expect(await call("GET", "/api/admin/session")).toMatchObject({ status: 428, body: { ...signIn, reason: "missing" } });
+
+    // A second-factor sign-in passes however old it is; freshness is for actions.
+    assured("mfa", 600);
+    expect((await call("GET", "/api/admin/session")).status).toBe(200);
+    expect((await call("GET", "/api/admin/health")).status).toBe(200);
+  });
+
+  it("refuses a password session for a passkey-only operator", async () => {
+    adminDependencies.enrolledFactor = async () => "phishing_resistant";
+    assured("password");
+    expect(await call("GET", "/api/admin/session")).toMatchObject({ status: 428, body: { required: "mfa", scope: "session", reason: "insufficient_level" } });
+    assured("phishing_resistant", 600);
+    expect((await call("GET", "/api/admin/session")).status).toBe(200);
+  });
+
+  it("lets a factorless operator in with a password session so they can enroll a factor", async () => {
+    adminDependencies.enrolledFactor = async () => null;
+    assured("password", 600);
+    expect((await call("GET", "/api/admin/session")).status).toBe(200);
+    expect((await call("GET", "/api/admin/health")).status).toBe(200);
+  });
+
+  it("skips the enrolled-factor lookup when the session already proves a second factor", async () => {
+    adminDependencies.enrolledFactor = async () => { throw new Error("factor lookup should not run"); };
+    assured("mfa");
+    expect((await call("GET", "/api/admin/health")).status).toBe(200);
+    assured("phishing_resistant");
+    expect((await call("GET", "/api/admin/session")).status).toBe(200);
+  });
+
+  it("skips freshness for stepUp: false routes but keeps the minimum sign-in level", async () => {
+    assured("password", 60);
+    state.roles = ["platform_operator", "security_admin"];
+    // A read over POST, and ending a support session, reduce nothing; a stale session may use them.
+    expect((await call("POST", "/api/admin/access/explain", { body: {} })).status).not.toBe(428);
+    expect((await call("POST", "/api/admin/support/sessions/s-1/end", { body: { reason: "done" } })).status).not.toBe(428);
+    // Other actions still need fresh evidence.
+    expect(await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "retry" } })).toMatchObject({ status: 428, body: { reason: "stale" } });
+    // An operator with a factor still has to have signed in with it.
+    adminDependencies.enrolledFactor = async () => "mfa";
+    expect(await call("POST", "/api/admin/access/explain", { body: {} })).toMatchObject({ status: 428, body: { scope: "session" } });
+  });
+
+  it("reports step-up as due when the session is below the environment's action level", async () => {
+    const staging = { ...environment, APP_ENV: "staging" as const, DATABASE_ADMIN_URL: environment.DATABASE_URL };
+    assured("password");
+    expect((await call("GET", "/api/admin/session", {}, staging)).body).toMatchObject({ assurance: { level: "password" }, stepUpRequiredAfter: null });
+    assured("mfa");
+    expect(Date.parse((await call("GET", "/api/admin/session", {}, staging)).body.stepUpRequiredAfter)).toBeGreaterThan(Date.now());
+    assured("password");
+    expect(Date.parse((await call("GET", "/api/admin/session")).body.stepUpRequiredAfter)).toBeGreaterThan(Date.now());
   });
 
   it("gives Better Auth the admin's fail-closed environment, so security events are never labelled local by default", () => {

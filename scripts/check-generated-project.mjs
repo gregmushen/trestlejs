@@ -261,7 +261,14 @@ try {
       "serves factor endpoints only to platform operators, and leaves sign-in challenges open",
       "refuses the seeded local admin's factor changes outside local development",
       "treats an unset APP_ENV as deployed for the local account and the platform connection",
-      "checks assurance only where it is needed and fails closed",
+      "checks assurance on every admin request and fails closed",
+      // Minimum sign-in level: an operator with a factor must have signed in with it, on every admin request.
+      "requires a second-factor sign-in for every admin request once the operator has a factor",
+      "refuses a password session for a passkey-only operator",
+      "lets a factorless operator in with a password session so they can enroll a factor",
+      "skips freshness for stepUp: false routes but keeps the minimum sign-in level",
+      "reports step-up as due when the session is below the environment's action level",
+      "gives Better Auth the admin's fail-closed environment, so security events are never labelled local by default",
     ]);
     // Session assurance is recorded by the endpoint that proves it, never upgraded by enrollment, and stored behind the platform role.
     await requireScenarios(adminProject, "./packages/auth", ["src/index.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [

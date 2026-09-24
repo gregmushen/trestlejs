@@ -4,7 +4,7 @@ import { createRootRoute, createRoute, createRouter, Link as RouterLink, Outlet,
 import { forwardRef, lazy, StrictMode, Suspense, useState, type ComponentType, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 
-import { PermissionDenied, api, errorMessage, sessionQueryKey, Unauthenticated } from "./api";
+import { PermissionDenied, SignInRequired, api, errorMessage, onSignInRequired, sessionQueryKey, Unauthenticated } from "./api";
 import { reauthenticateWithPasskey, reauthenticateWithPassword, verifySecondFactor, type ReauthResult } from "./auth-client";
 import { viewAvailability, type AdminViewDescriptor } from "./registry";
 import { shouldHoldShell } from "./step-up-machine";
@@ -158,17 +158,24 @@ function App() {
   if (session.isPending) return <div role="status" className="grid min-h-screen place-items-center bg-kumo-canvas text-kumo-subtle"><span className="flex items-center gap-2"><Loader />Checking your operator session</span></div>;
   const held = shouldHoldShell(steppingUp, session.data !== undefined);
   if (session.error instanceof Unauthenticated && !held) return <SignIn />;
+  // The account has a second factor, but this session proves only a password (for example a customer-app session).
+  if (session.error instanceof SignInRequired && !held) return <SignIn notice={signInRequiredNotice} />;
   // A signed-in account without a platform role can switch to an operator account here.
   if (session.error instanceof PermissionDenied && !held) return <SignIn notice="This account has no platform role. Sign in as a platform operator." />;
   if ((session.error && !held) || !session.data) return <main className="bg-kumo-canvas p-8"><AdminError error={session.error} retry={() => void session.refetch()} /><p className="mt-3 text-sm text-kumo-subtle">{errorMessage(session.error)}</p></main>;
   return <AdminProvider session={session.data} registry={adminRegistry}><CommandProvider><RouterProvider router={router} /></CommandProvider></AdminProvider>;
 }
 
+const signInRequiredNotice = "This account has a second factor. Sign in with it or with a passkey.";
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: (count, error) => !(error instanceof SignInRequired) && count < 1, refetchOnWindowFocus: false } } });
+// Any admin call refused for the session's sign-in level re-reads the session, which moves the shell to sign-in.
+onSignInRequired(() => void queryClient.invalidateQueries({ queryKey: sessionQueryKey }));
+
 const element = document.querySelector("#root");
 if (!element) throw new Error("Missing #root element");
 const overlays = document.querySelector<HTMLElement>("#admin-overlays") ?? document.body;
 createRoot(element).render(<StrictMode>
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } })}>
+  <QueryClientProvider client={queryClient}>
     <LinkProvider component={RouterBridge}>
       <KumoPortalProvider container={overlays}>
         <TooltipProvider>

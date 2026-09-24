@@ -59,7 +59,25 @@ export function meetsRequirement(assurance: AuthenticationAssurance | null, requ
   return { ok: true };
 }
 
+/**
+ * The least a session must prove to use the platform admin at all: once an
+ * account has a second factor or a passkey, a session that proves only a
+ * password (an admin password sign-in, or a session from a surface without
+ * factors) is refused. Freshness does not matter here; actions check it.
+ * Factorless accounts pass, so an operator can still sign in to enroll one.
+ */
+export function meetsSignInLevel(assurance: Pick<AuthenticationAssurance, "level"> | null, enrolled: AssuranceLevel | null): { ok: true } | { ok: false; reason: "missing" | "insufficient_level" } {
+  if (!enrolled) return { ok: true };
+  if (!assurance) return { ok: false, reason: "missing" };
+  return assuranceRank[assurance.level] >= assuranceRank.mfa ? { ok: true } : { ok: false, reason: "insufficient_level" };
+}
+
 const phishingResistantPermissions: ReadonlySet<PermissionCode> = new Set(["platform.roles.manage"]);
+
+/** The level ordinary platform actions require: a password locally, a second factor in every deployed environment. */
+export function actionAssuranceLevel(environment: ApplicationEnvironment): AssuranceLevel {
+  return environment === "local" ? "password" : "mfa";
+}
 
 /**
  * Application-owned step-up policy for sensitive platform actions. Local
@@ -68,6 +86,6 @@ const phishingResistantPermissions: ReadonlySet<PermissionCode> = new Set(["plat
  * grant or revoke authority require phishing-resistant evidence (a passkey).
  */
 export function platformAssuranceRequirement(permission: string, environment: ApplicationEnvironment): AssuranceRequirement {
-  if (environment === "local") return { level: "password", maxAgeMinutes: stepUpWindowMinutes };
-  return { level: (phishingResistantPermissions as ReadonlySet<string>).has(permission) ? "phishing_resistant" : "mfa", maxAgeMinutes: stepUpWindowMinutes };
+  if (environment === "local") return { level: actionAssuranceLevel(environment), maxAgeMinutes: stepUpWindowMinutes };
+  return { level: (phishingResistantPermissions as ReadonlySet<string>).has(permission) ? "phishing_resistant" : actionAssuranceLevel(environment), maxAgeMinutes: stepUpWindowMinutes };
 }

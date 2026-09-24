@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assuranceForEndpoint, meetsRequirement, platformAssuranceRequirement, securityEventForEndpoint } from "./assurance.js";
+import { actionAssuranceLevel, assuranceForEndpoint, meetsRequirement, meetsSignInLevel, platformAssuranceRequirement, securityEventForEndpoint } from "./assurance.js";
 
 const now = new Date("2026-09-23T12:00:00.000Z");
 const minutesAgo = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
@@ -25,6 +25,23 @@ describe("authentication assurance", () => {
     expect(platformAssuranceRequirement("platform.outbox.redrive", "local")).toEqual({ level: "password", maxAgeMinutes: 15 });
     expect(platformAssuranceRequirement("platform.outbox.redrive", "production")).toEqual({ level: "mfa", maxAgeMinutes: 15 });
     expect(platformAssuranceRequirement("platform.roles.manage", "staging")).toEqual({ level: "phishing_resistant", maxAgeMinutes: 15 });
+  });
+
+  it("requires an account with a factor to have signed in with one, however long ago", () => {
+    const at = (level: "password" | "mfa" | "phishing_resistant") => ({ sessionId: "s", level, method: "password" as const, verifiedAt: new Date(0) });
+    expect(meetsSignInLevel(at("password"), null)).toEqual({ ok: true });
+    expect(meetsSignInLevel(null, null)).toEqual({ ok: true });
+    expect(meetsSignInLevel(at("password"), "mfa")).toEqual({ ok: false, reason: "insufficient_level" });
+    expect(meetsSignInLevel(at("password"), "phishing_resistant")).toEqual({ ok: false, reason: "insufficient_level" });
+    expect(meetsSignInLevel(null, "mfa")).toEqual({ ok: false, reason: "missing" });
+    expect(meetsSignInLevel(at("mfa"), "phishing_resistant")).toEqual({ ok: true });
+    expect(meetsSignInLevel(at("phishing_resistant"), "mfa")).toEqual({ ok: true });
+  });
+
+  it("names the level ordinary platform actions need in each environment", () => {
+    expect(actionAssuranceLevel("local")).toBe("password");
+    expect(actionAssuranceLevel("preview")).toBe("mfa");
+    expect(actionAssuranceLevel("production")).toBe("mfa");
   });
 
   it("names audited account-security changes without credential material", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AdminViewError, adminViews, defineAdminViews } from "./api-registry";
+import { AdminViewError, adminViews, defineAdminViews, stepUpExemptRoutes } from "./api-registry";
 
 describe("admin view registry", () => {
   it("requires unique views guarded by registered platform permissions", () => {
@@ -16,5 +16,15 @@ describe("admin view registry", () => {
     ])).toThrow("different permissions");
     expect(() => defineAdminViews([{ ...view, api: [{ method: "POST", path: "/api/admin/x" }] }])).toThrow("must declare its own platform permission");
     expect(() => defineAdminViews([{ ...view, api: [{ method: "POST", path: "/api/admin/x", permission: "organization.webhooks.manage" }] }])).toThrow("must require a platform permission");
+  });
+
+  it("exempts only declared low-risk actions from fresh step-up, consistently across views", () => {
+    expect([...stepUpExemptRoutes].sort()).toEqual(["POST /api/admin/access/explain", "POST /api/admin/support/sessions/:id/end"]);
+    const view = { id: "x", path: "/x", label: "X", group: "G", permission: "platform.overview.read", api: [] };
+    expect(() => defineAdminViews([{ ...view, api: [{ method: "GET", path: "/api/admin/x", stepUp: false }] }])).toThrow("only actions declare stepUp: false");
+    expect(() => defineAdminViews([
+      { ...view, api: [{ method: "POST", path: "/api/admin/x", permission: "platform.overview.read", stepUp: false }] },
+      { ...view, id: "y", path: "/y", api: [{ method: "POST", path: "/api/admin/x", permission: "platform.overview.read" }] },
+    ])).toThrow("different step-up requirements");
   });
 });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StepUpRequired, toApiError } from "./api";
+import { SignInRequired, StepUpRequired, createAdminApi, onSignInRequired, toApiError } from "./api";
 import { networkErrorMessage } from "./step-up";
 import { createStepUpRunner, initialStepUpForm, shouldHoldShell, stepUpBusyMessage, stepUpFormReducer, stepUpTooWeakMessage } from "./step-up-machine";
 import { beginStepUp, resetStepUpState, setSignInNotice, signInNotice, stepUpInProgress, twoFactorChallengeMs } from "./step-up-state";
@@ -139,5 +139,23 @@ describe("admin API 428", () => {
     expect(mfa).toBeInstanceOf(StepUpRequired);
     expect((mfa as StepUpRequired).required).toBe("mfa");
     expect(((await toApiError(response({ error: "step_up_required", required: "retina" }))) as StepUpRequired).required).toBe("phishing_resistant");
+  });
+
+  it("sends a session that is below the minimum sign-in level back to sign-in, never to a step-up dialog", async () => {
+    const body = { error: "step_up_required", required: "mfa", reason: "insufficient_level", scope: "session", message: "Sign in with your second factor or passkey" };
+    const response = () => new Response(JSON.stringify(body), { status: 428, headers: { "content-type": "application/json" } });
+    const error = await toApiError(response());
+    expect(error).toBeInstanceOf(SignInRequired);
+    expect(error).not.toBeInstanceOf(StepUpRequired);
+
+    // Any admin API call that meets it notifies the shell, which re-reads the session and shows sign-in.
+    const heard = vi.fn();
+    const stop = onSignInRequired(heard);
+    const client = createAdminApi({ fetch: async () => response() });
+    await expect(client.request("GET", "overview")).rejects.toBeInstanceOf(SignInRequired);
+    expect(heard).toHaveBeenCalledTimes(1);
+    stop();
+    await expect(client.request("GET", "overview")).rejects.toBeInstanceOf(SignInRequired);
+    expect(heard).toHaveBeenCalledTimes(1);
   });
 });
