@@ -154,6 +154,9 @@ describe("admin API 428", () => {
     const client = createAdminApi({ fetch: async () => response() });
     await expect(client.request("GET", "overview")).rejects.toBeInstanceOf(SignInRequired);
     expect(heard).toHaveBeenCalledTimes(1);
+    // The session read itself does not notify, or re-reading the session would loop.
+    await expect(client.session()).rejects.toBeInstanceOf(SignInRequired);
+    expect(heard).toHaveBeenCalledTimes(1);
     stop();
     await expect(client.request("GET", "overview")).rejects.toBeInstanceOf(SignInRequired);
     expect(heard).toHaveBeenCalledTimes(1);

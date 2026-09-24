@@ -656,7 +656,8 @@ passkey." This refuses a password-only session for an operator with a
 factor, including a customer-app session replayed on the admin: both
 surfaces share the Better Auth secret and session table, and the customer app
 has no factor challenge. Operators without a factor are not affected, so
-they can sign in to enroll one. The factor lookup is skipped when the session
+they can sign in to enroll one; once the first factor is enrolled, that
+password session is refused too and the operator signs in again with it. The factor lookup is skipped when the session
 already proves `mfa` or better.
 
 **Requirement.** Every non-GET admin API route with a platform permission

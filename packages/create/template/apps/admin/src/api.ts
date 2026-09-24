@@ -251,7 +251,7 @@ export class SignInRequired extends AdminApiError {
 }
 
 const signInListeners = new Set<() => void>();
-/** Called whenever an admin API call meets SignInRequired, so the shell can re-read the session; returns an unsubscribe. */
+/** Called whenever an admin API call other than the session read meets SignInRequired, so the shell can re-read the session; returns an unsubscribe. */
 export function onSignInRequired(listener: () => void): () => void {
   signInListeners.add(listener);
   return () => { signInListeners.delete(listener); };
@@ -324,7 +324,8 @@ export function createAdminApi(options: { baseUrl?: string; fetch?: typeof fetch
     });
     if (!response.ok) {
       const error = await toApiError(response);
-      if (error instanceof SignInRequired) for (const listener of signInListeners) listener();
+      // The session read reports this itself; notifying on it would re-read the session in a loop.
+      if (error instanceof SignInRequired && path !== "session") for (const listener of signInListeners) listener();
       throw error;
     }
     if (response.status === 204) return undefined as T;
