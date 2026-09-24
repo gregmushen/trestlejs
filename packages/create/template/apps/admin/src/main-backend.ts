@@ -358,6 +358,13 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
       await request("POST", `security/api-keys/${encodeURIComponent(key.organizationId)}/${encodeURIComponent(id)}/revoke`, reasoned(reason));
       return { succeeded: [id] };
     },
+    supportOrganization: async (sessionId: string) => await request<{
+      organization: { id: string; name: string; slug: string | null; createdAt: string } | null;
+      members: Array<{ userId: string; role: string; name: string; email: string; joinedAt: string }>;
+      subscription: { plan: string; planVersion: number; status: string; currentPeriodEnd: string | null } | null;
+      regional: { language: string | null; locale: string | null; timeZone: string | null; currency: string | null } | null;
+      recentAudit: Array<{ name: string; occurredAt: string; actorType: string; outcome: string; correlationId: string }>;
+    }>("GET", `support/sessions/${encodeURIComponent(sessionId)}/organization`),
     supportProfiles: async () => ({ profiles: [supportProfile], durations: [15, 30, 60, 120, 240] }),
     previewSupport: async (_organizationId: string, _profile: string): Promise<{ profile: SupportProfile; permissions: SupportPermissionPreview[] }> => ({
       profile: supportProfile,

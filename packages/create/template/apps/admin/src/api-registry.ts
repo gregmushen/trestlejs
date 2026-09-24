@@ -102,6 +102,14 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "GET", path: "/api/admin/service-accounts" },
   ] },
   { id: "email", path: "/communications/email", label: "Email", group: "Communications", permission: "platform.operations.read", capability: "email", api: [{ method: "GET", path: "/api/admin/email" }] },
+  { id: "plans", path: "/commercial/plans", label: "Plans", group: "Commercial", permission: "platform.subscriptions.read", capability: "billing", api: [] },
+  { id: "entitlements", path: "/commercial/entitlements", label: "Entitlements", group: "Commercial", permission: "platform.subscriptions.read", capability: "billing", api: [
+    { method: "GET", path: "/api/admin/commercial/subscriptions" },
+    { method: "GET", path: "/api/admin/commercial/subscriptions/:organizationId" },
+  ] },
+  { id: "support-workspace", path: "/support/workspace", label: "Support Workspace", group: "Customers", permission: "platform.support_sessions.use", api: [
+    { method: "GET", path: "/api/admin/support/sessions/:id/organization" },
+  ] },
   { id: "support-sessions", path: "/support/sessions", label: "Support Sessions", group: "Customers", permission: "platform.support_sessions.use", api: [
     { method: "GET", path: "/api/admin/support/sessions" },
     { method: "POST", path: "/api/admin/support/sessions", permission: "platform.support_sessions.use" },

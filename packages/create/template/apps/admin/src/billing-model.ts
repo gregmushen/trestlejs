@@ -1,5 +1,5 @@
 // The side-effect-free plans module: the SPA must never bundle the billing repository.
-import { featureDefinitions, type FeatureCode } from "@__TRESTLE_PROJECT_NAME__/billing/plans";
+import { featureDefinitions, plans, type FeatureCode } from "@__TRESTLE_PROJECT_NAME__/billing/plans";
 
 /**
  * The admin's view of the application's commercial model. The billing package
@@ -21,3 +21,8 @@ export type PlanVersionState = "draft" | "active" | "grandfathered" | "retired";
 export type PlanVersion = { plan: string; version: number; name: string; state: PlanVersionState; entitlements: Array<{ code: string; enabled: boolean; values: Record<string, PrivilegeValue> }> };
 export type QuotaState = { code: string; used: number; limit: number | null; resetsAt: string | null };
 export type ReconciliationResult = { outcome: "in_sync" | "repaired" | "drift"; differences: Array<{ field: string; local: string | null; provider: string | null }> };
+
+/** The application's plans as reviewed source defines them. */
+export function planCatalog(): Array<{ key: string; version: number; lifecycle: PlanVersionState; entitlements: readonly string[] }> {
+  return Object.entries(plans).map(([key, plan]) => ({ key, version: plan.version, lifecycle: plan.lifecycle, entitlements: plan.entitlements }));
+}

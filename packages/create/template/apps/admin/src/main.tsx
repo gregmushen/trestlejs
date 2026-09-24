@@ -101,6 +101,7 @@ function SupportBanner() {
         {/* Actions wrap with the text so the banner never forces horizontal scrolling on phones. */}
         <span className="flex flex-wrap gap-2">
           <Button size="sm" variant="secondary" onClick={() => void router.navigate({ to: "/support/sessions" as never, search: { selected: supportSession.id } as never })}>Session and audit</Button>
+          <Button size="sm" variant="secondary" onClick={() => void router.navigate({ to: "/support/workspace" as never })}>Workspace</Button>
           <Button size="sm" variant="primary" onClick={() => void exitSupportSession()}>Exit support context</Button>
         </span>
       </span>} />
