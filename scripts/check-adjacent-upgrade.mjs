@@ -172,6 +172,36 @@ try {
     }
     console.log("Reviewed the known Alpha 112 → 113 protected deployment workflow transitions; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.113" && after === "0.1.0-alpha.114") {
+    // Alpha 114 adds a sender-domain check to the three protected provider
+    // preflights. Review only those exact lines against the published Alpha
+    // 113 baseline; application-owned deployment edits still stop the upgrade.
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    for (const [relative, environments] of [
+      [".github/workflows/preview.yml", ["preview"]],
+      [".github/workflows/deploy.yml", ["staging", "production"]],
+    ]) {
+      const workflowPath = path.join(project, relative);
+      const source = await readFile(workflowPath, "utf8");
+      if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+        throw new Error(`Published Alpha 113 ${relative} differs from its recorded baseline`);
+      }
+      let reviewed = source;
+      for (const environment of environments) {
+        const beforeLine = "          node scripts/transactional-provider-preflight.mjs\n";
+        const preflightIndex = reviewed.indexOf(`      - name: Verify ${environment} Resend and Stripe credentials before provisioning\n`);
+        if (preflightIndex < 0) throw new Error(`Published Alpha 113 ${environment} preflight is missing`);
+        const lineIndex = reviewed.indexOf(beforeLine, preflightIndex);
+        if (lineIndex < 0) throw new Error(`Published Alpha 113 ${environment} preflight command is missing`);
+        reviewed = `${reviewed.slice(0, lineIndex)}${beforeLine}          pnpm exec trestle email doctor --env ${environment}\n${reviewed.slice(lineIndex + beforeLine.length)}`;
+      }
+      const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+      const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+      if (reviewed !== target) throw new Error(`Published Alpha 114 ${relative} differs from the narrowly reviewed transition`);
+      await writeFile(workflowPath, target);
+    }
+    console.log("Reviewed the known Alpha 113 → 114 protected provider preflights; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });
