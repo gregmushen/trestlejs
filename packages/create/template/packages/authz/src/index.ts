@@ -1,5 +1,6 @@
 export * from "./access.js";
 export * from "./api-keys.js";
+export * from "./assurance.js";
 export * from "./permissions.js";
 export * from "./policies.js";
 export * from "./registry.js";
