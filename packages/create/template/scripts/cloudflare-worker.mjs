@@ -41,16 +41,16 @@ if (operation === "delete-preview") {
     if (queueBindings.some((binding) => binding.queue_name !== `${worker}-events`)) {
       throw new Error("Preview Worker has an unexpected Queue binding; refusing to detach it");
     }
-    if (queueBindings.length) {
-      const queues = await previewQueueIds();
-      const queue = queues.find((item) => item.queue_name === `${worker}-events`);
-      if (queue) {
-        const consumers = await request(`${account}/queues/${encodeURIComponent(queue.queue_id)}/consumers`);
-        if (!Array.isArray(consumers?.result)) throw new Error("Cloudflare Queue consumers returned an invalid result");
-        for (const consumer of consumers.result.filter((item) => item.script === worker)) {
-          await request(`${account}/queues/${encodeURIComponent(queue.queue_id)}/consumers/${encodeURIComponent(consumer.consumer_id)}`, { method: "DELETE" });
-        }
+    const queues = await previewQueueIds();
+    const queue = queues.find((item) => item.queue_name === `${worker}-events`);
+    if (queue) {
+      const consumers = await request(`${account}/queues/${encodeURIComponent(queue.queue_id)}/consumers`);
+      if (!Array.isArray(consumers?.result)) throw new Error("Cloudflare Queue consumers returned an invalid result");
+      for (const consumer of consumers.result.filter((item) => item.script === worker)) {
+        await request(`${account}/queues/${encodeURIComponent(queue.queue_id)}/consumers/${encodeURIComponent(consumer.consumer_id)}`, { method: "DELETE" });
       }
+    }
+    if (queueBindings.length) {
       const form = new FormData();
       form.set("settings", JSON.stringify({ bindings: [] }));
       await request(`${endpoint}/settings`, { method: "PATCH", body: form });

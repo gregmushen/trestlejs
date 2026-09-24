@@ -313,6 +313,31 @@ describe("preview lifecycle", () => {
     ]);
   });
 
+  it("removes a remaining consumer when its preview producer binding is already absent", async () => {
+    const requests: string[] = [];
+    const base = await api((request, response) => {
+      const method = request.method ?? "";
+      const url = request.url ?? "";
+      requests.push(`${method} ${url}`);
+      const result = url.endsWith("/settings")
+        ? { bindings: [] }
+        : url.startsWith("/accounts/account/queues?")
+          ? [{ queue_name: "clearclose-worker-pr-42-events", queue_id: "queue-id" }]
+          : url.endsWith("/consumers")
+            ? [{ script: "clearclose-worker-pr-42", consumer_id: "consumer-id" }]
+            : {};
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ success: true, result }));
+    });
+    const result = await run("cloudflare-worker.mjs", ["delete-preview", "clearclose-worker-pr-42"], {
+      CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base,
+    });
+    expect(result.code).toBe(0);
+    expect(requests).toContain("DELETE /accounts/account/queues/queue-id/consumers/consumer-id");
+    expect(requests).not.toContain("PATCH /accounts/account/workers/scripts/clearclose-worker-pr-42/settings");
+    expect(requests.at(-1)).toBe("DELETE /accounts/account/workers/scripts/clearclose-worker-pr-42");
+  });
+
   it("fails closed on provider errors and sanitizes the response", async () => {
     const base = await api((_request, response) => { response.statusCode = 500; response.end('top-secret provider body'); });
     const result = await run("cloudflare-pages.mjs", ["ensure", "clearclose-app-pr-42"], {
