@@ -105,6 +105,13 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   "preview and staging provider email redirect every recipient; local email cannot use Resend"));
 
   const preview = sources.get("preview.yml") ?? "";
+  const projectPackage = await readFile(path.join(root, "package.json"), "utf8").then((source) => JSON.parse(source) as { scripts?: Record<string, string> }).catch(() => null);
+  const previewBrowser = await readFile(path.join(root, "tests/browser/preview-product.spec.ts"), "utf8").catch(() => "");
+  checks.push(check("ci.browser.preview-only-billing", preview.includes("pnpm test:preview")
+    && projectPackage?.scripts?.["test:preview"]?.includes("preview-product.spec.ts") === true
+    && projectPackage?.scripts?.["test:deployed"]?.includes("preview-product.spec.ts") === false
+    && previewBrowser.includes('process.env.TRESTLE_DEPLOY_ENV !== "preview"'),
+  "test Checkout is restricted to preview; production smoke cannot run the preview billing test"));
   checks.push(check(
     "ci.preview.trusted-only",
     preview.includes("github.event.pull_request.head.repo.full_name == github.repository"),

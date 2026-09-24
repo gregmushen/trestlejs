@@ -253,6 +253,42 @@ try {
     await writeFile(workflowPath, target);
     console.log("Reviewed the known Alpha 115 → 116 protected preview auth and browser-gate transition; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.116" && after === "0.1.0-alpha.117") {
+    // Same-origin Pages routing changed protected deployment workflows. Require
+    // each published Alpha 116 baseline and only the exact Alpha 117 edits.
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    for (const relative of [".github/workflows/preview.yml", ".github/workflows/deploy.yml"]) {
+      const workflowPath = path.join(project, relative);
+      const source = await readFile(workflowPath, "utf8");
+      if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+        throw new Error(`Published Alpha 116 ${relative} differs from its recorded baseline`);
+      }
+      let reviewed = source;
+      const bindings = relative.endsWith("preview.yml")
+        ? [["preview", '"${{ steps.preview.outputs.app_project }}" "${{ steps.preview.outputs.worker_name }}"', '${{ steps.preview.outputs.api_url }}', '${{ steps.preview.outputs.app_url }}']]
+        : [["staging", "upgrade-canary-staging upgrade-canary-worker-staging", '${{ vars.API_URL }}', '${{ vars.APP_URL }}'],
+          ["production", "upgrade-canary upgrade-canary-worker", '${{ vars.API_URL }}', '${{ vars.APP_URL }}']];
+      for (const [environment, names, oldOrigin, newOrigin] of bindings) {
+        const step = `      - name: Bind ${environment} Pages app to ${environment === "preview" ? "isolated API Worker" : "API Worker"}\n`
+          + `        run: node scripts/cloudflare-pages.mjs bind-service ${names}\n`
+          + `        env:\n`
+          + `          CLOUDFLARE_API_TOKEN: "${'${{ secrets.CLOUDFLARE_API_TOKEN }}'}"\n`
+          + `          CLOUDFLARE_ACCOUNT_ID: "${'${{ secrets.CLOUDFLARE_ACCOUNT_ID }}'}"\n`;
+        const oldLine = `      - run: VITE_API_ORIGIN="${oldOrigin}" pnpm --filter @upgrade-canary/app build\n`;
+        const expectedCount = environment === "staging" ? 2 : 1;
+        if (reviewed.split(oldLine).length - 1 !== expectedCount) {
+          throw new Error(`Published Alpha 116 ${environment} app build step did not match the reviewed transition`);
+        }
+        reviewed = reviewed.replace(oldLine,
+          `${step}      - run: VITE_API_ORIGIN="${newOrigin}" pnpm --filter @upgrade-canary/app build\n`);
+      }
+      const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+      const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+      if (reviewed !== target) throw new Error(`Published Alpha 117 ${relative} differs from the narrowly reviewed same-origin transition`);
+      await writeFile(workflowPath, target);
+    }
+    console.log("Reviewed the known Alpha 116 → 117 protected same-origin Pages routing transitions; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });

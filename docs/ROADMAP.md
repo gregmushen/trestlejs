@@ -910,6 +910,21 @@ redirected verification email, sign-in, two-organization switching,
 test-mode Stripe Checkout, idempotent retry, and cross-tenant denial. This is
 preview evidence, not a completed staging run, signed Stripe webhook, or
 cron-enabled async-delivery proof; those beta gates remain open.
+Alpha 118 makes Stripe webhook signature verification asynchronous with the
+Web Crypto provider required by Cloudflare Workers. The earlier synchronous
+path rejected even a correctly signed request in the deployed Worker. The
+generated preview browser gate now completes a Stripe test-card Checkout and
+requires a provider-signed webhook to activate the local Pro subscription and
+`workflows.advanced` entitlement. This payment test is confined to preview;
+production smoke does not submit a test card. The isolated canary
+[passed hosted preview with both browser tests](https://github.com/gregmushen/trestlejs-canary/actions/runs/36022657568)
+after its preview-only Stripe webhook endpoint and encrypted signing secret
+were aligned. Its prior test endpoint was disabled, not deleted. This is
+provider-backed preview evidence; the separate mainline subscription
+reconciliation path, a protected staging run, and live production promotion
+remain beta gates. The published Alpha 116 → 117 adjacent upgrade rehearsal
+also narrowly reviews the protected preview and deployment workflow changes
+for same-origin Pages routing against recorded baseline hashes.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
