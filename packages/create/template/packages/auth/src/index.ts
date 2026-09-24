@@ -1,6 +1,6 @@
 import { assuranceForEndpoint, memberDefaultApplicationRoles, organizationCreatorApplicationRoles, securityEventForEndpoint } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
-import { createDatabase, createTenantDatabase, grantApplicationRoles, recordAssurance, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createDatabase, createTenantDatabase, grantApplicationRoles, recordAssurance, sessionAssurance, type Database, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import * as schema from "@__TRESTLE_PROJECT_NAME__/db";
 import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate, type R2BucketBinding } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { passkey } from "@better-auth/passkey";
@@ -78,24 +78,32 @@ export function createAuth(environment: AuthEnvironment, options: AuthOptions = 
       }, { idempotencyKey: `auth-verification:${await fingerprint(url)}` }); },
     },
     hooks: {
-      // Record how each new session was authenticated, and audit account-security changes.
+      // Audit account-security changes.
       after: createAuthMiddleware(async (context) => {
-        const created = context.context.newSession;
         const event = securityEventForEndpoint(context.path);
-        // Most auth requests (get-session, sign-out) write nothing; open a connection only when needed.
-        if (!created && !event) return;
-        if (created) await recordAssurance(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), { sessionId: created.session.id, userId: created.user.id, ...assuranceForEndpoint(context.path) });
-        const actor = context.context.session?.user.id ?? created?.user.id;
-        const returned = context.context.returned as { status?: number } | undefined;
-        if (event && actor && !(returned instanceof Error) && (returned?.status ?? 200) < 400) await recordSecurityEvent(environment, event, actor);
+        if (!event) return;
+        const actor = context.context.session?.user.id ?? context.context.newSession?.user.id;
+        // A failed endpoint leaves its APIError here (better-auth api/dispatch.mjs); a successful one leaves
+        // its JSON body, whose own `status` field (for example `{ status: true }`) is not an HTTP status.
+        const succeeded = !(context.context.returned instanceof Error);
+        if (actor && succeeded) await recordSecurityEvent(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), environment, event, actor);
       }),
     },
     databaseHooks: {
+      session: {
+        create: {
+          // Runs right after the new session row is written and, when Better Auth rotates a
+          // session, before it deletes the old one (whose assurance row then cascades away).
+          after: async (created, context) => {
+            await recordSessionAssurance(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), created, context?.context.session?.session ?? null, context?.path ?? "");
+          },
+        },
+      },
       user: {
         update: {
           // Enrollment completes when the first code verifies; sign-in challenges never update the user.
           after: async (user, context) => {
-            if (context?.path?.startsWith("/two-factor/verify-") && (user as { twoFactorEnabled?: boolean }).twoFactorEnabled) await recordSecurityEvent(environment, "security.two_factor.enabled", user.id);
+            if (context?.path?.startsWith("/two-factor/verify-") && (user as { twoFactorEnabled?: boolean }).twoFactorEnabled) await recordSecurityEvent(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), environment, "security.two_factor.enabled", user.id);
           },
         },
       },
@@ -132,12 +140,30 @@ export function createAuth(environment: AuthEnvironment, options: AuthOptions = 
   });
 }
 
+/**
+ * Records how a new session was authenticated. Only a session created without a
+ * prior one (a sign-in) gets the level its endpoint proves. A session that
+ * replaces an authenticated one (two-factor enrollment or disable, which need
+ * only the password) inherits the prior session's evidence, so enrolling an
+ * authenticator never upgrades a password-only session to MFA.
+ */
+async function recordSessionAssurance(database: Database, created: Readonly<{ id: string; userId: string }>, prior: Readonly<{ id: string; userId: string }> | null, path: string): Promise<void> {
+  try {
+    const carried = prior && prior.userId === created.userId && prior.id !== created.id ? await sessionAssurance(database, prior.id) : null;
+    const evidence = carried ?? (prior ? { level: "password", method: "password" } as const : assuranceForEndpoint(path));
+    await recordAssurance(database, { sessionId: created.id, userId: created.userId, level: evidence.level, method: evidence.method });
+  } catch (error) {
+    // Fail closed: the session stays usable for ordinary work, but with no assurance row
+    // every step-up check reports "missing" and asks the person to verify again.
+    createLogger({ surface: "auth" }).error("auth.assurance.record_failed", { errorName: error instanceof Error ? error.name : "unknown" });
+  }
+}
+
 /** Records an organization-less security.* event through the SECURITY DEFINER function (migration 0032). */
-async function recordSecurityEvent(environment: AuthEnvironment, name: string, userId: string): Promise<void> {
+async function recordSecurityEvent(database: Database, environment: AuthEnvironment, name: string, userId: string): Promise<void> {
   // The credential change is already committed when this runs, so a failed audit write is logged, not thrown.
   try {
-    await createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER)
-      .execute(sql`select trestle_record_security_event(${name}, ${userId}, ${`auth:${crypto.randomUUID()}`}, ${environment.APP_ENV ?? "local"})`);
+    await database.execute(sql`select trestle_record_security_event(${name}, ${userId}, ${`auth:${crypto.randomUUID()}`}, ${environment.APP_ENV ?? "local"})`);
   } catch (error) {
     createLogger({ surface: "auth" }).error("security.audit.record_failed", { event: name, errorName: error instanceof Error ? error.name : "unknown" });
   }
