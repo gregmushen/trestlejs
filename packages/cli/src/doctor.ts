@@ -8,6 +8,7 @@ import { validateCi } from "./ci.js";
 import { inspectResources } from "./inspect.js";
 import { diffSetupPlan } from "./plan.js";
 import { readSecrets, validateSecrets } from "./secrets.js";
+import { emailDeploymentIssues } from "./resend-status.js";
 import { stripeDeploymentIssues } from "./stripe-deployment.js";
 import { validateStripeCatalog } from "./stripe-sync.js";
 
@@ -354,13 +355,15 @@ export async function runDoctor(
         if (!workerPath) throw new Error("worker app is not declared");
         const workerConfig = await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8");
         const environmentBlock = wranglerEnvironmentBlock(workerConfig, environment);
-        const configured = wranglerStringVariable(environmentBlock, "EMAIL_DELIVERY_MODE") === "resend" && Boolean(wranglerStringVariable(environmentBlock, "EMAIL_FROM") && wranglerStringVariable(environmentBlock, "EMAIL_FROM") !== "CHANGE_ME") && (environment === "production" || Boolean(wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") && wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") !== "CHANGE_ME"));
+        const values = await readSecrets(root, environment, masterKey);
+        const issues = emailDeploymentIssues({ environment, mode: wranglerStringVariable(environmentBlock, "EMAIL_DELIVERY_MODE"), apiKey: values.RESEND_API_KEY, webhookSecret: values.RESEND_WEBHOOK_SECRET, sender: wranglerStringVariable(environmentBlock, "EMAIL_FROM"), recipientRedirect: wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") });
+        const configured = issues.length === 0;
         checks.push({
           id: "email.provider.configuration",
           group: "architecture",
           status: configured ? "pass" : "fail",
-          message: configured ? `Resend and a sender are configured for ${environment}` : `${environment} email provider configuration is incomplete`,
-          ...(!configured ? { remediation: `Set EMAIL_FROM${environment !== "production" ? ", EMAIL_STAGING_REDIRECT," : " and"} the ${environment} Resend adapter variables in ${workerPath}/wrangler.jsonc` } : {}),
+          message: configured ? `Resend delivery configuration is complete for ${environment}` : `${environment} email provider configuration is incomplete`,
+          ...(!configured ? { evidence: issues.join("; "), remediation: `Set the ${environment} email variables in ${workerPath}/wrangler.jsonc and credentials with trestle secrets edit --env ${environment}` } : {}),
         });
       } catch (error) {
         checks.push({ id: "email.provider.configuration", group: "architecture", status: "fail", message: "email deployment configuration cannot be read", evidence: error instanceof Error ? error.message : String(error) });

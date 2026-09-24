@@ -204,10 +204,15 @@ suite("local product path", () => {
         expect(outbox).toMatchObject({ eventName: "resource.article.created", resourceType: "article", resourceId: article.id, organizationId, status: "pending", payload: { resourceId: article.id } });
         expect(outbox?.correlationId).toBeTruthy();
         const queued: unknown[] = [];
-        await worker.scheduled(undefined, {
-          ...environment,
-          TRESTLE_EVENTS: { send: async (body: unknown) => { queued.push(body); } },
-        });
+        // Other integration scenarios can leave earlier committed outbox rows.
+        // A scheduled run leases only one bounded batch, so keep dispatching
+        // until this event is reached rather than assuming it is in batch one.
+        for (let batch = 0; batch < 100 && !queued.some((event) => (event as { id?: string }).id === outbox!.id); batch++) {
+          await worker.scheduled(undefined, {
+            ...environment,
+            TRESTLE_EVENTS: { send: async (body: unknown) => { queued.push(body); } },
+          });
+        }
         const queuedEvent = queued.find((event) => (event as { id?: string }).id === outbox!.id);
         expect(queuedEvent).toMatchObject({ id: outbox!.id, name: "resource.article.created", resource: { type: "article", id: article.id } });
         expect(queuedEvent).not.toHaveProperty("organizationId");

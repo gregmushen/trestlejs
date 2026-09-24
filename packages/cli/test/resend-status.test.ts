@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { inspectResendSender, senderDomain } from "../src/resend-status.js";
+import { emailDeploymentIssues, inspectResendSender, senderDomain } from "../src/resend-status.js";
 
 describe("Resend sender reconciliation", () => {
   it("extracts a sender domain and confirms provider verification", async () => {
@@ -11,5 +11,25 @@ describe("Resend sender reconciliation", () => {
   it("reports an unverified provider domain without leaking credentials", async () => {
     const request = vi.fn(async () => new Response(JSON.stringify({ data: [{ name: "example.com", status: "pending" }] }))) as unknown as typeof fetch;
     expect(await inspectResendSender("re_redacted", "noreply@example.com", request)).toMatchObject({ found: true, verified: false, providerStatus: "pending" });
+  });
+
+  it("requires Resend mode and recipient protection in preview and staging", () => {
+    const ready = { environment: "preview" as const, mode: "resend", apiKey: "re_redacted", webhookSecret: "whsec_redacted", sender: "Product <noreply@example.com>", recipientRedirect: "safe@example.com" };
+    expect(emailDeploymentIssues(ready)).toEqual([]);
+    expect(emailDeploymentIssues({ ...ready, mode: "local", recipientRedirect: "CHANGE_ME" }))
+      .toEqual(["EMAIL_DELIVERY_MODE must be resend", "preview recipient redirect is not configured"]);
+    expect(emailDeploymentIssues({ ...ready, environment: "staging", recipientRedirect: "invalid" }))
+      .toEqual(["staging recipient redirect must be a valid email address"]);
+  });
+
+  it("does not require a redirect in production but rejects malformed senders and keys", () => {
+    const config = { environment: "production" as const, mode: "resend", apiKey: "re_redacted", webhookSecret: "whsec_redacted", sender: "noreply@example.com" };
+    expect(emailDeploymentIssues(config)).toEqual([]);
+    expect(emailDeploymentIssues({ ...config, apiKey: "not-a-key", sender: "@example.com" }))
+      .toEqual(["RESEND_API_KEY must start with re_", "EMAIL_FROM must contain a valid email address"]);
+    expect(emailDeploymentIssues({ ...config, webhookSecret: "CHANGE_ME" }))
+      .toEqual(["RESEND_WEBHOOK_SECRET must start with whsec_"]);
+    expect(emailDeploymentIssues({ ...config, apiKey: "re_", webhookSecret: "whsec_" }))
+      .toEqual(["RESEND_API_KEY must start with re_", "RESEND_WEBHOOK_SECRET must start with whsec_"]);
   });
 });

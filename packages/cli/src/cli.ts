@@ -26,7 +26,7 @@ import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment
 import { inspectResources, inspectRoutes } from "./inspect.js";
 import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readApplyState, readSetupPlan } from "./plan.js";
 import { runCommand, runDevelopment } from "./processes.js";
-import { inspectResendSender } from "./resend-status.js";
+import { emailDeploymentIssues, inspectResendSender, validEmailAddress, type RemoteEmailEnvironment } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
 import { stripeDeploymentIssues, stripeServerKeyMatchesMode } from "./stripe-deployment.js";
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
@@ -550,9 +550,11 @@ export function createProgram(runtime: CliRuntime): Command {
       const workerPath = context.manifest.apps.worker ?? "apps/worker";
       const config = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
       const block = wranglerEnvironmentBlock(config, options.env);
-      const mode = options.env === "local" ? "local" : "resend";
-      const stagingProtected = options.env !== "staging" || /"EMAIL_STAGING_REDIRECT"\s*:\s*"(?!CHANGE_ME)[^"]+"/u.test(block);
-      runtime.stdout(["Email", `Environment:        ${options.env}`, `Adapter:            ${mode}`, `API key:            ${values.RESEND_API_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.RESEND_WEBHOOK_SECRET ? "present" : mode === "local" ? "not required" : "missing"}`, `Sender:             ${/"EMAIL_FROM"\s*:\s*"(?!CHANGE_ME)[^"]+"/u.test(block) ? "configured" : mode === "local" ? "local default" : "missing"}`, `Staging protection: ${stagingProtected ? "configured" : "missing"}`, ""].join("\n"));
+      const mode = options.env === "local" ? "local" : wranglerStringVariable(block, "EMAIL_DELIVERY_MODE") ?? "missing";
+      const sender = wranglerStringVariable(block, "EMAIL_FROM");
+      const redirect = wranglerStringVariable(block, "EMAIL_STAGING_REDIRECT");
+      const redirectStatus = options.env === "local" || options.env === "production" ? "not required" : validEmailAddress(redirect) ? "configured" : "missing";
+      runtime.stdout(["Email", `Environment:        ${options.env}`, `Adapter:            ${mode}`, `API key:            ${values.RESEND_API_KEY?.startsWith("re_") && values.RESEND_API_KEY.length > 3 ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.RESEND_WEBHOOK_SECRET?.startsWith("whsec_") && values.RESEND_WEBHOOK_SECRET.length > 6 ? "present" : mode === "local" ? "not required" : "missing"}`, `Sender:             ${validEmailAddress(sender) ? "configured" : mode === "local" ? "local default" : "missing"}`, `Recipient redirect: ${redirectStatus}`, ""].join("\n"));
     });
   email.command("doctor")
     .option("--env <environment>", "email environment", environment, "local")
@@ -565,8 +567,8 @@ export function createProgram(runtime: CliRuntime): Command {
       const block = wranglerEnvironmentBlock(config, options.env);
       const senderValue = wranglerStringVariable(block, "EMAIL_FROM");
       const sender = senderValue && senderValue !== "CHANGE_ME" ? senderValue : undefined;
-      const problems = [!values.RESEND_API_KEY?.startsWith("re_") ? "RESEND_API_KEY must start with re_" : "", !values.RESEND_WEBHOOK_SECRET ? "RESEND_WEBHOOK_SECRET is missing" : "", !sender ? "EMAIL_FROM is not configured" : "", options.env === "staging" && !/"EMAIL_STAGING_REDIRECT"\s*:\s*"(?!CHANGE_ME)[^"]+"/u.test(block) ? "staging recipient redirect is not configured" : ""].filter(Boolean);
-      if (values.RESEND_API_KEY?.startsWith("re_") && sender) {
+      const problems = emailDeploymentIssues({ environment: options.env as RemoteEmailEnvironment, mode: wranglerStringVariable(block, "EMAIL_DELIVERY_MODE"), apiKey: values.RESEND_API_KEY, webhookSecret: values.RESEND_WEBHOOK_SECRET, sender, recipientRedirect: wranglerStringVariable(block, "EMAIL_STAGING_REDIRECT") });
+      if (problems.length === 0 && values.RESEND_API_KEY && sender) {
         try { const provider = await inspectResendSender(values.RESEND_API_KEY, sender); if (!provider.verified) problems.push(`Resend sender domain ${provider.domain} is ${provider.providerStatus ?? "not registered"}`); }
         catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
       }
