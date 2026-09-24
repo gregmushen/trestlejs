@@ -520,6 +520,17 @@ stepUpRequiredAfter: new Date((assurance?.verifiedAt.getTime() ?? 0) + 15 * 60_0
 
 4. Expose the factor endpoints on the admin origin: extend the auth route loop and `basePolicies` with `POST /api/auth/two-factor/enable`, `/two-factor/disable`, `/two-factor/verify-totp`, `/two-factor/verify-backup-code`, `/two-factor/generate-backup-codes`, `GET /api/auth/passkey/list-user-passkeys`, `GET /api/auth/passkey/generate-register-options`, `POST /api/auth/passkey/verify-registration`, `GET /api/auth/passkey/generate-authenticate-options`, `POST /api/auth/passkey/verify-authentication`, `POST /api/auth/passkey/delete-passkey` (all `public: true, audience: "public"`: Better Auth authenticates them itself). Check exact method/path pairs against `better-auth` 1.7.5's plugin endpoint definitions before adding them.
 
+- [ ] **Step 3b: Step-up for factor management**
+
+Better Auth's factor endpoints (`/two-factor/enable`, `/two-factor/disable`, `/two-factor/generate-backup-codes`, `/passkey/generate-register-options`, `/passkey/verify-registration`, `/passkey/delete-passkey`) require only a password or a session. Without a gate, someone holding only the password could replace an operator's factors and then sign in at a higher level. In the admin Worker, before forwarding any of these to Better Auth:
+
+1. Resolve the session (`adminDependencies.session`) and its assurance; no session → 401.
+2. If the user has any factor enrolled (`user.two_factor_enabled` or at least one `passkey` row, read through the auth database), require `platformAssuranceRequirement`-style evidence of at least `mfa`, fresh within 15 minutes, in every environment (including local, once a factor exists).
+3. If the user has no factor yet (first enrollment), require a fresh password (15 minutes).
+4. Otherwise respond 428 `step_up_required` with the same body shape as Step 3.
+
+Add tests: an operator with a factor and only password assurance gets 428 on `/api/auth/two-factor/disable` and `/api/auth/passkey/generate-register-options`; with fresh mfa assurance the request is forwarded; an operator without factors and a fresh password can start enrollment.
+
 - [ ] **Step 4: Run to verify it passes**, plus the whole admin suite (`pnpm exec vitest run`); the `beforeEach` fixture from Step 1 keeps the existing action tests passing.
 
 - [ ] **Step 5: Commit** (`git commit -m "Require step-up assurance for platform actions"`).
