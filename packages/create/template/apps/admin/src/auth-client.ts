@@ -4,6 +4,8 @@ import { createAuthClient } from "better-auth/react";
 
 import { adminApiOrigin } from "./api";
 
+import type { StepUpIdentity } from "./step-up";
+
 export type { AssuranceLevel } from "./step-up";
 
 const create = () => createAuthClient({ baseURL: adminApiOrigin || window.location.origin, plugins: [twoFactorClient(), passkeyClient()] });
@@ -45,3 +47,9 @@ export async function reauthenticateWithPasskey(): Promise<ReauthResult> {
   const result = await authClient().signIn.passkey();
   return result?.error ? { ok: false, error: result.error.message ?? "Passkey verification failed" } : { ok: true };
 }
+
+/** Reads who the current session belongs to, bypassing any cached session, and signs it out. */
+export const stepUpIdentity: StepUpIdentity = {
+  currentUserId: async () => (await authClient().getSession({ query: { disableCookieCache: true } })).data?.user.id ?? null,
+  signOut: async () => await authClient().signOut(),
+};

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { authErrorMessage, stepUpMethods, stepUpRequirement } from "./step-up";
+import { authErrorMessage, confirmStepUpIdentity, stepUpMethods, stepUpRequirement } from "./step-up";
+import { beginStepUp, setSignInNotice, signInNotice, stepUpInProgress } from "./step-up-state";
 
 describe("step-up", () => {
   it("reads the required level from a Better Auth 428 and ignores other errors", () => {
@@ -24,5 +25,33 @@ describe("step-up", () => {
     expect(authErrorMessage({ status: 403, reason: "local_account", message: "x" }, "failed")).toMatch(/local development/u);
     expect(authErrorMessage({ status: 400, message: "Invalid code" }, "failed")).toBe("Invalid code");
     expect(authErrorMessage({ status: 500 }, "Set up authenticator failed")).toBe("Set up authenticator failed");
+  });
+
+  it("never continues as a different account after a step-up", async () => {
+    let signedOut = 0;
+    const as = (id: string | null) => ({ currentUserId: async () => id, signOut: async () => { signedOut += 1; } });
+    expect(await confirmStepUpIdentity("op-1", "passkey", as("op-1"))).toEqual({ ok: true });
+    expect(signedOut).toBe(0);
+    const other = await confirmStepUpIdentity("op-1", "passkey", as("op-2"));
+    expect(other.ok).toBe(false);
+    expect(!other.ok && other.error).toMatch(/passkey belongs to a different account/u);
+    expect(signedOut).toBe(1);
+    // No session after the step-up also fails closed.
+    expect((await confirmStepUpIdentity("op-1", "password", as(null))).ok).toBe(false);
+    expect((await confirmStepUpIdentity("op-1", "password", { currentUserId: async () => { throw new Error("offline"); }, signOut: async () => undefined })).ok).toBe(false);
+  });
+
+  it("holds the shell while any step-up is in progress and ends each exactly once", () => {
+    expect(stepUpInProgress()).toBe(false);
+    const first = beginStepUp();
+    const second = beginStepUp();
+    first(); first();
+    expect(stepUpInProgress()).toBe(true);
+    second();
+    expect(stepUpInProgress()).toBe(false);
+    setSignInNotice("Verification cancelled. Sign in again to continue.");
+    expect(signInNotice()).toMatch(/cancelled/u);
+    setSignInNotice(null);
+    expect(signInNotice()).toBeNull();
   });
 });

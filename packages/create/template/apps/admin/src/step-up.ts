@@ -35,3 +35,17 @@ export function authErrorMessage(error: unknown, fallback: string): string {
   if (value?.reason === "local_account") return "The default local admin account only works in local development. Sign in with your own operator account.";
   return value?.message || fallback;
 }
+
+export type StepUpIdentity = Readonly<{ currentUserId: () => Promise<string | null>; signOut: () => Promise<unknown> }>;
+
+/**
+ * Confirms a step-up signed in the operator who started it. A passkey is
+ * discoverable, so it can sign in a different account; that session is signed
+ * out and the action is never retried as that account.
+ */
+export async function confirmStepUpIdentity(operatorId: string, method: "passkey" | "password", identity: StepUpIdentity): Promise<{ ok: true } | { ok: false; error: string }> {
+  const current = await identity.currentUserId().catch(() => null);
+  if (current === operatorId) return { ok: true };
+  await identity.signOut().catch(() => undefined);
+  return { ok: false, error: `That ${method === "passkey" ? "passkey" : "sign-in"} belongs to a different account, so you have been signed out. Sign in again as yourself.` };
+}

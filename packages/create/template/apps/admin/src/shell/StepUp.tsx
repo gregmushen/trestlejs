@@ -1,9 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { sessionQueryKey } from "../api";
-import { reauthenticateWithPasskey, reauthenticateWithPassword, verifySecondFactor, type ReauthResult } from "../auth-client";
-import { stepUpMethods, stepUpRequirement, type AssuranceLevel } from "../step-up";
+import { reauthenticateWithPasskey, reauthenticateWithPassword, stepUpIdentity, verifySecondFactor, type ReauthResult } from "../auth-client";
+import { confirmStepUpIdentity, stepUpMethods, stepUpRequirement, type AssuranceLevel } from "../step-up";
+import { beginStepUp, setSignInNotice } from "../step-up-state";
 import { useAdmin } from "./context";
 import { Button, Dialog, Input, SensitiveInput } from "./kumo";
 
@@ -16,7 +17,9 @@ const intro: Record<AssuranceLevel, ReactNode> = {
 /**
  * Re-authenticates the operator after a 428 step-up challenge, offering only
  * the paths that can reach `required`. Each path creates a fresh session whose
- * assurance the server records and checks again when the caller retries.
+ * assurance the server records and checks again when the caller retries, and
+ * that session must belong to the same operator. While mounted it holds the
+ * shell's session poll, since a code prompt runs without a live session.
  */
 export function StepUpForm(props: { required: AssuranceLevel; onVerified: () => void | Promise<void>; onCancel: () => void; notice?: string }) {
   const { session } = useAdmin();
@@ -27,13 +30,26 @@ export function StepUpForm(props: { required: AssuranceLevel; onVerified: () => 
   const [code, setCode] = useState("");
   const [codeKind, setCodeKind] = useState<"totp" | "backup">("totp");
   const [error, setError] = useState<string | undefined>(props.notice);
+  // Set while the operator has no live session (a code prompt, or a different account signed out); shown on sign-in if they leave.
+  const sessionEnded = useRef<string | null>(null);
+  useEffect(() => {
+    const end = beginStepUp();
+    return () => {
+      end();
+      if (sessionEnded.current) { setSignInNotice(sessionEnded.current); void queryClient.invalidateQueries({ queryKey: sessionQueryKey }); }
+    };
+  }, [queryClient]);
   // A password sign-in replaces the session cookie, so the shell re-reads the session either way.
   const refreshSession = () => void queryClient.invalidateQueries({ queryKey: sessionQueryKey });
-  const finish = async (result: ReauthResult, retryStage: "password" | "code", viaPassword: boolean) => {
-    if ("needsCode" in result) { setStage("code"); setError(undefined); return; }
+  const finish = async (result: ReauthResult, retryStage: "password" | "code", method: "password" | "code" | "passkey") => {
+    if ("needsCode" in result) { sessionEnded.current = "Verification cancelled. Sign in again to continue."; setStage("code"); setError(undefined); return; }
     if (!result.ok) { setError(result.error); setStage(retryStage); return; }
     setCode("");
+    const identity = await confirmStepUpIdentity(session.operator.id, method === "passkey" ? "passkey" : "password", stepUpIdentity);
+    if (!identity.ok) { sessionEnded.current = identity.error; setError(identity.error); setStage("password"); return; }
+    sessionEnded.current = null;
     refreshSession();
+    const viaPassword = method === "password";
     // Without an authenticator, a password reaches password assurance only.
     if (viaPassword && props.required !== "password") { setError("This account has no authenticator app enrolled, so a password alone cannot satisfy this. Use a passkey, or set up an authenticator in Account security."); setStage("password"); return; }
     await props.onVerified();
@@ -42,10 +58,11 @@ export function StepUpForm(props: { required: AssuranceLevel; onVerified: () => 
     setStage("working");
     const result = await reauthenticateWithPassword(session.operator.email, password);
     setPassword("");
-    await finish(result, "password", true);
+    await finish(result, "password", "password");
   };
-  const withCode = async () => { setStage("working"); await finish(await verifySecondFactor(code, codeKind), "code", false); };
-  const withPasskey = async () => { setStage("working"); await finish(await reauthenticateWithPasskey(), "password", false); };
+  const withCode = async () => { setStage("working"); await finish(await verifySecondFactor(code, codeKind), "code", "code"); };
+  const withPasskey = async () => { setStage("working"); await finish(await reauthenticateWithPasskey(), "password", "passkey"); };
+  // Leaving a code prompt signs the operator out; unmounting explains that on the sign-in screen.
   const cancel = () => { refreshSession(); props.onCancel(); };
   const working = stage === "working";
 
