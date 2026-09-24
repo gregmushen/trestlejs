@@ -51,7 +51,7 @@ jobs:
             exit 1
           fi
       - name: Prepare isolated preview Queue bindings
-        run: node scripts/queue-config.mjs render preview "${{ steps.preview.outputs.worker_name }}"
+        run: node scripts/queue-config.mjs render preview "${{ steps.preview.outputs.worker_name }}" --without-cron
       - name: Validate preview configuration
         run: pnpm exec trestle doctor --env preview
         env:

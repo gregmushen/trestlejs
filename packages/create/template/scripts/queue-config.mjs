@@ -52,7 +52,8 @@ export function renderQueueConfig(source, environment, workerName, capabilities 
     };
   }
   if (capabilities.r2) target.r2_buckets = [{ binding: "TRESTLE_ARTIFACTS", bucket_name: artifactBucketName(workerName) }];
-  if (options.cron === false) delete target.triggers;
+  // Ephemeral PR Workers must not consume account-wide cron capacity.
+  if (environment === "preview" || options.cron === false) delete target.triggers;
   else if (capabilities.queues || capabilities.r2) target.triggers = { ...config.env[environment].triggers, crons: ["* * * * *"] };
   if (capabilities.workflows) {
     target.workflows = [{ binding: "TRESTLE_WORKFLOW", name: resourceName(`${workerName}-workflow`), class_name: "TrestleWorkflow" }];
