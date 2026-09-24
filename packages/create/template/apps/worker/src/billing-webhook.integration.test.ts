@@ -13,11 +13,13 @@ const subscriptionIds: string[] = [];
 const secret = "whsec_billing_webhook_integration";
 
 async function deliver(input: { eventId: string; organizationId?: string; plan?: string; kind?: "subscription" | "checkout"; remote?: boolean; subscriptionId?: string }) {
+  const subscriptionId = input.subscriptionId ?? `sub_${input.eventId}`;
+  subscriptionIds.push(subscriptionId);
   const metadata = { ...(input.organizationId ? { organizationId: input.organizationId } : {}), ...(input.plan ? { plan: input.plan } : {}) };
   const checkout = input.kind === "checkout";
   const payload = JSON.stringify({ id: input.eventId, object: "event", api_version: "2026-08-27.basil", created: Math.floor(Date.now() / 1000), data: {
-    object: checkout ? { id: "cs_test_atomic", object: "checkout.session", customer: "cus_test_atomic", subscription: input.subscriptionId ?? "sub_test_atomic", metadata }
-      : { id: input.subscriptionId ?? "sub_test_atomic", object: "subscription", customer: "cus_test_atomic", status: "active", cancel_at_period_end: true, items: { data: [{ current_period_start: 1_790_000_000, current_period_end: 1_792_592_000 }] }, metadata },
+    object: checkout ? { id: "cs_test_atomic", object: "checkout.session", customer: "cus_test_atomic", subscription: subscriptionId, metadata }
+      : { id: subscriptionId, object: "subscription", customer: "cus_test_atomic", status: "active", cancel_at_period_end: true, items: { data: [{ current_period_start: 1_790_000_000, current_period_end: 1_792_592_000 }] }, metadata },
   }, livemode: false, pending_webhooks: 1, request: null, type: checkout ? "checkout.session.completed" : "customer.subscription.created" });
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = `t=${timestamp},v1=${createHmac("sha256", secret).update(`${timestamp}.${payload}`).digest("hex")}`;
@@ -36,6 +38,7 @@ suite("signed Stripe webhook route", () => {
     }
     if (eventIds.length) await sql!`delete from billing_provider_event where provider='stripe' and provider_event_id = any(${eventIds})`;
     if (subscriptionIds.length) await sql!`delete from billing_subscription_reconciliation where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
+    if (subscriptionIds.length) await sql!`delete from billing_subscription_ownership where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
     vi.unstubAllGlobals();
     await sql!.end();
   });

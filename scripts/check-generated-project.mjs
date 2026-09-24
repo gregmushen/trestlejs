@@ -13,10 +13,20 @@ const project = path.join(temporaryRoot, "release-canary");
 // Give this isolated browser exercise a per-run port without changing the
 // generated application's normal local-development default.
 const browserSitePort = process.env.TRESTLE_BROWSER_SITE_PORT ?? String(randomInt(20_000, 30_000));
-if (!/^[0-9]+$/u.test(browserSitePort) || Number(browserSitePort) < 1024 || Number(browserSitePort) > 65535) {
-  throw new Error("TRESTLE_BROWSER_SITE_PORT must be an unprivileged TCP port");
+const browserAppPort = process.env.TRESTLE_BROWSER_APP_PORT ?? String(randomInt(30_000, 40_000));
+const browserWorkerPort = process.env.TRESTLE_BROWSER_WORKER_PORT ?? String(randomInt(40_000, 50_000));
+for (const [name, port] of [["SITE", browserSitePort], ["APP", browserAppPort], ["WORKER", browserWorkerPort]]) {
+  if (!/^[0-9]+$/u.test(port) || Number(port) < 1024 || Number(port) > 65535) {
+    throw new Error(`TRESTLE_BROWSER_${name}_PORT must be an unprivileged TCP port`);
+  }
 }
-const browserSiteEnvironment = { TRESTLE_BROWSER_SITE_PORT: browserSitePort, SITE_URL: `http://localhost:${browserSitePort}` };
+if (new Set([browserSitePort, browserAppPort, browserWorkerPort]).size !== 3) throw new Error("Browser test ports must be distinct");
+const browserSiteEnvironment = {
+  TRESTLE_BROWSER_SITE_PORT: browserSitePort, TRESTLE_BROWSER_APP_PORT: browserAppPort,
+  TRESTLE_BROWSER_WORKER_PORT: browserWorkerPort,
+  SITE_URL: `http://localhost:${browserSitePort}`, APP_URL: `http://localhost:${browserAppPort}`,
+  API_URL: `http://localhost:${browserWorkerPort}`,
+};
 
 /**
  * Runs vitest files and requires each named scenario to have passed, so a
@@ -149,6 +159,11 @@ try {
       "commits the receipt, subscription, and entitlements together and ignores a duplicate",
       "rolls back an invalid entitlement projection, records failure, then safely retries",
       "serializes concurrent duplicate deliveries so the projection runs once",
+      "never transfers one provider subscription to a second organization",
+      "does not grant the application role permission to rewrite ownership",
+      "rejects a competing subscription while the current one is active",
+      "allows a canceled subscription to be replaced but supersedes later old events",
+      "serializes two organizations racing to claim the same provider identity",
       "supersedes a slow stale lookup while a newer subscription reconciliation commits",
       "retries a failed reconciliation with a fresh generation",
       "assigns distinct generations to concurrent events for one subscription",

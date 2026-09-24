@@ -3,7 +3,14 @@ import { defineConfig, devices } from "@playwright/test";
 const deployed = process.env.TRESTLE_BROWSER_MODE === "deployed";
 const databaseUrl = process.env.TRESTLE_BROWSER_DATABASE_URL;
 const sitePort = Number(process.env.TRESTLE_BROWSER_SITE_PORT ?? 42068);
-if (!Number.isSafeInteger(sitePort) || sitePort < 1024 || sitePort > 65535) throw new Error("TRESTLE_BROWSER_SITE_PORT must be an unprivileged TCP port");
+const appPort = Number(process.env.TRESTLE_BROWSER_APP_PORT ?? 42069);
+const workerPort = Number(process.env.TRESTLE_BROWSER_WORKER_PORT ?? 8787);
+for (const [name, port] of [["SITE", sitePort], ["APP", appPort], ["WORKER", workerPort]] as const) {
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error(`TRESTLE_BROWSER_${name}_PORT must be an unprivileged TCP port`);
+}
+if (new Set([sitePort, appPort, workerPort]).size !== 3) throw new Error("Browser test ports must be distinct");
+const appOrigin = `http://localhost:${appPort}`;
+const apiOrigin = `http://localhost:${workerPort}`;
 if (!deployed && !databaseUrl) throw new Error("Set TRESTLE_BROWSER_DATABASE_URL to a migrated, isolated local PostgreSQL database");
 if (deployed) {
   const origins = ["SITE_URL", "APP_URL", "API_URL"].map((name) => {
@@ -26,12 +33,12 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: process.env.CI ? "github" : "list",
-  use: { ...devices["Desktop Chrome"], baseURL: deployed ? process.env.APP_URL! : "http://localhost:42069", trace: deployed ? "off" : "retain-on-failure" },
+  use: { ...devices["Desktop Chrome"], baseURL: deployed ? process.env.APP_URL! : appOrigin, trace: deployed ? "off" : "retain-on-failure" },
   ...(deployed ? {} : { webServer: [
     {
       name: "Worker",
-      command: "pnpm --filter ./apps/worker exec wrangler dev --port 8787",
-      url: "http://localhost:8787/api/health",
+      command: `pnpm --filter ./apps/worker exec wrangler dev --port ${workerPort} --var WEB_ORIGIN:${appOrigin}`,
+      url: `${apiOrigin}/api/health`,
       timeout: 180_000,
       reuseExistingServer: false,
       stdout: "pipe",
@@ -40,17 +47,18 @@ export default defineConfig({
         DATABASE_URL: databaseUrl!,
         DATABASE_DRIVER: "postgres-js",
         BETTER_AUTH_SECRET: "browser-test-secret-with-at-least-thirty-two-characters",
-        BETTER_AUTH_URL: "http://localhost:8787",
+        BETTER_AUTH_URL: apiOrigin,
       },
     },
     {
       name: "App",
-      command: "pnpm --filter ./apps/app dev",
-      url: "http://localhost:42069/sign-in",
+      command: `pnpm --filter ./apps/app exec vite --port ${appPort} --strictPort`,
+      url: `${appOrigin}/sign-in`,
       timeout: 180_000,
       reuseExistingServer: false,
       stdout: "pipe",
       stderr: "pipe",
+      env: { TRESTLE_API_ORIGIN: apiOrigin },
     },
     {
       name: "Site",

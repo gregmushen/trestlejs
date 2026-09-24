@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import postgres from "postgres";
 
+const appURL = process.env.APP_URL ?? "http://localhost:42069";
+
 test("a customer verifies email and switches isolated organizations", async ({ page }) => {
   const nonce = crypto.randomUUID().slice(0, 12);
   const email = `browser-${nonce}@example.test`;
@@ -50,22 +52,22 @@ test("a customer verifies email and switches isolated organizations", async ({ p
 
   for (const organizationId of [firstId!, secondId!]) {
     const headers = { "x-trestle-tenant": organizationId };
-    const inspection = await page.context().request.get("http://localhost:42069/api/developer/webhooks/endpoints", { headers });
+    const inspection = await page.context().request.get(`${appURL}/api/developer/webhooks/endpoints`, { headers });
     expect(inspection.status()).toBe(200);
     expect(await inspection.json()).toEqual({ endpoints: [] });
-    expect((await page.context().request.get("http://localhost:42069/api/developer/webhooks/endpoints?limit=101", { headers })).status()).toBe(400);
-    expect((await page.context().request.post("http://localhost:42069/api/developer/webhooks/endpoints", {
+    expect((await page.context().request.get(`${appURL}/api/developer/webhooks/endpoints?limit=101`, { headers })).status()).toBe(400);
+    expect((await page.context().request.post(`${appURL}/api/developer/webhooks/endpoints`, {
       headers: { ...headers, origin: "https://attacker.example" },
       data: { name: "Rejected", destinationUrl: "https://hooks.example.com/receive", subscriptions: [{ type: "article.published", version: 1 }] },
     })).status()).toBe(403);
-    expect((await page.context().request.post("http://localhost:42069/api/developer/webhooks/endpoints", {
-      headers: { ...headers, origin: "http://localhost:42069" },
+    expect((await page.context().request.post(`${appURL}/api/developer/webhooks/endpoints`, {
+      headers: { ...headers, origin: appURL },
       data: { name: "Missing key", destinationUrl: "https://hooks.example.com/receive", subscriptions: [{ type: "article.published", version: 1 }] },
     })).status()).toBe(503);
   }
 
   const activate = async (organizationId: string, plan: string) => {
-    const response = await page.context().request.post("http://localhost:42069/api/dev/billing", {
+    const response = await page.context().request.post(`${appURL}/api/dev/billing`, {
       headers: { "x-trestle-tenant": organizationId },
       data: { action: "activate", plan },
     });
@@ -160,7 +162,7 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     await page.getByRole("textbox", { name: "Edit Article name" }).fill(`Edited ${nonce}`);
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText(`Edited ${nonce}`)).toBeVisible();
-    const articles = await page.context().request.get("http://localhost:42069/api/articles", { headers: { "x-trestle-tenant": firstId! } });
+    const articles = await page.context().request.get(`${appURL}/api/articles`, { headers: { "x-trestle-tenant": firstId! } });
     expect(articles.status()).toBe(200);
     const articleId = ((await articles.json()) as { articles: Array<{ id: string }> }).articles[0]?.id;
     expect(articleId).toBeTruthy();
@@ -184,9 +186,9 @@ test("a customer verifies email and switches isolated organizations", async ({ p
     await switchOrganization(secondId!);
     await expect(page.getByText(`Edited ${nonce}`)).not.toBeVisible();
     const headers = { "x-trestle-tenant": secondId! };
-    expect((await page.context().request.get(`http://localhost:42069/api/articles/${articleId}`, { headers })).status()).toBe(404);
-    expect((await page.context().request.patch(`http://localhost:42069/api/articles/${articleId}`, { headers, data: { name: "Illicit edit" } })).status()).toBe(404);
-    expect((await page.context().request.delete(`http://localhost:42069/api/articles/${articleId}`, { headers })).status()).toBe(404);
+    expect((await page.context().request.get(`${appURL}/api/articles/${articleId}`, { headers })).status()).toBe(404);
+    expect((await page.context().request.patch(`${appURL}/api/articles/${articleId}`, { headers, data: { name: "Illicit edit" } })).status()).toBe(404);
+    expect((await page.context().request.delete(`${appURL}/api/articles/${articleId}`, { headers })).status()).toBe(404);
     await page.getByRole("textbox", { name: "New Article name" }).fill(`Second ${nonce}`);
     await page.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page.getByRole("listitem").getByText(`Second ${nonce}`)).toBeVisible();
