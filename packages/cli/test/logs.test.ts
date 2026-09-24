@@ -6,6 +6,7 @@ import { buildLogTailArguments, createTailLineConsumer, safeTailRecords, tailSem
 
 const timestamp = "2026-09-24T17:00:00.000Z";
 const correlationId = "01234567-89ab-4cde-8f01-23456789abcd";
+const causationId = "fedcba98-7654-4abc-8def-0123456789ab";
 const semantic = (fields: Record<string, unknown> = {}) => ({ timestamp, level: "info", event: "billing.checkout.created", ...fields });
 
 describe("safe log tail arguments", () => {
@@ -39,12 +40,30 @@ describe("safe log tail arguments", () => {
 
   it("rejects malformed records and searches only semantic event names", () => {
     const logs = [
-      semantic({ timestamp: "bad" }), semantic({ level: "debug" }), semantic({ event: "secret value" }), semantic({ event: "billing.sk_test_credential" }),
+      semantic({ timestamp: "bad" }), semantic({ level: "trace" }), semantic({ event: "secret value" }), semantic({ event: "billing.sk_test_credential" }),
       semantic({ event: "billing.checkout.failed", correlationId: "sk_test_DO_NOT_EXPOSE", status: 999, durationMs: -1 }),
       semantic({ event: "email.send.accepted" }),
     ].map((record) => ({ message: [JSON.stringify(record)] }));
     expect(safeTailRecords({ logs }, "billing")).toEqual([{ timestamp, level: "info", event: "billing.checkout.failed" }]);
     expect(safeTailRecords({ logs }, "email")).toEqual([{ timestamp, level: "info", event: "email.send.accepted" }]);
+  });
+
+  it("shows debug and UUID causation safely without forwarding free-form identifiers", () => {
+    const trace = { logs: [
+      { message: [JSON.stringify(semantic({ level: "debug", event: "queue.event.acknowledged", correlationId, causationId, payload: "private" }))] },
+      { message: [JSON.stringify(semantic({ event: "queue.event.retried", causationId: "sk_test_DO_NOT_EXPOSE" }))] },
+    ] };
+    const records = safeTailRecords(trace);
+    expect(records).toEqual([
+      { timestamp, level: "debug", event: "queue.event.acknowledged", correlationId, causationId },
+      { timestamp, level: "info", event: "queue.event.retried" },
+    ]);
+    const output: string[] = [];
+    const consume = createTailLineConsumer({ environment: "staging", format: "pretty" }, (line) => output.push(line));
+    consume(`${JSON.stringify(trace)}\n`);
+    expect(output[0]).toContain(`DEBUG queue.event.acknowledged correlation=${correlationId} causation=${causationId}`);
+    expect(output.join("")).not.toContain("DO_NOT_EXPOSE");
+    expect(output.join("")).not.toContain("private");
   });
 
   it("streams split JSON lines and withholds malformed, oversized, and raw tail content", () => {

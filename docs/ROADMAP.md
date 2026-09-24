@@ -972,6 +972,9 @@ reported without raw content or untrusted identifiers; diagnostic observers
 receive metadata only and cannot change delivery settlement. This narrows the
 remaining cross-boundary observability gap but does not replace deployed
 Queue/Workflow evidence.
+Alpha 125 makes the safe remote log tail show debug-level semantic events and
+UUID-shaped causation IDs alongside correlation IDs. Free-form IDs, raw
+requests, payloads, and unknown Cloudflare trace fields remain withheld.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
