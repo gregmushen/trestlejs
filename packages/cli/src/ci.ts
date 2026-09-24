@@ -125,6 +125,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.preview.provider-preflight", preview.includes("cloudflare-preflight.mjs") && /^\s+node scripts\/neon-preflight\.mjs\s*$/mu.test(preview) && /- id: cloudflare_access\n\s+name:[^\n]+\n\s+continue-on-error: true/u.test(preview) && /- id: neon_access\n\s+name:[^\n]+\n\s+continue-on-error: true/u.test(preview) && occursInOrder(preview, "Verify Cloudflare access before provisioning", "Verify Neon project access before provisioning") && occursInOrder(preview, "Verify Neon project access before provisioning", "Require both provider access checks") && occursInOrder(preview, "Require both provider access checks", "Validate preview configuration") && occursInOrder(preview, "Validate preview configuration", "Provision isolated Neon branch") && preview.includes("steps.cloudflare_access.outcome") && preview.includes("steps.neon_access.outcome") && preview.includes('CLOUDFLARE_WORKERS_SUBDOMAIN: "${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}"'), "preview independently verifies Cloudflare and Neon access before configuration gates and provisioning"));
   checks.push(check("ci.preview.transactional-provider-preflight",
     preview.includes("node scripts/transactional-provider-preflight.mjs")
+    && preview.includes("pnpm exec trestle email doctor --env preview")
     && preview.includes("trestle secrets get RESEND_API_KEY --env preview --raw")
     && preview.includes("trestle secrets get STRIPE_SECRET_KEY --env preview --raw")
     && preview.includes('TRESTLE_STRIPE_MODE: test')
@@ -148,6 +149,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.deploy.transactional-provider-preflight",
     ([[stagingDeploy, "staging", "test", "Provision staging Queues"], [productionDeploy, "production", "live", "Provision production Queues"]] as const).every(([source, environment, mode, provision]) =>
       source.includes("node scripts/transactional-provider-preflight.mjs")
+      && source.includes(`pnpm exec trestle email doctor --env ${environment}`)
       && source.includes(`trestle secrets get RESEND_API_KEY --env ${environment} --raw`)
       && source.includes(`trestle secrets get STRIPE_SECRET_KEY --env ${environment} --raw`)
       && source.includes(`TRESTLE_STRIPE_MODE: ${mode}`)
@@ -163,6 +165,16 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.deploy.queues", deploy.includes("queue-config.mjs render staging") && deploy.includes("queue-config.mjs render production") && (deploy.match(/cloudflare-queues\.mjs ensure/gu) ?? []).length >= 2 && (deploy.match(/deploy --config \.trestle-queues\.wrangler\.jsonc/gu) ?? []).length >= 2, "staging and production prepare and provision opt-in Queues"));
   checks.push(check("ci.deploy.r2", (deploy.match(/cloudflare-r2\.mjs ensure/gu) ?? []).length >= 2 && occursInOrder(deploy, "Prepare staging Queue bindings", "Provision staging R2 bucket") && occursInOrder(deploy, "Prepare production Queue bindings", "Provision production R2 bucket"), "staging and production provision opt-in R2 buckets"));
   checks.push(check("ci.deploy.runtime-role", (deploy.match(/db:roles:bootstrap/gu) ?? []).length >= 2 && (deploy.match(/db:roles:configure/gu) ?? []).length >= 2 && (deploy.match(/db:roles:verify/gu) ?? []).length >= 2, "staging and production bootstrap, configure, and verify restricted database runtime roles"));
+  const deployedProduct = await readFile(path.join(root, "tests/browser/deployed-product.spec.ts"), "utf8").catch(() => "");
+  checks.push(check("ci.deploy.staging-article-rls",
+    stagingDeploy.includes("pnpm test:staging")
+    && stagingDeploy.includes("trestle secrets get DATABASE_URL --env staging --raw")
+    && deployedProduct.includes("expect(table?.relforcerowsecurity).toBe(true)")
+    && deployedProduct.includes("current_user")
+    && deployedProduct.includes("set_config('app.organization_id'")
+    && deployedProduct.includes("select id from article where id")
+    && deployedProduct.includes("expect(other).toHaveLength(0)"),
+  "staging browser gate probes forced Article RLS through the restricted runtime database role"));
   const projectSource = await readFile(path.join(root, ".trestle", "project.yaml"), "utf8").catch(() => "");
   let adminEnabled = true;
   try { if (projectSource) adminEnabled = parseProjectManifest(projectSource).capabilities.admin; }

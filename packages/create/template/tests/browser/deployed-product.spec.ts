@@ -105,9 +105,34 @@ test("staging signs up through redirected Resend verification and switches organ
     expect(firstArticle?.id).toBeTruthy();
     if (!firstArticle) throw new Error("Created staging Article was not returned by the API");
 
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) throw new Error("The deployed Article gate requires the staging runtime DATABASE_URL");
+    const sql = postgres(databaseUrl, { max: 1, connect_timeout: 10 });
+    try {
+      const [table] = await sql<{ relrowsecurity: boolean; relforcerowsecurity: boolean }[]>`
+        select relrowsecurity, relforcerowsecurity
+        from pg_class where oid = to_regclass('public.article')
+      `;
+      expect(table?.relrowsecurity).toBe(true);
+      expect(table?.relforcerowsecurity).toBe(true);
+      const [role] = await sql<{ rolsuper: boolean; rolbypassrls: boolean }[]>`
+        select rolsuper, rolbypassrls from pg_roles where rolname = current_user
+      `;
+      expect(role?.rolsuper).toBe(false);
+      expect(role?.rolbypassrls).toBe(false);
+      await sql.begin(async (transaction) => {
+        await transaction`select set_config('app.organization_id', ${firstId!}, true)`;
+        const own = await transaction<{ id: string }[]>`select id from article where id = ${firstArticle.id}`;
+        expect(own).toHaveLength(1);
+        await transaction`select set_config('app.organization_id', ${secondId!}, true)`;
+        const other = await transaction<{ id: string }[]>`select id from article where id = ${firstArticle.id}`;
+        expect(other).toHaveLength(0);
+      });
+    } finally {
+      await sql.end();
+    }
+
     if (queuesDeclared) {
-      const databaseUrl = process.env.DATABASE_URL;
-      if (!databaseUrl) throw new Error("The deployed Queue gate requires the staging runtime DATABASE_URL");
       const sql = postgres(databaseUrl, { max: 1, connect_timeout: 10 });
       try {
         const completed = await waitForStagingAsyncEvent(async () => {

@@ -64,6 +64,7 @@ jobs:
           export STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env preview --raw)"
           echo "::add-mask::$STRIPE_SECRET_KEY"
           node scripts/transactional-provider-preflight.mjs
+          pnpm exec trestle email doctor --env preview
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           TRESTLE_STRIPE_MODE: test

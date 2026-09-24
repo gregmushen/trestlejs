@@ -46,6 +46,19 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.transactional-provider-preflight", status: "fail" }));
   });
 
+  it("requires verified Resend sender domain in preview and staging preflight", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const previewPath = path.join(root, ".github", "workflows", "preview.yml");
+    await writeFile(previewPath, (await readFile(previewPath, "utf8")).replace("pnpm exec trestle email doctor --env preview", "echo skip"));
+    const deployPath = path.join(root, ".github", "workflows", "deploy.yml");
+    await writeFile(deployPath, (await readFile(deployPath, "utf8")).replace("pnpm exec trestle email doctor --env staging", "echo skip"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.transactional-provider-preflight", status: "fail" }));
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.transactional-provider-preflight", status: "fail" }));
+  });
+
   it("requires encrypted transactional provider preflight before staging and production provisioning", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
@@ -55,6 +68,19 @@ describe("generated CI deployment contract", () => {
     await writeFile(workflowPath, source.replace('TRESTLE_STRIPE_MODE: live', 'TRESTLE_STRIPE_MODE: test'));
     const report = await validateCi(root);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.transactional-provider-preflight", status: "fail" }));
+  });
+
+  it("requires a deployed Article RLS probe against the staging runtime database", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const browserPath = path.join(root, "tests", "browser", "deployed-product.spec.ts");
+    await mkdir(path.dirname(browserPath), { recursive: true });
+    const source = await readFile(path.join(templateRoot, "tests", "browser", "deployed-product.spec.ts"), "utf8");
+    await writeFile(browserPath, source);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.staging-article-rls", status: "pass" }));
+    await writeFile(browserPath, source.replace("expect(table?.relforcerowsecurity).toBe(true);", "expect(table?.relforcerowsecurity).toBe(false);"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.staging-article-rls", status: "fail" }));
   });
 
   it("rejects provider verification that bypasses encrypted staging credentials", async () => {
