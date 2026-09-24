@@ -18,6 +18,14 @@ export function previewWebhookUrl(apiUrl) {
   return `${url.origin}/webhooks/stripe`;
 }
 
+export function secretPutArguments(apiUrl) {
+  previewWebhookUrl(apiUrl);
+  // --env appends an environment suffix even when --name is explicit; the
+  // generated preview deploy targets the exact, unsuffixed PR Worker name.
+  const workerName = new URL(apiUrl).hostname.split(".")[0];
+  return ["exec", "wrangler", "secret", "put", "STRIPE_WEBHOOK_SECRET", "--config", ".trestle-queues.wrangler.jsonc", "--name", workerName];
+}
+
 export function stripePreviewClient({ apiKey, fetcher = fetch }) {
   if (!/^(?:sk|rk)_test_[A-Za-z0-9]+$/u.test(apiKey ?? "")) throw new Error("a Stripe test-mode server key is required");
   const headers = { authorization: `Bearer ${apiKey}` };
@@ -96,7 +104,7 @@ async function main() {
     if (!/^whsec_[A-Za-z0-9]+$/u.test(secret)) throw new Error("Stripe webhook signing secret is invalid");
     if (process.env.GITHUB_ACTIONS === "true") process.stdout.write(`::add-mask::${secret}\n`);
     const workerDirectory = fileURLToPath(new URL("../apps/worker/", import.meta.url));
-    const result = spawnSync("pnpm", ["exec", "wrangler", "secret", "put", "STRIPE_WEBHOOK_SECRET", "--env", "preview", "--config", ".trestle-queues.wrangler.jsonc", "--name", new URL(apiUrl).hostname.split(".")[0]], {
+    const result = spawnSync("pnpm", secretPutArguments(apiUrl), {
       cwd: workerDirectory, env: process.env, input: secret, encoding: "utf8",
     });
     if (result.status !== 0) throw new Error(`Could not bind preview Stripe webhook secret (exit ${result.status ?? "unknown"})`);

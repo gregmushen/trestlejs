@@ -1074,6 +1074,12 @@ preview Worker, replaces only endpoints at the exact same preview URL on
 redeploy, and removes them on preview cleanup. This closes the missing-endpoint
 configuration gap observed in canary PR 11, but a successful deployed webhook
 and entitlement projection are still required as evidence.
+The first live PR 11 run created the endpoint but placed its signing secret on
+an unintended `-preview` Worker variant, so Stripe signatures were rejected
+by the deployed Worker. The binding command now targets the exact PR Worker
+without an environment suffix. The unintended secret-only Worker was deleted;
+the intended preview Worker remained healthy. The corrected end-to-end gate
+must still pass before this is counted as complete.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.

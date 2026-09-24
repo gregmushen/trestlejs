@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
-import { previewWebhookUrl, provisionPreviewWebhook, removePreviewWebhook, stripePreviewClient } from "./stripe-preview.mjs";
+import { previewWebhookUrl, provisionPreviewWebhook, removePreviewWebhook, secretPutArguments, stripePreviewClient } from "./stripe-preview.mjs";
 
 const apiUrl = "https://example-worker-pr-11.example.workers.dev";
 const webhookUrl = `${apiUrl}/webhooks/stripe`;
@@ -11,6 +11,8 @@ const unrelated = { id: "we_other123", url: "https://example-worker-staging.exam
 
 test("only exact isolated preview Worker URLs and test credentials are accepted", () => {
   assert.equal(previewWebhookUrl(apiUrl), webhookUrl);
+  assert.deepEqual(secretPutArguments(apiUrl).slice(-2), ["--name", "example-worker-pr-11"]);
+  assert.equal(secretPutArguments(apiUrl).includes("--env"), false);
   for (const url of ["https://example-worker-staging.example.workers.dev", "https://example-worker-pr-11.evil.test", "http://example-worker-pr-11.example.workers.dev", `${apiUrl}/other`]) {
     assert.throws(() => previewWebhookUrl(url), /isolated preview/u);
   }
@@ -50,6 +52,23 @@ test("cleanup deletes only the exact test-mode preview webhook, accepting absenc
   assert.deepEqual(await removePreviewWebhook({ client, apiUrl }), { url: webhookUrl, removed: 1 });
   assert.deepEqual(removed, [first.id]);
   assert.deepEqual(await removePreviewWebhook({ client: { list: async () => [], remove: async () => {} }, apiUrl }), { url: webhookUrl, removed: 0 });
+});
+
+test("Stripe create declares only billing events and requires a fresh signing secret", async () => {
+  const requests = [];
+  const client = stripePreviewClient({ apiKey: "rk_test_private123", fetcher: async (url, options) => {
+    requests.push({ url, options });
+    return Response.json({ id: "we_new123", secret: "whsec_new123", url: webhookUrl, livemode: false });
+  } });
+  assert.equal((await client.create(webhookUrl, "stable-run")).id, "we_new123");
+  assert.equal(requests[0].options.method, "POST");
+  assert.equal(requests[0].options.headers["idempotency-key"], "stable-run");
+  assert.deepEqual(requests[0].options.body.getAll("enabled_events[]"), [
+    "checkout.session.completed", "customer.subscription.created", "customer.subscription.updated",
+    "customer.subscription.deleted", "invoice.paid", "invoice.payment_failed",
+  ]);
+  const invalid = stripePreviewClient({ apiKey: "sk_test_private123", fetcher: async () => Response.json({ id: "we_new123", url: webhookUrl, livemode: false }) });
+  await assert.rejects(invalid.create(webhookUrl), /signing secret/u);
 });
 
 test("Stripe client uses test authorization, paginates, and normalizes failures without leaking credentials", async () => {

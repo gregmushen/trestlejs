@@ -324,7 +324,7 @@ app.post("/webhooks/stripe", async (context) => {
   if (!signature) return context.json({ error: "Missing Stripe signature" }, 400);
   let event: Awaited<ReturnType<typeof verifyAndNormalizeStripeEvent>>;
   try { event = await verifyAndNormalizeStripeEvent(await context.req.text(), signature, context.env.STRIPE_WEBHOOK_SECRET); }
-  catch { log.warn("billing.webhook.rejected", { reason: "invalid_signature_or_payload" }); return context.json({ error: "Invalid Stripe webhook" }, 400); }
+  catch (error) { log.warn("billing.webhook.rejected", { reason: "invalid_signature_or_payload", ...safeErrorDiagnostic(error) }); return context.json({ error: "Invalid Stripe webhook" }, 400); }
   const subscriptionEvent = event.type.startsWith("Subscription");
   let generation: number | undefined;
   if (subscriptionEvent && (context.env.STRIPE_MODE ?? "local") !== "local") {
