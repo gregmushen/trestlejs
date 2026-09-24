@@ -352,6 +352,25 @@ try {
     await writeFile(workflowPath, target);
     console.log("Reviewed the known Alpha 125 → 126 protected preview cron-free transition; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.127" && after === "0.1.0-alpha.128") {
+    // Preview Checkout must return to the isolated PR app, not to a static
+    // template URL. Review exactly this protected workflow command change.
+    const relative = ".github/workflows/preview.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 127 preview workflow differs from its recorded baseline");
+    }
+    const reviewed = replaceExactlyOnce(source,
+      '--var WEB_ORIGIN:${{ steps.preview.outputs.app_url }}',
+      '--var WEB_ORIGIN:${{ steps.preview.outputs.app_url }} --var BILLING_RETURN_URL:${{ steps.preview.outputs.app_url }}/settings/billing');
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 128 preview workflow differs from the narrowly reviewed billing-return transition");
+    await writeFile(workflowPath, target);
+    console.log("Reviewed the known Alpha 127 → 128 protected preview billing-return transition; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });
