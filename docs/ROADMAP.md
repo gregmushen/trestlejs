@@ -737,6 +737,14 @@ correctly decodes JSON-valued Wrangler strings instead of truncating escaped
 quotes. Tests cover every declared plan, duplicate or unknown mappings,
 environment separation, and redacted diagnostics. This makes readiness
 claims more trustworthy but is not live Stripe integration evidence.
+Alpha 96 accepts properly scoped Stripe restricted server keys (`rk_test_` /
+`rk_live_`) in the corresponding environment alongside full secret keys.
+Protected staging verification probes the prices, products, subscriptions,
+and Checkout read permissions used by the billing adapter instead of assuming
+restricted keys can read the Stripe account endpoint. The permission probes
+are read-only; successful reads do not prove write privileges for Checkout,
+catalog synchronization, or webhook endpoint management. Those remain live
+staging acceptance gates.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

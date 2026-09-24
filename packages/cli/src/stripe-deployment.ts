@@ -8,6 +8,12 @@ export type StripeDeploymentConfiguration = Readonly<{
   returnUrl: string | undefined;
 }>;
 
+/** Stripe restricted server keys are valid when scoped to the operations used by this adapter. */
+export function stripeServerKeyMatchesMode(key: string | undefined, environment: StripeDeploymentEnvironment): boolean {
+  const mode = environment === "production" ? "live" : "test";
+  return Boolean(key && new RegExp(`^(?:sk|rk)_${mode}_[A-Za-z0-9_]+$`, "u").test(key));
+}
+
 /** Read-only, provider-neutral diagnostics. Never include credential values in issues. */
 export function stripeDeploymentIssues(environment: StripeDeploymentEnvironment, configuration: StripeDeploymentConfiguration, catalog: StripeCatalog): string[] {
   const issues: string[] = [];

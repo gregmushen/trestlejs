@@ -68,6 +68,17 @@ describe("worker routes", () => {
     await expect(localMode.json()).resolves.toMatchObject({ capabilities: { billing: { configured: false } } });
   });
 
+  it("accepts a restricted test-mode Stripe server key without accepting a live one", async () => {
+    const base = { ...environment, APP_ENV: "staging" as const, STRIPE_MODE: "test" as const,
+      STRIPE_SECRET_KEY: "rk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive",
+      STRIPE_PUBLISHABLE_KEY: "pk_test_example", STRIPE_PRICES: JSON.stringify({ starter: "price_starter", pro: "price_pro", business: "price_business" }),
+      BILLING_RETURN_URL: "https://example.test/billing" };
+    const accepted = await app.request("/api/health/operational", undefined, base);
+    await expect(accepted.json()).resolves.toMatchObject({ capabilities: { billing: { configured: true } } });
+    const rejected = await app.request("/api/health/operational", undefined, { ...base, STRIPE_SECRET_KEY: "rk_live_sensitive" });
+    await expect(rejected.json()).resolves.toMatchObject({ capabilities: { billing: { configured: false } } });
+  });
+
   it("reports the deployed Queue binding independently of Workflow readiness", async () => {
     const response = await app.request("/api/health/operational", undefined, {
       ...environment,

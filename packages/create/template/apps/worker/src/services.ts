@@ -9,7 +9,7 @@ export function stripeConfigurationReady(environment: AuthEnvironment): boolean 
   if (appEnvironment === "local") return (environment.STRIPE_MODE ?? "local") === "local";
   const mode = appEnvironment === "production" ? "live" : "test";
   if (environment.STRIPE_MODE !== mode || !environment.STRIPE_SECRET_KEY
-    || !new RegExp(`^sk_${mode}_[A-Za-z0-9_]+$`, "u").test(environment.STRIPE_SECRET_KEY)
+    || !new RegExp(`^(?:sk|rk)_${mode}_[A-Za-z0-9_]+$`, "u").test(environment.STRIPE_SECRET_KEY)
     || !environment.STRIPE_WEBHOOK_SECRET || !/^whsec_[A-Za-z0-9_]+$/u.test(environment.STRIPE_WEBHOOK_SECRET)
     || !environment.STRIPE_PUBLISHABLE_KEY || !new RegExp(`^pk_${mode}_[A-Za-z0-9_]+$`, "u").test(environment.STRIPE_PUBLISHABLE_KEY)) return false;
   try {
