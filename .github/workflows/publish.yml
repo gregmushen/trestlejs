@@ -58,6 +58,9 @@ jobs:
       - name: Build and test
         run: pnpm check
 
+      - name: Rehearse a published adjacent-version upgrade
+        run: pnpm check:upgrade
+
       - name: Install browser test runtime
         run: npx --yes playwright@1.63.0 install --with-deps --only-shell chromium
 

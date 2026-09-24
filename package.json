@@ -10,6 +10,7 @@
     "build": "pnpm -r build",
     "check": "pnpm build && pnpm typecheck && vitest run",
     "check:generated": "node scripts/check-generated-project.mjs",
+    "check:upgrade": "node scripts/check-adjacent-upgrade.mjs",
     "release:check": "node scripts/check-release.mjs",
     "release:pack": "node scripts/pack-release.mjs",
     "typecheck": "pnpm -r typecheck",
