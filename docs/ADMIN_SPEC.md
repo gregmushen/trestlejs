@@ -645,9 +645,27 @@ to carry, the new session has no row, and every check reports `missing` until
 the operator verifies again. A failed write also leaves the session without a
 row (fail closed). Rows cascade with their session.
 
+**Minimum sign-in level.** Every `/api/admin/*` request, including reads and
+`GET /api/admin/session`, in every environment, checks how the session was
+signed in. When the operator has any enrolled factor (TOTP or a passkey), the
+session must prove at least `mfa` (a passkey counts); how long ago does not
+matter. A session with no assurance row counts as below it. Otherwise the
+Worker answers 428 with `scope: "session"` (below) and the shell shows the
+sign-in screen: "This account has a second factor. Sign in with it or with a
+passkey." This refuses a password-only session for an operator with a
+factor, including a customer-app session replayed on the admin: both
+surfaces share the Better Auth secret and session table, and the customer app
+has no factor challenge. Operators without a factor are not affected, so
+they can sign in to enroll one. The factor lookup is skipped when the session
+already proves `mfa` or better.
+
 **Requirement.** Every non-GET admin API route with a platform permission
 checks the session's evidence before it runs. The environment comes from
-`APP_ENV`, and an unset `APP_ENV` is treated as production (fail closed).
+`APP_ENV`, and an unset `APP_ENV` is treated as production (fail closed). A
+route the view registry marks `stepUp: false` skips this freshness check; the
+minimum sign-in level still applies. Two routes use it: `POST
+/api/admin/access/explain` (a read over POST) and `POST
+/api/admin/support/sessions/:id/end` (it only gives up access).
 
 | Environment | Permission | Required level | Freshness |
 | --- | --- | --- | --- |
@@ -657,8 +675,10 @@ checks the session's evidence before it runs. The environment comes from
 
 A higher level satisfies a lower one. `GET /api/admin/session` reports
 `assurance` (`{ level, method, verifiedAt }` or `null`) and
-`stepUpRequiredAfter` (when the evidence stops being fresh, or `null` when
-none is recorded).
+`stepUpRequiredAfter` (when the evidence stops being fresh for ordinary
+actions, or `null` when none is recorded or the recorded level is below what
+actions need in this environment, for example a password session when
+deployed).
 
 **The 428 response.** A request whose evidence is missing, stale, or too weak
 is refused before it touches data:
@@ -669,26 +689,41 @@ is refused before it touches data:
   "message": "Re-authenticate with a second factor to perform this action" }
 ```
 
+A session below the minimum sign-in level gets the same error with a scope,
+and the UI sends the operator to sign in again rather than to a step-up
+dialog:
+
+```json
+{ "error": "step_up_required", "required": "mfa", "scope": "session",
+  "reason": "missing" | "insufficient_level",
+  "message": "Sign in with your second factor or passkey" }
+```
+
 The admin UI answers a 428 with a re-authentication dialog that offers only
 the paths that reach `required` (`phishing_resistant`: a passkey; `mfa`: a
-password and code, or a passkey; `password`: a password), then retries the
-action once. The new session must belong to the operator who opened the
-dialog; another account's session is signed out and nothing is retried. The
-UI never sends `trustDevice`, so a later step-up always asks for the second
-factor again.
+password and code, or a passkey; `password`: a password). A confirmed action
+retries after each successful verification; a factor change (below) retries
+once and then reports the second 428. The new session must belong to the
+operator who opened the dialog; another account's session is signed out and
+nothing is retried. The UI never sends `trustDevice`, so a later step-up
+always asks for the second factor again. Known follow-up: stepping up creates
+a new session and leaves the previous one alive until it expires.
 
 **Factor management.** The admin origin proxies the operator's own factor
 endpoints: two-factor enable, disable, verify-totp, verify-backup-code, and
 generate-backup-codes, and passkey list, register, authenticate, and delete.
-Sign-in challenges stay open (verify-totp without a session,
-verify-backup-code, and passkey authentication); every other factor endpoint,
-and verify-totp with a session (completing enrollment), requires a platform
-operator. Enabling, disabling, or regenerating
+Sign-in challenges stay open (verify-totp and verify-backup-code without a
+session, and passkey authentication); every other factor endpoint, and the
+two code endpoints when a session is present, requires a platform operator.
+The factor plugins live in the admin (`apps/admin/worker/factors.ts`), so the
+customer Worker never bundles them. Enabling, disabling, or regenerating
 backup codes, and registering or deleting a passkey, require fresh evidence
 (15 minutes) at the strongest factor the account already has: a passkey
 requires `phishing_resistant`, TOTP requires `mfa`, and an account with no
 factor requires a fresh `password`. A phished TOTP code therefore cannot
 remove a passkey, and a stolen password cannot replace an enrolled factor.
+Until an operator enrolls a factor, their password alone can enroll one;
+enroll factors before granting deployed platform roles.
 Refusals:
 
 - 401 `unauthorized`: no session.
@@ -1339,7 +1374,9 @@ mechanism.
     admin origin, and require fresh step-up assurance: a password locally,
     MFA when deployed, and a passkey to manage platform roles (§7.6). Factor
     changes require the account's strongest enrolled factor. An unset
-    `APP_ENV` is treated as production.
+    `APP_ENV` is treated as production. An operator with a second factor or
+    passkey reaches no admin route, reads included, with a session that did
+    not sign in with one.
 18. All inbound provider webhooks require signature verification and idempotent
     processing before updating authoritative projections.
 
