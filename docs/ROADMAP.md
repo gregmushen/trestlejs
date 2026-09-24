@@ -794,6 +794,14 @@ bodies and expired signatures are rejected, and a transient database outage
 returns a retryable response before the same event succeeds on redelivery.
 This is stronger local evidence, not live provider delivery or endpoint
 registration.
+Alpha 104 adds a CI and release gate that creates a project with the published
+version two alphas behind the candidate and upgrades it using the next
+published CLI. It checks the trusted source baseline and migration history,
+applies pristine source, runs the generated project's local checks, finalizes
+the source version, validates the result, and proves application-owned content
+survives. For Alpha 104 this exercises the real Alpha 102 → 103 path. This
+does not yet prove database migration on live application data or deployed
+adjacent-version compatibility; those beta gates remain open.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
