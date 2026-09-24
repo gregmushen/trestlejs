@@ -1,4 +1,4 @@
-import { boolean, index, integer, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 
 export const organizationSubscription = pgTable("organization_subscription", {
   organizationId: text("organization_id").primaryKey(), provider: text("provider").notNull(), providerCustomerId: text("provider_customer_id"), providerSubscriptionId: text("provider_subscription_id"), plan: text("plan").notNull(), planVersion: integer("plan_version").default(1).notNull(), status: text("status").notNull(), currentPeriodStart: timestamp("current_period_start", { withTimezone: true }), currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }), cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false).notNull(), updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -15,5 +15,13 @@ export const organizationEntitlementOverride = pgTable("organization_entitlement
 }, (table) => [primaryKey({ columns: [table.organizationId, table.entitlement, table.effectiveAt] })]);
 
 export const billingProviderEvent = pgTable("billing_provider_event", {
-  provider: text("provider").notNull(), providerEventId: text("provider_event_id").notNull(), type: text("type").notNull(), receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(), processedAt: timestamp("processed_at", { withTimezone: true }), status: text("status").default("received").notNull(), error: text("error"),
+  provider: text("provider").notNull(), providerEventId: text("provider_event_id").notNull(), providerSubscriptionId: text("provider_subscription_id"), type: text("type").notNull(), receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(), processedAt: timestamp("processed_at", { withTimezone: true }), status: text("status").default("received").notNull(), error: text("error"),
 }, (table) => [primaryKey({ columns: [table.provider, table.providerEventId] })]);
+
+/** The generation prevents a slow, stale provider lookup from overwriting a
+ * newer reconciliation of the same subscription. It is provider-internal. */
+export const billingSubscriptionReconciliation = pgTable("billing_subscription_reconciliation", {
+  provider: text("provider").notNull(), providerSubscriptionId: text("provider_subscription_id").notNull(),
+  generation: bigint("generation", { mode: "number" }).default(0).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [primaryKey({ name: "billing_subscription_reconciliation_pk", columns: [table.provider, table.providerSubscriptionId] })]);

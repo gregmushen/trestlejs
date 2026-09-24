@@ -149,6 +149,9 @@ try {
       "commits the receipt, subscription, and entitlements together and ignores a duplicate",
       "rolls back an invalid entitlement projection, records failure, then safely retries",
       "serializes concurrent duplicate deliveries so the projection runs once",
+      "supersedes a slow stale lookup while a newer subscription reconciliation commits",
+      "retries a failed reconciliation with a fresh generation",
+      "assigns distinct generations to concurrent events for one subscription",
     ]);
     await run("pnpm", ["--filter", "./packages/data", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
@@ -157,6 +160,9 @@ try {
       "activates entitlements from a signed subscription once and acknowledges duplicates",
       "rejects a signed subscription lacking tenant or plan metadata without an event receipt",
       "records Checkout completion without granting paid entitlements before a subscription event",
+      "reconciles a signed but stale active event against the current cancelled Stripe subscription",
+      "keeps a provider lookup failure retryable without exposing the provider response",
+      "recovers subscription identity from current Stripe state when the signed snapshot lacks metadata",
     ]);
     // Tenant-side admin-capability scenarios: cross-plane denial and a scoped API key before and after revocation.
     await requireScenarios(project, "./apps/worker", ["src/machine-access.integration.test.ts", "src/execution-context.test.ts", "src/access-routes.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [

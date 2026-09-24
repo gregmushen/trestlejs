@@ -684,6 +684,17 @@ This is a generated, deterministic gate, not yet live staging evidence: the
 isolated canary still lacks its actual Resend/Stripe environment values.
 Tenant resource CRUD, forced RLS, deployed billing Checkout/webhooks, and
 provider delivery evidence remain open beta gates.
+Alpha 91 treats signed Stripe subscription webhooks as change notifications,
+not ordered state snapshots. Test/live Workers fetch the current Subscription
+from Stripe, then commit the local projection only if their durable
+per-subscription reconciliation generation is still current. A slower lookup
+is recorded as superseded instead of re-granting stale entitlements; provider
+failures retain redacted, retryable receipts. Generated PostgreSQL and signed
+Worker-route tests cover concurrency, stale events, metadata recovery, and
+provider outages. Local mode remains account-free. Live Stripe test-mode
+Checkout/webhook evidence, provider-subscription ownership transitions,
+billing domain event/outbox publication, and broader deployed billing tests
+remain beta work.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
