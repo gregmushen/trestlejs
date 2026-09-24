@@ -67,11 +67,15 @@ export type AdminSession = {
   roles: string[];
   permissions: string[];
   environment: Environment;
-  stepUpRequiredAfter: string;
+  /** When this session's evidence stops being fresh; null means none is recorded, so the next sensitive action asks for step-up. */
+  stepUpRequiredAfter: string | null;
   supportSession?: SupportSession | null;
-  /** How this session was authenticated; sensitive actions require a level and freshness from it. */
-  assurance?: { level: "password" | "mfa" | "phishing_resistant"; method: string; verifiedAt: string } | null;
+  /** How this session was authenticated; sensitive actions require a level and freshness from it. Null when nothing is recorded. */
+  assurance: { level: "password" | "mfa" | "phishing_resistant"; method: string; verifiedAt: string } | null;
 };
+/** True when the next sensitive action will ask the operator to re-authenticate (no evidence, or evidence past its window). */
+export const stepUpDue = (session: Pick<AdminSession, "stepUpRequiredAfter">, now = Date.now()): boolean =>
+  session.stepUpRequiredAfter === null || Date.parse(session.stepUpRequiredAfter) <= now;
 export type SupportProfile = { key: string; name: string; description: string; organization: string[]; application: string[] };
 export type SupportPermissionPreview = { code: string; plane: "organization" | "application"; description: string; allowed: boolean; reason: string };
 export type SupportSessionSummary = SupportSession & { operator: Operator; activity: number };

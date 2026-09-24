@@ -5,7 +5,7 @@ import { forwardRef, lazy, StrictMode, Suspense, useState, type ComponentType, t
 import { createRoot } from "react-dom/client";
 
 import { PermissionDenied, api, errorMessage, sessionQueryKey, Unauthenticated } from "./api";
-import { reauthenticateWithPassword, verifySecondFactor, type ReauthResult } from "./auth-client";
+import { reauthenticateWithPasskey, reauthenticateWithPassword, verifySecondFactor, type ReauthResult } from "./auth-client";
 import { viewAvailability, type AdminViewDescriptor } from "./registry";
 import { CommandIntent, CommandLayer, CommandProvider } from "./shell/commands";
 import { AdminProvider, useAdmin, useNow } from "./shell/context";
@@ -57,7 +57,7 @@ function SignIn(props: { notice?: string }) {
         <p className="text-sm text-kumo-subtle">Access requires an assigned platform role. Organization and application roles grant no platform authority.</p>
         {props.notice && <Banner variant="alert" size="sm" description={props.notice} />}
         {stage === "password" ? <>
-          <Input label="Email or username" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} />
+          <Input label="Email or username" autoComplete="username webauthn" required value={email} onChange={(event) => setEmail(event.target.value)} />
           <SensitiveInput label="Password" autoComplete="current-password" required value={password} onChange={(event: { target: { value: string } }) => setPassword(event.target.value)} />
         </> : <>
           <p className="text-sm text-kumo-default">Enter the {codeKind === "totp" ? "6-digit code from your authenticator app" : "backup code"}.</p>
@@ -66,6 +66,7 @@ function SignIn(props: { notice?: string }) {
         </>}
         {error && <Banner variant="error" size="sm" description={error} />}
         <Button type="submit" variant="primary" loading={working}>{stage === "code" ? "Verify" : "Sign in"}</Button>
+        {stage === "password" && <Button variant="secondary" onClick={() => { setError(undefined); setWorking(true); void reauthenticateWithPasskey().then(done); }}>Sign in with a passkey</Button>}
       </form>
       {local && <Banner className="mt-6" variant="secondary" size="sm" title="Local development only" description="Username admin, password admin. This account is refused outside local." />}
     </LayerCard.Primary></LayerCard>

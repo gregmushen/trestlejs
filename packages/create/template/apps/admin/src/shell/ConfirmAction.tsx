@@ -2,10 +2,11 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 
 import { StepUpRequired, errorMessage, reasonSchema, type ActionFailure, type ActionOutcome } from "../api";
-import { reauthenticateWithPasskey, reauthenticateWithPassword, verifySecondFactor, type AssuranceLevel, type ReauthResult } from "../auth-client";
+import type { AssuranceLevel } from "../step-up";
 import { formatHotkey } from "./commands";
 import { useAdmin } from "./context";
-import { Banner, Button, Dialog, Input, SensitiveInput, Textarea } from "./kumo";
+import { Banner, Button, Dialog, Textarea } from "./kumo";
+import { StepUpForm } from "./StepUp";
 import { useAdminToast } from "./ui";
 
 export type ConfirmConfig = Readonly<{
@@ -34,15 +35,15 @@ const outcomeOf = (value: unknown): ActionOutcome | undefined =>
  * permission, freshness, or step-up checks, which the server also enforces.
  */
 export function useConfirmAction() {
-  const { session, environment } = useAdmin();
+  const { environment } = useAdmin();
   const toast = useAdminToast();
   const [config, setConfig] = useState<ConfirmConfig | null>(null);
   const [reason, setReason] = useState("");
-  const [password, setPassword] = useState("");
-  const [stage, setStage] = useState<"reason" | "step-up" | "code" | "working" | "partial">("reason");
+  const [stage, setStage] = useState<"reason" | "step-up" | "working" | "partial">("reason");
   const [required, setRequired] = useState<AssuranceLevel>("password");
-  const [code, setCode] = useState("");
-  const [codeKind, setCodeKind] = useState<"totp" | "backup">("totp");
+  // Each challenge remounts the step-up form; a repeat after verifying explains why.
+  const [challenge, setChallenge] = useState<{ count: number; notice?: string }>({ count: 0 });
+  const steppedUp = useRef(false);
   const [error, setError] = useState<string>();
   const [failures, setFailures] = useState<readonly ActionFailure[]>([]);
   const [succeeded, setSucceeded] = useState<readonly string[]>([]);
@@ -52,7 +53,8 @@ export function useConfirmAction() {
     // A hotkey fires with focus on the page; return focus to the active row it acted on.
     const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     origin.current = focused ?? document.querySelector<HTMLElement>("tr[data-active]");
-    setReason(""); setPassword(""); setCode(""); setStage("reason"); setError(undefined); setFailures([]); setSucceeded([]);
+    steppedUp.current = false;
+    setReason(""); setStage("reason"); setError(undefined); setFailures([]); setSucceeded([]);
     setConfig(next);
   }, []);
   const close = useCallback(() => {
@@ -76,26 +78,19 @@ export function useConfirmAction() {
       toast.success(config.successMessage ?? `${config.confirmLabel}: done`);
       close();
     } catch (caught) {
-      if (caught instanceof StepUpRequired) { setRequired(caught.required); setStage("step-up"); setError(undefined); return; }
+      if (caught instanceof StepUpRequired) {
+        setRequired(caught.required);
+        setChallenge((current) => ({ count: current.count + 1, ...(steppedUp.current ? { notice: "That verification was not strong enough for this action. Try another method." } : {}) }));
+        setStage("step-up"); setError(undefined); return;
+      }
       setError(errorMessage(caught));
       setStage("reason");
     }
   };
-  // Each path creates a fresh session whose assurance level the server records and checks.
-  const finish = async (result: ReauthResult, retryStage: "step-up" | "code") => {
-    if (result.ok) { setCode(""); await run(); return; }
-    if ("needsCode" in result) { setStage("code"); setError(undefined); return; }
-    setError(result.error); setStage(retryStage);
-  };
-  const stepUp = async () => {
-    setStage("working");
-    const result = await reauthenticateWithPassword(session.operator.email, password);
-    setPassword("");
-    await finish(result, "step-up");
-  };
-  const secondFactor = async () => { setStage("working"); await finish(await verifySecondFactor(code, codeKind), "code"); };
-  const passkeyStepUp = async () => { setStage("working"); await finish(await reauthenticateWithPasskey(), "step-up"); };
-  const submit = () => { if (stage === "step-up") void stepUp(); else if (stage === "code") void secondFactor(); else if (stage === "reason") void run(); };
+  // After a successful step-up the action runs again with the same reason; the server checks the new session.
+  const retry = async () => { steppedUp.current = true; await run(); };
+  // The step-up form submits itself on Enter; the chords confirm the reason stage.
+  const submit = () => { if (stage === "reason") void run(); };
   const destructive = config?.destructive ?? false;
   useHotkeys([
     { hotkey: "Mod+Enter", callback: (event) => { if (!destructive) { event.preventDefault(); submit(); } }, options: { enabled: config !== null, ignoreInputs: false } },
@@ -115,26 +110,8 @@ export function useConfirmAction() {
         <Banner variant="alert" title={`Completed with failures: ${succeeded.length} succeeded, ${failures.length} failed`} />
         <ul className="mt-2 space-y-1 text-sm">{failures.map((failure) => <li key={failure.target} className="rounded bg-kumo-recessed px-3 py-1.5 text-kumo-danger"><span className="font-mono">{failure.target}</span>: {failure.message}</li>)}</ul>
         <div className="mt-5 flex justify-end"><Button variant="secondary" onClick={close}>Close</Button></div>
-      </div> : stage === "code" ? <form className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); void secondFactor(); }}>
-        <p className="text-sm text-kumo-default">Enter the {codeKind === "totp" ? "6-digit code from your authenticator app" : "backup code"} for <strong>{session.operator.email}</strong>.</p>
-        <Input label={codeKind === "totp" ? "Authentication code" : "Backup code"} autoFocus autoComplete="one-time-code" inputMode={codeKind === "totp" ? "numeric" : "text"} value={code} onChange={(event) => setCode(event.target.value)} />
-        {error && <p role="alert" className="text-sm text-kumo-danger">{error}</p>}
-        <div className="flex items-center justify-between gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setCodeKind(codeKind === "totp" ? "backup" : "totp")}>{codeKind === "totp" ? "Use a backup code" : "Use an authenticator code"}</Button>
-          <span className="flex gap-2"><Button variant="secondary" onClick={close}>Cancel</Button><Button type="submit" variant="primary" disabled={!code.trim()}>Verify and continue</Button></span>
-        </div>
-      </form> : stage === "step-up" ? <form className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); void stepUp(); }}>
-        <p className="text-sm text-kumo-default">{required === "phishing_resistant"
-          ? <>This action requires a passkey verified in the last 15 minutes. Use a passkey registered to <strong>{session.operator.email}</strong>.</>
-          : required === "mfa"
-            ? <>This action requires a recent sign-in with a second factor. Confirm your password; you will then be asked for your authenticator code.</>
-            : <>This action requires a recent sign-in. Confirm the password for <strong>{session.operator.email}</strong> to continue.</>}</p>
-        {required === "phishing_resistant"
-          ? <Button variant="primary" autoFocus onClick={() => void passkeyStepUp()}>Verify with a passkey</Button>
-          : <SensitiveInput label="Password" autoFocus autoComplete="current-password" value={password} onChange={(event: { target: { value: string } }) => setPassword(event.target.value)} />}
-        {error && <p role="alert" className="text-sm text-kumo-danger">{error}</p>}
-        <div className="flex justify-end gap-2"><Button variant="secondary" onClick={close}>Cancel</Button>{required !== "phishing_resistant" && <Button type="submit" variant="primary" disabled={!password}>Confirm and continue</Button>}</div>
-      </form> : <form className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); void run(); }}>
+      </div> : stage === "step-up" ? <StepUpForm key={challenge.count} required={required} onVerified={retry} onCancel={close} {...(challenge.notice ? { notice: challenge.notice } : {})} />
+      : <form className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); void run(); }}>
         {config.fields}
         <Textarea label="Reason (recorded in the audit log)" autoFocus required maxLength={500} rows={3} value={reason} onChange={(event: { target: { value: string } }) => setReason(event.target.value)} placeholder="Ticket reference and justification" />
         {error && <p role="alert" className="text-sm text-kumo-danger">{error}</p>}

@@ -85,9 +85,9 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
       roles: wire.roles,
       permissions: wire.permissions,
       environment: wire.environment,
-      // The Worker does not require step-up yet; the UI treats every session as fresh.
-      stepUpRequiredAfter: new Date(Date.now() + 15 * 60_000).toISOString(),
-      assurance: null,
+      // Null (no recorded evidence) means step-up is needed; the Worker enforces freshness on every change.
+      stepUpRequiredAfter: wire.stepUpRequiredAfter,
+      assurance: wire.assurance,
       supportSession: wire.supportSession ? { ...wire.supportSession, ticket: null, profile: supportProfile.name, permissions: supportPermissions, endedAt: null, endReason: null, endedBy: null, revocationReason: null } : null,
     };
   };

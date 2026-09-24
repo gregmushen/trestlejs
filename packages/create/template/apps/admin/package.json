@@ -18,6 +18,7 @@
     "@__TRESTLE_PROJECT_NAME__/context": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/theme": "workspace:*",
+    "@better-auth/passkey": "1.7.5",
     "@tanstack/react-query": "5.103.2",
     "@tanstack/react-router": "1.170.38",
     "better-auth": "1.7.5",
