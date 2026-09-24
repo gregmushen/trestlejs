@@ -6,7 +6,7 @@ import { getPlan, planEntitlements, plans } from "@__TRESTLE_PROJECT_NAME__/bill
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
-import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
+import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, retrieveCurrentStripeSubscription, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
@@ -550,6 +550,12 @@ type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBin
 export default {
   fetch: app.fetch.bind(app),
   queue: async (batch: QueueBatch, environment: WorkerEnvironment) => {
+    const observeEvent = ({ outcome, event }: QueueSettlement) => {
+      const log = createLogger({ environment: environment.APP_ENV ?? "local", ...(event ? { correlationId: event.correlationId, ...(event.causationId ? { causationId: event.causationId } : {}) } : {}) }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
+      const fields = event ? { eventId: event.id, eventName: event.name, schemaVersion: event.schemaVersion } : { validated: false };
+      if (outcome === "acknowledged") log.info("queue.event.acknowledged", fields);
+      else log.warn("queue.event.retried", fields);
+    };
     if (environment.TRESTLE_WORKFLOWS_ENABLED === "true" && !environment.TRESTLE_WORKFLOW) {
       throw new Error("Enabled Workflows require the TRESTLE_WORKFLOW binding");
     }
@@ -564,7 +570,7 @@ export default {
     if (eventMessages.length === 0) return native;
     if (environment.TRESTLE_WORKFLOWS_ENABLED === "true") {
       if (!environment.TRESTLE_WORKFLOW) throw new Error("Enabled Workflows require the TRESTLE_WORKFLOW binding");
-      const events = await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW)({ messages: eventMessages });
+      const events = await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW, observeEvent)({ messages: eventMessages });
       return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     }
     const inbox = new PostgresEventInbox(environment.DATABASE_URL, { assumeApplicationRole: true });
@@ -572,7 +578,7 @@ export default {
     try {
       const events = await createQueueConsumer(eventConsumers, inbox, async (envelope, currentEnvironment) => {
         await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox, ...(environment.TRESTLE_EVENTS ? { queue: environment.TRESTLE_EVENTS } : {}) });
-      })({ messages: eventMessages }, environment);
+      }, observeEvent)({ messages: eventMessages }, environment);
       return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     } finally { await Promise.all([inbox.close(), outbox.close()]); }
   },

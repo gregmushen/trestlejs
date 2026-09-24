@@ -164,11 +164,16 @@ export class InMemoryEventInbox implements EventInboxStore {
 }
 
 export type QueueBatchMessage = { body: unknown; ack(): void; retry(options?: { delaySeconds?: number }): void };
-export async function processQueueBatch(messages: QueueBatchMessage[], handler: (message: EventEnvelope) => Promise<void>, retryDelaySeconds = 30): Promise<{ acknowledged: number; retried: number }> {
+export type QueueSettlement = Readonly<{ outcome: "acknowledged" | "retried"; event?: Readonly<Pick<EventEnvelope, "id" | "name" | "schemaVersion" | "correlationId" | "causationId">> }>;
+export async function processQueueBatch(messages: QueueBatchMessage[], handler: (message: EventEnvelope) => Promise<void>, retryDelaySeconds = 30, observe?: (settlement: QueueSettlement) => void): Promise<{ acknowledged: number; retried: number }> {
   let acknowledged = 0; let retried = 0;
   for (const item of messages) {
-    try { await handler(eventEnvelopeSchema.parse(item.body)); item.ack(); acknowledged += 1; }
-    catch { item.retry({ delaySeconds: retryDelaySeconds }); retried += 1; }
+    let envelope: EventEnvelope | undefined;
+    let outcome: QueueSettlement["outcome"];
+    try { envelope = eventEnvelopeSchema.parse(item.body); await handler(envelope); item.ack(); acknowledged += 1; outcome = "acknowledged"; }
+    catch { item.retry({ delaySeconds: retryDelaySeconds }); retried += 1; outcome = "retried"; }
+    // Diagnostics cannot change Queue acknowledgment, retry, or tenant authority.
+    try { observe?.({ outcome, ...(envelope ? { event: { id: envelope.id, name: envelope.name, schemaVersion: envelope.schemaVersion, correlationId: envelope.correlationId, ...(envelope.causationId ? { causationId: envelope.causationId } : {}) } } : {}) }); } catch { /* Best effort. */ }
   }
   return { acknowledged, retried };
 }

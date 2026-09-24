@@ -55,4 +55,17 @@ describe("Alpha 8 asynchronous execution spine", () => {
     ];
     expect(await processQueueBatch(batch, async () => undefined, 17)).toEqual({ acknowledged: 1, retried: 1 }); expect(states).toEqual(["ack", "retry:17"]);
   });
+  it("observes only validated Queue envelopes after settlement without changing retries", async () => {
+    const valid = message("observed-1");
+    const settlements: Array<{ outcome: string; event?: unknown }> = [];
+    const states: string[] = [];
+    const batch: QueueBatchMessage[] = [
+      { body: valid, ack: () => states.push("ack"), retry: () => states.push("unexpected") },
+      { body: { payload: "untrusted" }, ack: () => states.push("unexpected"), retry: () => states.push("retry") },
+    ];
+    expect(await processQueueBatch(batch, async () => undefined, 30, (settlement) => { settlements.push(settlement); throw new Error("observer unavailable"); })).toEqual({ acknowledged: 1, retried: 1 });
+    expect(states).toEqual(["ack", "retry"]);
+    expect(settlements).toEqual([{ outcome: "acknowledged", event: { id: valid.id, name: valid.name, schemaVersion: valid.schemaVersion, correlationId: valid.correlationId } }, { outcome: "retried" }]);
+    expect(JSON.stringify(settlements)).not.toContain("Hello");
+  });
 });

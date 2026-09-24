@@ -19,6 +19,7 @@ vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
 }));
 
 import worker, { app } from "./index.js";
+import { eventEnvelopeSchema } from "@__TRESTLE_PROJECT_NAME__/events";
 
 const environment = {
   DATABASE_URL: "postgres://unused",
@@ -41,6 +42,28 @@ describe("worker routes", () => {
     await expect(worker.queue({ messages: [] }, { ...environment, APP_ENV: "preview", TRESTLE_WORKFLOWS_ENABLED: "true" })).rejects.toThrow("TRESTLE_WORKFLOW binding");
     const health = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "preview", TRESTLE_WORKFLOWS_ENABLED: "true" });
     await expect(health.json()).resolves.toMatchObject({ capabilities: { workflows: { enabled: true, configured: false } } });
+  });
+
+  it("logs validated Queue correlation and causation without raw payloads", async () => {
+    const rawSecret = "untrusted-queue-payload-secret";
+    const event = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "billing.checkout.completed", schemaVersion: 1,
+      occurredAt: new Date().toISOString(), resource: { type: "organization", id: "org-1" }, correlationId: "corr-queue", causationId: "cause-queue",
+      idempotencyKey: "checkout:org-1", payload: { organizationId: "org-1", currentSubscription: false, extra: rawSecret } });
+    const output: string[] = [];
+    const states: string[] = [];
+    const original = console.log;
+    console.log = (...items: unknown[]) => { output.push(items.map(String).join(" ")); };
+    try {
+      expect(await worker.queue({ messages: [
+        { body: event, ack: () => states.push("ack"), retry: () => states.push("unexpected") },
+        { body: { payload: rawSecret }, ack: () => states.push("unexpected"), retry: () => states.push("retry") },
+      ] }, { ...environment, TRESTLE_WORKFLOWS_ENABLED: "true", TRESTLE_WORKFLOW: { create: async () => ({ id: event.id }), get: async () => null } })).toEqual({ acknowledged: 1, retried: 1 });
+    } finally { console.log = original; }
+    expect(states).toEqual(["ack", "retry"]);
+    const records = output.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ event: "queue.event.acknowledged", correlationId: "corr-queue", causationId: "cause-queue", eventId: event.id })]));
+    expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ event: "queue.event.retried", validated: false })]));
+    expect(output.join("\n")).not.toContain(rawSecret);
   });
 
   it("reports health", async () => {
