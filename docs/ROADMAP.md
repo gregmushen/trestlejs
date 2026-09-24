@@ -851,6 +851,11 @@ Its published-adjacent upgrade rehearsal also explicitly reviews the protected
 Alpha 109 → 110 deployment workflow: it requires an unchanged recorded
 baseline and the exact three-line staging transition before allowing the
 remaining source upgrade. Real application workflows still require review.
+Alpha 112 adds PostgreSQL-backed retry evidence for the generated
+`TrestleWorkflow`: a transient handler failure releases the inbox claim, a
+second execution completes it, and replay does not run the handler again.
+This exercises the real generated Workflow handler locally; a live Cloudflare
+Workflow retry remains part of the open staging evidence gate.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
