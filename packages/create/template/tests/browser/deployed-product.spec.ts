@@ -13,7 +13,7 @@ const r2Declaration = /^  r2: (true|false)$/mu.exec(readFileSync(new URL("../../
 if (!r2Declaration) throw new Error("The generated project must declare its R2 capability");
 const r2Declared = r2Declaration[1] === "true";
 
-test.skip(process.env.TRESTLE_BROWSER_MODE !== "deployed", "Staging-only provider test");
+test.skip(process.env.TRESTLE_BROWSER_MODE !== "deployed" || process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1", "Live Resend email tests require explicit opt-in");
 
 test("staging signs up through redirected Resend verification and switches organizations", async ({ page }) => {
   // Resend inspection may take 90 seconds and Queue/Workflow delivery another 180.

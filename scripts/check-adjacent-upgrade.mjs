@@ -417,6 +417,59 @@ try {
     await run("pnpm", ["install", "--no-frozen-lockfile"], project);
     console.log("Reviewed the known Alpha 130 → 131 auth context dependency; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.131" && after === "0.1.0-alpha.132") {
+    // Protected preview workflows never source-apply without review. Alpha 132
+    // inserted only the isolated Stripe test webhook lifecycle around Worker
+    // deployment and cleanup. Verify the pristine published baseline, then
+    // require those exact two insertions to equal the published target.
+    const relative = ".github/workflows/preview.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 131 preview workflow differs from its recorded baseline");
+    }
+    const provision = [
+      "      - name: Provision isolated Stripe test webhook and bind its signing secret",
+      "        run: |",
+      '          STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env preview --raw)"',
+      "          export STRIPE_SECRET_KEY",
+      '          echo "::add-mask::$STRIPE_SECRET_KEY"',
+      '          node scripts/stripe-preview.mjs provision "${{ steps.preview.outputs.api_url }}"',
+      "        env:",
+      '          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"',
+      '          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"',
+      '          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"',
+      "",
+    ].join("\n");
+    const cleanup = [
+      "      - name: Delete isolated Stripe test webhook",
+      "        if: always()",
+      "        run: |",
+      '          STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env preview --raw)"',
+      "          export STRIPE_SECRET_KEY",
+      '          echo "::add-mask::$STRIPE_SECRET_KEY"',
+      '          node scripts/stripe-preview.mjs delete "${{ steps.preview.outputs.api_url }}"',
+      "        env:",
+      '          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"',
+      "",
+    ].join("\n");
+    const authBinding = [
+      '          BETTER_AUTH_URL: "${{ steps.preview.outputs.api_url }}"',
+      '          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"',
+      '          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"',
+      "",
+    ].join("\n");
+    let reviewed = replaceExactlyOnce(source, authBinding, `${authBinding}${provision}`);
+    reviewed = replaceExactlyOnce(reviewed,
+      "      - name: Delete isolated Worker\n",
+      `${cleanup}      - name: Delete isolated Worker\n`);
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 132 preview workflow differs from the narrowly reviewed Stripe webhook transition");
+    await writeFile(workflowPath, target);
+    console.log("Reviewed the known Alpha 131 → 132 isolated Stripe preview webhook transition; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });

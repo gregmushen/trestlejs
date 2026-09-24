@@ -1087,6 +1087,17 @@ The Alpha 132 published-adjacent rehearsal also reviews the exact Alpha 130
 → 131 auth manifest dependency on `context` against the recorded baseline,
 updates the workspace lockfile, and then applies the published source upgrade.
 The local two-tenant PostgreSQL rehearsal passes with forced RLS preserved.
+Alpha 132 was published after a clean generated-project and adjacent-version
+upgrade gate in [release run 36071652219](https://github.com/gregmushen/trestlejs/actions/runs/36071652219).
+Alpha 133 makes generated preview and staging deployment browser checks
+non-sending by default: the live Resend signup and billing suites require an
+explicit opt-in command, while local capture remains in ordinary CI. The
+generated CI validator and tests reject accidental re-enablement. This
+prevents repeated deployments from consuming a shared Resend quota, but also
+means an automatic green preview/staging browser check is not evidence of
+live verification-email delivery, billing webhook entitlements, or forced
+Article RLS. Those deployed product gates remain required before beta and
+must be run deliberately with bounded provider usage.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.
