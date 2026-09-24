@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import postgres from "postgres";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { app } from "./index.js";
 
@@ -9,19 +9,21 @@ const suite = databaseUrl ? describe : describe.skip;
 const sql = databaseUrl ? postgres(databaseUrl, { max: 2, prepare: false }) : undefined;
 const organizationIds: string[] = [];
 const eventIds: string[] = [];
+const subscriptionIds: string[] = [];
 const secret = "whsec_billing_webhook_integration";
 
-async function deliver(input: { eventId: string; organizationId?: string; plan?: string; kind?: "subscription" | "checkout" }) {
+async function deliver(input: { eventId: string; organizationId?: string; plan?: string; kind?: "subscription" | "checkout"; remote?: boolean; subscriptionId?: string }) {
   const metadata = { ...(input.organizationId ? { organizationId: input.organizationId } : {}), ...(input.plan ? { plan: input.plan } : {}) };
   const checkout = input.kind === "checkout";
   const payload = JSON.stringify({ id: input.eventId, object: "event", api_version: "2026-08-27.basil", created: Math.floor(Date.now() / 1000), data: {
-    object: checkout ? { id: "cs_test_atomic", object: "checkout.session", customer: "cus_test_atomic", subscription: "sub_test_atomic", metadata }
-      : { id: "sub_test_atomic", object: "subscription", customer: "cus_test_atomic", status: "active", cancel_at_period_end: true, items: { data: [{ current_period_start: 1_790_000_000, current_period_end: 1_792_592_000 }] }, metadata },
+    object: checkout ? { id: "cs_test_atomic", object: "checkout.session", customer: "cus_test_atomic", subscription: input.subscriptionId ?? "sub_test_atomic", metadata }
+      : { id: input.subscriptionId ?? "sub_test_atomic", object: "subscription", customer: "cus_test_atomic", status: "active", cancel_at_period_end: true, items: { data: [{ current_period_start: 1_790_000_000, current_period_end: 1_792_592_000 }] }, metadata },
   }, livemode: false, pending_webhooks: 1, request: null, type: checkout ? "checkout.session.completed" : "customer.subscription.created" });
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = `t=${timestamp},v1=${createHmac("sha256", secret).update(`${timestamp}.${payload}`).digest("hex")}`;
   return app.request("/webhooks/stripe", { method: "POST", headers: { "stripe-signature": signature, "content-type": "application/json" }, body: payload }, {
     DATABASE_URL: databaseUrl!, DATABASE_DRIVER: "postgres-js", STRIPE_WEBHOOK_SECRET: secret,
+    ...(input.remote ? { STRIPE_SECRET_KEY: "sk_test_reconciliation", STRIPE_MODE: "test" as const } : {}),
     BETTER_AUTH_SECRET: "billing-integration-test-secret-long-enough", BETTER_AUTH_URL: "http://localhost:42069", APP_ENV: "local",
   });
 }
@@ -33,6 +35,8 @@ suite("signed Stripe webhook route", () => {
       await sql!`delete from organization_subscription where organization_id = any(${organizationIds})`;
     }
     if (eventIds.length) await sql!`delete from billing_provider_event where provider='stripe' and provider_event_id = any(${eventIds})`;
+    if (subscriptionIds.length) await sql!`delete from billing_subscription_reconciliation where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
+    vi.unstubAllGlobals();
     await sql!.end();
   });
 
@@ -70,5 +74,67 @@ suite("signed Stripe webhook route", () => {
     expect(await sql!`select organization_id from organization_subscription where organization_id=${organizationId}`).toHaveLength(0);
     expect(await sql!`select organization_id from organization_entitlement where organization_id=${organizationId}`).toHaveLength(0);
     expect((await sql!`select status from billing_provider_event where provider='stripe' and provider_event_id=${eventId}`)[0]?.status).toBe("processed");
+  });
+
+  it("reconciles a signed but stale active event against the current cancelled Stripe subscription", async () => {
+    const organizationId = `billing_route_${crypto.randomUUID().replaceAll("-", "")}`;
+    const eventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
+    organizationIds.push(organizationId);
+    eventIds.push(eventId);
+    subscriptionIds.push(subscriptionId);
+    const stripeFetch = vi.fn(async (request: RequestInfo | URL) => {
+      expect(String(request)).toContain(`/v1/subscriptions/${subscriptionId}`);
+      return new Response(JSON.stringify({ id: subscriptionId, object: "subscription", customer: "cus_test_atomic", status: "canceled",
+        cancel_at_period_end: true, items: { data: [] }, metadata: { organizationId, plan: "pro" } }),
+      { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", stripeFetch);
+    try {
+      const response = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId });
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({ event: { type: "SubscriptionCancelled", status: "cancelled", organizationId } });
+      expect((await sql!`select status from organization_subscription where organization_id=${organizationId}`)[0]?.status).toBe("cancelled");
+      expect(await sql!`select entitlement from organization_entitlement where organization_id=${organizationId}`).toHaveLength(0);
+      const duplicate = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId });
+      expect(duplicate.status).toBe(200);
+      expect(stripeFetch).toHaveBeenCalledTimes(1);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("keeps a provider lookup failure retryable without exposing the provider response", async () => {
+    const organizationId = `billing_route_${crypto.randomUUID().replaceAll("-", "")}`;
+    const eventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
+    organizationIds.push(organizationId);
+    eventIds.push(eventId);
+    subscriptionIds.push(subscriptionId);
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("private provider response body"); }));
+    try {
+      const response = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId });
+      expect(response.status).toBe(503);
+      expect(await response.text()).not.toContain("private provider response body");
+      expect((await sql!`select status, error from billing_provider_event where provider_event_id=${eventId}`)[0])
+        .toEqual({ status: "failed", error: "provider_unavailable" });
+      expect(await sql!`select organization_id from organization_subscription where organization_id=${organizationId}`).toHaveLength(0);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("recovers subscription identity from current Stripe state when the signed snapshot lacks metadata", async () => {
+    const organizationId = `billing_route_${crypto.randomUUID().replaceAll("-", "")}`;
+    const eventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
+    organizationIds.push(organizationId);
+    eventIds.push(eventId);
+    subscriptionIds.push(subscriptionId);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ id: subscriptionId, object: "subscription", customer: "cus_test_atomic",
+      status: "active", cancel_at_period_end: false, items: { data: [] }, metadata: { organizationId, plan: "pro" } }),
+    { status: 200, headers: { "content-type": "application/json" } })));
+    try {
+      const response = await deliver({ eventId, remote: true, subscriptionId });
+      expect(response.status).toBe(202);
+      expect((await sql!`select plan, status from organization_subscription where organization_id=${organizationId}`)[0])
+        .toEqual({ plan: "pro", status: "active" });
+    } finally { vi.unstubAllGlobals(); }
   });
 });

@@ -249,6 +249,12 @@ startup role options); closure deletes that branch. The preview workflow checks
 Cloudflare and Neon access independently before Doctor or resource creation.
 Doctor then requires real Resend and Stripe test-mode configuration before the
 preview can deploy; provider access alone does not mark a preview as ready.
+For Stripe test/live mode, the signed subscription webhook is a notification:
+the Worker retrieves the current subscription before projecting local billing
+state. A PostgreSQL reconciliation generation ensures an older, slower lookup
+cannot overwrite a newer one; provider calls occur outside the projection
+transaction. Local mode retains deterministic signed-fixture tests without a
+Stripe account. Provider lookup failures leave a retryable, redacted receipt.
 
 Validate the checked-in delivery contract locally with:
 

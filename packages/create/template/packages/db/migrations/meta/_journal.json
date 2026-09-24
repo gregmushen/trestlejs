@@ -204,6 +204,13 @@
       "when": 1790294400020,
       "tag": "0028_naive_loners",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790294400021,
+      "tag": "0029_curved_ultimates",
+      "breakpoints": true
     }
   ]
 }
