@@ -180,6 +180,11 @@ try {
     await requireScenarios(project, "./apps/worker", ["src/system.integration.test.ts"], workerSystemEnvironment, [
       "verifies email, signs in, selects an organization, and reads tenant billing",
     ]);
+    await requireScenarios(project, "./apps/worker", ["src/resend-webhook.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "persists a verified event once and acknowledges a signed duplicate",
+      "rejects a tampered raw body and an expired signature before persistence",
+      "returns a retryable response during a database outage and records redelivery",
+    ]);
     await requireScenarios(project, "./apps/worker", ["src/billing-webhook.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "activates entitlements from a signed subscription once and acknowledges duplicates",
       "rejects a signed subscription lacking tenant or plan metadata without an event receipt",

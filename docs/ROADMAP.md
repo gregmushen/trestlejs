@@ -787,6 +787,13 @@ configured signing secret belongs to that endpoint.
 The generated PostgreSQL acceptance gate runs the local product path after
 other Worker suites and drains bounded outbox batches; it no longer assumes a
 new event is among the first ten pending messages left by other tests.
+Alpha 103 exercises the Resend signature boundary against a real generated
+PostgreSQL schema, without provider credentials: a correctly signed raw-body
+event persists once, signed duplicates acknowledge idempotently, tampered
+bodies and expired signatures are rejected, and a transient database outage
+returns a retryable response before the same event succeeds on redelivery.
+This is stronger local evidence, not live provider delivery or endpoint
+registration.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
