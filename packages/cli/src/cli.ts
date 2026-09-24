@@ -17,7 +17,7 @@ import { projectContext } from "./context.js";
 import { formatDoctorHuman, formatDoctorJson, runDoctor } from "./doctor.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
 import { localEnvironment } from "./local.js";
-import { buildLogTailArguments } from "./logs.js";
+import { buildLogTailArguments, tailSemanticLogs } from "./logs.js";
 import { clearLocalEmail, formatEmail, formatEmailList, getLocalEmail, listLocalEmail, openLocalEmail } from "./email.js";
 import { generateEmail } from "./generate-email.js";
 import { addResourceField, generateResource, generateResourceMigration, parseResourceField } from "./generate-resource.js";
@@ -950,7 +950,7 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--worker-name <name>", "override the Worker target for an isolated preview")
     .option("--format <format>", "pretty or json", "pretty")
     .option("--status <status>", "ok, error, or canceled")
-    .option("--search <text>", "search semantic event names and safe metadata")
+    .option("--search <text>", "filter displayed semantic event names locally")
     .option("--sampling-rate <rate>", "sample between 0 and 1", Number)
     .option("--yes", "confirm production log access")
     .action(async (options: { env: ReturnType<typeof environment>; workerName?: string; format: string; status?: string; search?: string; samplingRate?: number; yes?: boolean }, command: Command) => {
@@ -959,10 +959,10 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.format !== "pretty" && options.format !== "json") throw new CliFailure("log format must be pretty or json");
       if (options.status && !["ok", "error", "canceled"].includes(options.status)) throw new CliFailure("log status must be ok, error, or canceled");
       const context = await projectContext(command, runtime);
-      let arguments_: string[];
-      try { arguments_ = buildLogTailArguments({ environment: options.env, ...(options.workerName ? { workerName: options.workerName } : {}), format: options.format as "pretty" | "json", ...(options.status ? { status: options.status as "ok" | "error" | "canceled" } : {}), ...(options.search ? { search: options.search } : {}), ...(options.samplingRate !== undefined ? { samplingRate: options.samplingRate } : {}) }); }
+      const logOptions = { environment: options.env, ...(options.workerName ? { workerName: options.workerName } : {}), format: options.format as "pretty" | "json", ...(options.status ? { status: options.status as "ok" | "error" | "canceled" } : {}), ...(options.search ? { search: options.search } : {}), ...(options.samplingRate !== undefined ? { samplingRate: options.samplingRate } : {}) };
+      try { buildLogTailArguments(logOptions); }
       catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
-      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", ...arguments_], { cwd: context.root, env: process.env });
+      await tailSemanticLogs(logOptions, { cwd: context.root, environment: process.env, projectName: context.manifest.project.name, output: runtime.stdout });
     });
 
   program

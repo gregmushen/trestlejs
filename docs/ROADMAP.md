@@ -946,6 +946,15 @@ schedule with all account schedules before provisioning or migration. Against
 the canary's real Cloudflare account, it detected 5/5 used triggers and
 stopped before remote changes. This prevents another partial staging update,
 but does not satisfy the blocked cron-enabled staging or beta gate.
+Alpha 121 makes `trestle logs` a safe projection of Cloudflare's raw tail:
+only validated Trestle semantic events, timestamp, level, UUID correlation ID,
+status, and duration reach the terminal. Request metadata, exception text,
+arbitrary console output, and unknown fields are withheld. The protected
+canary provider integration suite also passed locally against the supplied
+Stripe test and Resend credentials, including redirected email and idempotent
+test Checkout. This is provider evidence, not a protected GitHub Actions run
+or the missing cron-enabled staging gate. Full logging-spec conformance,
+including exact-value secret redaction and cross-boundary context, remains open.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
@@ -953,8 +962,8 @@ but does not satisfy the blocked cron-enabled staging or beta gate.
   route, including billing.
 - Standardize shared error mapping, semantic event names, correlation across
   asynchronous boundaries, redaction, metrics, and operational health.
-- Add `trestle logs` without turning it into a secret or request-body escape
-  hatch.
+- Complete the remaining standardized logging contract, including exact-value
+  secret redaction, bounded serialization, and cross-boundary context.
 
 ### Alpha 10: operations and recovery
 

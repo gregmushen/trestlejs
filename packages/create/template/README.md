@@ -328,6 +328,14 @@ pnpm exec trestle env status --env staging
 pnpm exec trestle logs --env staging --status error
 ```
 
+`trestle logs` projects Cloudflare's raw tail into validated semantic event
+records. It displays only timestamp, level, event, UUID correlation ID, status,
+and duration; request URLs, headers, exception text, arbitrary console output,
+and unknown metadata are withheld. `--search` filters event names locally, not
+raw provider payloads. Use `--format json` for the same bounded fields as JSON.
+Direct `wrangler tail` is a separate trusted diagnostic operation and may
+expose sensitive data.
+
 ## Operations and recovery
 
 Local development is deterministic. `trestle dev` applies the idempotent
