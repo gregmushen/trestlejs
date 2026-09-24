@@ -925,6 +925,21 @@ reconciliation path, a protected staging run, and live production promotion
 remain beta gates. The published Alpha 116 → 117 adjacent upgrade rehearsal
 also narrowly reviews the protected preview and deployment workflow changes
 for same-origin Pages routing against recorded baseline hashes.
+Alpha 119 adds reviewed Stripe webhook endpoint setup. An existing `whsec_`
+value is no longer presented as proof of a remote signing-secret match:
+Stripe exposes the secret at endpoint creation, not later inspection. The
+CLI plans the exact URL and mode without mutation; apply requires a separate
+management key on standard input, a stable retry ID, and an explicit old
+endpoint ID for rotation. It stores the new secret in encrypted credentials
+before disabling only that old endpoint. The canary's preview endpoint was
+rotated through this command and [passed its hosted Checkout and signed-webhook
+browser gate](https://github.com/gregmushen/trestlejs-canary/actions/runs/36027059455).
+The first manual staging run passed credentials, tests, and migration but
+[failed at Cloudflare cron provisioning](https://github.com/gregmushen/trestlejs-canary/actions/runs/36025564283):
+all five Free-plan cron slots on that account belong to active Tidal House
+Workers. No unrelated schedule was removed, and production was skipped. A
+paid-plan capacity change or an explicitly selected schedule retirement is
+required before a complete cron-enabled staging gate can pass.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

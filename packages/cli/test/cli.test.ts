@@ -72,6 +72,14 @@ function capture(root: string, input = "") {
 }
 
 describe("TrestleJS CLI", () => {
+  it("refuses production Stripe webhook changes before project access unless explicitly confirmed", async () => {
+    const root = await fixture();
+    const output = capture(root, "sk_live_management");
+    expect(await executeCli(["payments", "stripe", "webhook", "configure", "--env", "production",
+      "--url", "https://example.test/webhooks/stripe", "--api-key-stdin", "--apply", "--operation-id", "operation123"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("production webhook mutation requires --apply --yes");
+  });
+
   it("does not generate application routes against a pre-registry authority model", async () => {
     const root = await fixture();
     await mkdir(path.join(root, "packages", "context", "src"), { recursive: true });
