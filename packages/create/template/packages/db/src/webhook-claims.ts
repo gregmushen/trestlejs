@@ -1,4 +1,4 @@
-import { and, count, eq, gt, inArray, lte, or } from "drizzle-orm";
+import { and, count, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
 
 import type { Database } from "./index.js";
 import { webhookDelivery } from "./webhook-projection-schema.js";
@@ -21,15 +21,22 @@ export async function claimNativeWebhookDelivery(input: {
   clock: { now(): Date };
   leaseMs?: number;
   maxActivePerEndpoint?: number;
+  maxActivePerTenant?: number;
 }): Promise<NativeWebhookClaimResult> {
   const leaseMs = input.leaseMs ?? 30_000;
   if (!Number.isInteger(leaseMs) || leaseMs < 1_000 || leaseMs > 5 * 60_000) throw new Error("Invalid native webhook lease duration");
   const maxActivePerEndpoint = input.maxActivePerEndpoint ?? 4;
   if (!Number.isInteger(maxActivePerEndpoint) || maxActivePerEndpoint < 1 || maxActivePerEndpoint > 32) throw new Error("Invalid native webhook endpoint concurrency limit");
+  const maxActivePerTenant = input.maxActivePerTenant ?? 16;
+  if (!Number.isInteger(maxActivePerTenant) || maxActivePerTenant < 1 || maxActivePerTenant > 128) throw new Error("Invalid native webhook tenant concurrency limit");
   const now = input.clock.now();
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new Error("Invalid native webhook clock");
   const database = input.tenantDatabase(input.organizationId);
   return database.transaction(async (transaction): Promise<NativeWebhookClaimResult> => {
+    // Endpoint row locks only serialize claims to that endpoint. Serialize all
+    // claims for one tenant before counting leases across different endpoints.
+    // Hash collisions can delay another tenant, but cannot grant extra leases.
+    await transaction.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.organizationId}, 0))`);
     const [record] = await transaction.select({
       endpointId: webhookEndpoint.id,
       provider: webhookEndpoint.provider,
@@ -49,6 +56,10 @@ export async function claimNativeWebhookDelivery(input: {
       ? Boolean(record.leasedUntil && record.leasedUntil <= now)
       : (record.deliveryState === "pending" || record.deliveryState === "retry") && Boolean(record.nextAttemptAt && record.nextAttemptAt <= now);
     if (!due) return { state: "not_due" };
+    const [tenantActive] = await transaction.select({ total: count() }).from(webhookDelivery).where(and(
+      eq(webhookDelivery.organizationId, input.organizationId), eq(webhookDelivery.state, "leased"), gt(webhookDelivery.leasedUntil, now),
+    ));
+    if ((tenantActive?.total ?? 0) >= maxActivePerTenant) return { state: "capacity" };
     const [active] = await transaction.select({ total: count() }).from(webhookDelivery).where(and(
       eq(webhookDelivery.organizationId, input.organizationId), eq(webhookDelivery.endpointId, record.endpointId),
       eq(webhookDelivery.state, "leased"), gt(webhookDelivery.leasedUntil, now),
