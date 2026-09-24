@@ -1,4 +1,5 @@
 import type { ApplicationEnvironment } from "./api-keys.js";
+import type { PermissionCode } from "./permissions.js";
 
 /**
  * Authentication assurance. Better Auth owns the credential protocols;
@@ -55,7 +56,7 @@ export function meetsRequirement(assurance: AuthenticationAssurance | null, requ
   return { ok: true };
 }
 
-const phishingResistantPermissions: ReadonlySet<string> = new Set(["platform.roles.manage"]);
+const phishingResistantPermissions: ReadonlySet<PermissionCode> = new Set(["platform.roles.manage"]);
 
 /**
  * Application-owned step-up policy for sensitive platform actions. Local
@@ -65,5 +66,5 @@ const phishingResistantPermissions: ReadonlySet<string> = new Set(["platform.rol
  */
 export function platformAssuranceRequirement(permission: string, environment: ApplicationEnvironment): AssuranceRequirement {
   if (environment === "local") return { level: "password", maxAgeMinutes: 15 };
-  return { level: phishingResistantPermissions.has(permission) ? "phishing_resistant" : "mfa", maxAgeMinutes: 15 };
+  return { level: (phishingResistantPermissions as ReadonlySet<string>).has(permission) ? "phishing_resistant" : "mfa", maxAgeMinutes: 15 };
 }
