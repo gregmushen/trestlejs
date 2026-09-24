@@ -7,10 +7,10 @@ import { adminRoutePolicies } from "./route-policies.js";
 const environment: AdminEnvironment = { DATABASE_URL: "postgres://user:password@127.0.0.1:1/unused", DATABASE_DRIVER: "postgres-js", BETTER_AUTH_SECRET: "test-secret-at-least-32-characters", APP_ENV: "local" };
 const state = { userId: "" as string, roles: [] as string[] };
 
-async function call(method: string, path: string, init: { origin?: string; body?: unknown } = {}) {
+async function call(method: string, path: string, init: { origin?: string; body?: unknown } = {}, env: AdminEnvironment = environment) {
   const headers: Record<string, string> = { origin: init.origin ?? "http://localhost:42070" };
   if (init.body !== undefined) headers["content-type"] = "application/json";
-  const response = await admin.request(path, { method, headers, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) }, environment);
+  const response = await admin.request(path, { method, headers, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) }, env);
   return { status: response.status, body: await response.json().catch(() => ({})) as Record<string, any> };
 }
 
@@ -18,7 +18,10 @@ describe("platform admin Worker", () => {
   beforeEach(() => {
     state.userId = "operator-1";
     state.roles = ["platform_operator"];
-    adminDependencies.session = async () => state.userId ? { user: { id: state.userId, email: `${state.userId}@example.test` } } : null;
+    adminDependencies.session = async () => state.userId ? { user: { id: state.userId, email: `${state.userId}@example.test` }, session: { id: "session-1" } } : null;
+    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "password", method: "password", verifiedAt: new Date() });
+    adminDependencies.enrolledFactor = async () => false;
+    adminDependencies.forwardAuth = async () => new Response(JSON.stringify({ forwarded: true }), { headers: { "content-type": "application/json" } });
     adminDependencies.platformRoles = async () => state.roles;
     adminDependencies.operationalStatus = async () => ({ capabilities: { database: { configured: true }, email: { configured: false, mode: "resend" }, billing: { configured: true, mode: "local" }, queues: { configured: false } } });
   });
@@ -81,6 +84,46 @@ describe("platform admin Worker", () => {
     expect((await call("POST", "/api/admin/support/sessions", { body: { organizationId: "org-1", reason: "x" } })).status).toBe(403);
     state.roles = ["platform_operator"];
     expect(await call("POST", "/api/admin/support/sessions", { body: { organizationId: "org-1" } })).toMatchObject({ status: 400, body: { error: "invalid" } });
+  });
+
+  it("requires fresh assurance for platform actions and reports it in the session", async () => {
+    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "password", method: "password", verifiedAt: new Date(Date.now() - 20 * 60_000) });
+    const stale = await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "retry" } });
+    expect(stale.status).toBe(428);
+    expect(stale.body).toMatchObject({ error: "step_up_required", required: "password", reason: "stale" });
+
+    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "password", method: "password", verifiedAt: new Date() });
+    const production = await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "retry" } }, { ...environment, APP_ENV: "production", DATABASE_ADMIN_URL: environment.DATABASE_URL });
+    expect(production.status).toBe(428);
+    expect(production.body).toMatchObject({ required: "mfa", reason: "insufficient_level" });
+
+    const session = await call("GET", "/api/admin/session");
+    expect(session.body.assurance).toMatchObject({ level: "password", method: "password" });
+    expect(Date.parse(session.body.stepUpRequiredAfter)).toBeGreaterThan(Date.now());
+  });
+
+  it("requires a fresh second factor to change an enrolled operator's factors", async () => {
+    adminDependencies.enrolledFactor = async () => true;
+    const disable = await call("POST", "/api/auth/two-factor/disable", { body: { password: "x" } });
+    expect(disable).toMatchObject({ status: 428, body: { error: "step_up_required", required: "mfa", reason: "insufficient_level" } });
+    expect(await call("GET", "/api/auth/passkey/generate-register-options")).toMatchObject({ status: 428, body: { required: "mfa" } });
+
+    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "mfa", method: "totp", verifiedAt: new Date(Date.now() - 20 * 60_000) });
+    expect(await call("POST", "/api/auth/passkey/delete-passkey", { body: { id: "pk-1" } })).toMatchObject({ status: 428, body: { reason: "stale" } });
+
+    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "mfa", method: "totp", verifiedAt: new Date() });
+    expect(await call("POST", "/api/auth/two-factor/disable", { body: { password: "x" } })).toMatchObject({ status: 200, body: { forwarded: true } });
+    expect(await call("GET", "/api/auth/passkey/generate-register-options")).toMatchObject({ status: 200, body: { forwarded: true } });
+  });
+
+  it("lets an operator without factors start enrollment with a fresh password, and nobody without a session", async () => {
+    expect(await call("POST", "/api/auth/two-factor/enable", { body: { password: "x" } })).toMatchObject({ status: 200, body: { forwarded: true } });
+    adminDependencies.assurance = async () => ({ sessionId: "session-1", userId: state.userId, level: "password", method: "password", verifiedAt: new Date(Date.now() - 20 * 60_000) });
+    expect(await call("POST", "/api/auth/two-factor/enable", { body: { password: "x" } })).toMatchObject({ status: 428, body: { required: "password", reason: "stale" } });
+    state.userId = "";
+    expect((await call("POST", "/api/auth/two-factor/enable", { body: { password: "x" } })).status).toBe(401);
+    // Proving a factor is how a person signs in or steps up, so it needs no session.
+    expect(await call("POST", "/api/auth/two-factor/verify-totp", { body: { code: "000000" } })).toMatchObject({ status: 200, body: { forwarded: true } });
   });
 
   it("exposes no sign-up, organization, or unknown admin routes on the admin origin", async () => {

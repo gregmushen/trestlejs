@@ -1,5 +1,5 @@
-import { activePlatformRoles, auditEvent, organization, platformRoleAssignment, user, type Database } from "@__TRESTLE_PROJECT_NAME__/db";
-import { count, countDistinct, desc, isNull, sql } from "drizzle-orm";
+import { activePlatformRoles, auditEvent, organization, passkey, platformRoleAssignment, user, type Database } from "@__TRESTLE_PROJECT_NAME__/db";
+import { count, countDistinct, desc, eq, isNull, sql } from "drizzle-orm";
 
 /**
  * Platform reads for the admin, always on the trestle_platform connection.
@@ -28,4 +28,12 @@ export async function overview(database: Database, options: Readonly<{ includeAu
 
 export async function databaseReachable(database: Database): Promise<boolean> {
   try { await database.execute(sql`select 1`); return true; } catch { return false; }
+}
+
+/** Whether the person has enabled two-factor or registered a passkey. Reads Better Auth's tables, so it runs on the auth connection. */
+export async function hasEnrolledFactor(database: Database, userId: string): Promise<boolean> {
+  const [person] = await database.select({ twoFactorEnabled: user.twoFactorEnabled }).from(user).where(eq(user.id, userId)).limit(1);
+  if (person?.twoFactorEnabled) return true;
+  const [credential] = await database.select({ id: passkey.id }).from(passkey).where(eq(passkey.userId, userId)).limit(1);
+  return Boolean(credential);
 }

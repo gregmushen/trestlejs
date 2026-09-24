@@ -9,10 +9,22 @@ import { adminViews } from "../src/api-registry.js";
  * registered route has no policy or a policy has no route.
  */
 const basePolicies: RoutePolicy[] = [
-  // Only sign-in, session, and sign-out reach Better Auth on the admin origin.
+  // Only sign-in, session, sign-out, and the operator's own factors reach Better Auth on the admin origin.
+  // Better Auth authenticates these itself; the Worker adds step-up before factor changes.
   { method: "POST", path: "/api/auth/sign-in/email", public: true, audience: "public" },
   { method: "POST", path: "/api/auth/sign-out", public: true, audience: "public" },
   { method: "GET", path: "/api/auth/get-session", public: true, audience: "public" },
+  { method: "POST", path: "/api/auth/two-factor/enable", public: true, audience: "public" },
+  { method: "POST", path: "/api/auth/two-factor/disable", public: true, audience: "public" },
+  { method: "POST", path: "/api/auth/two-factor/verify-totp", public: true, audience: "public" },
+  { method: "POST", path: "/api/auth/two-factor/verify-backup-code", public: true, audience: "public" },
+  { method: "POST", path: "/api/auth/two-factor/generate-backup-codes", public: true, audience: "public" },
+  { method: "GET", path: "/api/auth/passkey/list-user-passkeys", public: true, audience: "public" },
+  { method: "GET", path: "/api/auth/passkey/generate-register-options", public: true, audience: "public" },
+  { method: "POST", path: "/api/auth/passkey/verify-registration", public: true, audience: "public" },
+  { method: "GET", path: "/api/auth/passkey/generate-authenticate-options", public: true, audience: "public" },
+  { method: "POST", path: "/api/auth/passkey/verify-authentication", public: true, audience: "public" },
+  { method: "POST", path: "/api/auth/passkey/delete-passkey", public: true, audience: "public" },
   { method: "GET", path: "/api/admin/health/live", public: true, audience: "public" },
   { method: "GET", path: "/api/admin/session", audience: "session" },
 ];
