@@ -1,6 +1,6 @@
 # Native webhook egress on Cloudflare Workers
 
-Status: blocked for general HTTPS delivery. Remote `WEBHOOK_DELIVERY_MODE` remains `disabled` by default.
+Status: known issue; remote native delivery is deferred. Remote `WEBHOOK_DELIVERY_MODE` remains `disabled` by default.
 
 ## Deployed runtime evidence
 
@@ -12,7 +12,7 @@ Cloudflare's [TCP socket troubleshooting documentation](https://developers.cloud
 
 - Local capture, tenant isolation, signing, leases, retries, replay, and backpressure remain available for local and database-backed verification.
 - `trestle doctor --env <remote>` fails when `WEBHOOK_DELIVERY_MODE=native`, even if its Queue and signing key are configured. Preview, staging, and production workflows run Doctor before deployment.
-- Do not advertise native webhook delivery as production-ready or mark the deployed-delivery beta gate complete.
-- A supported remote transport needs a reviewed design and a successful deployed test against ordinary HTTPS destinations, including a destination behind Cloudflare.
+- Do not advertise native webhook delivery as production-ready. A beta candidate may proceed with the optional remote webhook capability disabled and this limitation disclosed; it must not claim deployed native delivery evidence.
+- A supported remote transport needs a reviewed design and a successful deployed test against ordinary HTTPS destinations, including a destination behind Cloudflare. This design decision is intentionally deferred.
 
 Possible paths are a trusted egress service that can pin approved IPs, or an explicit decision to accept Workers `fetch` with a reduced address-pinning guarantee. Either needs SSRF, redirect, DNS-rebinding, TLS, retry, observability, and failure-mode tests before enabling remote delivery.

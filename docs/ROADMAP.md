@@ -658,8 +658,9 @@ connections to ordinary HTTPS services on port 443 are rejected. The
 unsupported `ALPNProtocols` option is removed, and remote Doctor now fails
 closed when native delivery is enabled. See
 [WEBHOOK_EGRESS_RUNTIME.md](WEBHOOK_EGRESS_RUNTIME.md). The remote transport
-decision and deployed successful delivery remain beta gates, not completed
-Alpha 88 claims.
+decision and deployed successful delivery are deferred known issues, not
+completed Alpha 88 claims. The beta candidate can proceed with optional
+remote native delivery disabled and this limitation disclosed.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
