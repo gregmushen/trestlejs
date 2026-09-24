@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { stripeDeploymentIssues } from "../src/stripe-deployment.js";
+import { stripeDeploymentIssues, stripeServerKeyMatchesMode } from "../src/stripe-deployment.js";
 import { validateStripeCatalog } from "../src/stripe-sync.js";
 
 const catalog = validateStripeCatalog({ schemaVersion: 1, currency: "usd", plans: {
@@ -11,6 +11,14 @@ const ready = { mode: "test", publishableKey: "pk_test_fixture", prices: JSON.st
   returnUrl: "https://app.example.test/settings/billing" };
 
 describe("Stripe deployment configuration", () => {
+  it("accepts full and restricted server keys only in their own mode", () => {
+    expect(stripeServerKeyMatchesMode("sk_test_fixture", "staging")).toBe(true);
+    expect(stripeServerKeyMatchesMode("rk_test_fixture", "preview")).toBe(true);
+    expect(stripeServerKeyMatchesMode("rk_live_fixture", "production")).toBe(true);
+    expect(stripeServerKeyMatchesMode("rk_live_fixture", "staging")).toBe(false);
+    expect(stripeServerKeyMatchesMode("pk_test_fixture", "staging")).toBe(false);
+    expect(stripeServerKeyMatchesMode("rk_test_", "staging")).toBe(false);
+  });
   it("accepts a complete test-mode mapping without exposing values", () => {
     expect(stripeDeploymentIssues("preview", ready, catalog)).toEqual([]);
     expect(stripeDeploymentIssues("staging", ready, catalog)).toEqual([]);

@@ -21,12 +21,15 @@ provider("protected staging providers", () => {
   it("authenticates to Stripe test mode without creating resources", async () => {
     const key = process.env.STRIPE_SECRET_KEY;
     const staging = await readStagingProviderVariables();
-    expect(key?.startsWith("sk_test_")).toBe(true);
+    expect(key).toMatch(/^(?:sk|rk)_test_[A-Za-z0-9_]+$/u);
     expect(staging.STRIPE_MODE).toBe("test");
     expect(staging.STRIPE_PUBLISHABLE_KEY?.startsWith("pk_test_")).toBe(true);
-    const response = await fetch("https://api.stripe.com/v1/account", { headers: { authorization: `Bearer ${key}` } });
-    expect(response.ok, `Stripe returned HTTP ${response.status}`).toBe(true);
-    const account = await response.json() as { id?: string };
-    expect(account.id).toMatch(/^acct_/u);
+    for (const resource of ["prices", "products", "subscriptions", "checkout/sessions"]) {
+      const response = await fetch(`https://api.stripe.com/v1/${resource}?limit=1`, { headers: { authorization: `Bearer ${key}` } });
+      expect(response.ok, `Stripe ${resource} returned HTTP ${response.status}`).toBe(true);
+      const result = await response.json() as { object?: string; data?: unknown };
+      expect(result.object).toBe("list");
+      expect(Array.isArray(result.data)).toBe(true);
+    }
   });
 });

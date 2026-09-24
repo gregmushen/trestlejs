@@ -259,6 +259,11 @@ test/live publishable key, and a safe HTTPS billing return URL. An empty or
 partial `STRIPE_PRICES` map is not deployment-ready. `trestle payments stripe
 sync --env staging` reports the intended mapping before it is applied to the
 environment configuration.
+The Stripe server key may be a full `sk_test_`/`sk_live_` key or a restricted
+`rk_test_`/`rk_live_` key with the permissions your application actually uses.
+Doctor checks the environment prefix; the protected staging provider gate
+checks relevant read access. Verify write permissions through a controlled
+test-mode Checkout and webhook run before treating billing as production-ready.
 For Stripe test/live mode, the signed subscription webhook is a notification:
 the Worker retrieves the current subscription before projecting local billing
 state. A PostgreSQL reconciliation generation ensures an older, slower lookup

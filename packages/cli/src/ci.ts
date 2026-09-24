@@ -83,7 +83,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     && !providers.includes("secrets.RESEND_API_KEY") && !providers.includes("secrets.STRIPE_SECRET_KEY"), "protected provider verification reads Trestle encrypted staging credentials, not duplicate GitHub provider secrets"));
   checks.push(check("ci.providers.safety", providers.includes("TRESTLE_PROVIDER_INTEGRATION_TESTS")
     && providers.includes("provider.integration.test.ts") && providerTests.includes("EMAIL_STAGING_REDIRECT")
-    && providerTests.includes("STRIPE_MODE") && providerTests.includes("sk_test_")
+    && providerTests.includes("STRIPE_MODE") && providerTests.includes("(?:sk|rk)_test_") && providerTests.includes("checkout/sessions")
     && providerTests.includes("readStagingProviderVariables") && providerConfig.includes("apps/worker/wrangler.jsonc"), "provider verification checks the declared Resend staging redirect and Stripe test mode"));
 
   const preview = sources.get("preview.yml") ?? "";

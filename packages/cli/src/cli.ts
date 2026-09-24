@@ -28,7 +28,7 @@ import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readAppl
 import { runCommand, runDevelopment } from "./processes.js";
 import { inspectResendSender } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
-import { stripeDeploymentIssues } from "./stripe-deployment.js";
+import { stripeDeploymentIssues, stripeServerKeyMatchesMode } from "./stripe-deployment.js";
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
@@ -854,12 +854,12 @@ export function createProgram(runtime: CliRuntime): Command {
       const context = await projectContext(command, runtime);
       if (options.env === "local") { runtime.stdout("✓ LocalBillingAdapter requires no Stripe account\n"); return; }
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      const expected = options.env === "production" ? "sk_live_" : "sk_test_";
+      const expected = options.env === "production" ? "live" : "test";
       const workerPath = context.manifest.apps.worker ?? "apps/worker";
       const workerConfig = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
       const block = wranglerEnvironmentBlock(workerConfig, options.env);
       const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json"), "utf8")) as unknown);
-      const problems = [!values.STRIPE_SECRET_KEY || !new RegExp(`^${expected}[A-Za-z0-9_]+$`, "u").test(values.STRIPE_SECRET_KEY) ? `STRIPE_SECRET_KEY must use ${expected} in ${options.env}` : "", !values.STRIPE_WEBHOOK_SECRET || !/^whsec_[A-Za-z0-9_]+$/u.test(values.STRIPE_WEBHOOK_SECRET) ? "STRIPE_WEBHOOK_SECRET must start with whsec_" : "", ...stripeDeploymentIssues(options.env, {
+      const problems = [!stripeServerKeyMatchesMode(values.STRIPE_SECRET_KEY, options.env) ? `STRIPE_SECRET_KEY must be a sk_${expected}_ or rk_${expected}_ server key in ${options.env}` : "", !values.STRIPE_WEBHOOK_SECRET || !/^whsec_[A-Za-z0-9_]+$/u.test(values.STRIPE_WEBHOOK_SECRET) ? "STRIPE_WEBHOOK_SECRET must start with whsec_" : "", ...stripeDeploymentIssues(options.env, {
         mode: wranglerStringVariable(block, "STRIPE_MODE"), publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
         prices: wranglerStringVariable(block, "STRIPE_PRICES"), returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
       }, catalog)].filter(Boolean);
