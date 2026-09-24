@@ -19,12 +19,14 @@ export type EmailConfiguration = { mode?: "local" | "resend"; environment?: "loc
 
 export function createEmailService(configuration: EmailConfiguration): EmailService {
   if ((configuration.mode ?? "local") === "local") return new LocalEmailAdapter(undefined, undefined, configuration.logger);
+  const environment = configuration.environment ?? "local";
+  if (environment === "local") throw new EmailValidationError("Local email must use the local capture adapter");
   if (!configuration.resendApiKey) throw new EmailValidationError("RESEND_API_KEY is required for the Resend email adapter");
   if (!configuration.from) throw new EmailValidationError("EMAIL_FROM is required for the Resend email adapter");
   const service: EmailService = new ResendEmailAdapter({ apiKey: configuration.resendApiKey, from: configuration.from, ...(configuration.replyTo ? { replyTo: configuration.replyTo } : {}), ...(configuration.logger ? { logger: configuration.logger } : {}) });
-  if (configuration.environment === "staging") {
-    if (!configuration.stagingRedirect) throw new EmailValidationError("EMAIL_STAGING_REDIRECT is required in staging");
-    return new StagingRedirectEmailService(service, configuration.stagingRedirect);
+  if (environment === "preview" || environment === "staging") {
+    if (!configuration.stagingRedirect) throw new EmailValidationError(`EMAIL_STAGING_REDIRECT is required in ${environment}`);
+    return new StagingRedirectEmailService(service, configuration.stagingRedirect, environment);
   }
   return service;
 }

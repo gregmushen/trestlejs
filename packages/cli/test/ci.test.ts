@@ -71,6 +71,21 @@ describe("generated CI deployment contract", () => {
     expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.checkout-write", status: "fail" }));
   });
 
+  it("rejects preview email that can bypass recipient redirection", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const emailRoot = path.join(root, "packages", "integrations", "src", "email");
+    await mkdir(emailRoot, { recursive: true });
+    const templateEmail = path.join(templateRoot, "packages", "integrations", "src", "email");
+    const factory = await readFile(path.join(templateEmail, "index.ts"), "utf8");
+    await writeFile(path.join(emailRoot, "index.ts"), factory);
+    await cp(path.join(templateEmail, "email.test.tsx"), path.join(emailRoot, "email.test.tsx"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.email.nonproduction-redirect", status: "pass" }));
+    await writeFile(path.join(emailRoot, "index.ts"), factory.replace('environment === "preview" || environment === "staging"', 'environment === "staging"'));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.email.nonproduction-redirect", status: "fail" }));
+  });
+
   it("rejects omission of the local product system test", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
