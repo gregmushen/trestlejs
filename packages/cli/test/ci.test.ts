@@ -131,6 +131,7 @@ describe("generated CI deployment contract", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
     await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await cp(path.join(templateRoot, "package.json"), path.join(root, "package.json"));
     const browserPath = path.join(root, "tests", "browser", "deployed-product.spec.ts");
     await mkdir(path.dirname(browserPath), { recursive: true });
     const source = await readFile(path.join(templateRoot, "tests", "browser", "deployed-product.spec.ts"), "utf8");
@@ -138,6 +139,35 @@ describe("generated CI deployment contract", () => {
     expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.staging-article-rls", status: "pass" }));
     await writeFile(browserPath, source.replace("expect(table?.relforcerowsecurity).toBe(true);", "expect(table?.relforcerowsecurity).toBe(false);"));
     expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.staging-article-rls", status: "fail" }));
+  });
+
+  it("rejects automatic or unguarded live-email browser tests", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await cp(path.join(templateRoot, "tests", "browser"), path.join(root, "tests", "browser"), { recursive: true });
+    const packagePath = path.join(root, "package.json");
+    const original = await readFile(path.join(templateRoot, "package.json"), "utf8");
+    await writeFile(packagePath, original);
+    const checkStatus = async () => (await validateCi(root)).checks.find(({ id }) => id === "ci.browser.live-email-opt-in")?.status;
+    expect(await checkStatus()).toBe("pass");
+
+    const manifest = JSON.parse(original) as { scripts: Record<string, string> };
+    manifest.scripts["test:preview"] = manifest.scripts["test:preview"]!.replace("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0", "TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1");
+    await writeFile(packagePath, JSON.stringify(manifest));
+    expect(await checkStatus()).toBe("fail");
+    await writeFile(packagePath, original);
+
+    const previewSpec = path.join(root, "tests", "browser", "preview-product.spec.ts");
+    const spec = await readFile(previewSpec, "utf8");
+    await writeFile(previewSpec, spec.replace('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"', "false"));
+    expect(await checkStatus()).toBe("fail");
+    await writeFile(previewSpec, spec);
+
+    const previewWorkflow = path.join(root, ".github", "workflows", "preview.yml");
+    const workflow = await readFile(previewWorkflow, "utf8");
+    await writeFile(previewWorkflow, workflow.replace("run: pnpm test:preview", "run: pnpm test:preview:live-email"));
+    expect(await checkStatus()).toBe("fail");
   });
 
   it("rejects provider verification that bypasses encrypted staging credentials", async () => {

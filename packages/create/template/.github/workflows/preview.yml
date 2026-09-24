@@ -196,13 +196,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Install deployed browser runtime
         run: pnpm exec playwright install --with-deps --only-shell chromium
-      - name: Verify deployed site and application in Chromium
-        run: |
-          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env preview --raw)"
-          echo "::add-mask::$RESEND_API_KEY"
-          pnpm test:preview
+      - name: Verify deployed site in Chromium without sending email
+        run: pnpm test:preview
         env:
-          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           SITE_URL: "${{ steps.preview.outputs.site_url }}"
           APP_URL: "${{ steps.preview.outputs.app_url }}"
           API_URL: "${{ steps.preview.outputs.api_url }}"
@@ -219,7 +215,7 @@ jobs:
             echo "- Site: ${{ steps.preview.outputs.site_url }}"
             echo "- API: ${{ steps.preview.outputs.api_url }}"
             echo "- Smoke gate: passed"
-            echo "- Browser gate: passed"
+            echo "- Site browser gate: passed (no email sent)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   cleanup:

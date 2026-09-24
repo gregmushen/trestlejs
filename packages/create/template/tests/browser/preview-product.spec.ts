@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { waitForStagingVerificationLink } from "../../scripts/staging-email.js";
 
-test.skip(process.env.TRESTLE_BROWSER_MODE !== "deployed" || process.env.TRESTLE_DEPLOY_ENV !== "preview", "Deployed preview only");
+test.skip(process.env.TRESTLE_BROWSER_MODE !== "deployed" || process.env.TRESTLE_DEPLOY_ENV !== "preview" || process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1", "Live Resend email tests require explicit opt-in");
 
 test("preview verifies redirected email, tenant-safe test Checkout, and webhook entitlements", async ({ page }) => {
   test.setTimeout(240_000);

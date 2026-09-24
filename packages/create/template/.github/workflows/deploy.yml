@@ -186,15 +186,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Install deployed browser runtime
         run: pnpm exec playwright install --with-deps --only-shell chromium
-      - name: Verify deployed staging signup, email, organizations, and async delivery in Chromium
-        run: |
-          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env staging --raw)"
-          echo "::add-mask::$RESEND_API_KEY"
-          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"
-          echo "::add-mask::$DATABASE_URL"
-          pnpm test:staging
+      - name: Verify deployed staging site in Chromium without sending email
+        run: pnpm test:staging
         env:
-          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           SITE_URL: "${{ vars.SITE_URL }}"
           APP_URL: "${{ vars.APP_URL }}"
           API_URL: "${{ vars.API_URL }}"

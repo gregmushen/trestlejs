@@ -40,7 +40,9 @@ from `pnpm check` because it requires a real browser and database.
 The same browser suite also loads the Astro site and follows its sign-in and
 pricing links into the hydrated React application. Preview and production
 deploy workflows run the read-only `pnpm test:deployed` against their actual
-HTTPS URLs. Staging runs `pnpm test:staging`: it signs up with a unique
+HTTPS URLs. Preview and staging deploys run site-handoff browser checks; their
+live-email product tests are skipped by default. The separate, explicit
+`pnpm test:staging:live-email` gate signs up with a unique
 `example.test` address, locates only that account's redirected verification
 message through Resend's sent-email API, verifies the link without printing
 the token, signs in, and checks that two organizations stay distinct. When the
@@ -56,7 +58,11 @@ a forged tenant and cross-tenant access, and verifies deletion revokes that
 URL. This requires a staging Resend key with sent-email list/read access. The test
 confirms provider acceptance and redirection, not inbox delivery; staging
 canary accounts remain in the staging database until the application's
-retention policy removes them. Production never runs this mutating test.
+retention policy removes them. `pnpm test:preview:live-email` exercises the
+equivalent preview signup and billing flow. Neither live-email command is run
+by an automatic workflow: each invocation consumes Resend quota and creates a
+new test account. Local browser and CI tests use local email capture instead.
+Production never runs these mutating tests.
 
 ```yaml
 BETTER_AUTH_SECRET: <randomly generated>
@@ -144,9 +150,10 @@ Free plan (five triggers) unless the deployment environment sets
 an existing trigger on the target Worker during redeployment; it does not
 change or remove other Workers' schedules. A full account must gain capacity
 before the cron-enabled deployment can proceed.
-The preview browser gate verifies redirected email sign-up and test-mode
-Checkout against the deployed services; it does not complete a payment or
-process a signed Stripe webhook. Those remain staging release gates.
+The automatic preview browser gate checks the deployed site and application
+without sending email. The explicit `pnpm test:preview:live-email` gate verifies
+redirected email sign-up, test-mode Checkout, and signed Stripe webhook
+entitlements. Run it sparingly when a release requires fresh provider evidence.
 `BETTER_AUTH_URL` in deployed preview must be the Worker API origin so
 verification and reset links reach the auth handler; the Pages app origin is
 passed separately as `WEB_ORIGIN` for trusted browser requests.

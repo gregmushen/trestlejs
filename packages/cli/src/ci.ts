@@ -195,13 +195,24 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   const deployedProduct = await readFile(path.join(root, "tests/browser/deployed-product.spec.ts"), "utf8").catch(() => "");
   checks.push(check("ci.deploy.staging-article-rls",
     stagingDeploy.includes("pnpm test:staging")
-    && stagingDeploy.includes("trestle secrets get DATABASE_URL --env staging --raw")
+    && projectPackage?.scripts?.["test:staging:live-email"]?.includes("deployed-product.spec.ts") === true
     && deployedProduct.includes("expect(table?.relforcerowsecurity).toBe(true)")
     && deployedProduct.includes("current_user")
     && deployedProduct.includes("set_config('app.organization_id'")
     && deployedProduct.includes("select id from article where id")
     && deployedProduct.includes("expect(other).toHaveLength(0)"),
-  "staging browser gate probes forced Article RLS through the restricted runtime database role"));
+  "opt-in staging browser gate retains the forced Article RLS probe through the restricted runtime database role"));
+  checks.push(check("ci.browser.live-email-opt-in",
+    ["preview", "staging"].every((environment) =>
+      projectPackage?.scripts?.[`test:${environment}`]?.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0") === true
+      && projectPackage?.scripts?.[`test:${environment}:live-email`]?.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1") === true)
+    && previewBrowser.includes('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"')
+    && deployedProduct.includes('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"')
+    && !preview.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1")
+    && !stagingDeploy.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1")
+    && !preview.includes("pnpm test:preview:live-email")
+    && !stagingDeploy.includes("pnpm test:staging:live-email"),
+  "automatic preview and staging deploys cannot send Resend mail; live-email product gates require explicit opt-in"));
   const projectSource = await readFile(path.join(root, ".trestle", "project.yaml"), "utf8").catch(() => "");
   let adminEnabled = true;
   try { if (projectSource) adminEnabled = parseProjectManifest(projectSource).capabilities.admin; }
