@@ -758,6 +758,13 @@ idempotency. The authorized canary restricted key passed this test against a
 declared test-mode price. This proves Checkout creation with that key and
 price, not a completed payment, signed webhook delivery, or local entitlement
 projection. Those deployed end-to-end gates remain open.
+Alpha 99 closes a preview email safety gap. Resend delivery in both preview
+and staging now requires a configured recipient redirect and strips cc/bcc
+before immediate or scheduled delivery; preview subjects identify the
+original recipient without forwarding to it. Local mode cannot opt into
+direct Resend delivery, and only production can send provider email without
+redirection. Factory-level tests and CI contract checks protect these rules.
+The canary preview must pick up this source fix before Resend is enabled.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

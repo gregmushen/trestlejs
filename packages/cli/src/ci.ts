@@ -91,6 +91,13 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     && (providerTests.match(/adapter\.createCheckoutSession\(input\)/gu) ?? []).length >= 2
     && providerTests.includes("expect(retry.id).toBe(first.id)"),
   "protected provider verification creates a test-mode Checkout session and checks idempotent retry"));
+  const emailFactory = await readFile(path.join(root, "packages", "integrations", "src", "email", "index.ts"), "utf8").catch(() => "");
+  const emailTests = await readFile(path.join(root, "packages", "integrations", "src", "email", "email.test.tsx"), "utf8").catch(() => "");
+  checks.push(check("ci.email.nonproduction-redirect", emailFactory.includes('environment === "preview" || environment === "staging"')
+    && emailFactory.includes("Local email must use the local capture adapter")
+    && emailFactory.includes("StagingRedirectEmailService(service, configuration.stagingRedirect, environment)")
+    && emailTests.includes('it.each(["preview", "staging"]'),
+  "preview and staging provider email redirect every recipient; local email cannot use Resend"));
 
   const preview = sources.get("preview.yml") ?? "";
   checks.push(check(
