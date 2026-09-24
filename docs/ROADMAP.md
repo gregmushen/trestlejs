@@ -808,6 +808,11 @@ upgrades source and migrations with the next published CLI, verifies both
 records and forced RLS survive, and runs the generated RLS integration suite
 before source finalization. The test uses a fresh disposable database and
 does not claim deployed Neon migration or production data compatibility.
+Alpha 106 makes the human `trestle doctor` output name each safe Resend and
+Stripe configuration issue (for example an invalid webhook-secret shape or
+missing test publishable key). It keeps arbitrary exception evidence out of
+human output, so deployment failures are actionable without printing secret
+values. This does not relax the provider-readiness gate.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

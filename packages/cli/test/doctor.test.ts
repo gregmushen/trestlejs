@@ -6,7 +6,7 @@ import os from "node:os";
 import { loadProjectManifest } from "@trestlejs/core";
 import { describe, expect, it } from "vitest";
 
-import { runDoctor } from "../src/doctor.js";
+import { formatDoctorHuman, runDoctor } from "../src/doctor.js";
 import { encryptSecrets } from "../src/secrets.js";
 
 const templateRoot = path.resolve("packages/create/template");
@@ -26,6 +26,7 @@ describe("remote provider preflight", () => {
       await writeFile(credentialsPath, encryptSecrets({ RESEND_API_KEY: "re_test", RESEND_WEBHOOK_SECRET: "placeholder" }, "preview", key));
       const invalidSecret = await runDoctor(root, manifest, "preview", key);
       expect(invalidSecret.checks).toContainEqual(expect.objectContaining({ id: "email.provider.configuration", status: "fail", evidence: expect.stringContaining("whsec_") }));
+      expect(formatDoctorHuman(invalidSecret)).toContain("Issue: RESEND_WEBHOOK_SECRET must start with whsec_");
       await writeFile(credentialsPath, encryptSecrets({ RESEND_API_KEY: "re_test", RESEND_WEBHOOK_SECRET: "whsec_test" }, "preview", key));
       const ready = await runDoctor(root, manifest, "preview", key);
       expect(ready.checks).toContainEqual(expect.objectContaining({ id: "email.provider.configuration", status: "pass" }));
@@ -63,6 +64,7 @@ describe("remote provider preflight", () => {
       const incomplete = await runDoctor(root, manifest, "preview");
       expect(incomplete.checks).toContainEqual(expect.objectContaining({ id: "billing.stripe.configuration", status: "fail",
         evidence: expect.stringContaining("starter") }));
+      expect(formatDoctorHuman(incomplete)).toContain("Issue: STRIPE_PRICES is missing a valid price ID for starter");
       await writeFile(configPath, JSON.stringify({ env: { preview: { vars: {
         ...variables, STRIPE_PRICES: JSON.stringify({ starter: "price_starter", pro: "price_pro" }),
       } } } }));
@@ -70,6 +72,15 @@ describe("remote provider preflight", () => {
       expect(ready.checks).toContainEqual(expect.objectContaining({ id: "billing.stripe.configuration", status: "pass" }));
       expect(JSON.stringify(ready)).not.toContain("pk_test_example");
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("does not print arbitrary failure evidence in human output", () => {
+    const output = formatDoctorHuman({ environment: "preview", checks: [
+      { id: "email.provider.configuration", group: "architecture", status: "fail", message: "email deployment configuration cannot be read", evidence: "whsec_private_value" },
+      { id: "configuration.secrets.valid", group: "architecture", status: "fail", message: "preview encrypted credentials cannot be read", evidence: "sk_test_private_value" },
+    ], summary: { passed: 0, warnings: 0, failed: 2 } });
+    expect(output).not.toContain("whsec_private_value");
+    expect(output).not.toContain("sk_test_private_value");
   });
 
   it("distinguishes readable but incomplete credentials from unreadable credentials", async () => {
