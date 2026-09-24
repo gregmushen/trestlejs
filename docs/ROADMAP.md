@@ -999,6 +999,11 @@ that simulates the Pages-forwarded hostname. Its published-adjacent upgrade rehe
 reviews the Alpha 125 → 126 protected preview workflow change against the
 recorded source hash and exact target content rather than bypassing workflow
 review.
+Alpha 128 binds preview Stripe Checkout's return URL to that pull request's
+isolated Pages app at Worker deployment time. The generated CI contract now
+rejects a preview workflow missing the binding. The protected Alpha 127 → 128
+workflow edit is narrowly encoded for the next published-adjacent rehearsal;
+Alpha 128's rehearsal covers the already-published Alpha 126 → 127 pair.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

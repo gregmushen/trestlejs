@@ -149,7 +149,7 @@ jobs:
           accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           packageManager: pnpm
           workingDirectory: apps/worker
-          command: deploy --config .trestle-queues.wrangler.jsonc --env preview --name ${{ steps.preview.outputs.worker_name }} --var WEB_ORIGIN:${{ steps.preview.outputs.app_url }}
+          command: deploy --config .trestle-queues.wrangler.jsonc --env preview --name ${{ steps.preview.outputs.worker_name }} --var WEB_ORIGIN:${{ steps.preview.outputs.app_url }} --var BILLING_RETURN_URL:${{ steps.preview.outputs.app_url }}/settings/billing
       - name: Bind preview Pages app to isolated API Worker
         run: node scripts/cloudflare-pages.mjs bind-service "${{ steps.preview.outputs.app_project }}" "${{ steps.preview.outputs.worker_name }}"
         env:

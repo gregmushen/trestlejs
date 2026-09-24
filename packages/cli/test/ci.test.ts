@@ -36,6 +36,17 @@ describe("generated CI deployment contract", () => {
     expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.no-cron", status: "fail" }));
   });
 
+  it("requires preview Checkout to return to that preview's app", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.billing-return", status: "pass" }));
+    await writeFile(workflowPath, source.replace(" --var BILLING_RETURN_URL:${{ steps.preview.outputs.app_url }}/settings/billing", ""));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.billing-return", status: "fail" }));
+  });
+
   it("pins external Actions and uses the project-local Trestle CLI", async () => {
     const report = await validateCi(templateRoot);
     expect(report.valid).toBe(true);
