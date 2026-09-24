@@ -43,7 +43,10 @@ deploy workflows run the read-only `pnpm test:deployed` against their actual
 HTTPS URLs. Staging runs `pnpm test:staging`: it signs up with a unique
 `example.test` address, locates only that account's redirected verification
 message through Resend's sent-email API, verifies the link without printing
-the token, signs in, and checks that two organizations stay distinct. This
+the token, signs in, and checks that two organizations stay distinct. When the
+application declares an Article resource, staging also creates, edits, reads,
+and deletes one through the deployed app and API, checks cross-tenant
+read/write denial, and verifies each organization's list remains isolated. This
 requires a staging Resend key with sent-email list/read access. The test
 confirms provider acceptance and redirection, not inbox delivery; staging
 canary accounts remain in the staging database until the application's

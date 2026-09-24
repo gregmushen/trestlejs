@@ -819,6 +819,17 @@ production is persistent and production-classified. Status descriptions now
 name the actual environment; cleanup can deactivate only pull-request
 previews. Request-level tests verify the records and guardrails, but this is
 not evidence that a hosted staging or production deployment has passed.
+Alpha 108 extends the generated staging browser gate to exercise deployed
+Article CRUD and cross-tenant read/write denial whenever the application
+declares that resource. The local PostgreSQL/browser canary covers the same
+behavior before release; hosted staging evidence remains open until provider
+configuration permits the test to run against a real deployment. It also
+records hash-verified generated package source so a future adjacent upgrade
+can distinguish pnpm's dependency-version edit from application changes even
+when pnpm reformats package.json. Alpha 108 recognizes older pristine
+byte-preserving baselines too; the published Alpha 106 → 107 rehearsal uses a
+strictly reviewed package-script transition because Alpha 107's CLI cannot
+apply that specific change automatically.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

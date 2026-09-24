@@ -111,7 +111,7 @@ export async function createProject(options: CreateProjectOptions): Promise<Crea
     const enabled = new Set<OptionalTemplateCapability>(options.admin ? ["admin"] : []);
     await copyTemplate(templateRoot, destination, name, baseline, enabled);
     if (enabled.size) await applyCapabilities(destination, baseline, enabled);
-    await writeFile(path.join(destination, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files: Object.fromEntries(Object.entries(baseline).sort(([left], [right]) => left.localeCompare(right))) }, null, 2)}\n`);
+    await writeFile(path.join(destination, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files: Object.fromEntries(Object.entries(baseline).sort(([left], [right]) => left.localeCompare(right))), packageSource: await readFile(path.join(destination, "package.json"), "utf8") }, null, 2)}\n`);
     const manifest = await loadProjectManifest(destination);
     if (manifest.project.name !== name) {
       throw new Error("Rendered project manifest name does not match target directory");

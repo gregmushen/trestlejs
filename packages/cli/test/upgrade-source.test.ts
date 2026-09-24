@@ -170,6 +170,76 @@ describe("adjacent-alpha source apply", () => {
     } finally { await rm(parent, { recursive: true, force: true }); }
   });
 
+  it("applies a changed generated package manifest after only the required CLI version bump", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      const previousVersion = `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 1}`;
+      const oldPackage = `${JSON.stringify({ name: "sample-app", scripts: { test: "node old.test.mjs" }, devDependencies: { trestlejs: previousVersion } }, null, 2)}\n`;
+      const upgradedDependency = oldPackage.replace(previousVersion, TRESTLEJS_VERSION);
+      const newPackage = `${JSON.stringify({ name: "sample-app", scripts: { test: "node new.test.mjs" }, devDependencies: { trestlejs: TRESTLEJS_VERSION } }, null, 2)}\n`;
+      const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+      const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+      baseline.files["package.json"] = hash(oldPackage);
+      await writeFile(baselinePath, JSON.stringify(baseline));
+      await writeFile(path.join(root, "package.json"), upgradedDependency);
+      await writeFile(path.join(template, "package.json"), newPackage);
+      expect((await planSourceDiff(root, "sample-app", template)).entries.find(({ path: relative }) => relative === "package.json")?.classification).toBe("modified");
+      expect(await applySourceUpgrade(root, "sample-app", template)).toEqual(["added.txt", "changed.txt", "package.json"]);
+      expect(await readFile(path.join(root, "package.json"), "utf8")).toBe(newPackage);
+      expect(await applySourceUpgrade(root, "sample-app", template)).toEqual([]);
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("uses a hash-verified package baseline when pnpm reformats the dependency bump", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      const previousVersion = `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 1}`;
+      const oldPackage = `${JSON.stringify({ name: "sample-app", scripts: { test: "node old.test.mjs" }, devDependencies: { trestlejs: previousVersion, foo: "1" } }, null, 2)}\n`;
+      const target = `${JSON.stringify({ name: "sample-app", scripts: { test: "node new.test.mjs" }, devDependencies: { trestlejs: TRESTLEJS_VERSION, foo: "1" } }, null, 2)}\n`;
+      const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+      const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+      baseline.files["package.json"] = hash(oldPackage);
+      baseline.packageSource = oldPackage;
+      await writeFile(baselinePath, JSON.stringify(baseline));
+      await writeFile(path.join(root, "package.json"), JSON.stringify({ devDependencies: { foo: "1", trestlejs: TRESTLEJS_VERSION }, scripts: { test: "node old.test.mjs" }, name: "sample-app" }));
+      await writeFile(path.join(template, "package.json"), target);
+      expect(await applySourceUpgrade(root, "sample-app", template)).toContain("package.json");
+      expect(await readFile(path.join(root, "package.json"), "utf8")).toBe(target);
+      await finalizeSourceUpgrade(root, "sample-app", async () => {}, template);
+      const finalized = JSON.parse(await readFile(baselinePath, "utf8"));
+      expect(finalized.packageSource).toBe(target);
+      expect(finalized.files["package.json"]).toBe(hash(target));
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("still rejects an application package edit combined with a CLI version bump", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      const previousVersion = `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 1}`;
+      const oldPackage = JSON.stringify({ scripts: { test: "node old.test.mjs" }, devDependencies: { trestlejs: previousVersion } });
+      const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+      const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+      baseline.files["package.json"] = hash(oldPackage);
+      await writeFile(baselinePath, JSON.stringify(baseline));
+      await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { test: "node application.test.mjs" }, devDependencies: { trestlejs: TRESTLEJS_VERSION } }));
+      await writeFile(path.join(template, "package.json"), JSON.stringify({ scripts: { test: "node new.test.mjs" }, devDependencies: { trestlejs: TRESTLEJS_VERSION } }));
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("package.json");
+      await expect(readFile(path.join(root, "added.txt"))).rejects.toThrow();
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("does not trust package source that disagrees with its recorded hash", async () => {
+    const { parent, root, template } = await fixture();
+    try {
+      const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+      const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+      baseline.packageSource = '{"devDependencies":{"trestlejs":"tampered"}}';
+      await writeFile(baselinePath, JSON.stringify(baseline));
+      expect((await planSourceDiff(root, "sample-app", template)).baselineTrusted).toBe(false);
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("matching baseline");
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
   it("fails before writing when an application edit or protected configuration would change", async () => {
     const { parent, root, template } = await fixture();
     try {

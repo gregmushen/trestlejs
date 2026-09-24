@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { existsSync } from "node:fs";
 
 import { waitForStagingVerificationLink } from "../../scripts/staging-email.js";
+
+const articleDeclared = existsSync(new URL("../../.trestle/resources/article.json", import.meta.url));
 
 test.skip(process.env.TRESTLE_BROWSER_MODE !== "deployed", "Staging-only provider test");
 
@@ -65,4 +68,50 @@ test("staging signs up through redirected Resend verification and switches organ
   expect(outsider.status()).toBe(404);
   await page.goto("/settings/billing");
   await expect(page.getByText("No active subscription.")).toBeVisible();
+
+  if (articleDeclared) {
+    const switchOrganization = async (organizationId: string) => {
+      const changed = page.waitForResponse((response) => response.url().includes("/api/auth/organization/set-active") && response.request().method() === "POST");
+      await selector.selectOption(organizationId);
+      expect((await changed).status()).toBe(200);
+      await expect(selector).toHaveValue(organizationId);
+    };
+    const firstName = `Staging first ${nonce}`;
+    const editedName = `Staging edited ${nonce}`;
+    const secondName = `Staging second ${nonce}`;
+    await switchOrganization(firstId!);
+    await page.goto("/articles");
+    await expect(page.getByRole("heading", { name: "Article" })).toBeVisible();
+    await page.getByRole("textbox", { name: "New Article name" }).fill(firstName);
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByRole("listitem").getByText(firstName)).toBeVisible();
+    await page.getByRole("button", { name: "Edit" }).click();
+    await page.getByRole("textbox", { name: "Edit Article name" }).fill(editedName);
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("listitem").getByText(editedName)).toBeVisible();
+    const firstList = await page.context().request.get(`${apiOrigin}/api/articles`, { headers: { "x-trestle-tenant": firstId! } });
+    expect(firstList.status()).toBe(200);
+    const firstArticle = ((await firstList.json()) as { articles: Array<{ id: string; name: string }> }).articles.find((article) => article.name === editedName);
+    expect(firstArticle?.id).toBeTruthy();
+    if (!firstArticle) throw new Error("Created staging Article was not returned by the API");
+
+    await switchOrganization(secondId!);
+    await expect(page.getByRole("listitem").getByText(editedName)).toHaveCount(0);
+    const secondHeaders = { "x-trestle-tenant": secondId! };
+    expect((await page.context().request.get(`${apiOrigin}/api/articles/${firstArticle.id}`, { headers: secondHeaders })).status()).toBe(404);
+    expect((await page.context().request.patch(`${apiOrigin}/api/articles/${firstArticle.id}`, { headers: secondHeaders, data: { name: "Cross-tenant edit" } })).status()).toBe(404);
+    expect((await page.context().request.delete(`${apiOrigin}/api/articles/${firstArticle.id}`, { headers: secondHeaders })).status()).toBe(404);
+    await page.getByRole("textbox", { name: "New Article name" }).fill(secondName);
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByRole("listitem").getByText(secondName)).toBeVisible();
+
+    await switchOrganization(firstId!);
+    await expect(page.getByRole("listitem").getByText(editedName)).toBeVisible();
+    await expect(page.getByRole("listitem").getByText(secondName)).toHaveCount(0);
+    expect((await page.context().request.delete(`${apiOrigin}/api/articles/${firstArticle.id}`, { headers: { "x-trestle-tenant": firstId! } })).status()).toBe(204);
+    await page.reload();
+    await expect(page.getByRole("listitem").getByText(editedName)).toHaveCount(0);
+    await switchOrganization(secondId!);
+    await expect(page.getByRole("listitem").getByText(secondName)).toBeVisible();
+  }
 });
