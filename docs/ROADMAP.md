@@ -802,6 +802,12 @@ the source version, validates the result, and proves application-owned content
 survives. For Alpha 104 this exercises the real Alpha 102 → 103 path. This
 does not yet prove database migration on live application data or deployed
 adjacent-version compatibility; those beta gates remain open.
+Alpha 105 extends the published adjacent-version rehearsal to PostgreSQL.
+It migrates the older generated schema, seeds two tenant-owned records,
+upgrades source and migrations with the next published CLI, verifies both
+records and forced RLS survive, and runs the generated RLS integration suite
+before source finalization. The test uses a fresh disposable database and
+does not claim deployed Neon migration or production data compatibility.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
