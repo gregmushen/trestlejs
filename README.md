@@ -136,6 +136,8 @@ That creates an application-owned vertical slice containing:
 - a TanStack Query/Form screen at `/articles`;
 - contract tests and read-only resource metadata.
 
+Remote native outbound webhook delivery is a [known issue](docs/WEBHOOK_EGRESS_RUNTIME.md): Cloudflare Workers reject the current IP-pinned HTTPS socket transport. It is disabled by default in preview, staging, and production, and Doctor blocks enabling it. Local signed delivery capture and tests remain available.
+
 Inspect what Trestle sees without spelunking through the repository:
 
 ```bash
