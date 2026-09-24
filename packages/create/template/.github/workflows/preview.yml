@@ -57,6 +57,16 @@ jobs:
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           TRESTLE_WRANGLER_CONFIG: apps/worker/.trestle-queues.wrangler.jsonc
+      - name: Verify preview Resend and Stripe credentials before provisioning
+        run: |
+          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env preview --raw)"
+          echo "::add-mask::$RESEND_API_KEY"
+          export STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env preview --raw)"
+          echo "::add-mask::$STRIPE_SECRET_KEY"
+          node scripts/transactional-provider-preflight.mjs
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          TRESTLE_STRIPE_MODE: test
       - name: Provision isolated preview Queues
         run: node scripts/cloudflare-queues.mjs ensure "${{ steps.preview.outputs.worker_name }}"
         env:

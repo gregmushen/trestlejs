@@ -856,6 +856,14 @@ Alpha 112 adds PostgreSQL-backed retry evidence for the generated
 second execution completes it, and replay does not run the handler again.
 This exercises the real generated Workflow handler locally; a live Cloudflare
 Workflow retry remains part of the open staging evidence gate.
+Alpha 113 adds a read-only Resend/Stripe credential preflight to generated
+preview, staging, and production deployment workflows before resource
+provisioning. It checks active API access and test/live key separation without
+printing credentials. The canary's encrypted preview/staging Resend key is
+currently rejected by Resend, and its Stripe test restricted key is rejected
+by Stripe (HTTP 401); these external credentials must be replaced before the
+deployed beta gates can pass. A live Stripe publishable key does not satisfy
+the required staging `pk_test_` configuration.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

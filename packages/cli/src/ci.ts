@@ -123,6 +123,16 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.preview.deployment-evidence", (preview.match(/github-deployment\.mjs/gu) ?? []).length >= 2, "preview publishes and deactivates URL-bearing GitHub Deployments"));
   checks.push(check("ci.preview.isolated-database", preview.includes("neon-preview.mjs ensure") && preview.includes("neon-preview.mjs delete") && preview.includes("steps.runtime-role.outputs.runtime_url"), "preview provisions, configures, uses, and deletes an isolated Neon branch"));
   checks.push(check("ci.preview.provider-preflight", preview.includes("cloudflare-preflight.mjs") && /^\s+node scripts\/neon-preflight\.mjs\s*$/mu.test(preview) && /- id: cloudflare_access\n\s+name:[^\n]+\n\s+continue-on-error: true/u.test(preview) && /- id: neon_access\n\s+name:[^\n]+\n\s+continue-on-error: true/u.test(preview) && occursInOrder(preview, "Verify Cloudflare access before provisioning", "Verify Neon project access before provisioning") && occursInOrder(preview, "Verify Neon project access before provisioning", "Require both provider access checks") && occursInOrder(preview, "Require both provider access checks", "Validate preview configuration") && occursInOrder(preview, "Validate preview configuration", "Provision isolated Neon branch") && preview.includes("steps.cloudflare_access.outcome") && preview.includes("steps.neon_access.outcome") && preview.includes('CLOUDFLARE_WORKERS_SUBDOMAIN: "${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}"'), "preview independently verifies Cloudflare and Neon access before configuration gates and provisioning"));
+  checks.push(check("ci.preview.transactional-provider-preflight",
+    preview.includes("node scripts/transactional-provider-preflight.mjs")
+    && preview.includes("trestle secrets get RESEND_API_KEY --env preview --raw")
+    && preview.includes("trestle secrets get STRIPE_SECRET_KEY --env preview --raw")
+    && preview.includes('TRESTLE_STRIPE_MODE: test')
+    && preview.includes('echo "::add-mask::$RESEND_API_KEY"')
+    && preview.includes('echo "::add-mask::$STRIPE_SECRET_KEY"')
+    && occursInOrder(preview, "Validate preview configuration", "Verify preview Resend and Stripe credentials before provisioning")
+    && occursInOrder(preview, "Verify preview Resend and Stripe credentials before provisioning", "Provision isolated preview Queues"),
+  "preview verifies encrypted Resend and Stripe credentials before resource provisioning"));
   checks.push(check("ci.preview.encrypted-neon-credential", (preview.match(/trestle secrets get NEON_API_KEY --env preview --raw/gu) ?? []).length >= 2 && !preview.includes("secrets.NEON_API_KEY"), "preview creation and teardown use the declared encrypted Neon CI credential"));
   checks.push(check("ci.preview.dynamic-auth-url", preview.includes("Bind Better Auth to the isolated preview application") && preview.includes("steps.preview.outputs.app_url") && preview.includes("secret put BETTER_AUTH_URL"), "preview binds Better Auth to its isolated application URL"));
   checks.push(check("ci.preview.queues", preview.includes("queue-config.mjs render preview") && preview.includes("cloudflare-queues.mjs ensure") && preview.includes("cloudflare-queues.mjs delete-preview") && preview.includes("deploy --config .trestle-queues.wrangler.jsonc --env preview"), "preview prepares isolated Queue bindings, provisions Queues, and cleans them up"));
@@ -135,6 +145,17 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.deploy.operational-smoke", deploy.includes("TRESTLE_DEPLOY_ENV: staging") && deploy.includes("TRESTLE_DEPLOY_ENV: production"), "staging and production smoke verify their operational environments"));
   const stagingDeploy = deploy.slice(0, deploy.indexOf("  production:"));
   const productionDeploy = deploy.slice(deploy.indexOf("  production:"));
+  checks.push(check("ci.deploy.transactional-provider-preflight",
+    ([[stagingDeploy, "staging", "test", "Provision staging Queues"], [productionDeploy, "production", "live", "Provision production Queues"]] as const).every(([source, environment, mode, provision]) =>
+      source.includes("node scripts/transactional-provider-preflight.mjs")
+      && source.includes(`trestle secrets get RESEND_API_KEY --env ${environment} --raw`)
+      && source.includes(`trestle secrets get STRIPE_SECRET_KEY --env ${environment} --raw`)
+      && source.includes(`TRESTLE_STRIPE_MODE: ${mode}`)
+      && source.includes('echo "::add-mask::$RESEND_API_KEY"')
+      && source.includes('echo "::add-mask::$STRIPE_SECRET_KEY"')
+      && occursInOrder(source, `Verify ${environment} configuration and Cloudflare access`, `Verify ${environment} Resend and Stripe credentials before provisioning`)
+      && occursInOrder(source, `Verify ${environment} Resend and Stripe credentials before provisioning`, provision)),
+  "staging and production verify encrypted Resend and Stripe access before provisioning"));
   checks.push(check("ci.deploy.async-resources-verified", [stagingDeploy, productionDeploy].every((source) =>
     occursInOrder(source, "node scripts/smoke.mjs", "cloudflare-queues.mjs verify")
     && occursInOrder(source, "cloudflare-queues.mjs verify", "cloudflare-r2.mjs verify")

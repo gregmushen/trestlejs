@@ -268,7 +268,9 @@ an isolated Neon branch and unpooled runtime URL (required for PostgreSQL
 startup role options); closure deletes that branch. The preview workflow checks
 Cloudflare and Neon access independently before Doctor or resource creation.
 Doctor then requires real Resend and Stripe test-mode configuration before the
-preview can deploy; provider access alone does not mark a preview as ready.
+preview can deploy. A read-only provider preflight checks that the encrypted
+Resend and Stripe keys are active and have the required read access before
+provisioning; provider access alone does not mark a preview as ready.
 Stripe readiness requires a price ID for every declared plan, a matching
 test/live publishable key, and a safe HTTPS billing return URL. An empty or
 partial `STRIPE_PRICES` map is not deployment-ready. `trestle payments stripe
@@ -276,8 +278,9 @@ sync --env staging` reports the intended mapping before it is applied to the
 environment configuration.
 The Stripe server key may be a full `sk_test_`/`sk_live_` key or a restricted
 `rk_test_`/`rk_live_` key with the permissions your application actually uses.
-Doctor checks the environment prefix; the protected staging provider gate
-checks relevant read access. Verify write permissions through a controlled
+Doctor checks the environment prefix; deployment preflight checks live API
+read access, and the protected staging provider gate checks a redirected send
+and test-mode Checkout. Verify write permissions through a controlled
 test-mode Checkout and webhook run before treating billing as production-ready.
 For Stripe test/live mode, the signed subscription webhook is a notification:
 the Worker retrieves the current subscription before projecting local billing
