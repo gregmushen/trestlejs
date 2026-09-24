@@ -37,6 +37,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           TRESTLE_WRANGLER_CONFIG: apps/worker/.trestle-queues.wrangler.jsonc
+      - name: Verify staging Resend and Stripe credentials before provisioning
+        run: |
+          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env staging --raw)"
+          echo "::add-mask::$RESEND_API_KEY"
+          export STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env staging --raw)"
+          echo "::add-mask::$STRIPE_SECRET_KEY"
+          node scripts/transactional-provider-preflight.mjs
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          TRESTLE_STRIPE_MODE: test
       - name: Provision staging Queues
         run: node scripts/cloudflare-queues.mjs ensure __TRESTLE_PROJECT_NAME__-worker-staging
         env:
@@ -208,6 +218,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           TRESTLE_WRANGLER_CONFIG: apps/worker/.trestle-queues.wrangler.jsonc
+      - name: Verify production Resend and Stripe credentials before provisioning
+        run: |
+          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env production --raw)"
+          echo "::add-mask::$RESEND_API_KEY"
+          export STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env production --raw)"
+          echo "::add-mask::$STRIPE_SECRET_KEY"
+          node scripts/transactional-provider-preflight.mjs
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          TRESTLE_STRIPE_MODE: live
       - name: Provision production Queues
         run: node scripts/cloudflare-queues.mjs ensure __TRESTLE_PROJECT_NAME__-worker
         env:

@@ -112,3 +112,61 @@ test("Neon preflight rejects an invalid key or mismatched project", async () => 
     assert.match(result.stderr, /did not return the configured project/u);
   });
 });
+
+function transactionalEnvironment(base, overrides = {}) {
+  return {
+    TRESTLE_RESEND_API_BASE: base,
+    TRESTLE_STRIPE_API_BASE: base,
+    TRESTLE_STRIPE_MODE: "test",
+    RESEND_API_KEY: "re_test-resend-key",
+    STRIPE_SECRET_KEY: "rk_test_stripe_key",
+    ...overrides,
+  };
+}
+
+test("transactional provider preflight verifies read access without exposing credentials", async () => {
+  await withApi((request) => request.url === "/domains"
+    ? { body: { data: [] } }
+    : { body: { object: "list", data: [] } }, async (base, requests) => {
+    const result = await runScript("./transactional-provider-preflight.mjs", transactionalEnvironment(base));
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(requests, [
+      { path: "/domains", authorization: "Bearer re_test-resend-key" },
+      { path: "/v1/prices?limit=1", authorization: "Bearer rk_test_stripe_key" },
+    ]);
+    assert.doesNotMatch(result.stdout + result.stderr, /re_test-resend-key|rk_test_stripe_key/u);
+  });
+});
+
+test("transactional provider preflight rejects revoked Resend key before contacting Stripe", async () => {
+  await withApi(() => ({ status: 401 }), async (base, requests) => {
+    const result = await runScript("./transactional-provider-preflight.mjs", transactionalEnvironment(base));
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Resend rejected the configured credential \(HTTP 401\)/u);
+    assert.deepEqual(requests.map(({ path }) => path), ["/domains"]);
+    assert.doesNotMatch(result.stdout + result.stderr, /re_test-resend-key|rk_test_stripe_key/u);
+  });
+});
+
+test("transactional provider preflight rejects unauthorized Stripe read access", async () => {
+  await withApi((request) => request.url === "/domains"
+    ? { body: { data: [] } }
+    : { status: 403 }, async (base) => {
+    const result = await runScript("./transactional-provider-preflight.mjs", transactionalEnvironment(base));
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Stripe rejected the configured credential \(HTTP 403\)/u);
+    assert.doesNotMatch(result.stdout + result.stderr, /re_test-resend-key|rk_test_stripe_key/u);
+  });
+});
+
+test("transactional provider preflight enforces test/live mode before network access", async () => {
+  await withApi(() => ({ body: { data: [] } }), async (base, requests) => {
+    const result = await runScript("./transactional-provider-preflight.mjs", transactionalEnvironment(base, {
+      TRESTLE_STRIPE_MODE: "live",
+    }));
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /STRIPE_SECRET_KEY must be a live-mode/u);
+    assert.equal(requests.length, 0);
+    assert.doesNotMatch(result.stdout + result.stderr, /re_test-resend-key|rk_test_stripe_key/u);
+  });
+});
