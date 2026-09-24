@@ -26,6 +26,12 @@ export function artifactSigner(environment: AuthEnvironment) {
   return createArtifactSigner(secret);
 }
 
+export function publicArtifactUrl(signedPath: string, environment: AuthEnvironment, requestUrl: string): string {
+  // Pages forwards API requests under the app hostname, but signed downloads
+  // use a Worker route that Pages does not proxy.
+  return new URL(signedPath, environment.BETTER_AUTH_URL ?? requestUrl).toString();
+}
+
 export function artifactRuntimeReady(environment: AuthEnvironment): boolean {
   return !environment.APP_ENV || environment.APP_ENV === "local"
     || Boolean(environment.TRESTLE_ARTIFACTS && environment.ARTIFACT_SIGNING_SECRET
