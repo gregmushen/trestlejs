@@ -1,11 +1,14 @@
-import { memberDefaultApplicationRoles, organizationCreatorApplicationRoles } from "@__TRESTLE_PROJECT_NAME__/authz";
-import { createDatabase, createTenantDatabase, grantApplicationRoles, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
+import { assuranceForEndpoint, memberDefaultApplicationRoles, organizationCreatorApplicationRoles, securityEventForEndpoint } from "@__TRESTLE_PROJECT_NAME__/authz";
+import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createDatabase, createTenantDatabase, grantApplicationRoles, recordAssurance, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import * as schema from "@__TRESTLE_PROJECT_NAME__/db";
 import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate, type R2BucketBinding } from "@__TRESTLE_PROJECT_NAME__/integrations";
+import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { organization } from "better-auth/plugins";
+import { createAuthMiddleware } from "better-auth/api";
+import { organization, twoFactor } from "better-auth/plugins";
 
 export interface AuthEnvironment {
   DATABASE_URL: string;
@@ -33,7 +36,10 @@ export interface AuthEnvironment {
   ARTIFACT_READY_RETENTION_DAYS?: string;
 }
 
-export function createAuth(environment: AuthEnvironment) {
+/** `factors` enables TOTP, backup codes, and passkeys; only the admin surface turns it on for now. */
+export type AuthOptions = Readonly<{ factors?: boolean }>;
+
+export function createAuth(environment: AuthEnvironment, options: AuthOptions = {}) {
   const baseURL = environment.BETTER_AUTH_URL ?? "http://localhost:42069";
   const webOrigin = environment.WEB_ORIGIN ?? baseURL;
   const email = createEmailService({
@@ -71,6 +77,29 @@ export function createAuth(environment: AuthEnvironment) {
         template: verifyEmailTemplate({ verificationUrl: url }),
       }, { idempotencyKey: `auth-verification:${await fingerprint(url)}` }); },
     },
+    hooks: {
+      // Record how each new session was authenticated, and audit account-security changes.
+      after: createAuthMiddleware(async (context) => {
+        const created = context.context.newSession;
+        const event = securityEventForEndpoint(context.path);
+        // Most auth requests (get-session, sign-out) write nothing; open a connection only when needed.
+        if (!created && !event) return;
+        if (created) await recordAssurance(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), { sessionId: created.session.id, userId: created.user.id, ...assuranceForEndpoint(context.path) });
+        const actor = context.context.session?.user.id ?? created?.user.id;
+        const returned = context.context.returned as { status?: number } | undefined;
+        if (event && actor && !(returned instanceof Error) && (returned?.status ?? 200) < 400) await recordSecurityEvent(environment, event, actor);
+      }),
+    },
+    databaseHooks: {
+      user: {
+        update: {
+          // Enrollment completes when the first code verifies; sign-in challenges never update the user.
+          after: async (user, context) => {
+            if (context?.path?.startsWith("/two-factor/verify-") && (user as { twoFactorEnabled?: boolean }).twoFactorEnabled) await recordSecurityEvent(environment, "security.two_factor.enabled", user.id);
+          },
+        },
+      },
+    },
     plugins: [organization({
       sendInvitationEmail: async ({ email: address, id, organization: invitedOrganization }) => { await email.send({
         to: address,
@@ -93,8 +122,25 @@ export function createAuth(environment: AuthEnvironment) {
           await grantMembershipRoles(environment, joined.id, user.id, memberDefaultApplicationRoles, "policy:member_default");
         },
       },
-    })],
+    }),
+    ...(options.factors ? [
+      // Passkeys (WebAuthn) bound to the origin serving this auth instance.
+      passkey({ rpID: new URL(webOrigin).hostname, rpName: "__TRESTLE_PROJECT_NAME__", origin: webOrigin }),
+      // TOTP and backup codes; Better Auth encrypts the secret and codes at rest.
+      twoFactor({ issuer: "__TRESTLE_PROJECT_NAME__" }),
+    ] : [])],
   });
+}
+
+/** Records an organization-less security.* event through the SECURITY DEFINER function (migration 0032). */
+async function recordSecurityEvent(environment: AuthEnvironment, name: string, userId: string): Promise<void> {
+  // The credential change is already committed when this runs, so a failed audit write is logged, not thrown.
+  try {
+    await createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER)
+      .execute(sql`select trestle_record_security_event(${name}, ${userId}, ${`auth:${crypto.randomUUID()}`}, ${environment.APP_ENV ?? "local"})`);
+  } catch (error) {
+    createLogger({ surface: "auth" }).error("security.audit.record_failed", { event: name, errorName: error instanceof Error ? error.name : "unknown" });
+  }
 }
 
 async function memberCount(environment: AuthEnvironment, organizationId: string): Promise<number> {

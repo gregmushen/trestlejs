@@ -21,6 +21,7 @@ import * as webhookSecretSchema from "./webhook-secret-schema.js";
 
 export * from "./access-schema.js";
 export * from "./assurance-schema.js";
+export * from "./assurance.js";
 export * from "./application-roles.js";
 export * from "./audit-schema.js";
 export * from "./audit.js";

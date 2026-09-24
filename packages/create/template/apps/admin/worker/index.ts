@@ -50,7 +50,7 @@ export const adminDependencies = {
 
 function adminAuth(environment: AdminEnvironment) {
   // The same accounts sign in on a separate origin with separate cookies; customer sessions never reach the admin.
-  return createAuth({ ...environment, BETTER_AUTH_URL: environment.ADMIN_API_URL ?? "http://localhost:8788", WEB_ORIGIN: environment.ADMIN_ORIGIN ?? "http://localhost:42070", EMAIL_DELIVERY_MODE: "local" } as AuthEnvironment);
+  return createAuth({ ...environment, BETTER_AUTH_URL: environment.ADMIN_API_URL ?? "http://localhost:8788", WEB_ORIGIN: environment.ADMIN_ORIGIN ?? "http://localhost:42070", EMAIL_DELIVERY_MODE: "local" } as AuthEnvironment, { factors: true });
 }
 
 function platformConnection(environment: AdminEnvironment): string {
