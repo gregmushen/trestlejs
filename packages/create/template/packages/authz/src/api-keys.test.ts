@@ -11,7 +11,7 @@ describe("scoped API keys", () => {
     expect(live.displayPrefix).toBe(`tr_live_${live.publicId}`);
     expect(dev.token.startsWith("tr_dev_")).toBe(true);
     expect(live.verifier).toMatch(/^[a-f0-9]{64}$/u);
-    expect(live.verifier).not.toContain(live.token.split("_").at(-1));
+    expect(live.verifier).not.toContain(live.token.slice(-43));
     expect(parseApiKey(live.token)).toEqual({ environmentPrefix: "live", publicId: live.publicId });
     expect(parseApiKey("tr_live_short_secret")).toBeNull();
     expect(await verifyApiKey(live.token, live.verifier)).toBe(true);

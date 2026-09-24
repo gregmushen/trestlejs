@@ -67,6 +67,8 @@ suite("service accounts and scoped API keys", () => {
     expect(minted.status).toBe(201);
     expect(minted.body.token).toMatch(/^tr_dev_/u);
     const token = minted.body.token as string;
+    // The secret is the final 43 base64url characters; it may itself contain "_".
+    const secret = token.slice(-43);
 
     // Authorized for resource.read: the artifact simply does not exist.
     expect((await call("GET", "/api/artifacts/missing/access", { token })).status).toBe(404);
@@ -76,7 +78,7 @@ suite("service accounts and scoped API keys", () => {
     expect((await call("GET", "/api/artifacts/missing/access", { token, tenant: orgB })).status).toBe(404);
 
     const listed = await call("GET", "/api/tenant/service-accounts");
-    expect(JSON.stringify(listed.body)).not.toContain(token.split("_").at(-1));
+    expect(JSON.stringify(listed.body)).not.toContain(secret);
     state.userId = users.outsider;
     state.organizationId = orgB;
     expect((await call("POST", `/api/tenant/api-keys/${minted.body.id}/revoke`, { body: { reason: "not mine" } })).status).toBe(404);
@@ -94,7 +96,7 @@ suite("service accounts and scoped API keys", () => {
 
     const events = await sql!`select name, actor_type, reason, summary from audit_event where organization_id = ${orgA} order by occurred_at`;
     expect(events.map((event) => event.name)).toEqual(["access.service_account.created", "access.api_key.minted", "access.api_key.rotated", "access.api_key.revoked"]);
-    expect(JSON.stringify(events)).not.toContain(token.split("_").at(-1));
+    expect(JSON.stringify(events)).not.toContain(secret);
     expect(events.at(-1)).toMatchObject({ actor_type: "user", reason: "integration finished" });
   });
 });
