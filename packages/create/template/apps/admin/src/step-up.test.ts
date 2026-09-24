@@ -42,6 +42,9 @@ describe("step-up", () => {
     expect(!unreadable.ok && unreadable.error).toMatch(/Could not confirm which account/u);
     // A sign-out that fails says so, rather than claiming the account is gone.
     const stuck = await confirmStepUpIdentity("op-1", "passkey", { currentUserId: async () => "op-2", signOut: async () => { throw new Error("offline"); } });
-    expect(!stuck.ok && stuck.error).toBe("Could not sign that account out; close this browser tab.");
+    expect(stuck).toEqual({ ok: false, signedOut: false, error: "Could not sign that account out; close this browser tab." });
+    // Every other refusal reports the session as gone, so the dialog can send the operator to sign-in.
+    expect(other).toMatchObject({ ok: false, signedOut: true });
+    expect(unreadable).toMatchObject({ ok: false, signedOut: true });
   });
 });

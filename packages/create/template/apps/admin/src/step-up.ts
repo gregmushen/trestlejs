@@ -56,12 +56,12 @@ export type StepUpIdentity = Readonly<{
  * out and the action is never retried as that account. When the account cannot
  * be confirmed at all, the session is signed out too (fail closed).
  */
-export async function confirmStepUpIdentity(operatorId: string, method: "passkey" | "password", identity: StepUpIdentity): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function confirmStepUpIdentity(operatorId: string, method: "passkey" | "password", identity: StepUpIdentity): Promise<{ ok: true } | { ok: false; error: string; signedOut: boolean }> {
   let current: string | null;
   let lookupFailed = false;
   try { current = await identity.currentUserId(); } catch { current = null; lookupFailed = true; }
   if (current === operatorId) return { ok: true };
-  try { await identity.signOut(); } catch { return { ok: false, error: "Could not sign that account out; close this browser tab." }; }
-  if (lookupFailed) return { ok: false, error: "Could not confirm which account signed in, so you have been signed out. Sign in again." };
-  return { ok: false, error: `That ${method === "passkey" ? "passkey" : "sign-in"} belongs to a different account, so you have been signed out. Sign in again as yourself.` };
+  try { await identity.signOut(); } catch { return { ok: false, error: "Could not sign that account out; close this browser tab.", signedOut: false }; }
+  if (lookupFailed) return { ok: false, error: "Could not confirm which account signed in, so you have been signed out. Sign in again.", signedOut: true };
+  return { ok: false, signedOut: true, error: `That ${method === "passkey" ? "passkey" : "sign-in"} belongs to a different account, so you have been signed out. Sign in again as yourself.` };
 }
