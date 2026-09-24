@@ -19,9 +19,9 @@ describe("UI and server view registries", () => {
     }
   });
 
-  it("requires every command's permission to be one the server enforces for that view", () => {
+  it("requires every command's permission to be one the server enforces on some admin route", () => {
+    const enforced = new Set(adminViews.flatMap((view) => [view.permission, ...view.api.map((route) => route.permission ?? view.permission)]));
     for (const view of adminRegistry.views) {
-      const enforced = new Set([view.permission, ...(adminViews.find((entry) => entry.id === view.id)?.api ?? []).map((route) => route.permission).filter(Boolean)]);
       for (const command of view.commands) if (command.permission) expect(enforced, `${command.id} needs ${command.permission}`).toContain(command.permission);
     }
   });

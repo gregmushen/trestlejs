@@ -75,6 +75,20 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "POST", path: "/api/admin/operations/webhooks/:organizationId/endpoints/:endpointId/disable", permission: "platform.webhooks.manage" },
     { method: "POST", path: "/api/admin/operations/webhooks/:organizationId/deliveries/:deliveryId/replay", permission: "platform.webhooks.manage" },
   ] },
+  { id: "organizations", path: "/organizations", label: "Organizations", group: "Customers", permission: "platform.organizations.read", api: [
+    { method: "GET", path: "/api/admin/organizations" },
+    { method: "GET", path: "/api/admin/organizations/:organizationId" },
+  ] },
+  { id: "users", path: "/users", label: "Users", group: "Customers", permission: "platform.users.read", api: [{ method: "GET", path: "/api/admin/users" }] },
+  { id: "audit", path: "/operations/audit", label: "Audit", group: "Operations", permission: "platform.audit.read", api: [
+    { method: "GET", path: "/api/admin/audit" },
+    { method: "GET", path: "/api/admin/audit/:id" },
+  ] },
+  { id: "platform-roles", path: "/access/platform-roles", label: "Platform Roles", group: "Access", permission: "platform.roles.read", api: [
+    { method: "GET", path: "/api/admin/platform-roles" },
+    { method: "POST", path: "/api/admin/platform-roles", permission: "platform.roles.manage" },
+    { method: "POST", path: "/api/admin/platform-roles/:userId/:role/revoke", permission: "platform.roles.manage" },
+  ] },
   { id: "support-sessions", path: "/support/sessions", label: "Support Sessions", group: "Customers", permission: "platform.support_sessions.use", api: [
     { method: "GET", path: "/api/admin/support/sessions" },
     { method: "POST", path: "/api/admin/support/sessions", permission: "platform.support_sessions.use" },

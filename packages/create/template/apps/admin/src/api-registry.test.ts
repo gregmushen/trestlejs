@@ -4,7 +4,7 @@ import { AdminViewError, adminViews, defineAdminViews } from "./api-registry";
 
 describe("admin view registry", () => {
   it("requires unique views guarded by registered platform permissions", () => {
-    expect(adminViews.map((view) => view.id)).toEqual(["overview", "health", "async", "webhooks", "support-sessions", "subscriptions", "api-keys", "artifacts"]);
+    expect(adminViews.map((view) => view.id)).toEqual(["overview", "health", "async", "webhooks", "organizations", "users", "audit", "platform-roles", "support-sessions", "subscriptions", "api-keys", "artifacts"]);
     const view = { id: "x", path: "/x", label: "X", group: "G", permission: "platform.overview.read", api: [] };
     expect(() => defineAdminViews([view, { ...view, path: "/y" }])).toThrow(AdminViewError);
     expect(() => defineAdminViews([{ ...view, permission: "organization.read" }])).toThrow("must require a platform permission");

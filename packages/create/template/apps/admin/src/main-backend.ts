@@ -1,5 +1,5 @@
 import type {
-  ActionOutcome, ServiceAccountDetail, AdminSession, ApiKeyMetadata, AuditEventJson, CapabilityStatus, DeadLetter, HealthCheck, OrganizationSummary, Overview, OverviewException,
+  ActionOutcome, AuditEvent, OrganizationMember, PlatformRoleAssignment, RoleJson, ServiceAccountDetail, UserSummary, AdminSession, ApiKeyMetadata, AuditEventJson, CapabilityStatus, DeadLetter, HealthCheck, OrganizationSummary, Overview, OverviewException,
   SubscriptionDetail, SubscriptionSummary, SupportActivity, SupportPermissionPreview, SupportProfile, SupportSession, SupportSessionSummary, WebhookEndpointDetail, WebhookEndpointSummary,
 } from "./api";
 import { features } from "./billing-model";
@@ -36,6 +36,17 @@ type WireCommercial = {
   subscription: { provider: string; plan: string; planVersion: number; status: string; currentPeriodStart: string | null; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean } | null;
   planEntitlements: string[];
   overrides: Array<{ entitlement: string; enabled: boolean; reason: string; authorId: string; effectiveAt: string; expiresAt: string | null; removedAt: string | null; removedBy: string | null; removalReason: string | null }>;
+};
+type WireOrganizationDetail = {
+  organization: { id: string; name: string; slug: string; createdAt: string };
+  members: Array<{ memberId: string; userId: string; name: string; email: string; organizationRole: string; joinedAt: string }>;
+  regional: { language: string | null; locale: string | null; timeZone: string | null; currency: string | null } | null;
+};
+type WireUsers = { users: Array<{ id: string; name: string; email: string; emailVerified: boolean; createdAt: string; memberships: Array<{ organizationId: string; organizationName: string; organizationRole: string }>; platformRoles: string[] }> };
+type WireAuditEvent = { id: string; occurredAt: string; name: string; actorType: string; actorId: string; organizationId: string | null; organizationName: string | null; targetType: string; targetId: string; reason: string | null; outcome: string; environment: string; correlationId: string; supportSessionId: string | null };
+type WirePlatformRoles = {
+  assignments: Array<{ id: string; userId: string; email: string | null; name: string | null; role: string; grantedAt: string; grantedBy: string; reason: string; revokedAt: string | null; revokedBy: string | null; revocationReason: string | null }>;
+  roles: Array<{ key: string; name: string; description: string; permissions: string[] }>;
 };
 type WireApiKeys = { keys: Array<{ id: string; organizationId: string; serviceAccountId: string; serviceAccountName: string; name: string; environment: string; displayPrefix: string; scopes: string[]; expiresAt: string | null; createdAt: string; rotatedFrom: string | null; revokedAt: string | null; revocationReason: string | null }> };
 
@@ -148,9 +159,48 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
       .filter((row) => !query || `${row.organizationName ?? ""} ${row.organizationId} ${row.plan}`.toLowerCase().includes(query));
   };
 
+  const auditEvent = (event: WireAuditEvent): AuditEvent => ({
+    id: event.id, name: event.name, occurredAt: event.occurredAt, actor: event.actorId, actorType: event.actorType, organizationId: event.organizationId,
+    ...(event.organizationName ? { organizationName: event.organizationName } : {}), target: `${event.targetType}:${event.targetId}`, ...(event.reason ? { reason: event.reason } : {}),
+    outcome: event.outcome, correlationId: event.correlationId, environment: event.environment, ...(event.supportSessionId ? { supportSessionId: event.supportSessionId } : {}),
+  });
+  const platformRoleState = async (history: boolean) => await request<WirePlatformRoles>("GET", "platform-roles", undefined, { history: history ? "1" : undefined });
+
   return {
     session,
     capabilities,
+    organization: async (id: string): Promise<{ organization: OrganizationSummary & { regional?: WireOrganizationDetail["regional"] }; members: OrganizationMember[] }> => {
+      const wire = await request<WireOrganizationDetail>("GET", `organizations/${encodeURIComponent(id)}`);
+      return {
+        organization: { ...wire.organization, members: wire.members.length, regional: wire.regional },
+        // Application roles are tenant data outside the platform role's grants; organization roles are shown.
+        members: wire.members.map((entry) => ({ memberId: entry.memberId, userId: entry.userId, email: entry.email, name: entry.name, organizationRoles: [entry.organizationRole], applicationRoles: [] })),
+      };
+    },
+    users: async (q?: string): Promise<{ users: UserSummary[] }> => {
+      const wire = await request<WireUsers>("GET", "users", undefined, { q });
+      return { users: wire.users.map((entry) => ({ id: entry.id, email: entry.email, name: entry.name, emailVerified: entry.emailVerified, banned: false, createdAt: entry.createdAt, platformRoles: entry.platformRoles, memberships: entry.memberships.map((membership) => ({ organizationId: membership.organizationId, organizationName: membership.organizationName, organizationRoles: [membership.organizationRole], applicationRoles: [] })) })) };
+    },
+    audit: async (filters: { organizationId?: string; actor?: string; name?: string; correlation?: string; page?: string; pageSize?: string }) => {
+      const wire = await request<{ events: WireAuditEvent[]; total: number; page: number; pageSize: number }>("GET", "audit", undefined, filters);
+      return { ...wire, events: wire.events.map(auditEvent) };
+    },
+    auditEvent: async (id: string) => ({ event: auditEvent((await request<{ event: WireAuditEvent }>("GET", `audit/${encodeURIComponent(id)}`)).event) }),
+    roles: async (): Promise<{ organization: RoleJson[]; application: RoleJson[]; platform: RoleJson[] }> => ({
+      organization: [], application: [],
+      platform: (await platformRoleState(false)).roles.map((role) => ({ key: role.key, name: role.name, description: role.description, plane: "platform" as const, permissions: role.permissions, custom: false })),
+    }),
+    platformRoles: async (includeRevoked = false): Promise<{ assignments: PlatformRoleAssignment[] }> => ({
+      assignments: (await platformRoleState(includeRevoked)).assignments.map((entry) => ({ id: entry.id, userId: entry.userId, ...(entry.email ? { email: entry.email } : {}), ...(entry.name ? { name: entry.name } : {}), role: entry.role, grantedAt: entry.grantedAt, grantedBy: entry.grantedBy, reason: entry.reason, revokedAt: entry.revokedAt, revokedBy: entry.revokedBy })),
+    }),
+    assignPlatformRole: async (userId: string, role: string, reason: string): Promise<ActionOutcome> => {
+      await request("POST", "platform-roles", { userId, role, ...reasoned(reason) });
+      return { succeeded: [role] };
+    },
+    revokePlatformRole: async (userId: string, role: string, reason: string): Promise<ActionOutcome> => {
+      await request("POST", `platform-roles/${encodeURIComponent(userId)}/${encodeURIComponent(role)}/revoke`, reasoned(reason));
+      return { succeeded: [role] };
+    },
     features: async () => ({ features: [...features.list()] }),
     subscriptions: async (q?: string) => ({ subscriptions: await subscriptionRows(q) }),
     subscription: async (organizationId: string): Promise<SubscriptionDetail> => {

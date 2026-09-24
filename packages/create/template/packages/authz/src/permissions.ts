@@ -33,6 +33,7 @@ export const permissions = definePermissions({
 
   "platform.overview.read": { plane: "platform", description: "Read the platform overview and capability health" },
   "platform.organizations.read": { plane: "platform", description: "Search organizations and read their sanitized summaries" },
+  "platform.users.read": { plane: "platform", description: "Search users and read their verification state, memberships, and platform roles" },
   "platform.audit.read": { plane: "platform", description: "Read administrative and access audit history" },
   "platform.roles.read": { plane: "platform", description: "Read platform-role assignments" },
   "platform.roles.manage": { plane: "platform", description: "Grant and revoke platform roles" },

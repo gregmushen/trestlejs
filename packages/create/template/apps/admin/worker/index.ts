@@ -1,10 +1,11 @@
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { AccessDeniedError, platformAccess, publicDenial, type AccessEvaluator } from "@__TRESTLE_PROJECT_NAME__/authz";
+import { AccessDeniedError, platformAccess, platformRoles, publicDenial, type AccessEvaluator } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportableOrganizations, supportOrganizationView,
+  grantPlatformRole, listPlatformAuditEvents, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
   listPlatformApiKeys, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   type DatabaseDriver, type PlatformChangeContext,
 } from "@__TRESTLE_PROJECT_NAME__/db";
@@ -230,6 +231,64 @@ admin.post("/api/admin/commercial/subscriptions/:organizationId/overrides/:entit
   return context.json({ revoked: true, correlationId: context.get("correlationId") });
 });
 
+admin.get("/api/admin/organizations/:organizationId", async (context) => {
+  const database = platformDatabase(context.env);
+  const detail = await platformOrganizationDetail(database, context.req.param("organizationId"));
+  if (!detail) throw new PlatformOperationError("not_found", "Organization not found");
+  const regional = await organizationRegionalOverrides(database, detail.organization.id).catch(() => null);
+  return context.json({
+    organization: { ...detail.organization, slug: detail.organization.slug ?? "", createdAt: detail.organization.createdAt.toISOString() },
+    members: detail.members.map((entry) => ({ ...entry, joinedAt: entry.joinedAt.toISOString() })),
+    regional,
+  });
+});
+
+admin.get("/api/admin/users", async (context) => {
+  const users = await listPlatformUsers(platformDatabase(context.env), { query: context.req.query("q") ?? "" });
+  return context.json({ users: users.map((entry) => ({ ...entry, createdAt: entry.createdAt.toISOString() })) });
+});
+
+const auditJson = (event: Awaited<ReturnType<typeof platformAuditEvent>> & object) => ({ ...event, occurredAt: event.occurredAt.toISOString() });
+
+admin.get("/api/admin/audit", async (context) => {
+  const query = (name: string) => context.req.query(name) || undefined;
+  const result = await listPlatformAuditEvents(platformDatabase(context.env), {
+    ...(query("organizationId") ? { organizationId: query("organizationId")! } : {}), ...(query("actor") ? { actor: query("actor")! } : {}),
+    ...(query("name") ? { name: query("name")! } : {}), ...(query("correlation") ? { correlationId: query("correlation")! } : {}),
+    page: Number(query("page") ?? 1), pageSize: Number(query("pageSize") ?? 50),
+  });
+  return context.json({ ...result, events: result.events.map(auditJson) });
+});
+
+admin.get("/api/admin/audit/:id", async (context) => {
+  const event = await platformAuditEvent(platformDatabase(context.env), context.req.param("id"));
+  if (!event) throw new PlatformOperationError("not_found", "Audit event not found");
+  return context.json({ event: auditJson(event) });
+});
+
+admin.get("/api/admin/platform-roles", async (context) => {
+  const assignments = await listPlatformRoleAssignments(platformDatabase(context.env), { history: context.req.query("history") === "1" });
+  return context.json({
+    assignments: assignments.map((entry) => ({ ...entry, grantedAt: entry.grantedAt.toISOString(), revokedAt: iso(entry.revokedAt) })),
+    roles: platformRoles.list().map((role) => ({ key: role.key, name: role.name, description: role.description, permissions: role.permissions })),
+  });
+});
+
+admin.post("/api/admin/platform-roles", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { userId?: unknown; role?: unknown; reason?: unknown };
+  if (typeof body.userId !== "string" || !body.userId) throw new PlatformOperationError("invalid", "Choose a user");
+  if (typeof body.role !== "string" || !platformRoles.get(body.role)) throw new PlatformOperationError("invalid", "Choose a platform role the application defines");
+  await grantPlatformRole(platformDatabase(context.env), { userId: body.userId, role: body.role }, await actionContext(context, body));
+  return context.json({ granted: true, correlationId: context.get("correlationId") });
+});
+
+admin.post("/api/admin/platform-roles/:userId/:role/revoke", async (context) => {
+  // An operator cannot remove their own platform authority; another administrator must.
+  if (context.req.param("userId") === context.get("operator").id) throw new PlatformOperationError("invalid", "Ask another security administrator to revoke your own platform role");
+  await revokePlatformRole(platformDatabase(context.env), { userId: context.req.param("userId"), role: context.req.param("role") }, await actionContext(context));
+  return context.json({ revoked: true, correlationId: context.get("correlationId") });
+});
+
 admin.get("/api/admin/support/sessions", async (context) => {
   const database = platformDatabase(context.env);
   const [sessions, organizations] = await Promise.all([listSupportSessions(database, { operatorId: context.get("operator").id }), supportableOrganizations(database)]);
@@ -346,7 +405,7 @@ admin.get("/api/admin/health", async (context) => {
 const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const;
 
 admin.onError((error, context) => {
-  if (error instanceof PlatformOperationError || error instanceof MachineAccessError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code]);
+  if (error instanceof PlatformOperationError || error instanceof MachineAccessError || error instanceof PlatformRoleError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code as keyof typeof operationStatus] ?? 400);
   createLogger({ correlationId: context.get("correlationId"), surface: "admin" }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);
 });
