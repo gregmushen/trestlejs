@@ -9,7 +9,7 @@ import { TrestleWorkflow } from "./cloudflare-workflow.js";
 import { runArtifactReferenceAudit } from "./artifact-reference-audit.js";
 import { runArtifactOrphanAudit } from "./artifact-orphan-audit.js";
 import { projectWebhookForEvent } from "./webhook-runtime.js";
-import worker, { app } from "./index.js";
+import worker, { app, eventConsumers } from "./index.js";
 
 const databaseUrl = process.env.TRESTLE_SYSTEM_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -260,6 +260,34 @@ suite("local product path", () => {
         expect(duplicateDelivery).toEqual(["ack"]);
         const [inbox] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, outbox!.idempotencyKey)).limit(1);
         expect(inbox).toMatchObject({ status: "completed", attempts: 1 });
+        const retryKey = `system.workflow.retry:${article.id}`;
+        const retryEnvelope: EventEnvelope = {
+          id: crypto.randomUUID(), name: "system.workflow.retry", schemaVersion: 1,
+          occurredAt: new Date().toISOString(), resource: { type: "workflow_test", id: crypto.randomUUID() },
+          correlationId: crypto.randomUUID(), idempotencyKey: retryKey,
+          payload: { resourceId: article.id },
+        };
+        let handlerAttempts = 0;
+        eventConsumers.register({
+          name: retryEnvelope.name, schemaVersion: 1,
+          parse: (payload: unknown) => {
+            if (!payload || typeof payload !== "object" || (payload as { resourceId?: unknown }).resourceId !== article.id) throw new Error("Invalid workflow retry payload");
+            return payload;
+          },
+        }, async () => { if (++handlerAttempts === 1) throw new Error("Transient workflow handler failure"); });
+        const retryStore = new PostgresOutboxStore(databaseUrl!, { assumeApplicationRole: true });
+        try { await retryStore.append(retryEnvelope, { organizationId: organizationId! }); }
+        finally { await retryStore.close(); }
+        const retryWorkflow = Object.assign(new TrestleWorkflow(), { env: environment });
+        const retryEvent = { payload: retryEnvelope, instanceId: retryEnvelope.id, timestamp: new Date(), workflowName: "retry-test-workflow" };
+        await expect(retryWorkflow.run(retryEvent, step)).rejects.toThrow("Workflow handler failed");
+        const [released] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, retryKey)).limit(1);
+        expect(released).toMatchObject({ status: "processing", attempts: 1, lastError: "Error" });
+        await retryWorkflow.run(retryEvent, step);
+        await retryWorkflow.run(retryEvent, step);
+        const [completedRetry] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, retryKey)).limit(1);
+        expect(completedRetry).toMatchObject({ status: "completed", attempts: 2, lastError: null });
+        expect(handlerAttempts).toBe(2);
         const invalidDelivery: string[] = [];
         expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: 42 } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 0, retried: 1 });
         expect(invalidDelivery).toEqual(["retry"]);
@@ -396,6 +424,8 @@ suite("local product path", () => {
         await database.delete(webhookEndpoint).where(eq(webhookEndpoint.id, webhookEndpointId));
       }
       if (articleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${articleId}`));
+      if (articleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `system.workflow.retry:${articleId}`));
+      if (articleId) await database.delete(outboxMessage).where(eq(outboxMessage.idempotencyKey, `system.workflow.retry:${articleId}`));
       if (secondArticleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${secondArticleId}`));
       if (articleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, articleId));
       if (secondArticleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, secondArticleId));
