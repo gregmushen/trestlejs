@@ -897,6 +897,9 @@ That deeper gate also caught a preview auth URL mistake: Better Auth was
 generating email links on the static Pages app domain rather than the Worker
 API domain. Preview now binds `BETTER_AUTH_URL` to the API origin and keeps the
 app origin in `WEB_ORIGIN`.
+The published Alpha 114 → 115 upgrade rehearsal narrowly reviews the three
+preview secret-target changes against the recorded Alpha 114 workflow hash;
+unrelated protected workflow edits remain manual-review gates.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
