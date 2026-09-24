@@ -17,6 +17,7 @@ import { cors } from "hono/cors";
 
 import { adminViews, type AdminCapability } from "../src/api-registry.js";
 import { databaseReachable, overview, platformRolesFor, strongestEnrolledFactor } from "./data.js";
+import { adminFactorPlugins } from "./factors.js";
 import { adminPolicyFor } from "./route-policies.js";
 
 export type AdminEnvironment = {
@@ -54,9 +55,19 @@ export const adminDependencies = {
   },
 };
 
+/**
+ * Better Auth for the admin origin. The same accounts sign in here with their own cookies, but the secret
+ * and session table are shared with the customer app, so a customer-app session cookie is also a valid
+ * session here. APP_ENV is the admin's fail-closed reading, so security events are never labelled local by default.
+ */
+export function adminAuthEnvironment(environment: AdminEnvironment): AuthEnvironment {
+  return { ...environment, APP_ENV: adminEnvironment(environment), BETTER_AUTH_URL: environment.ADMIN_API_URL ?? "http://localhost:8788", WEB_ORIGIN: environment.ADMIN_ORIGIN ?? "http://localhost:42070", EMAIL_DELIVERY_MODE: "local" } as AuthEnvironment;
+}
+
 function adminAuth(environment: AdminEnvironment) {
-  // The same accounts sign in on a separate origin with separate cookies; customer sessions never reach the admin.
-  return createAuth({ ...environment, BETTER_AUTH_URL: environment.ADMIN_API_URL ?? "http://localhost:8788", WEB_ORIGIN: environment.ADMIN_ORIGIN ?? "http://localhost:42070", EMAIL_DELIVERY_MODE: "local" } as AuthEnvironment, { factors: true });
+  const settings = adminAuthEnvironment(environment);
+  // TOTP, backup codes, and passkeys exist only on the admin; the customer Worker never bundles them.
+  return createAuth(settings, { plugins: adminFactorPlugins(settings.WEB_ORIGIN!) });
 }
 
 /** Better Auth's own tables (sessions, assurance, factors); one handle serves a request's lookups. */

@@ -3,12 +3,11 @@ import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
 import { createDatabase, createTenantDatabase, grantApplicationRoles, recordAssurance, sessionAssurance, type Database, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import * as schema from "@__TRESTLE_PROJECT_NAME__/db";
 import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate, type R2BucketBinding } from "@__TRESTLE_PROJECT_NAME__/integrations";
-import { passkey } from "@better-auth/passkey";
-import { betterAuth } from "better-auth";
+import { betterAuth, type BetterAuthPlugin } from "better-auth";
 import { eq, sql } from "drizzle-orm";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createAuthMiddleware } from "better-auth/api";
-import { organization, twoFactor } from "better-auth/plugins";
+import { organization } from "better-auth/plugins";
 
 export interface AuthEnvironment {
   DATABASE_URL: string;
@@ -36,8 +35,11 @@ export interface AuthEnvironment {
   ARTIFACT_READY_RETENTION_DAYS?: string;
 }
 
-/** `factors` enables TOTP, backup codes, and passkeys; only the admin surface turns it on for now. */
-export type AuthOptions = Readonly<{ factors?: boolean }>;
+/**
+ * `plugins` adds Better Auth plugins for one surface. The platform admin passes its sign-in factors
+ * (TOTP, backup codes, passkeys; apps/admin/worker/factors.ts), so the customer Worker never bundles them.
+ */
+export type AuthOptions = Readonly<{ plugins?: readonly BetterAuthPlugin[] }>;
 
 export function createAuth(environment: AuthEnvironment, options: AuthOptions = {}) {
   const baseURL = environment.BETTER_AUTH_URL ?? "http://localhost:42069";
@@ -133,12 +135,7 @@ export function createAuth(environment: AuthEnvironment, options: AuthOptions = 
         },
       },
     }),
-    ...(options.factors ? [
-      // Passkeys (WebAuthn) bound to the origin serving this auth instance.
-      passkey({ rpID: new URL(webOrigin).hostname, rpName: "__TRESTLE_PROJECT_NAME__", origin: webOrigin }),
-      // TOTP and backup codes; Better Auth encrypts the secret and codes at rest.
-      twoFactor({ issuer: "__TRESTLE_PROJECT_NAME__" }),
-    ] : [])],
+    ...(options.plugins ?? [])],
   });
 }
 

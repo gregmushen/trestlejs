@@ -2,10 +2,14 @@ import { createHmac } from "node:crypto";
 
 import { createDatabase } from "@__TRESTLE_PROJECT_NAME__/db";
 import { hashPassword } from "better-auth/crypto";
+import { twoFactor } from "better-auth/plugins";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAuth } from "./index.js";
+
+/** The admin's TOTP plugin (apps/admin/worker/factors.ts); passkeys are not needed for these flows. */
+const factors = { plugins: [twoFactor({ issuer: "test" })] };
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -115,7 +119,7 @@ suite("auth hooks against PostgreSQL", () => {
   });
 
   it("keeps an enrollment session at its prior assurance, then records MFA only for a second-factor sign-in", async () => {
-    const auth = createAuth(environment, { factors: true });
+    const auth = createAuth(environment, factors);
     const jar = new Map<string, string>();
     const signIn = await post(auth, "/sign-in/email", { email: operatorEmail, password }, jar);
     expect(signIn.status).toBe(200);
@@ -155,7 +159,7 @@ suite("auth hooks against PostgreSQL", () => {
   });
 
   it("upgrades a signed-in operator who steps up with an enrolled second factor", async () => {
-    const auth = createAuth(environment, { factors: true });
+    const auth = createAuth(environment, factors);
     await database!.execute(sql`delete from session where user_id = ${operator}`);
     const jar = new Map<string, string>();
     await post(auth, "/sign-in/email", { email: operatorEmail, password }, jar);

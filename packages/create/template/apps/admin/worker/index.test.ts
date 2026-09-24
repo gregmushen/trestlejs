@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { adminViews } from "../src/api-registry.js";
-import { admin, adminDependencies, capabilityGuidance, type AdminEnvironment } from "./index.js";
+import { admin, adminAuthEnvironment, adminDependencies, capabilityGuidance, type AdminEnvironment } from "./index.js";
 import { adminRoutePolicies } from "./route-policies.js";
 
 const environment: AdminEnvironment = { DATABASE_URL: "postgres://user:password@127.0.0.1:1/unused", DATABASE_DRIVER: "postgres-js", BETTER_AUTH_SECRET: "test-secret-at-least-32-characters", APP_ENV: "local" };
@@ -221,6 +221,12 @@ describe("platform admin Worker", () => {
     assured("password");
     const { APP_ENV: _unset, ...unset } = environment;
     expect(await call("POST", "/api/admin/operations/outbox/evt-1/redrive", { body: { reason: "retry" } }, { ...unset, DATABASE_ADMIN_URL: environment.DATABASE_URL })).toMatchObject({ status: 428, body: { required: "mfa" } });
+  });
+
+  it("gives Better Auth the admin's fail-closed environment, so security events are never labelled local by default", () => {
+    const { APP_ENV: _unset, ...unset } = environment;
+    expect(adminAuthEnvironment(unset).APP_ENV).toBe("production");
+    expect(adminAuthEnvironment({ ...environment, APP_ENV: "staging" })).toMatchObject({ APP_ENV: "staging", BETTER_AUTH_URL: "http://localhost:8788", WEB_ORIGIN: "http://localhost:42070" });
   });
 
   it("exposes no sign-up, organization, or unknown admin routes on the admin origin", async () => {
