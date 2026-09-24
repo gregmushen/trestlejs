@@ -47,7 +47,7 @@ type ContextDependencies = {
 };
 
 const defaults: ContextDependencies = {
-  getSession: async (headers, environment) => await createAuth(environment).api.getSession({ headers }) as AuthenticatedSession | null,
+  getSession: async (headers, environment) => await createAuth(environment, correlationId(headers)).api.getSession({ headers }) as AuthenticatedSession | null,
   findMembership: async (userId, organizationId, environment) => {
     const [record] = await createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER)
       .select({ role: member.role })

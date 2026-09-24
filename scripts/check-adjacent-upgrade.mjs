@@ -371,6 +371,26 @@ try {
     await writeFile(workflowPath, target);
     console.log("Reviewed the known Alpha 127 → 128 protected preview billing-return transition; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.129" && after === "0.1.0-alpha.130") {
+    // Alpha 130 replaces the unsafe preview Worker deletion path with one
+    // that first detaches Queue bindings. Protected workflows still require
+    // a baseline-matched, exact reviewed change before source-apply.
+    const relative = ".github/workflows/preview.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 129 preview workflow differs from its recorded baseline");
+    }
+    const reviewed = replaceExactlyOnce(source,
+      'run: node scripts/cloudflare-worker.mjs delete "${{ steps.preview.outputs.worker_name }}"',
+      'run: node scripts/cloudflare-worker.mjs delete-preview "${{ steps.preview.outputs.worker_name }}"');
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 130 preview workflow differs from the narrowly reviewed transition");
+    await writeFile(workflowPath, target);
+    console.log("Reviewed the known Alpha 129 → 130 protected preview cleanup transition; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });

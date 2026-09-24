@@ -86,6 +86,29 @@ const reservedFields = new Set(["timestamp", "level", "event", "schemaVersion"])
 const REDACTED = "[REDACTED]";
 export type LoggerOptions = Readonly<{ secretValues?: readonly (string | undefined)[] }>;
 
+/** Diagnostic identifiers only: never expose exception messages, stacks, or SQL. */
+export function safeErrorDiagnostic(error: unknown): Readonly<{ errorName: string; errorCode?: string; causeName?: string; causeCode?: string }> {
+  try {
+    const identifier = (value: unknown): string | undefined => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(value) ? value : undefined;
+    const code = (value: unknown): string | undefined => typeof value === "string" && /^(?:[0-9A-Z]{5}|E[A-Z0-9_]{2,31}|ERR_[A-Z0-9_]{2,31})$/u.test(value) ? value : undefined;
+    const details = (value: unknown): { name: string; code?: string } => {
+      if (!(value instanceof Error)) return { name: "UnknownError" };
+      const candidate = value as Error & { code?: unknown };
+      const safeCode = code(candidate.code);
+      return { name: identifier(value.name) ?? "UnknownError", ...(safeCode ? { code: safeCode } : {}) };
+    };
+    const current = details(error);
+    const cause = error instanceof Error ? details(error.cause) : undefined;
+    return {
+      errorName: current.name,
+      ...(current.code ? { errorCode: current.code } : {}),
+      ...(cause && cause.name !== "UnknownError" ? { causeName: cause.name, ...(cause.code ? { causeCode: cause.code } : {}) } : {}),
+    };
+  } catch {
+    return { errorName: "UnknownError" };
+  }
+}
+
 /** Collect only declared runtime credentials, never arbitrary environment values. */
 export function loggerSecretsFromEnvironment(environment: object): string[] {
   const names = ["DATABASE_URL", "DATABASE_ADMIN_URL", "DATABASE_PLATFORM_URL", "BETTER_AUTH_SECRET", "WEBHOOK_SECRET_KEY", "RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "ARTIFACT_SIGNING_SECRET"];
