@@ -50,12 +50,12 @@ export function stripePreviewClient({ apiKey, fetcher = fetch }) {
       if (!/^we_[A-Za-z0-9]+$/u.test(cursor ?? "")) throw new Error("Stripe webhook pagination identity is invalid");
     } while (true);
   }
-  async function create(url, idempotencyKey) {
+  async function create(url) {
     const body = new URLSearchParams({ url, description: "Trestle isolated preview billing webhook" });
     for (const event of events) body.append("enabled_events[]", event);
     const endpoint = await request("", {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}) },
+      headers: { "content-type": "application/x-www-form-urlencoded" },
       body,
     });
     if (!/^we_[A-Za-z0-9]+$/u.test(endpoint.id ?? "") || !/^whsec_[A-Za-z0-9]+$/u.test(endpoint.secret ?? "") || endpoint.url !== url || endpoint.livemode !== false) {
@@ -70,10 +70,10 @@ export function stripePreviewClient({ apiKey, fetcher = fetch }) {
   return { list, create, remove };
 }
 
-export async function provisionPreviewWebhook({ client, apiUrl, putSecret, idempotencyKey }) {
+export async function provisionPreviewWebhook({ client, apiUrl, putSecret }) {
   const url = previewWebhookUrl(apiUrl);
   const prior = (await client.list()).filter((endpoint) => endpoint.url === url && endpoint.livemode === false);
-  const created = await client.create(url, idempotencyKey);
+  const created = await client.create(url);
   try {
     await putSecret(created.secret);
   } catch (error) {
@@ -109,9 +109,7 @@ async function main() {
     });
     if (result.status !== 0) throw new Error(`Could not bind preview Stripe webhook secret (exit ${result.status ?? "unknown"})`);
   };
-  const runIdentity = [process.env.GITHUB_RUN_ID, process.env.GITHUB_RUN_ATTEMPT].filter(Boolean).join("-");
-  const idempotencyKey = runIdentity ? `trestle-preview-webhook-${new URL(apiUrl).hostname.split(".")[0]}-${runIdentity}` : undefined;
-  const result = await provisionPreviewWebhook({ client, apiUrl, putSecret, idempotencyKey });
+  const result = await provisionPreviewWebhook({ client, apiUrl, putSecret });
   process.stdout.write(`Provisioned Stripe test webhook ${result.id} for ${result.url}\n`);
 }
 

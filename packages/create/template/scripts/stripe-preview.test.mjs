@@ -24,15 +24,15 @@ test("provision binds the new signing secret before removing only the old exact 
   const calls = [];
   const client = {
     list: async () => [first, unrelated],
-    create: async (url, key) => { calls.push(["create", url, key]); return { id: "we_new123", secret: "whsec_new123", url, livemode: false }; },
+    create: async (url) => { calls.push(["create", url]); return { id: "we_new123", secret: "whsec_new123", url, livemode: false }; },
     remove: async (id) => { calls.push(["remove", id]); },
   };
   const result = await provisionPreviewWebhook({
-    client, apiUrl, idempotencyKey: "stable-run",
+    client, apiUrl,
     putSecret: async (secret) => { calls.push(["secret", secret]); },
   });
   assert.deepEqual(result, { id: "we_new123", url: webhookUrl, state: "provisioned" });
-  assert.deepEqual(calls, [["create", webhookUrl, "stable-run"], ["secret", "whsec_new123"], ["remove", first.id]]);
+  assert.deepEqual(calls, [["create", webhookUrl], ["secret", "whsec_new123"], ["remove", first.id]]);
 });
 
 test("failed secret binding removes the newly created endpoint and preserves the prior endpoint", async () => {
@@ -44,6 +44,24 @@ test("failed secret binding removes the newly created endpoint and preserves the
   };
   await assert.rejects(provisionPreviewWebhook({ client, apiUrl, putSecret: async () => { throw new Error("binding unavailable"); } }), /binding unavailable/u);
   assert.deepEqual(removed, ["we_new123"]);
+});
+
+test("a failed binding can be retried with a fresh endpoint and secret", async () => {
+  let attempts = 0;
+  const removed = [];
+  const client = {
+    list: async () => [first],
+    create: async () => {
+      attempts += 1;
+      return { id: `we_new${attempts}`, secret: `whsec_new${attempts}`, url: webhookUrl, livemode: false };
+    },
+    remove: async (id) => { removed.push(id); },
+  };
+  await assert.rejects(provisionPreviewWebhook({ client, apiUrl, putSecret: async () => { throw new Error("binding unavailable"); } }), /binding unavailable/u);
+  const secrets = [];
+  await provisionPreviewWebhook({ client, apiUrl, putSecret: async (secret) => { secrets.push(secret); } });
+  assert.deepEqual(secrets, ["whsec_new2"]);
+  assert.deepEqual(removed, ["we_new1", first.id]);
 });
 
 test("cleanup deletes only the exact test-mode preview webhook, accepting absence", async () => {
@@ -60,9 +78,9 @@ test("Stripe create declares only billing events and requires a fresh signing se
     requests.push({ url, options });
     return Response.json({ id: "we_new123", secret: "whsec_new123", url: webhookUrl, livemode: false });
   } });
-  assert.equal((await client.create(webhookUrl, "stable-run")).id, "we_new123");
+  assert.equal((await client.create(webhookUrl)).id, "we_new123");
   assert.equal(requests[0].options.method, "POST");
-  assert.equal(requests[0].options.headers["idempotency-key"], "stable-run");
+  assert.equal(requests[0].options.headers["content-type"], "application/x-www-form-urlencoded");
   assert.deepEqual(requests[0].options.body.getAll("enabled_events[]"), [
     "checkout.session.completed", "customer.subscription.created", "customer.subscription.updated",
     "customer.subscription.deleted", "invoice.paid", "invoice.payment_failed",
