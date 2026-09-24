@@ -255,6 +255,10 @@ state. A PostgreSQL reconciliation generation ensures an older, slower lookup
 cannot overwrite a newer one; provider calls occur outside the projection
 transaction. Local mode retains deterministic signed-fixture tests without a
 Stripe account. Provider lookup failures leave a retryable, redacted receipt.
+The provider subscription ID is also bound permanently to one organization.
+Another tenant cannot claim it through webhook metadata, an active subscription
+cannot be silently replaced by a second ID, and late events from a canceled
+subscription cannot reactivate it after a replacement.
 
 Validate the checked-in delivery contract locally with:
 

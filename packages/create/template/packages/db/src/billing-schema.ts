@@ -25,3 +25,11 @@ export const billingSubscriptionReconciliation = pgTable("billing_subscription_r
   generation: bigint("generation", { mode: "number" }).default(0).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [primaryKey({ name: "billing_subscription_reconciliation_pk", columns: [table.provider, table.providerSubscriptionId] })]);
+
+/** Immutable provider identity binding. Webhook metadata cannot move an
+ * existing subscription to another organization's entitlement projection. */
+export const billingSubscriptionOwnership = pgTable("billing_subscription_ownership", {
+  provider: text("provider").notNull(), providerSubscriptionId: text("provider_subscription_id").notNull(),
+  organizationId: text("organization_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [primaryKey({ name: "billing_subscription_ownership_pk", columns: [table.provider, table.providerSubscriptionId] })]);

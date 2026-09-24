@@ -695,6 +695,17 @@ provider outages. Local mode remains account-free. Live Stripe test-mode
 Checkout/webhook evidence, provider-subscription ownership transitions,
 billing domain event/outbox publication, and broader deployed billing tests
 remain beta work.
+Alpha 92 binds each provider subscription identity to one organization in an
+immutable application-role table, backfills existing projections at migration,
+and fails migration on ambiguous historical ownership. Concurrent events
+cannot transfer a subscription to a different tenant or replace an active
+subscription with another identity. A canceled or incomplete subscription may
+be replaced; subsequent events for the old identity are acknowledged as
+superseded without changing the new projection. PostgreSQL tests cover tenant
+transfer, active replacement, canceled replacement, late old events, and
+concurrent claims. Live provider and billing outbox evidence remain open.
+The generated release canary also selects isolated browser-test ports, so
+testing a clean project does not interrupt a developer's running Trestle app.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

@@ -1,6 +1,6 @@
 import { and, eq, notInArray, sql } from "drizzle-orm";
 
-import { billingProviderEvent, billingSubscriptionReconciliation, organizationEntitlement, organizationSubscription } from "./billing-schema.js";
+import { billingProviderEvent, billingSubscriptionOwnership, billingSubscriptionReconciliation, organizationEntitlement, organizationSubscription } from "./billing-schema.js";
 import { createDatabase, createTenantDatabase, type DatabaseDriver } from "./index.js";
 import { outboxApplicationConnectionString } from "./outbox.js";
 
@@ -74,6 +74,7 @@ export async function applyBillingProviderEvent(input: {
   reconciliation?: { providerSubscriptionId: string; generation: number };
 }): Promise<{ duplicate: boolean; superseded?: boolean }> {
   if (!input.provider || !input.providerEventId || !input.type) throw new Error("Invalid billing provider event identity");
+  if (input.projection && !input.projection.providerSubscriptionId) throw new Error("Billing projection requires a provider subscription identity");
   if (input.reconciliation && (!input.projection || input.projection.providerSubscriptionId !== input.reconciliation.providerSubscriptionId || !Number.isSafeInteger(input.reconciliation.generation))) {
     throw new Error("Invalid billing reconciliation projection");
   }
@@ -100,6 +101,33 @@ export async function applyBillingProviderEvent(input: {
       }
       if (input.projection) {
         const value = input.projection;
+        const providerSubscriptionId = value.providerSubscriptionId!;
+        // Serialize all subscriptions targeting the same organization, even
+        // when it has no projection row yet. A receipt lock only covers one
+        // provider event and cannot prevent competing Checkout sessions.
+        await transaction.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`billing:${value.organizationId}`}, 0))`);
+        const ownershipKey = and(eq(billingSubscriptionOwnership.provider, input.provider),
+          eq(billingSubscriptionOwnership.providerSubscriptionId, providerSubscriptionId));
+        const inserted = await transaction.insert(billingSubscriptionOwnership).values({
+          provider: input.provider, providerSubscriptionId, organizationId: value.organizationId,
+        }).onConflictDoNothing().returning();
+        const [owner] = await transaction.select({ organizationId: billingSubscriptionOwnership.organizationId })
+          .from(billingSubscriptionOwnership).where(ownershipKey).limit(1);
+        if (!owner || owner.organizationId !== value.organizationId) throw new Error("Billing subscription ownership conflict");
+        const [current] = await transaction.select({ provider: organizationSubscription.provider,
+          providerSubscriptionId: organizationSubscription.providerSubscriptionId, status: organizationSubscription.status })
+          .from(organizationSubscription).where(eq(organizationSubscription.organizationId, value.organizationId)).for("update").limit(1);
+        if (current?.providerSubscriptionId && (current.provider !== input.provider || current.providerSubscriptionId !== providerSubscriptionId)) {
+          if (inserted.length === 0) {
+            // An old subscription may still send valid provider events after a
+            // replacement. It must never reactivate the replaced projection.
+            await transaction.update(billingProviderEvent).set({ status: "superseded", processedAt: new Date(), error: null }).where(key);
+            return { duplicate: false, superseded: true };
+          }
+          if (current.status !== "cancelled" && current.status !== "incomplete") {
+            throw new Error("Active billing subscription cannot be replaced by another provider identity");
+          }
+        }
         const updatedAt = new Date();
         await transaction.insert(organizationSubscription).values({
           organizationId: value.organizationId, provider: input.provider, providerCustomerId: value.providerCustomerId,
