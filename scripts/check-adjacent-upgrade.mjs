@@ -40,6 +40,11 @@ async function output(command, arguments_, cwd) {
   return stdout;
 }
 
+function replaceExactlyOnce(source, before, after) {
+  if (source.split(before).length !== 2) throw new Error("Reviewed adjacent workflow transition did not match the published source exactly");
+  return source.replace(before, after);
+}
+
 try {
   await run("pnpm", ["dlx", `create-trestlejs@${before}`, project, "--no-git", "--no-install"], root);
   await run("pnpm", ["install"], project);
@@ -105,6 +110,33 @@ try {
     const reviewedPackage = templatePackage.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary").replaceAll("__TRESTLEJS_VERSION__", after);
     await writeFile(packagePath, reviewedPackage);
     console.log("Reviewed the known Alpha 106 → 107 generated package-script transition; all other source remains subject to source-apply review.");
+  }
+  if (before === "0.1.0-alpha.109" && after === "0.1.0-alpha.110") {
+    // Deployment workflows are intentionally protected from automatic source
+    // application. Rehearse a narrow human review of the published transition:
+    // the source must still match its Alpha 109 baseline, and only the three
+    // exact Alpha 110 staging-gate edits may produce the target workflow.
+    const relative = ".github/workflows/deploy.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 109 deployment workflow differs from its recorded baseline");
+    }
+    let reviewed = replaceExactlyOnce(source,
+      "  staging:\n    environment: staging\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n",
+      "  staging:\n    environment: staging\n    runs-on: ubuntu-latest\n    timeout-minutes: 25\n");
+    reviewed = replaceExactlyOnce(reviewed,
+      "      - name: Verify deployed staging signup, email, and organizations in Chromium\n",
+      "      - name: Verify deployed staging signup, email, organizations, and async delivery in Chromium\n");
+    reviewed = replaceExactlyOnce(reviewed,
+      "          echo \"::add-mask::$RESEND_API_KEY\"\n          pnpm test:staging\n",
+      "          echo \"::add-mask::$RESEND_API_KEY\"\n          export DATABASE_URL=\"$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)\"\n          echo \"::add-mask::$DATABASE_URL\"\n          pnpm test:staging\n");
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 110 deployment workflow differs from the narrowly reviewed transition");
+    await writeFile(workflowPath, target);
+    console.log("Reviewed the known Alpha 109 → 110 protected deployment workflow transition; all other source remains subject to source-apply review.");
   }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
