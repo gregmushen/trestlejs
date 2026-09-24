@@ -940,6 +940,12 @@ all five Free-plan cron slots on that account belong to active Tidal House
 Workers. No unrelated schedule was removed, and production was skipped. A
 paid-plan capacity change or an explicitly selected schedule retirement is
 required before a complete cron-enabled staging gate can pass.
+Alpha 120 adds a read-only account cron-capacity gate to the generated staging
+and production deployment workflows. It compares the rendered Worker's desired
+schedule with all account schedules before provisioning or migration. Against
+the canary's real Cloudflare account, it detected 5/5 used triggers and
+stopped before remote changes. This prevents another partial staging update,
+but does not satisfy the blocked cron-enabled staging or beta gate.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
