@@ -12,6 +12,29 @@ import { encryptSecrets } from "../src/secrets.js";
 const templateRoot = path.resolve("packages/create/template");
 
 describe("remote provider preflight", () => {
+  it("rejects invalid Resend webhook secrets and missing preview redirects", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-email-readiness-doctor-"));
+    const key = randomBytes(32).toString("hex");
+    const configPath = path.join(root, "apps", "worker", "wrangler.jsonc");
+    const credentialsPath = path.join(root, "config", "credentials", "preview.yml.enc");
+    const vars = { EMAIL_DELIVERY_MODE: "resend", EMAIL_FROM: "Product <noreply@example.com>", EMAIL_STAGING_REDIRECT: "safe@example.com" };
+    try {
+      await mkdir(path.dirname(configPath), { recursive: true });
+      await mkdir(path.dirname(credentialsPath), { recursive: true });
+      await writeFile(configPath, JSON.stringify({ env: { preview: { vars } } }));
+      await writeFile(credentialsPath, encryptSecrets({ RESEND_API_KEY: "re_test", RESEND_WEBHOOK_SECRET: "placeholder" }, "preview", key));
+      const invalidSecret = await runDoctor(root, manifest, "preview", key);
+      expect(invalidSecret.checks).toContainEqual(expect.objectContaining({ id: "email.provider.configuration", status: "fail", evidence: expect.stringContaining("whsec_") }));
+      await writeFile(credentialsPath, encryptSecrets({ RESEND_API_KEY: "re_test", RESEND_WEBHOOK_SECRET: "whsec_test" }, "preview", key));
+      const ready = await runDoctor(root, manifest, "preview", key);
+      expect(ready.checks).toContainEqual(expect.objectContaining({ id: "email.provider.configuration", status: "pass" }));
+      await writeFile(configPath, JSON.stringify({ env: { preview: { vars: { ...vars, EMAIL_STAGING_REDIRECT: "CHANGE_ME" } } } }));
+      const missingRedirect = await runDoctor(root, manifest, "preview", key);
+      expect(missingRedirect.checks).toContainEqual(expect.objectContaining({ id: "email.provider.configuration", status: "fail", evidence: expect.stringContaining("preview recipient redirect") }));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("declares preview Stripe keys and rejects unconfigured preview providers", async () => {
     const manifest = await loadProjectManifest(templateRoot);
     expect(manifest.secrets?.STRIPE_SECRET_KEY?.required).toContain("preview");

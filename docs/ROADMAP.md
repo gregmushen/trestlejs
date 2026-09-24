@@ -778,6 +778,15 @@ after a valid webhook returns HTTP 503 so the provider can redeliver it. The
 generated Worker tests rejection, first receipt, duplicate receipt, and
 recovery after a transient persistence failure. Live webhook registration and
 deployed delivery-event evidence remain open.
+Alpha 102 aligns `trestle email status|doctor` and top-level `trestle doctor`
+with preview/staging delivery safety: readiness requires Resend mode, a valid
+recipient redirect, a sender address, and credential shape; status reports the
+configured adapter rather than inferring it from the environment. This does
+not prove that the webhook endpoint is registered in Resend or that the
+configured signing secret belongs to that endpoint.
+The generated PostgreSQL acceptance gate runs the local product path after
+other Worker suites and drains bounded outbox batches; it no longer assumes a
+new event is among the first ten pending messages left by other tests.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

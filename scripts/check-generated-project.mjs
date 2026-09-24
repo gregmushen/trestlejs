@@ -175,7 +175,11 @@ try {
     ]);
     await run("pnpm", ["--filter", "./packages/data", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
-    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" });
+    const workerSystemEnvironment = { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" };
+    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "--exclude", "src/system.integration.test.ts"], project, workerSystemEnvironment);
+    await requireScenarios(project, "./apps/worker", ["src/system.integration.test.ts"], workerSystemEnvironment, [
+      "verifies email, signs in, selects an organization, and reads tenant billing",
+    ]);
     await requireScenarios(project, "./apps/worker", ["src/billing-webhook.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "activates entitlements from a signed subscription once and acknowledges duplicates",
       "rejects a signed subscription lacking tenant or plan metadata without an event receipt",
