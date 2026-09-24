@@ -306,7 +306,7 @@ trestle plan ...                    validate and inspect setup intent
 trestle apply <plan> --yes          apply reviewed supported mutations
 trestle resources                   inspect declared domain resources
 trestle routes                      inspect API routes and auth posture
-trestle logs --env <env>            tail redacted structured Worker logs
+trestle logs --env <env>            tail safe semantic Worker events
 trestle queue dlq list --env <env>  inspect dead-lettered outbox delivery
 trestle workflow status <name> <id> inspect a Cloudflare Workflow instance
 trestle backup verify ... --yes     prove an isolated Neon restore and RLS

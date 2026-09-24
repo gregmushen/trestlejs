@@ -306,6 +306,32 @@ try {
     await writeFile(workflowPath, target);
     console.log("Reviewed the known Alpha 117 → 118 protected preview browser-gate transition; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.119" && after === "0.1.0-alpha.120") {
+    // Alpha 120 inserts a read-only cron capacity check before remote writes.
+    // Protected deployment workflows are never source-applied implicitly:
+    // require the pristine published baseline and these exact six additions.
+    const relative = ".github/workflows/deploy.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 119 deployment workflow differs from its recorded baseline");
+    }
+    let reviewed = source;
+    for (const environment of ["staging", "production"]) {
+      reviewed = replaceExactlyOnce(reviewed,
+        `          pnpm exec trestle doctor --env ${environment}\n          node scripts/cloudflare-preflight.mjs\n`,
+        `          pnpm exec trestle doctor --env ${environment}\n          node scripts/cloudflare-preflight.mjs\n          node scripts/cloudflare-cron-preflight.mjs\n`);
+      reviewed = replaceExactlyOnce(reviewed,
+        `          TRESTLE_WRANGLER_CONFIG: apps/worker/.trestle-queues.wrangler.jsonc\n      - name: Verify ${environment} Resend and Stripe credentials before provisioning\n`,
+        `          TRESTLE_WRANGLER_CONFIG: apps/worker/.trestle-queues.wrangler.jsonc\n          TRESTLE_CRON_DEPLOY_ENV: ${environment}\n          CLOUDFLARE_WORKERS_PLAN: "${'${{ vars.CLOUDFLARE_WORKERS_PLAN }}'}"\n      - name: Verify ${environment} Resend and Stripe credentials before provisioning\n`);
+    }
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 120 deployment workflow differs from the narrowly reviewed cron-capacity transition");
+    await writeFile(workflowPath, target);
+    console.log("Reviewed the known Alpha 119 → 120 protected cron-capacity transition; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });
