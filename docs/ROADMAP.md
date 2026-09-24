@@ -745,6 +745,12 @@ restricted keys can read the Stripe account endpoint. The permission probes
 are read-only; successful reads do not prove write privileges for Checkout,
 catalog synchronization, or webhook endpoint management. Those remain live
 staging acceptance gates.
+Alpha 97 keeps the deployment contract compatible with applications that
+explicitly disable the optional platform admin. Such projects may retain an
+older staging/production workflow with no admin steps; admin-enabled projects
+still require fully capability-guarded admin deployment, verification, and
+smoke tests. An unguarded admin step fails validation even when admin is
+disabled. This removes an upgrade-only failure found in the live canary.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

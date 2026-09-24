@@ -129,6 +129,28 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "fail" }));
   });
 
+  it("accepts legacy deployments without admin steps only when admin is disabled", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await mkdir(path.join(root, ".trestle"), { recursive: true });
+    const manifestPath = path.join(root, ".trestle", "project.yaml");
+    const manifest = await readFile(path.join(templateRoot, ".trestle", "project.yaml"), "utf8");
+    await writeFile(manifestPath, manifest);
+    const workflowPath = path.join(root, ".github", "workflows", "deploy.yml");
+    const source = await readFile(workflowPath, "utf8");
+    const legacy = source.split(/\n(?=      - )/u)
+      .filter((step) => !/apps\/admin|\/admin build|db:platform:|admin-capability\.mjs|-admin(?:-staging)?\b/u.test(step))
+      .join("\n");
+    await writeFile(workflowPath, legacy);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "pass" }));
+    await writeFile(manifestPath, manifest.replace("  admin: false", "  admin: true"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "fail" }));
+    await writeFile(manifestPath, manifest);
+    await writeFile(workflowPath, `${legacy}\n      - name: Unsafe admin deploy\n        run: pnpm --filter ./apps/admin build\n`);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "fail" }));
+  });
+
   it("rejects a workflow that downloads whatever CLI is currently latest", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
