@@ -46,7 +46,9 @@ beta is complete before the evidence gates pass.
 - [ ] **Staging system gate:** run browser/API tests against the deployed
   Astro site, React application, Worker, authentication, email, billing,
   resource CRUD, tenant switching, forced RLS, CORS, deep links, health, and
-  invalid webhook signatures.
+  invalid webhook signatures. Confirm the target Workers account has a CPU
+  allowance suitable for the generated auth and database workload, then run
+  repeated and concurrent requests without `exceededCpu` outcomes.
 - [ ] **Promotion evidence:** publish GitHub Deployment records, verify the
   restricted runtime database role, promote the exact reviewed commit, and
   pass production smoke checks without exposing credentials.
@@ -1052,6 +1054,20 @@ unexpected server failures while suppressing ordinary authentication denials.
 The generated-project canary typecheck and tests cover malformed error objects
 and credential-bearing messages. This is diagnostic coverage, not a claim that
 the intermittent staging failure or Hyperdrive tenant migration is fixed.
+Live staging tails on 2026-09-24 established the immediate failure mode:
+Cloudflare terminated authenticated `/api/me`, Better Auth, and scheduled
+invocations with `exceededCpu` at 10 ms. A 12-request authenticated `/api/me`
+burst returned two HTTP 500 responses while successful requests used 8–33 ms
+of CPU. Successful sign-up and sign-in requests used 113 ms and 95 ms,
+respectively, under Cloudflare's occasional-overrun flexibility. This matches
+the Workers Free per-request ceiling; the account subscription itself has not
+been confirmed through the billing API. The beta deployed gate therefore needs
+an explicit Workers CPU-plan check and repeatable reliability evidence. Moving
+the Worker to a paid plan would be a billing decision requiring account-owner
+approval; no upgrade has been made. Hyperdrive may reduce connection overhead
+but does not resolve a CPU ceiling by itself: time spent waiting on Neon does
+not count as Worker CPU time. The tenant-safe Hyperdrive adapter remains a
+separate, uncompleted task.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.
