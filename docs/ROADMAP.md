@@ -751,6 +751,13 @@ older staging/production workflow with no admin steps; admin-enabled projects
 still require fully capability-guarded admin deployment, verification, and
 smoke tests. An unguarded admin step fails validation even when admin is
 disabled. This removes an upgrade-only failure found in the live canary.
+Alpha 98 extends protected provider verification beyond Stripe read permissions:
+it creates a test-mode Checkout session through the application-owned
+`StripeBillingAdapter` and repeats the same logical request to verify Stripe
+idempotency. The authorized canary restricted key passed this test against a
+declared test-mode price. This proves Checkout creation with that key and
+price, not a completed payment, signed webhook delivery, or local entitlement
+projection. Those deployed end-to-end gates remain open.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

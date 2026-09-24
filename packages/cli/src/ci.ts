@@ -86,6 +86,11 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     && providers.includes("provider.integration.test.ts") && providerTests.includes("EMAIL_STAGING_REDIRECT")
     && providerTests.includes("STRIPE_MODE") && providerTests.includes("(?:sk|rk)_test_") && providerTests.includes("checkout/sessions")
     && providerTests.includes("readStagingProviderVariables") && providerConfig.includes("apps/worker/wrangler.jsonc"), "provider verification checks the declared Resend staging redirect and Stripe test mode"));
+  checks.push(check("ci.providers.checkout-write", providerTests.includes("StripeBillingAdapter")
+    && providerTests.includes("STRIPE_PRICES")
+    && (providerTests.match(/adapter\.createCheckoutSession\(input\)/gu) ?? []).length >= 2
+    && providerTests.includes("expect(retry.id).toBe(first.id)"),
+  "protected provider verification creates a test-mode Checkout session and checks idempotent retry"));
 
   const preview = sources.get("preview.yml") ?? "";
   checks.push(check(
