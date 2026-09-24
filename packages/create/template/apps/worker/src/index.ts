@@ -293,7 +293,7 @@ app.post("/api/dev/emails/flush", async (context) => {
 });
 
 app.post("/api/webhooks/resend", async (context) => {
-  const log = createLogger({ correlationId: context.get("correlationId"), provider: "resend" });
+  const log = createLogger({ correlationId: context.get("correlationId"), provider: "resend" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   if (!context.env.RESEND_API_KEY || !context.env.RESEND_WEBHOOK_SECRET) return context.json({ error: "Email webhook is not configured" }, 503);
   const id = context.req.header("svix-id");
   const timestamp = context.req.header("svix-timestamp");
@@ -318,7 +318,7 @@ app.post("/api/webhooks/resend", async (context) => {
 });
 
 app.post("/webhooks/stripe", async (context) => {
-  const log = createLogger({ correlationId: context.get("correlationId"), provider: "stripe" });
+  const log = createLogger({ correlationId: context.get("correlationId"), provider: "stripe" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   if (!context.env.STRIPE_WEBHOOK_SECRET) return context.json({ error: "Stripe webhook is not configured" }, 503);
   const signature = context.req.header("stripe-signature");
   if (!signature) return context.json({ error: "Missing Stripe signature" }, 400);
@@ -542,7 +542,7 @@ app.get("/artifacts/:id", async (context) => {
 
 app.onError((error, context) => {
   const mapped = mapHttpError(error);
-  createLogger({ correlationId: context.get("correlationId") }).error("http.request.failed", { code: mapped.code, retryable: mapped.retryable, durationMs: Date.now() - context.get("requestStartedAt") });
+  createLogger({ correlationId: context.get("correlationId") }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("http.request.failed", { code: mapped.code, retryable: mapped.retryable, durationMs: Date.now() - context.get("requestStartedAt") });
   return context.json({ error: mapped.code, message: mapped.message, retryable: mapped.retryable }, mapped.status);
 });
 
@@ -577,6 +577,7 @@ export default {
     } finally { await Promise.all([inbox.close(), outbox.close()]); }
   },
   scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
+    const log = createLogger({ environment: environment.APP_ENV ?? "local" }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
     if (!environment.TRESTLE_EVENTS && !environment.TRESTLE_ARTIFACTS && environment.WEBHOOK_DELIVERY_MODE !== "local") {
       if (!environment.APP_ENV || environment.APP_ENV === "local") return;
       throw new Error("Remote scheduled work requires a Queue or R2 binding");
@@ -585,7 +586,7 @@ export default {
       const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
       try {
         const result = await dispatchQueuedOutbox(store, environment.TRESTLE_EVENTS);
-        createLogger({ environment: environment.APP_ENV ?? "local" }).info("outbox.dispatch.completed", result);
+        log.info("outbox.dispatch.completed", result);
       } finally {
         await store.close();
       }
@@ -593,33 +594,33 @@ export default {
     if (environment.WEBHOOK_DELIVERY_MODE === "native") {
       if (!environment.TRESTLE_EVENTS) throw new Error("Native webhook recovery requires the TRESTLE_EVENTS Queue binding");
       const result = await maintainNativeWebhookDeliveries({ environment, queue: environment.TRESTLE_EVENTS });
-      createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.native.recovery.completed", result);
+      log.info("webhook.native.recovery.completed", result);
       if (result.failed > 0) throw new Error("Native webhook recovery left incomplete work");
     }
     let artifactUnresolved = false;
     if (environment.TRESTLE_ARTIFACTS) {
       try {
         const result = await maintainArtifacts(environment);
-        createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.maintenance.completed", result);
+        log.info("artifact.maintenance.completed", result);
         const retention = await maintainReadyArtifacts(environment);
-        if (retention) createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.retention.completed", retention);
+        if (retention) log.info("artifact.retention.completed", retention);
         const audit = await auditArtifactReferences(environment, (item) => {
-          createLogger({ environment: environment.APP_ENV ?? "local" }).error(`artifact.reference.${item.reason}`, item);
+          log.error(`artifact.reference.${item.reason}`, item);
         });
-        createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.reference.audit.completed", audit);
+        log.info("artifact.reference.audit.completed", audit);
         const orphans = await auditArtifactOrphans(environment, (item) => {
-          createLogger({ environment: environment.APP_ENV ?? "local" }).error(`artifact.orphan.${item.reason}`, item);
+          log.error(`artifact.orphan.${item.reason}`, item);
         });
-        createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.orphan.audit.completed", orphans);
+        log.info("artifact.orphan.audit.completed", orphans);
         artifactUnresolved = result.failed > 0 || (retention?.failed ?? 0) > 0 || audit.missing > 0 || audit.mismatched > 0 || audit.failed > 0 || orphans.orphaned > 0 || orphans.failed > 0;
       } catch {
         artifactUnresolved = true;
-        createLogger({ environment: environment.APP_ENV ?? "local" }).error("artifact.maintenance.unavailable");
+        log.error("artifact.maintenance.unavailable");
       }
     }
     if (environment.WEBHOOK_DELIVERY_MODE === "local" || environment.WEBHOOK_DELIVERY_MODE === "native") {
       const result = await maintainWebhookPayloads(environment);
-      createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.retention.completed", result);
+      log.info("webhook.retention.completed", result);
       if (result.failed > 0) throw new Error("Webhook retention left incomplete cleanup work");
     }
     if (artifactUnresolved) throw new Error("Artifact maintenance or storage audit found unresolved work");

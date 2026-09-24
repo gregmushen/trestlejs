@@ -961,6 +961,11 @@ immutable parent context, child loggers, a debug level, and a non-throwing sink.
 HTTP and authenticated execution loggers register the declared Worker runtime
 secrets. This does not yet guarantee secret registration for every background
 entry point or correlation propagation across all asynchronous boundaries.
+Alpha 123 extends runtime-secret registration to webhook and billing handlers,
+cron maintenance, native webhook queues, Workflows, the platform admin, and
+the local console. Declared admin and platform database credentials join the
+redaction registry. This closes the generated logger-entry-point gap; further
+cross-boundary correlation and provider-internal diagnostics still need review.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
@@ -968,8 +973,8 @@ entry point or correlation propagation across all asynchronous boundaries.
   route, including billing.
 - Standardize shared error mapping, semantic event names, correlation across
   asynchronous boundaries, redaction, metrics, and operational health.
-- Complete the remaining standardized logging contract, including registered
-  secrets at every background entry point and cross-boundary context.
+- Complete cross-boundary correlation and review provider-internal diagnostics
+  against the standardized logging contract.
 
 ### Alpha 10: operations and recovery
 

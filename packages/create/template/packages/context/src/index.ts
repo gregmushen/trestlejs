@@ -88,7 +88,7 @@ export type LoggerOptions = Readonly<{ secretValues?: readonly (string | undefin
 
 /** Collect only declared runtime credentials, never arbitrary environment values. */
 export function loggerSecretsFromEnvironment(environment: object): string[] {
-  const names = ["DATABASE_URL", "BETTER_AUTH_SECRET", "WEBHOOK_SECRET_KEY", "RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "ARTIFACT_SIGNING_SECRET"];
+  const names = ["DATABASE_URL", "DATABASE_ADMIN_URL", "DATABASE_PLATFORM_URL", "BETTER_AUTH_SECRET", "WEBHOOK_SECRET_KEY", "RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "ARTIFACT_SIGNING_SECRET"];
   const values = environment as Readonly<Record<string, unknown>>;
   return names.flatMap((name) => typeof values[name] === "string" && values[name] ? [values[name] as string] : []);
 }

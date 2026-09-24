@@ -25,7 +25,7 @@ describe("semantic logger", () => {
     log.error("provider.failed", { message: `connection rejected ${credential}`, error: new Error(`failure: ${credential}`), url: `https://host.test/?key=${credential}` });
     expect(JSON.stringify(records)).not.toContain(credential);
     expect(records[0]).toMatchObject({ message: "connection rejected [REDACTED]", error: { message: "failure: [REDACTED]" } });
-    expect(loggerSecretsFromEnvironment({ DATABASE_URL: credential, EMAIL_FROM: "safe", STRIPE_SECRET_KEY: "stripe-test" })).toEqual([credential, "stripe-test"]);
+    expect(loggerSecretsFromEnvironment({ DATABASE_URL: credential, DATABASE_ADMIN_URL: "admin-credential", EMAIL_FROM: "safe", STRIPE_SECRET_KEY: "stripe-test" })).toEqual([credential, "admin-credential", "stripe-test"]);
   });
 
   it("bounds circular, deep, wide, long, bigint and accessor values", () => {
