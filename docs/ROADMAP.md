@@ -652,6 +652,14 @@ other tenants remain independent. PostgreSQL contention tests verify the
 limit, isolation, and reuse of capacity after settlement. Global worker
 concurrency, throughput quotas, and deployed Cloudflare delivery evidence
 remain separate beta work.
+Alpha 88 runtime probing found a concrete Cloudflare compatibility blocker:
+Workers DNS resolves public webhook destinations, but direct IP-pinned TLS
+connections to ordinary HTTPS services on port 443 are rejected. The
+unsupported `ALPNProtocols` option is removed, and remote Doctor now fails
+closed when native delivery is enabled. See
+[WEBHOOK_EGRESS_RUNTIME.md](WEBHOOK_EGRESS_RUNTIME.md). The remote transport
+decision and deployed successful delivery remain beta gates, not completed
+Alpha 88 claims.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

@@ -25,7 +25,6 @@ export function connectPinnedTls(input: { address: string; hostname: string; por
     port: input.port,
     servername: input.hostname,
     rejectUnauthorized: true,
-    ALPNProtocols: ["http/1.1"],
   });
   return {
     onSecureConnect: (callback) => { socket.once("secureConnect", () => callback(socket.authorized)); },

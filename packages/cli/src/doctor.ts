@@ -267,6 +267,14 @@ export async function runDoctor(
       });
     }
     if (wranglerStringVariable(block, "WEBHOOK_DELIVERY_MODE") === "native") {
+      checks.push({
+        id: "webhook.native.runtime.compatibility",
+        group: "architecture",
+        status: "fail",
+        message: "native webhook delivery is not supported for general HTTPS destinations on Cloudflare Workers",
+        evidence: "Deployed Workers reject direct TCP/TLS connections to HTTP services on port 443; the current IP-pinned transport cannot deliver ordinary webhooks",
+        remediation: "Set WEBHOOK_DELIVERY_MODE to disabled for remote environments until a verified transport or trusted egress service is available",
+      });
       const declaration = manifest.secrets?.WEBHOOK_SECRET_KEY;
       const queueReady = manifest.capabilities.queues && wranglerCapabilityBinding(block, "queues");
       const secretDeclared = declaration?.target === "worker" && declaration.required.includes(environment);

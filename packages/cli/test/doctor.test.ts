@@ -110,6 +110,7 @@ describe("remote provider preflight", () => {
       await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ env: { preview: { vars: { WEBHOOK_DELIVERY_MODE: "native" } } } }));
       await writeFile(path.join(root, "config", "credentials", "preview.yml.enc"), encryptSecrets({}, "preview", key));
       const missing = await runDoctor(root, manifest, "preview", key);
+      expect(missing.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.runtime.compatibility", status: "fail" }));
       expect(missing.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.configuration", status: "fail" }));
       expect(missing.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.signing_secret.configured", status: "fail" }));
 
@@ -122,6 +123,7 @@ describe("remote provider preflight", () => {
       } } }));
       await writeFile(path.join(root, "config", "credentials", "preview.yml.enc"), encryptSecrets({ WEBHOOK_SECRET_KEY: "a".repeat(32) }, "preview", key));
       const ready = await runDoctor(root, enabled, "preview", key);
+      expect(ready.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.runtime.compatibility", status: "fail" }));
       expect(ready.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.configuration", status: "pass" }));
       expect(ready.checks).toContainEqual(expect.objectContaining({ id: "webhook.native.signing_secret.configured", status: "pass" }));
       expect(JSON.stringify(ready)).not.toContain("a".repeat(32));

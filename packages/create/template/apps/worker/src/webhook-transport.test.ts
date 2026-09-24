@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { connect as tlsConnect } from "node:tls";
 
 import { WebhookEgressError, type WebhookDestination } from "./webhook-egress.js";
-import { formatPinnedWebhookRequest, postPinnedWebhook, sendNativeWebhook, type PinnedSocket } from "./webhook-transport.js";
+import { connectPinnedTls, formatPinnedWebhookRequest, postPinnedWebhook, sendNativeWebhook, type PinnedSocket } from "./webhook-transport.js";
+
+vi.mock("node:tls", () => ({ connect: vi.fn(() => ({ once: vi.fn(), on: vi.fn(), write: vi.fn(), destroy: vi.fn(), authorized: true })) }));
 
 const destination: WebhookDestination = {
   url: new URL("https://hooks.example.com:8443/receive?source=app"),
@@ -31,6 +34,11 @@ function fakeSocket(response: string, authorized = true) {
 afterEach(() => vi.useRealTimers());
 
 describe("pinned native webhook transport", () => {
+  it("uses only TLS options supported by deployed Workers while preserving IP pinning and hostname verification", () => {
+    connectPinnedTls({ address: "8.8.8.8", hostname: "hooks.example.com", port: 443 });
+    expect(tlsConnect).toHaveBeenCalledWith({ host: "8.8.8.8", port: 443, servername: "hooks.example.com", rejectUnauthorized: true });
+  });
+
   it("builds one exact HTTP request with byte-correct body length and no redirect behavior", () => {
     const request = formatPinnedWebhookRequest({ destination, body: JSON.stringify({ name: "café" }), headers: { "webhook-id": "whm_123", "content-type": "application/json" } });
     const wire = new TextDecoder().decode(request);
