@@ -1068,6 +1068,12 @@ approval; no upgrade has been made. Hyperdrive may reduce connection overhead
 but does not resolve a CPU ceiling by itself: time spent waiting on Neon does
 not count as Worker CPU time. The tenant-safe Hyperdrive adapter remains a
 separate, uncompleted task.
+Alpha 132 provisions a test-mode Stripe webhook endpoint for each isolated
+pull-request preview, binds its one-time signing secret directly to that
+preview Worker, replaces only endpoints at the exact same preview URL on
+redeploy, and removes them on preview cleanup. This closes the missing-endpoint
+configuration gap observed in canary PR 11, but a successful deployed webhook
+and entitlement projection are still required as evidence.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.
