@@ -1,5 +1,5 @@
 {
-  "id": "366f213f-064d-412a-9f14-b231c54d0f7f",
+  "id": "9f608b63-b1fe-4301-a22d-aaec3cbf0469",
   "prevId": "8a614fcf-738d-44fe-88d4-4d726d369ade",
   "version": "7",
   "dialect": "postgresql",
@@ -379,7 +379,16 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "authentication_assurance_level_check": {
+          "name": "authentication_assurance_level_check",
+          "value": "\"authentication_assurance\".\"level\" IN ('password', 'mfa', 'phishing_resistant')"
+        },
+        "authentication_assurance_method_check": {
+          "name": "authentication_assurance_method_check",
+          "value": "\"authentication_assurance\".\"method\" IN ('password', 'totp', 'otp', 'backup_code', 'passkey', 'sso')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.audit_event": {

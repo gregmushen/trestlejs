@@ -3,7 +3,9 @@ CREATE TABLE "authentication_assurance" (
 	"user_id" text NOT NULL,
 	"level" text NOT NULL,
 	"method" text NOT NULL,
-	"verified_at" timestamp with time zone NOT NULL
+	"verified_at" timestamp with time zone NOT NULL,
+	CONSTRAINT "authentication_assurance_level_check" CHECK ("authentication_assurance"."level" IN ('password', 'mfa', 'phishing_resistant')),
+	CONSTRAINT "authentication_assurance_method_check" CHECK ("authentication_assurance"."method" IN ('password', 'totp', 'otp', 'backup_code', 'passkey', 'sso'))
 );
 --> statement-breakpoint
 CREATE TABLE "passkey" (
@@ -43,18 +45,34 @@ CREATE INDEX "two_factor_user_id_idx" ON "two_factor" USING btree ("user_id");--
 -- Account-security events: organization-less, actor and target are the same user, fixed outcome.
 -- The runtime login may name any user: it already writes user and session rows, so this grants it nothing new.
 -- Executable only by the runtime login (granted in configureRuntimeRole); never by trestle_app.
-CREATE OR REPLACE FUNCTION trestle_record_security_event(p_name text, p_user_id text, p_correlation_id text, p_environment text)
+-- plpgsql (not sql) so invalid input raises instead of silently inserting nothing.
+CREATE FUNCTION trestle_record_security_event(p_name text, p_user_id text, p_correlation_id text, p_environment text)
 RETURNS void
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
+BEGIN
+  IF p_name IS NULL OR length(p_name) > 120 OR p_name !~ '^security\.[a-z_]+\.[a-z_]+$' THEN
+    RAISE EXCEPTION 'Invalid security event name: %', p_name USING ERRCODE = '22023';
+  END IF;
+  IF nullif(p_user_id, '') IS NULL THEN
+    RAISE EXCEPTION 'Invalid security event user id' USING ERRCODE = '22023';
+  END IF;
+  IF nullif(p_correlation_id, '') IS NULL THEN
+    RAISE EXCEPTION 'Invalid security event correlation id' USING ERRCODE = '22023';
+  END IF;
+  IF nullif(p_environment, '') IS NULL THEN
+    RAISE EXCEPTION 'Invalid security event environment' USING ERRCODE = '22023';
+  END IF;
   INSERT INTO public.audit_event (name, schema_version, actor_type, actor_id, organization_id, target_type, target_id, summary, outcome, environment, correlation_id)
-  SELECT p_name, '1', 'user', p_user_id, NULL, 'user', p_user_id, '{}'::jsonb, 'succeeded', p_environment, p_correlation_id
-   WHERE p_name ~ '^security\.[a-z_]+\.[a-z_]+$'
+  VALUES (p_name, '1', 'user', p_user_id, NULL, 'user', p_user_id, '{}'::jsonb, 'succeeded', p_environment, p_correlation_id);
+END
 $$;--> statement-breakpoint
 REVOKE ALL ON FUNCTION trestle_record_security_event(text, text, text, text) FROM PUBLIC;--> statement-breakpoint
 -- audit_event forces RLS; the function owner needs an insert policy unless it bypasses RLS.
+-- Migration 0028 already granted the owner an unrestricted "audit_event_replay_owner" INSERT
+-- policy, so this policy only matters if that one is ever dropped.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user AND (rolsuper OR rolbypassrls)) THEN

@@ -1,4 +1,5 @@
-import { index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 import { session } from "./auth-schema.js";
 
@@ -13,4 +14,8 @@ export const authenticationAssurance = pgTable("authentication_assurance", {
   level: text("level").notNull(),
   method: text("method").notNull(),
   verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull(),
-}, (table) => [index("authentication_assurance_user_idx").on(table.userId)]);
+}, (table) => [
+  index("authentication_assurance_user_idx").on(table.userId),
+  check("authentication_assurance_level_check", sql`${table.level} IN ('password', 'mfa', 'phishing_resistant')`),
+  check("authentication_assurance_method_check", sql`${table.method} IN ('password', 'totp', 'otp', 'backup_code', 'passkey', 'sso')`),
+]);
