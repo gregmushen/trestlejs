@@ -332,6 +332,26 @@ try {
     await writeFile(workflowPath, target);
     console.log("Reviewed the known Alpha 119 → 120 protected cron-capacity transition; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.125" && after === "0.1.0-alpha.126") {
+    // Alpha 126 explicitly omits cron from ephemeral preview Workers. A
+    // protected workflow cannot be source-applied automatically: require the
+    // published Alpha 125 hash and exactly this one reviewed command edit.
+    const relative = ".github/workflows/preview.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 125 preview workflow differs from its recorded baseline");
+    }
+    const reviewed = replaceExactlyOnce(source,
+      'run: node scripts/queue-config.mjs render preview "${{ steps.preview.outputs.worker_name }}"',
+      'run: node scripts/queue-config.mjs render preview "${{ steps.preview.outputs.worker_name }}" --without-cron');
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 126 preview workflow differs from the narrowly reviewed cron-free transition");
+    await writeFile(workflowPath, target);
+    console.log("Reviewed the known Alpha 125 → 126 protected preview cron-free transition; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });

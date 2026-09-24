@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
+import { artifactRuntimeReady, artifactSigner, artifactStore, publicArtifactUrl } from "./artifact-runtime.js";
 
 const base = { DATABASE_URL: "postgres://unused", BETTER_AUTH_SECRET: "local-auth-secret-at-least-32-characters" };
 
 describe("artifact runtime configuration", () => {
+  it("uses the direct Worker origin for a Pages-forwarded signed download", () => {
+    expect(publicArtifactUrl("/artifacts/artifact-1?signature=abc", { ...base, BETTER_AUTH_URL: "https://api.example.test" }, "https://app.example.test/api/artifacts/artifact-1/access"))
+      .toBe("https://api.example.test/artifacts/artifact-1?signature=abc");
+  });
+
   it("uses a local store and domain-separated signed access in development", async () => {
     const environment = { ...base, APP_ENV: "local" as const };
     const store = artifactStore(environment, "org-a");

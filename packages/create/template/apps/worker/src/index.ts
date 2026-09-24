@@ -13,7 +13,7 @@ import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox,
 import { maintainArtifacts } from "./artifact-maintenance.js";
 import { auditArtifactReferences } from "./artifact-reference-audit.js";
 import { auditArtifactOrphans } from "./artifact-orphan-audit.js";
-import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
+import { artifactRuntimeReady, artifactSigner, artifactStore, publicArtifactUrl } from "./artifact-runtime.js";
 import { accessRoutes } from "./access-routes.js";
 import { machineAccessRoutes } from "./machine-access-routes.js";
 import { regionalRoutes } from "./regional-routes.js";
@@ -507,7 +507,7 @@ app.get("/api/artifacts/:id/access", requireExecutionContext, async (context) =>
   const artifact = await artifactStore(context.env, execution.tenant.organizationId).get(execution.tenant.organizationId, id);
   if (!artifact) return context.notFound();
   const signed = await artifactSigner(context.env).create(execution.tenant.organizationId, id);
-  return context.json({ url: new URL(signed.url, context.req.url).toString(), expiresAt: signed.expiresAt });
+  return context.json({ url: publicArtifactUrl(signed.url, context.env, context.req.url), expiresAt: signed.expiresAt });
 });
 
 app.delete("/api/artifacts/:id", requireExecutionContext, async (context) => {

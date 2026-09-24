@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { r2Client } from "./cloudflare-r2.mjs";
@@ -59,15 +62,22 @@ test("R2 failures fail closed and nonempty buckets are never purged", async () =
   assert.match(cli.stderr, /only isolated preview R2 buckets/u);
 });
 
-test("disabled R2 capability requires no credentials", () => {
-  const cli = spawnSync(process.execPath, [new URL("./cloudflare-r2.mjs", import.meta.url).pathname, "ensure", "example-worker-pr-1"], {
-    encoding: "utf8", env: { ...process.env, CLOUDFLARE_API_TOKEN: "", CLOUDFLARE_ACCOUNT_ID: "" },
-  });
-  assert.equal(cli.status, 0, cli.stderr);
-  assert.match(cli.stdout, /R2 disabled; no resources changed/u);
-  const verify = spawnSync(process.execPath, [new URL("./cloudflare-r2.mjs", import.meta.url).pathname, "verify", "example-worker-pr-1"], {
-    encoding: "utf8", env: { ...process.env, CLOUDFLARE_API_TOKEN: "", CLOUDFLARE_ACCOUNT_ID: "" },
-  });
-  assert.equal(verify.status, 0, verify.stderr);
-  assert.match(verify.stdout, /R2 disabled; no resources changed/u);
+test("disabled R2 capability requires no credentials", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "trestle-disabled-r2-")));
+  try {
+    await mkdir(join(root, "scripts"));
+    await mkdir(join(root, ".trestle"));
+    await copyFile(new URL("./cloudflare-r2.mjs", import.meta.url), join(root, "scripts/cloudflare-r2.mjs"));
+    await copyFile(new URL("./queue-config.mjs", import.meta.url), join(root, "scripts/queue-config.mjs"));
+    await writeFile(join(root, ".trestle/project.yaml"), "capabilities:\n  queues: false\n  r2: false\n  workflows: false\n");
+    for (const operation of ["ensure", "verify"]) {
+      const cli = spawnSync(process.execPath, [join(root, "scripts/cloudflare-r2.mjs"), operation, "example-worker-pr-1"], {
+        encoding: "utf8", env: { ...process.env, CLOUDFLARE_API_TOKEN: "", CLOUDFLARE_ACCOUNT_ID: "" },
+      });
+      assert.equal(cli.status, 0, cli.stderr);
+      assert.match(cli.stdout, /R2 disabled; no resources changed/u);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
