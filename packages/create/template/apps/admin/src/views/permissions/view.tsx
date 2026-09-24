@@ -147,7 +147,7 @@ export default function PermissionsView() {
     confirm.open({ title: `Create ${input.code}`, confirmLabel: "Create permission", scope: [`${input.plane} permission ${input.code}`, `principals: ${input.principals.join(", ")}`, "grants nothing until a role includes it and code checks it"], onConfirm: (reason) => api.createPermission(input, reason), onDone: () => { refresh(); update({ selected: input.code }); } });
   };
   return <>
-    <AdminPageHeader title="Permissions" description="Every permission belongs to exactly one plane, and authority never flows between planes. Permissions from reviewed source are protected; runtime permissions are grant-only until code checks them."
+    <AdminPageHeader title="Permissions" description="Every permission belongs to exactly one plane, and authority never flows between planes. Permissions are defined in reviewed source (packages/authz)."
       actions={manage ? <Button variant="primary" icon={<PlusIcon />} onClick={() => setCreating(emptyPermission)}>New permission</Button> : undefined} />
     <AdminSection title="Registry">
       <Tabs variant="segmented" value={plane} onValueChange={(value) => update({ plane: String(value) === "all" ? undefined : String(value) })}
