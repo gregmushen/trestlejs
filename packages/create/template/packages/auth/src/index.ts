@@ -92,8 +92,10 @@ export function createAuth(environment: AuthEnvironment, options: AuthOptions = 
     databaseHooks: {
       session: {
         create: {
-          // Runs right after the new session row is written and, when Better Auth rotates a
-          // session, before it deletes the old one (whose assurance row then cascades away).
+          // Outside a database transaction this runs as soon as the session row is written, so when
+          // Better Auth rotates a session (two-factor enable, enrollment, disable) the prior session
+          // and its assurance row still exist; inside one (passkey registration with createSession)
+          // Better Auth defers it until the transaction commits.
           after: async (created, context) => {
             await recordSessionAssurance(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), created, context?.context.session?.session ?? null, context?.path ?? "");
           },
@@ -142,16 +144,18 @@ export function createAuth(environment: AuthEnvironment, options: AuthOptions = 
 
 /**
  * Records how a new session was authenticated. Only a session created without a
- * prior one (a sign-in) gets the level its endpoint proves. A session that
+ * prior one gets the level its endpoint proves: a sign-in, or a step-up, whose
+ * two-factor challenge expires the old session cookie (better-auth two-factor
+ * sign-in hook) and whose passkey verification reads no session. A session that
  * replaces an authenticated one (two-factor enrollment or disable, which need
- * only the password) inherits the prior session's evidence, so enrolling an
- * authenticator never upgrades a password-only session to MFA.
+ * only the password) inherits the prior session's evidence and its time, so
+ * enrolling an authenticator never upgrades or refreshes a password-only session.
  */
 async function recordSessionAssurance(database: Database, created: Readonly<{ id: string; userId: string }>, prior: Readonly<{ id: string; userId: string }> | null, path: string): Promise<void> {
   try {
     const carried = prior && prior.userId === created.userId && prior.id !== created.id ? await sessionAssurance(database, prior.id) : null;
     const evidence = carried ?? (prior ? { level: "password", method: "password" } as const : assuranceForEndpoint(path));
-    await recordAssurance(database, { sessionId: created.id, userId: created.userId, level: evidence.level, method: evidence.method });
+    await recordAssurance(database, { sessionId: created.id, userId: created.userId, level: evidence.level, method: evidence.method, ...(carried ? { verifiedAt: carried.verifiedAt } : {}) });
   } catch (error) {
     // Fail closed: the session stays usable for ordinary work, but with no assurance row
     // every step-up check reports "missing" and asks the person to verify again.

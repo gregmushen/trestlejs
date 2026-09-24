@@ -110,6 +110,7 @@ suite("auth hooks against PostgreSQL", () => {
     const enable = await post(auth, "/two-factor/enable", { password }, jar);
     expect(enable.status).toBe(200);
     totpUri = String(enable.body.totpURI);
+    const [signedIn] = await rows<{ verifiedAt: Date }>(sql`select verified_at as "verifiedAt" from authentication_assurance where user_id = ${operator}`);
     const verify = await post(auth, "/two-factor/verify-totp", { code: totp(totpUri) }, jar);
     expect(verify.status).toBe(200);
     // The response still carries the old token (better-auth verify-two-factor.mjs); the rotated session is the only live one.
@@ -117,6 +118,9 @@ suite("auth hooks against PostgreSQL", () => {
     expect(others).toEqual([]);
     // Not MFA: a password-only holder could otherwise mint an MFA session by enrolling their own authenticator.
     expect(await liveAssurance(operator)).toEqual([{ sessionId: enrolled!, level: "password", method: "password" }]);
+    // The carried evidence keeps its original time, so rotating a session never refreshes it.
+    const [carried] = await rows<{ verifiedAt: Date }>(sql`select verified_at as "verifiedAt" from authentication_assurance where session_id = ${enrolled!}`);
+    expect(carried!.verifiedAt).toEqual(signedIn!.verifiedAt);
     expect(await securityEvents(operator)).toEqual(["security.two_factor.enrollment_started", "security.two_factor.enabled"]);
 
     // A fresh sign-in stops at the second-factor challenge; its interim session is deleted with its assurance.
@@ -134,5 +138,35 @@ suite("auth hooks against PostgreSQL", () => {
       { sessionId: enrolled!, level: "password", method: "password" },
       { sessionId: mfaSession, level: "mfa", method: "totp" },
     ]);
+  });
+
+  it("upgrades a signed-in operator who steps up with an enrolled second factor", async () => {
+    const auth = createAuth(environment, { factors: true });
+    await database!.execute(sql`delete from session where user_id = ${operator}`);
+    const jar = new Map<string, string>();
+    await post(auth, "/sign-in/email", { email: operatorEmail, password }, jar);
+    const signedIn = await post(auth, "/two-factor/verify-totp", { code: totp(totpUri) }, jar);
+    const current = await sessionIdFor(String(signedIn.body.token));
+    await database!.execute(sql`update authentication_assurance set level = 'password', method = 'password', verified_at = now() - interval '20 minutes' where session_id = ${current}`);
+
+    // Step-up re-authenticates while the session cookie is still sent; the challenge response expires it.
+    const challenged = await post(auth, "/sign-in/email", { email: operatorEmail, password }, jar);
+    expect(challenged.body.twoFactorRedirect).toBe(true);
+    const stepUp = await post(auth, "/two-factor/verify-totp", { code: totp(totpUri) }, jar);
+    expect(stepUp.status).toBe(200);
+    const stepped = await sessionIdFor(String(stepUp.body.token));
+    expect(stepped).not.toBe(current);
+    expect(await liveAssurance(operator)).toEqual([
+      { sessionId: current, level: "password", method: "password" },
+      { sessionId: stepped, level: "mfa", method: "totp" },
+    ]);
+
+    // Verifying a code on an existing session (no challenge) creates no session and proves nothing new.
+    const [before] = await rows<{ verifiedAt: Date }>(sql`select verified_at as "verifiedAt" from authentication_assurance where session_id = ${stepped}`);
+    const again = await post(auth, "/two-factor/verify-totp", { code: totp(totpUri) }, jar);
+    expect(again.body.token).toBe(stepUp.body.token);
+    expect(await liveSessionIds(operator)).toEqual([current, stepped]);
+    const [after] = await rows<{ verifiedAt: Date }>(sql`select verified_at as "verifiedAt" from authentication_assurance where session_id = ${stepped}`);
+    expect(after!.verifiedAt).toEqual(before!.verifiedAt);
   });
 });
