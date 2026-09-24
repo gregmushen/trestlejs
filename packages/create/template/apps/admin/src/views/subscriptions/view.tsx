@@ -91,7 +91,7 @@ export default function SubscriptionsView() {
   return <>
     <AdminPageHeader title="Subscriptions" description="The provider-neutral subscription projection. Checkout redirects are never proof of payment; verified provider events update this state, and audited overrides adjust one organization's entitlements." />
     <AdminFilter label="Search subscriptions" placeholder="Organization or plan" />
-    <ResourceListPage detail={selected ? <Detail subscription={selected} onOverride={() => confirm.open(override(selected))} /> : <AdminEmpty title="Select a subscription" description="Its plan, entitlements, and overrides appear here." />}>
+    <ResourceListPage detail={selected ? <Detail subscription={selected} onOverride={() => confirm.open(override(selected))} /> : null}>
       <AdminQueryState query={subscriptions} isEmpty={(data) => data.subscriptions.length === 0} empty="No subscriptions.">{(data) => <AdminDataTable caption="Subscriptions" selectable rows={data.subscriptions} rowKey={(row) => row.organizationId} rowLabel={(row) => row.organizationName ?? row.organizationId}
         rowActions={(row) => manage ? [{ label: "Add override", hotkey: "o", run: () => confirm.open(override(row)) }] : []}
         columns={[

@@ -6,7 +6,7 @@ import { useAdmin, useAdminQuery } from "../../shell/context";
 import { Button, Tabs } from "../../shell/kumo";
 import { PlaneBadge } from "../../shell/roles";
 import { useStartSupportSession } from "../../shell/StartSupportSession";
-import { AdminDataTable, AdminEmpty, AdminFilter, AdminPageHeader, AdminQueryState, AdminSection, AdminStatus, formatDate } from "../../shell/ui";
+import { AdminDataTable, AdminFilter, AdminPageHeader, AdminQueryState, AdminSection, AdminStatus, formatDate } from "../../shell/ui";
 import { useViewSearch } from "../../shell/url-state";
 
 function OrganizationDetail({ organization, onStart }: { organization: OrganizationSummary; onStart: (() => void) | undefined }) {
@@ -50,7 +50,7 @@ export default function OrganizationsView() {
   return <>
     <AdminPageHeader title="Organizations" description="Find customers and start an audited, time-boxed support session. Selecting a tenant grants nothing; only the session's support profile does, until it expires." />
     <AdminFilter label="Search organizations" placeholder="Name, slug, or ID" />
-    <ResourceListPage detail={selected ? <OrganizationDetail organization={selected} onStart={canStart ? startFor(selected) : undefined} /> : <AdminEmpty title="Select an organization" description="Use j and k to move, Enter to open. Its members, plan, and support actions appear here." />}>
+    <ResourceListPage detail={selected ? <OrganizationDetail organization={selected} onStart={canStart ? startFor(selected) : undefined} /> : null}>
       <AdminQueryState query={organizations} isEmpty={(data) => data.organizations.length === 0} empty="No organizations match.">{(data) => <AdminDataTable caption="Organizations" selectable rows={data.organizations} rowKey={(row) => row.id} rowLabel={(row) => row.name}
         rowActions={(row) => supportAvailable && supportSession?.organizationId !== row.id ? [{ label: "Start support session", hotkey: "e", run: startFor(row) }] : []}
         columns={[

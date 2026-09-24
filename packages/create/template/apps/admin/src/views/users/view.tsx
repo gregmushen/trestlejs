@@ -3,7 +3,7 @@ import { api, type UserSummary } from "../../api";
 import { useAdminQuery } from "../../shell/context";
 import { Button } from "../../shell/kumo";
 import { PlaneBadge } from "../../shell/roles";
-import { AdminDataTable, AdminEmpty, AdminFilter, AdminPageHeader, AdminQueryState, AdminSection, AdminStatus, formatDate } from "../../shell/ui";
+import { AdminDataTable, AdminFilter, AdminPageHeader, AdminQueryState, AdminSection, AdminStatus, formatDate } from "../../shell/ui";
 import { useViewSearch } from "../../shell/url-state";
 
 export default function UsersView() {
@@ -27,7 +27,7 @@ export default function UsersView() {
         <p className="font-medium">{membership.organizationName ?? membership.organizationId}</p>
         <p className="flex flex-wrap items-center gap-1"><PlaneBadge plane="organization" />{membership.organizationRoles.join(", ") || "—"}</p>
       </li>)}</ul>}
-    </AdminSection> : <AdminEmpty title="Select a user" description="Memberships and platform roles appear here." />}>
+    </AdminSection> : null}>
       <AdminQueryState query={users} isEmpty={(data) => data.users.length === 0} empty="No users match.">{(data) => <AdminDataTable caption="Users" selectable rows={data.users} rowKey={(user) => user.id} rowLabel={(user) => user.email} rowActions={actions} columns={[
         { header: "User", cell: (user) => <><p className="font-medium">{user.name}</p><p className="text-kumo-subtle">{user.email}</p></> },
         { header: "Status", cell: (user) => user.banned ? <AdminStatus variant="destructive">suspended</AdminStatus> : user.emailVerified ? <AdminStatus variant="success">verified</AdminStatus> : <AdminStatus variant="warning">unverified</AdminStatus> },

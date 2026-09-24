@@ -62,7 +62,7 @@ export default function SupportSessionsView() {
     <AdminPageHeader title="Support sessions" description="Your support sessions: where, why, for how long, and what was viewed. A session gives read-only access to one organization and never signs you in as a customer."
       tabs={[{ value: "active", label: "Active" }, { value: "history", label: "History" }]} tab={tab} onTabChange={(value) => update({ tab: value === "active" ? undefined : value, selected: undefined })}
       actions={<>{supportSession && <Button variant="secondary" onClick={() => void exitSupportSession()}>Exit your session</Button>}{canStart && !supportSession && <Button variant="primary" onClick={start}>Start a session</Button>}</>} />
-    <ResourceListPage detail={search.selected ? <SessionDetail id={search.selected} onRevoke={canRevoke ? (session) => confirm.open(revoke(session)) : undefined} /> : <AdminEmpty title="Select a session" description="Its permission snapshot, reason, and correlated activity appear here." />}>
+    <ResourceListPage detail={search.selected ? <SessionDetail id={search.selected} onRevoke={canRevoke ? (session) => confirm.open(revoke(session)) : undefined} /> : null}>
       <AdminQueryState query={sessions} isEmpty={(data) => data.sessions.length === 0} empty={tab === "active" ? "No active support sessions." : "No support sessions yet."}>{(data) => <AdminDataTable caption="Support sessions" selectable rows={data.sessions} rowKey={(row) => row.id} rowLabel={(row) => `${row.organizationName} by ${row.operator.email}`}
         rowActions={(row) => canRevoke && stateOf(row) === "active" ? [{ label: "Revoke session", hotkey: "r", destructive: true, run: () => confirm.open(revoke(row)) }] : []}
         columns={[
