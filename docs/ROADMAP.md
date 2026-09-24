@@ -955,6 +955,12 @@ Stripe test and Resend credentials, including redirected email and idempotent
 test Checkout. This is provider evidence, not a protected GitHub Actions run
 or the missing cron-enabled staging gate. Full logging-spec conformance,
 including exact-value secret redaction and cross-boundary context, remains open.
+Alpha 122 hardens the generated structured logger with registered runtime-secret
+redaction, circular/depth/width/size limits, safe Error and BigInt handling,
+immutable parent context, child loggers, a debug level, and a non-throwing sink.
+HTTP and authenticated execution loggers register the declared Worker runtime
+secrets. This does not yet guarantee secret registration for every background
+entry point or correlation propagation across all asynchronous boundaries.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
@@ -962,8 +968,8 @@ including exact-value secret redaction and cross-boundary context, remains open.
   route, including billing.
 - Standardize shared error mapping, semantic event names, correlation across
   asynchronous boundaries, redaction, metrics, and operational health.
-- Complete the remaining standardized logging contract, including exact-value
-  secret redaction, bounded serialization, and cross-boundary context.
+- Complete the remaining standardized logging contract, including registered
+  secrets at every background entry point and cross-boundary context.
 
 ### Alpha 10: operations and recovery
 

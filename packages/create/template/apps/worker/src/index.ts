@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { getPlan, planEntitlements, plans } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
-import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, createMetrics, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, retrieveCurrentStripeSubscription, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
@@ -39,7 +39,7 @@ app.use("*", async (context, next) => {
   context.set("correlationId", correlationId);
   context.set("requestStartedAt", requestStartedAt);
   context.header("x-correlation-id", correlationId);
-  const log = createLogger({ correlationId });
+  const log = createLogger({ correlationId }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   log.info("http.request.started", { method: context.req.method, path: new URL(context.req.url).pathname });
   await next();
   log.info("http.request.completed", { method: context.req.method, path: new URL(context.req.url).pathname, status: context.res.status, durationMs: Date.now() - requestStartedAt });
