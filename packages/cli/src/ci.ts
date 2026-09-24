@@ -162,6 +162,15 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.deploy.operational-smoke", deploy.includes("TRESTLE_DEPLOY_ENV: staging") && deploy.includes("TRESTLE_DEPLOY_ENV: production"), "staging and production smoke verify their operational environments"));
   const stagingDeploy = deploy.slice(0, deploy.indexOf("  production:"));
   const productionDeploy = deploy.slice(deploy.indexOf("  production:"));
+  checks.push(check("ci.deploy.cron-capacity-preflight",
+    ([[stagingDeploy, "staging"], [productionDeploy, "production"]] as const).every(([source, environment]) =>
+      source.includes("node scripts/cloudflare-cron-preflight.mjs")
+      && source.includes(`TRESTLE_CRON_DEPLOY_ENV: ${environment}`)
+      && source.includes('CLOUDFLARE_WORKERS_PLAN: "${{ vars.CLOUDFLARE_WORKERS_PLAN }}"')
+      && occursInOrder(source, `Prepare ${environment} Queue bindings`, "node scripts/cloudflare-cron-preflight.mjs")
+      && occursInOrder(source, "node scripts/cloudflare-cron-preflight.mjs", `Provision ${environment} Queues`)
+      && occursInOrder(source, "node scripts/cloudflare-cron-preflight.mjs", `Migrate ${environment}`)),
+  "staging and production check account cron capacity before provisioning or migration"));
   checks.push(check("ci.deploy.transactional-provider-preflight",
     ([[stagingDeploy, "staging", "test", "Provision staging Queues"], [productionDeploy, "production", "live", "Provision production Queues"]] as const).every(([source, environment, mode, provision]) =>
       source.includes("node scripts/transactional-provider-preflight.mjs")

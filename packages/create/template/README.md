@@ -137,6 +137,13 @@ but scheduled dispatch and maintenance do not run in that preview. Use the
 same rendered config for secret uploads and deployment. Staging and production
 still require the cron trigger; a cron-free preview does not verify scheduled
 behavior or establish production readiness.
+Staging and production check account-wide cron capacity before provisioning,
+database migration, or Worker upload. The check assumes the Cloudflare Workers
+Free plan (five triggers) unless the deployment environment sets
+`CLOUDFLARE_WORKERS_PLAN=paid` (250 triggers). It reads schedules and credits
+an existing trigger on the target Worker during redeployment; it does not
+change or remove other Workers' schedules. A full account must gain capacity
+before the cron-enabled deployment can proceed.
 The preview browser gate verifies redirected email sign-up and test-mode
 Checkout against the deployed services; it does not complete a payment or
 process a signed Stripe webhook. Those remain staging release gates.
