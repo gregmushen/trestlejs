@@ -289,6 +289,23 @@ try {
     }
     console.log("Reviewed the known Alpha 116 → 117 protected same-origin Pages routing transitions; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.117" && after === "0.1.0-alpha.118") {
+    // Alpha 118 confines the paid test-card browser gate to preview. Review
+    // this exact protected workflow edit against the published baseline.
+    const relative = ".github/workflows/preview.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 117 preview workflow differs from its recorded baseline");
+    }
+    const reviewed = replaceExactlyOnce(source, "          pnpm test:deployed\n", "          pnpm test:preview\n");
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 118 preview workflow differs from the narrowly reviewed test-only transition");
+    await writeFile(workflowPath, target);
+    console.log("Reviewed the known Alpha 117 → 118 protected preview browser-gate transition; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });

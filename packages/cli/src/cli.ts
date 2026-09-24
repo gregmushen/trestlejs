@@ -28,6 +28,7 @@ import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readAppl
 import { runCommand, runDevelopment } from "./processes.js";
 import { emailDeploymentIssues, inspectResendSender, validEmailAddress, type RemoteEmailEnvironment } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
+import { configureStripeWebhook } from "./stripe-webhook.js";
 import { stripeDeploymentIssues, stripeServerKeyMatchesMode } from "./stripe-deployment.js";
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
@@ -857,7 +858,7 @@ export function createProgram(runtime: CliRuntime): Command {
         mode, publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
         prices: wranglerStringVariable(block, "STRIPE_PRICES"), returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
       }, catalog);
-      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${Object.keys(catalog.plans).length}`, `Configuration:      ${problems.length ? `${problems.length} issue(s)` : "ready"}`, ""].join("\n"));
+      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present (remote match unverified)" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${Object.keys(catalog.plans).length}`, `Configuration:      ${problems.length ? `${problems.length} issue(s)` : "ready"}`, ""].join("\n"));
     });
   stripe.command("doctor")
     .option("--env <environment>", "billing environment", environment, "local")
@@ -874,7 +875,7 @@ export function createProgram(runtime: CliRuntime): Command {
         mode: wranglerStringVariable(block, "STRIPE_MODE"), publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
         prices: wranglerStringVariable(block, "STRIPE_PRICES"), returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
       }, catalog)].filter(Boolean);
-      runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Stripe ${options.env} credentials and mode agree\n`);
+      runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Stripe ${options.env} credentials and mode agree\n! Remote webhook signing-secret match requires endpoint setup and provider delivery evidence\n`);
       if (problems.length) throw new CliFailure("Stripe doctor found failures");
     });
   stripe.command("sync")
@@ -894,7 +895,40 @@ export function createProgram(runtime: CliRuntime): Command {
       if (report.items.some((item) => item.classification === "blocked")) throw new CliFailure("Stripe sync found blocked immutable drift");
     });
   stripe.command("listen").action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("stripe", ["listen", "--forward-to", "localhost:8787/webhooks/stripe"], { cwd: context.root, env: process.env }); });
-  stripe.command("webhook").action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("stripe", ["trigger", "customer.subscription.updated"], { cwd: context.root, env: process.env }); });
+  const stripeWebhook = stripe.command("webhook").description("test or configure a Stripe billing webhook");
+  stripeWebhook.command("configure")
+    .requiredOption("--env <environment>", "remote environment", environment)
+    .requiredOption("--url <url>", "exact deployed /webhooks/stripe URL")
+    .requiredOption("--api-key-stdin", "read a Stripe management key from standard input; never store it")
+    .option("--replace-endpoint-id <id>", "explicit old endpoint to disable after encrypted secret storage")
+    .option("--operation-id <id>", "stable operation ID for safe retries")
+    .option("--resume", "resume an interrupted operation with the same operation ID")
+    .option("--apply", "create and configure the endpoint after reviewing the plan")
+    .option("--yes", "confirm production mutation")
+    .action(async (options: { env: ReturnType<typeof environment>; url: string; apiKeyStdin: boolean; replaceEndpointId?: string; operationId?: string; resume?: boolean; apply?: boolean; yes?: boolean }, command: Command) => {
+      if (options.env === "local") throw new CliFailure("remote Stripe webhook configuration requires preview, staging, or production");
+      if (options.env === "production" && options.apply && !options.yes) throw new CliFailure("production webhook mutation requires --apply --yes after review");
+      if (!options.apiKeyStdin || !runtime.stdin) throw new CliFailure("Stripe management key must be supplied on standard input");
+      const apiKey = (await runtime.stdin()).trim();
+      const context = await projectContext(command, runtime);
+      if (!context.manifest.secrets?.STRIPE_WEBHOOK_SECRET) throw new CliFailure("STRIPE_WEBHOOK_SECRET must be declared before remote endpoint setup");
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      const report = await configureStripeWebhook({
+        environment: options.env, url: options.url, apiKey, apply: Boolean(options.apply),
+        ...(options.operationId ? { operationId: options.operationId } : {}),
+        ...(options.replaceEndpointId ? { replaceEndpointId: options.replaceEndpointId } : {}),
+        ...(options.resume ? { resume: true } : {}),
+        persistSecret: async (secret) => writeSecrets(context.root, options.env, { ...values, STRIPE_WEBHOOK_SECRET: secret }, selectedMasterKey(runtime)),
+      });
+      runtime.stdout([`Stripe ${options.env} webhook`, `URL: ${report.url}`, `Plan: ${report.classification}`,
+        `Enabled endpoint IDs: ${report.enabledEndpointIds.join(", ") || "none"}`,
+        ...(report.reason ? [`Review: ${report.reason}`] : []),
+        ...(report.createdEndpointId ? [`Created endpoint: ${report.createdEndpointId}`, "Signing secret stored in encrypted credentials; push secrets before testing delivery."] : []),
+        ...(report.disabledEndpointId ? [`Disabled old endpoint: ${report.disabledEndpointId}`] : []), ""].join("\n"));
+      if (options.apply && report.createdEndpointId) return;
+      if (options.apply) throw new CliFailure("Stripe webhook setup did not apply");
+    });
+  stripeWebhook.action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("stripe", ["trigger", "customer.subscription.updated"], { cwd: context.root, env: process.env }); });
   stripe.command("seed")
     .requiredOption("--organization <id>", "local organization ID")
     .option("--plan <plan>", "plan to activate", "pro")

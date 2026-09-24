@@ -236,6 +236,25 @@ Application code depends on `BillingService`, never Stripe SDK types. Verified
 webhooks update local subscription state, and authorization reads local
 entitlements rather than making live Stripe requests.
 
+For a deployed webhook, first review the exact endpoint URL using a Stripe
+management key on standard input. `status` and `doctor` cannot prove that an
+existing encrypted `whsec_` matches Stripe's endpoint: Stripe returns that
+secret only when the endpoint is created.
+
+```bash
+trestle payments stripe webhook configure --env staging \
+  --url https://your-worker.example.com/webhooks/stripe --api-key-stdin
+```
+
+After review, add `--apply --operation-id <stable-id>` to create the endpoint
+and store its signing secret in encrypted staging credentials. To rotate an
+existing destination, also name its exact ID with `--replace-endpoint-id`;
+Trestle disables only that endpoint after local secret storage succeeds. Keep
+the same operation ID and add `--resume` if interrupted. Push the encrypted
+credentials to the Worker, then prove delivery with a provider-signed test
+event. Production additionally requires `--yes`. The management key is never
+stored with the application's restricted runtime key.
+
 ## The TrestleJS way
 
 Trestle deliberately chooses one excellent path:
