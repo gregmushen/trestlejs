@@ -16,6 +16,8 @@ const r2Declared = r2Declaration[1] === "true";
 test.skip(process.env.TRESTLE_BROWSER_MODE !== "deployed", "Staging-only provider test");
 
 test("staging signs up through redirected Resend verification and switches organizations", async ({ page }) => {
+  // Resend inspection may take 90 seconds and Queue/Workflow delivery another 180.
+  test.setTimeout(450_000);
   const apiKey = process.env.RESEND_API_KEY;
   const apiOrigin = process.env.API_URL;
   if (!apiKey || !apiOrigin) throw new Error("The deployed product gate requires RESEND_API_KEY and API_URL");

@@ -842,6 +842,15 @@ was dispatched and its Queue/Workflow consumer receipt completed. This checks
 the real hosted path without exposing an internal status endpoint. The
 deterministic Workflow retry and duplicate-delivery challenge, as well as
 the first live staging run, remain open beta evidence.
+Alpha 111 gives that staging browser test a seven-and-a-half-minute timeout.
+The default 30-second Playwright limit was shorter than either the existing
+90-second Resend inspection window or the new 180-second Queue completion
+window, so a healthy deployed path could never complete reliably. This fixes
+the test budget; it is not evidence that staging has run.
+Its published-adjacent upgrade rehearsal also explicitly reviews the protected
+Alpha 109 → 110 deployment workflow: it requires an unchanged recorded
+baseline and the exact three-line staging transition before allowing the
+remaining source upgrade. Real application workflows still require review.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
