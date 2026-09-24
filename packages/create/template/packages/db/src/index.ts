@@ -38,6 +38,7 @@ export * from "./artifact-maintenance-schema.js";
 export * from "./artifact-maintenance.js";
 export * from "./artifacts.js";
 export * from "./billing-schema.js";
+export * from "./billing-events.js";
 export * from "./email-schema.js";
 export * from "./roles.js";
 export * from "./tenant-schema.js";

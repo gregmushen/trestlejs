@@ -145,9 +145,19 @@ try {
       "bounds simultaneous leases per endpoint across competing workers",
       "bounds one tenant across competing endpoints without throttling another tenant",
     ]);
+    await requireScenarios(project, "./packages/db", ["src/billing-events.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "commits the receipt, subscription, and entitlements together and ignores a duplicate",
+      "rolls back an invalid entitlement projection, records failure, then safely retries",
+      "serializes concurrent duplicate deliveries so the projection runs once",
+    ]);
     await run("pnpm", ["--filter", "./packages/data", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" });
+    await requireScenarios(project, "./apps/worker", ["src/billing-webhook.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "activates entitlements from a signed subscription once and acknowledges duplicates",
+      "rejects a signed subscription lacking tenant or plan metadata without an event receipt",
+      "records Checkout completion without granting paid entitlements before a subscription event",
+    ]);
     // Tenant-side admin-capability scenarios: cross-plane denial and a scoped API key before and after revocation.
     await requireScenarios(project, "./apps/worker", ["src/machine-access.integration.test.ts", "src/execution-context.test.ts", "src/access-routes.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "never lets organization ownership reach artifacts without an application role",
