@@ -1083,6 +1083,10 @@ signed Stripe subscription events returned HTTP 202 and the browser observed
 the paid entitlement. One earlier notification returned retryable HTTP 503
 while ownership was not yet projected; eventual retry/reconciliation coverage
 remains a separate beta hardening item.
+The Alpha 132 published-adjacent rehearsal also reviews the exact Alpha 130
+→ 131 auth manifest dependency on `context` against the recorded baseline,
+updates the workspace lockfile, and then applies the published source upgrade.
+The local two-tenant PostgreSQL rehearsal passes with forced RLS preserved.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.

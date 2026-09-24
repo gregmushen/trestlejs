@@ -391,6 +391,32 @@ try {
     await writeFile(workflowPath, target);
     console.log("Reviewed the known Alpha 129 → 130 protected preview cleanup transition; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.130" && after === "0.1.0-alpha.131") {
+    // Alpha 131's auth diagnostics import the generated context package. The
+    // published upgrade leaves package manifests for human review, so verify
+    // this exact new workspace dependency against the pristine Alpha 130
+    // baseline before updating the manifest and its lockfile.
+    const relative = "packages/auth/package.json";
+    const packagePath = path.join(project, relative);
+    const source = await readFile(packagePath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 130 auth manifest differs from its recorded baseline");
+    }
+    const expected = JSON.parse(source);
+    if (expected.dependencies?.["@upgrade-canary/context"] !== undefined) {
+      throw new Error("Published Alpha 130 auth manifest unexpectedly declares context");
+    }
+    expected.dependencies["@upgrade-canary/context"] = "workspace:*";
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (!isDeepStrictEqual(expected, JSON.parse(target))) {
+      throw new Error("Published Alpha 131 auth manifest differs from the reviewed context dependency change");
+    }
+    await writeFile(packagePath, target);
+    await run("pnpm", ["install"], project);
+    console.log("Reviewed the known Alpha 130 → 131 auth context dependency; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });
