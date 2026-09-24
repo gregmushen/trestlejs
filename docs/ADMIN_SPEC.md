@@ -30,10 +30,11 @@ in the TrestleJS repository) unless they name a TrestleJS package.
   IDs, and an optional `support_session_id`. Tenants read their own history
   through `GET /api/tenant/audit`.
 - **Optional platform admin.** `capabilities.admin` plus `apps.admin` create a
-  separate-origin SPA and admin Worker with sign-in only. It connects through
-  its own `trestle_platform` database login. Views: Overview, Health, Async
-  events, Webhooks, Artifacts, Subscriptions, Machine access, and Support
-  sessions. Operator roles are managed with `trestle admin grant|revoke|list`.
+  separate-origin SPA and admin Worker. Operators sign in with a password,
+  TOTP, or a passkey, and every platform change requires fresh step-up
+  assurance (§7.6). It connects through its own `trestle_platform` database
+  login. Views: Overview, Health, Async events, Webhooks, Artifacts,
+  Subscriptions, Machine access, Support sessions, and Account security. Operator roles are managed with `trestle admin grant|revoke|list`.
 - **Commercial controls.** Audited entitlement override grant and revoke, with
   tombstones. The customer-facing provenance does not show override reasons or
   authors.
@@ -55,7 +56,8 @@ in the TrestleJS repository) unless they name a TrestleJS package.
 - Organization permissions for member invitation, removal, and role
   assignment, and a Billing administrator organization role (§7.2).
 - Custom and resource-scoped application roles (§7.3).
-- Step-up authentication for sensitive platform actions (§7.5, §15).
+- An admin UI for recovering another operator's lost factors; recovery is a
+  database action today (§7.6).
 - Scope profiles, per-key rate limits, network (CIDR) restrictions, last-used
   and usage history, a service-account suspension API, and customer UI for
   machine access (§8).
@@ -181,10 +183,11 @@ policy, session cookies, and deployment configuration. It shares packages with
 the customer application but is not bundled into it.
 
 The admin origin exposes only `POST /api/auth/sign-in/email`,
-`POST /api/auth/sign-out`, and `GET /api/auth/get-session`. It has no sign-up.
-Every other admin route requires a signed-in user with at least one active
-platform role and the route's platform permission. Tenant membership or
-ownership grants nothing there.
+`POST /api/auth/sign-out`, `GET /api/auth/get-session`, and the operator's own
+two-factor and passkey endpoints (§7.6). It has no sign-up and no
+organization endpoints. Every other admin route requires a signed-in user with
+at least one active platform role and the route's platform permission. Tenant
+membership or ownership grants nothing there.
 
 Outside local development the admin Worker reads through `DATABASE_ADMIN_URL`,
 a distinct login granted only the `trestle_platform` database role. That role
@@ -581,8 +584,109 @@ pnpm exec trestle admin list --env local
 Platform permissions are narrowly scoped. Cross-tenant reads, each recovery
 action, override management, key revocation, and support-session use are
 separate permissions. Every platform action requires a reason, must come from
-the admin origin, and writes `audit_event` in the same transaction.
-**Deferred:** step-up authentication, and an admin view for platform roles.
+the admin origin, writes `audit_event` in the same transaction, and requires
+fresh step-up assurance (§7.6). **Deferred:** an admin view for platform
+roles.
+
+### 7.6 Operator authentication and step-up
+
+**Session assurance.** Each admin session records how it was authenticated in
+`authentication_assurance` (one row per session: `level`, `method`,
+`verified_at`). The level comes from the endpoint that created the session: a
+password sign-in is `password`; completing a two-factor challenge (TOTP or a
+backup code) is `mfa`; a passkey sign-in is `phishing_resistant`. A session
+that replaces an existing one (Better Auth rotates the session when a factor is
+enrolled or disabled) carries the prior session's level and `verified_at`, so
+enrolling a factor never upgrades or refreshes evidence. When there is nothing
+to carry, the new session has no row, and every check reports `missing` until
+the operator verifies again. A failed write also leaves the session without a
+row (fail closed). Rows cascade with their session.
+
+**Requirement.** Every non-GET admin API route with a platform permission
+checks the session's evidence before it runs. The environment comes from
+`APP_ENV`, and an unset `APP_ENV` is treated as production (fail closed).
+
+| Environment | Permission | Required level | Freshness |
+| --- | --- | --- | --- |
+| `local` | any | `password` | 15 minutes |
+| deployed (`preview`, `staging`, `production`, or unset) | any | `mfa` | 15 minutes |
+| deployed | `platform.roles.manage` | `phishing_resistant` | 15 minutes |
+
+A higher level satisfies a lower one. `GET /api/admin/session` reports
+`assurance` (`{ level, method, verifiedAt }` or `null`) and
+`stepUpRequiredAfter` (when the evidence stops being fresh, or `null` when
+none is recorded).
+
+**The 428 response.** A request whose evidence is missing, stale, or too weak
+is refused before it touches data:
+
+```json
+{ "error": "step_up_required", "required": "mfa", "maxAgeMinutes": 15,
+  "reason": "missing" | "stale" | "insufficient_level",
+  "message": "Re-authenticate with a second factor to perform this action" }
+```
+
+The admin UI answers a 428 with a re-authentication dialog that offers only
+the paths that reach `required` (`phishing_resistant`: a passkey; `mfa`: a
+password and code, or a passkey; `password`: a password), then retries the
+action once. The new session must belong to the operator who opened the
+dialog; another account's session is signed out and nothing is retried. The
+UI never sends `trustDevice`, so a later step-up always asks for the second
+factor again.
+
+**Factor management.** The admin origin proxies the operator's own factor
+endpoints: two-factor enable, disable, verify-totp, verify-backup-code, and
+generate-backup-codes, and passkey list, register, authenticate, and delete.
+Sign-in challenges stay open (verify-totp without a session,
+verify-backup-code, and passkey authentication); every other factor endpoint,
+and verify-totp with a session (completing enrollment), requires a platform
+operator. Enabling, disabling, or regenerating
+backup codes, and registering or deleting a passkey, require fresh evidence
+(15 minutes) at the strongest factor the account already has: a passkey
+requires `phishing_resistant`, TOTP requires `mfa`, and an account with no
+factor requires a fresh `password`. A phished TOTP code therefore cannot
+remove a passkey, and a stolen password cannot replace an enrolled factor.
+Refusals:
+
+- 401 `unauthorized`: no session.
+- 403 `forbidden` with `reason: "no_platform_roles"`: the account holds no
+  platform role.
+- 403 `forbidden` with `reason: "local_account"`: the seeded local operator
+  (`admin@trestle.local`) outside `APP_ENV=local`.
+- 428 `step_up_required`, as above.
+
+Factor changes write organization-less `security.*` audit events
+(`security.two_factor.enabled`, `security.passkey.added`, and so on) without
+credential material.
+
+**Account security view.** Every operator (`platform.overview.read`) has an
+Account security view at `/account/security`: this session's assurance and
+freshness, TOTP enrollment (the setup key and backup codes appear once),
+backup-code regeneration, and passkey registration and removal. Removing the
+last passkey asks for confirmation. The sign-in screen offers a passkey.
+
+**Operator recovery.** There is no self-service recovery and no admin UI for
+resetting another operator's factors (**Gap**). An operator who has lost
+every passkey, or their authenticator and backup codes, is recovered with a
+database action on the migration (owner) connection, after verifying the
+person out of band:
+
+```sql
+-- Replace the email; run on DATABASE_MIGRATION_URL.
+begin;
+delete from passkey where user_id = (select id from "user" where email = 'ops@example.com');
+delete from two_factor where user_id = (select id from "user" where email = 'ops@example.com');
+update "user" set two_factor_enabled = false where email = 'ops@example.com';
+delete from session where user_id = (select id from "user" where email = 'ops@example.com');
+commit;
+```
+
+Deleting the sessions signs the operator out everywhere; the cascade removes
+their assurance rows. They then sign in with their password and enroll new
+factors, which needs only a fresh password once no factor remains. Record the
+recovery in your change log: this path writes no `audit_event`. If the
+operator should lose platform access instead, revoke their roles with
+`trestle admin revoke`, which is audited.
 
 ## 8. Service Accounts, Scopes, and API Keys
 
@@ -858,6 +962,8 @@ The shipped views:
   and bytes per upload state, and stale pending uploads.
 - **Support sessions** (`platform.support_sessions.use`): see the Additions
   specification.
+- **Account security** (`platform.overview.read`): the operator's own
+  session assurance, TOTP, backup codes, and passkeys (§7.6).
 - **Subscriptions** (`platform.subscriptions.read`; capability `billing`):
   each organization's plan, status, and period end, and in detail its plan
   entitlements and overrides with internal reasons and authors. Granting or
@@ -1060,8 +1166,11 @@ mechanism.
 16. Destructive and bulk actions preview scope, use idempotency where
     applicable, and report partial failure. **Deferred:** the admin has no
     bulk actions yet.
-17. Sensitive platform actions require an explicit reason and come from the
-    admin origin. **Deferred:** step-up authentication.
+17. Sensitive platform actions require an explicit reason, come from the
+    admin origin, and require fresh step-up assurance: a password locally,
+    MFA when deployed, and a passkey to manage platform roles (§7.6). Factor
+    changes require the account's strongest enrolled factor. An unset
+    `APP_ENV` is treated as production.
 18. All inbound provider webhooks require signature verification and idempotent
     processing before updating authoritative projections.
 
@@ -1154,7 +1263,8 @@ The subsystem shipped in these slices (see `docs/ADMIN_INTEGRATION_PLAN.md`):
 8. Generated canary: with a database, `pnpm check:generated` requires named
    scenarios to pass. It covers the admin disabled and enabled, `trestle
    apply` parity, platform sign-in, cross-plane denial, support-session entry
-   and exit, and a scoped API key before and after revocation.
+   and exit, step-up for platform actions and factor changes, session
+   assurance recording, and a scoped API key before and after revocation.
 
 **Pending:** the first deployed run of the admin staging path. It needs an
 admin-enabled staging project with isolated resources, listed in
