@@ -1011,6 +1011,19 @@ isolated Neon database was created for its divergent migration history; the
 previous staging database was retained. Preview PR 10 has a separately
 configured signed Stripe test webhook, but automatic per-preview endpoint
 provisioning and cleanup are still required for a repeatable beta gate.
+The merged canary PR exposed another preview lifecycle gap: Cloudflare refuses
+to delete a Worker while it consumes a Queue, and refuses to delete the Queue
+while the Worker still binds it. Alpha 130 makes generated preview cleanup
+detach the exact preview Queue consumer and Worker binding before deleting the
+Worker, then removes its Queues. PR 10's leftover Worker and Queues were
+removed after verifying exact identities, and its isolated Stripe test webhook
+endpoint was disabled. Automatic Stripe endpoint lifecycle remains open.
+The canary main-branch staging deployment completed its provider preflight,
+migrations, Worker/Pages rollout, and smoke checks, but its first browser gate
+lost the active organization after navigation. A rerun reached the final R2
+checks and then received HTTP 500 while switching organizations. The earlier
+manual staging run passed on the same source commit, so deployed browser
+reliability is an unresolved beta gate rather than a passed production signal.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

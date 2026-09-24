@@ -48,6 +48,7 @@ describe("preview lifecycle", () => {
     expect(deploy).toContain("cloudflare-pages.mjs bind-service __TRESTLE_PROJECT_NAME__-staging __TRESTLE_PROJECT_NAME__-worker-staging");
     expect(deploy).toContain("cloudflare-pages.mjs bind-service __TRESTLE_PROJECT_NAME__ __TRESTLE_PROJECT_NAME__-worker");
     expect((deploy.match(/VITE_API_ORIGIN="\$\{\{ vars\.APP_URL \}\}"/gu) ?? [])).toHaveLength(2);
+    expect(preview).toContain('cloudflare-worker.mjs delete-preview "${{ steps.preview.outputs.worker_name }}"');
   });
 
   it("runs provider preflight before Neon or staging/production database mutations", async () => {
@@ -243,6 +244,73 @@ describe("preview lifecycle", () => {
     });
     expect(result).toMatchObject({ code: 0, stdout: "Deleted clearclose-worker-pr-42\n", stderr: "" });
     expect(requests).toEqual([{ method: "DELETE", url: "/accounts/account/workers/scripts/clearclose-worker-pr-42", authorization: "Bearer top-secret" }]);
+  });
+
+  it("detaches a preview Queue consumer and producer binding before deleting its Worker", async () => {
+    const requests: Array<{ method: string; url: string; body: string }> = [];
+    const base = await api((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => { body += String(chunk); });
+      request.on("end", () => {
+        const method = request.method ?? "";
+        const url = request.url ?? "";
+        requests.push({ method, url, body });
+        response.setHeader("content-type", "application/json");
+        const result = url.endsWith("/settings") && method === "GET"
+          ? { bindings: [{ type: "queue", name: "TRESTLE_EVENTS", queue_name: "clearclose-worker-pr-42-events" }] }
+          : url.startsWith("/accounts/account/queues?")
+            ? [{ queue_name: "clearclose-worker-pr-42-events", queue_id: "queue-id" }]
+            : url.endsWith("/consumers")
+              ? [{ script: "clearclose-worker-pr-42", consumer_id: "consumer-id" }, { script: "other-worker", consumer_id: "other-id" }]
+              : {};
+        response.end(JSON.stringify({ success: true, result }));
+      });
+    });
+    const result = await run("cloudflare-worker.mjs", ["delete-preview", "clearclose-worker-pr-42"], {
+      CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base,
+    });
+    expect(result).toMatchObject({ code: 0, stdout: "Deleted clearclose-worker-pr-42\n", stderr: "" });
+    expect(requests.map(({ method, url }) => `${method} ${url}`)).toEqual([
+      "GET /accounts/account/workers/scripts/clearclose-worker-pr-42/settings",
+      "GET /accounts/account/queues?page=1&per_page=100",
+      "GET /accounts/account/queues/queue-id/consumers",
+      "DELETE /accounts/account/queues/queue-id/consumers/consumer-id",
+      "PATCH /accounts/account/workers/scripts/clearclose-worker-pr-42/settings",
+      "DELETE /accounts/account/workers/scripts/clearclose-worker-pr-42",
+    ]);
+    expect(requests[4]?.body).toContain('"bindings":[]');
+    expect(JSON.stringify(result)).not.toContain("top-secret");
+  });
+
+  it("refuses to detach a non-preview Worker or unexpected Queue", async () => {
+    const base = await api((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end('{"success":true,"result":{"bindings":[{"type":"queue","queue_name":"other-project-events"}]}}');
+    });
+    const environment = { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base };
+    const production = await run("cloudflare-worker.mjs", ["delete-preview", "clearclose-worker"], environment);
+    expect(production.code).toBe(1);
+    expect(production.stderr).toContain("only isolated preview Workers");
+    const unexpected = await run("cloudflare-worker.mjs", ["delete-preview", "clearclose-worker-pr-42"], environment);
+    expect(unexpected.code).toBe(1);
+    expect(unexpected.stderr).toContain("unexpected Queue binding");
+  });
+
+  it("treats an already absent isolated preview Worker as clean", async () => {
+    const requests: string[] = [];
+    const base = await api((request, response) => {
+      requests.push(`${request.method} ${request.url}`);
+      response.statusCode = 404;
+      response.end('{"success":false}');
+    });
+    const result = await run("cloudflare-worker.mjs", ["delete-preview", "clearclose-worker-pr-42"], {
+      CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "top-secret", CLOUDFLARE_API_BASE: base,
+    });
+    expect(result).toMatchObject({ code: 0, stdout: "clearclose-worker-pr-42 already absent\n", stderr: "" });
+    expect(requests).toEqual([
+      "GET /accounts/account/workers/scripts/clearclose-worker-pr-42/settings",
+      "DELETE /accounts/account/workers/scripts/clearclose-worker-pr-42",
+    ]);
   });
 
   it("fails closed on provider errors and sanitizes the response", async () => {
