@@ -981,6 +981,20 @@ workflow states this explicitly and CI rejects a preview workflow that drops
 the guard. This removes unnecessary account-wide cron consumption from new
 previews; it does not resolve the existing Free-plan capacity needed for the
 cron-enabled staging gate.
+On 2026-09-24, the user authorized a temporary Tidal House cron pause to free
+one slot for Trestle staging. The `tidalhouse-ap-worker` receipt-matching sweep
+(`7 16 * * *` UTC) was removed through the Cloudflare schedule API, with its
+Worker and manual sweep endpoint preserved; account usage was verified at 4/5.
+Restore that exact schedule after the canary no longer requires the slot, and
+verify the account total and AP schedule afterward. A future Tidal House Worker
+deploy may restore it sooner, so recheck capacity before Trestle promotion.
+Alpha 127 makes the generated disabled-Queue and disabled-R2 CLI tests use
+isolated false-capability fixtures. They now pass even when an application
+enables both capabilities, as the beta canary does; no production Cloudflare
+behavior changes. Its published-adjacent upgrade rehearsal also narrowly
+reviews the Alpha 125 → 126 protected preview workflow change against the
+recorded source hash and exact target content rather than bypassing workflow
+review.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
