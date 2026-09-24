@@ -889,3 +889,111 @@ demonstrate a common need:
 The direction remains: strong conventions, visible application-owned source,
 local-first development, PostgreSQL-enforced tenant safety, and explicit
 operations.
+
+<!-- ===================== CUT LINE ===================== -->
+<!-- Everything below is an unscheduled proposal backlog. Release-loop and
+     implementation agents: do not implement, reorder, or edit anything below
+     this line unless the project owner explicitly schedules an item. -->
+
+---
+
+## Proposed Backlog (unscheduled, owner review)
+
+> **Do not act on this section.** These are proposals, not commitments. None are
+> scheduled, and none change the release plan above. The project owner moves
+> an item above the cut line when it is scheduled.
+
+Each item would ship like other optional capabilities:
+
+- a manifest flag, with generated files and bindings present only when it is enabled;
+- deploy steps guarded by that flag;
+- sanitized Health guidance when it is not configured;
+- a required canary scenario.
+
+The project's free-tier-first goal favors scale-to-zero, Cloudflare-native
+services. Provider free tiers change; confirm them before scheduling.
+
+### Suggested priority
+
+1. Customer UI for service accounts and API keys, audit history, application
+   roles, and regional settings. The APIs already ship; tenants cannot use
+   them without writing their own screens.
+2. OpenAPI generated from the central route policies, plus a typed client for
+   API keys. The drift tests already keep routes and policies aligned.
+3. Hyperdrive in front of Neon for connection pooling and query caching.
+4. Per-organization data export and account deletion.
+5. Exact per-API-key rate limits with Durable Objects.
+
+### Cost and scale
+
+- **Execution-context caching (KV).** Cache the subscription and effective
+  entitlements for about 60 seconds, and invalidate them when billing webhooks
+  or overrides change them. Do not cache role or API-key revocation: KV is
+  eventually consistent. The canary must prove a revoked key fails on its next
+  request.
+- **Hyperdrive.** Pool and cache Worker-to-Neon connections. For most apps this
+  is a bigger latency and cost win than KV.
+- **Rate limiting.**
+  - Durable Objects keep exact per-key and per-tenant token buckets, sized by
+    entitlements (for example `api.requests_per_minute`, adjustable by an audited
+    override) and returning 429 with `Retry-After`.
+  - The Workers Rate Limiting binding gives cheap, approximate abuse protection
+    for sign-in and unauthenticated routes.
+  - The same Durable Object can carry an instant key-revocation flag.
+- **Usage metering (Analytics Engine).**
+  - Write data points for API requests, artifact bytes, webhook deliveries, and
+    workflow runs.
+  - A scheduled job rolls them up into a forced-RLS `usage_rollup` table. That
+    table fills the customer usage page (currently `usage: []`) and an admin
+    Usage view.
+  - Analytics Engine samples at volume, so use it for dashboards and soft
+    quotas only. Billable counts must come from Durable Object counters or the
+    outbox.
+
+### Security
+
+- **Turnstile** on sign-up, sign-in, and password reset.
+- **Cloudflare Access (Zero Trust)** in front of the platform admin origin, as
+  defense in depth before platform sign-in.
+- **SSO (SAML/OIDC)** through Better Auth plugins, with domain verification and
+  enforced sign-in. This is deferred in `ADMIN_SPEC.md`.
+- **Service-account suspension routes.** The status column and credential
+  handling already exist.
+
+### Deferred admin and product gaps
+
+- **Notifications.** In-app and email digests driven by the outbox.
+- **Invitations and onboarding.** A generated flow: create organization, invite
+  team, create first resource.
+- **Trials, dunning, coupons, and referral codes** over the Stripe projection,
+  using entitlements to downgrade gracefully.
+- **Audit retention and per-organization audit export.**
+- **Backup evidence in the admin.** Show the last verified restore from
+  `backup-verify.yml` in Health.
+- **Public status page** generated from the smoke and Health data.
+- **`trestle doctor` checks for the admin:** its secrets, variables, and
+  Pages project, checked before deploy.
+
+### Additional Cloudflare capabilities
+
+- **Workers AI and AI Gateway** for AI features within a daily free allowance.
+- **Vectorize** for tenant-scoped semantic search.
+- **Images** for resizing and transforming R2 uploads.
+- **Browser Rendering** for PDF invoices and reports.
+- **Email Routing** for inbound support and reply-to flows.
+- **Custom Hostnames (Cloudflare for SaaS)** so customers can use their own
+  domains.
+- **D1** for edge-local, non-tenant data such as feature-flag snapshots.
+  Tenant data stays in PostgreSQL.
+
+### External services with useful free tiers
+
+- **Sentry** for errors across Workers and the SPAs.
+- **PostHog** for product analytics and feature flags, paired with entitlements.
+- **An uptime monitor** on the deployed smoke endpoints.
+- **Grafana Cloud** for searchable structured logs.
+
+### Agent and developer experience
+
+- **An MCP server for the tenant API,** authorized by scoped API keys, so
+  customers' agents act within the existing plane and scope boundaries.
