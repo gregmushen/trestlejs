@@ -414,7 +414,7 @@ try {
       throw new Error("Published Alpha 131 auth manifest differs from the reviewed context dependency change");
     }
     await writeFile(packagePath, target);
-    await run("pnpm", ["install"], project);
+    await run("pnpm", ["install", "--no-frozen-lockfile"], project);
     console.log("Reviewed the known Alpha 130 → 131 auth context dependency; all other source remains subject to source-apply review.");
   }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
