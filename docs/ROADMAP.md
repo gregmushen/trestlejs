@@ -1000,104 +1000,125 @@ operations.
 
 ## Proposed Backlog (unscheduled, owner review)
 
-> **Do not act on this section.** These are proposals, not commitments. None are
-> scheduled, and none change the release plan above. The project owner moves
-> an item above the cut line when it is scheduled.
+> **Do not act on this section.** These are proposals, not commitments. The
+> project owner moves an item above the cut line when it is scheduled.
 
-Each item would ship like other optional capabilities:
+### Selection rule
 
-- a manifest flag, with generated files and bindings present only when it is enabled;
-- deploy steps guarded by that flag;
-- sanitized Health guidance when it is not configured;
+A capability joins the framework only if it removes manual work every project
+does, or closes a security or cost risk every project has. It must also be
+testable locally and in the canary without live provider accounts. Anything
+else is application code.
+
+Each capability ships behind a manifest flag, with:
+
+- generated files present only when the flag is enabled;
+- guarded deploy steps;
+- Health guidance when it is not configured;
 - a required canary scenario.
 
-The project's free-tier-first goal favors scale-to-zero, Cloudflare-native
-services. Provider free tiers change; confirm them before scheduling.
+### Design principle: scale to zero
 
-### Suggested priority
+An idle generated project should cost close to nothing in every provider, not
+only in Cloudflare. No component may poll PostgreSQL on a fixed short interval,
+keep compute awake, or require an always-on server. Work is triggered by
+events. The only timers left are due-time alarms, set when work exists, and
+infrequent safety sweeps. Heavy or long work goes to Cloudflare Workflows or
+Containers, not a server on another cloud.
 
-1. Customer UI for service accounts and API keys, audit history, application
-   roles, and regional settings. The APIs already ship; tenants cannot use
-   them without writing their own screens.
-2. OpenAPI generated from the central route policies, plus a typed client for
-   API keys. The drift tests already keep routes and policies aligned.
-3. Hyperdrive in front of Neon for connection pooling and query caching.
-4. Per-organization data export and account deletion.
-5. Exact per-API-key rate limits with Durable Objects.
+### Selected (in order)
 
-### Cost and scale
+1. **Due-time scheduler, replacing the every-minute cron.**
+   - **The problem.** `queue-config.mjs` adds `* * * * *` whenever Queues or R2
+     are enabled. Each run queries Neon for outbox dispatch, native webhook
+     recovery, and artifact maintenance, so compute never suspends, even with
+     no users.
+   - **Dispatch on commit.** Send the Queue wake-up after the request commits.
+   - **The scheduler.** A single Durable Object acts as a dirty flag:
+     - code that creates future work records the work's due time with it;
+     - it sets an alarm for the earliest due time;
+     - the alarm drains due work and re-arms only if more remains.
+   - **Idle behavior.** With nothing pending there is no alarm and no database
+     connection. The object's own state answers "anything pending?".
+   - **Slower background work.** Maintenance runs hourly or daily; a safety
+     sweep runs every 10–15 minutes.
+   - Durable Object alarms run under `wrangler dev` and Miniflare.
+2. **Idle check in the canary.** An idle generated project makes zero database
+   queries over a sampled window. Created events still dispatch promptly, and a
+   scheduled webhook retry fires at its due time. This keeps the scale-to-zero
+   principle from regressing.
+3. **Project identity and the provisioning token.**
+   - **One identity block in `.trestle/project.yaml`:**
+     - project name and Cloudflare zone domain;
+     - derived site, app, api, admin, and admin-api hostnames;
+     - per-environment subdomains;
+     - email sender, reply-to, and sender domain;
+     - support address.
+   - **What it replaces.** Trestle derives `APP_URL`, `API_URL`, `WEB_ORIGIN`,
+     `EMAIL_FROM`, admin origins, and CORS origins, replacing every
+     `CHANGE_ME` and hand-set GitHub variable.
+   - **The setup token.** The user creates it from documented permissions,
+     scoped to one account and one zone:
+     - **Account:** Workers Scripts, Pages, R2, Queues, Turnstile, and Access
+       apps and policies, all Edit.
+     - **Zone:** Zone Read, plus DNS and Workers Routes, both Edit.
 
-- **Execution-context caching (KV).** Cache the subscription and effective
-  entitlements for about 60 seconds, and invalidate them when billing webhooks
-  or overrides change them. Do not cache role or API-key revocation: KV is
-  eventually consistent. The canary must prove a revoked key fails on its next
-  request.
-- **Hyperdrive.** Pool and cache Worker-to-Neon connections. For most apps this
-  is a bigger latency and cost win than KV.
-- **Rate limiting.**
-  - Durable Objects keep exact per-key and per-tenant token buckets, sized by
-    entitlements (for example `api.requests_per_minute`, adjustable by an audited
-    override) and returning 429 with `Retry-After`.
-  - The Workers Rate Limiting binding gives cheap, approximate abuse protection
-    for sign-in and unauthenticated routes.
-  - The same Durable Object can carry an instant key-revocation flag.
-- **Usage metering (Analytics Engine).**
-  - Write data points for API requests, artifact bytes, webhook deliveries, and
-    workflow runs.
-  - A scheduled job rolls them up into a forced-RLS `usage_rollup` table. That
-    table fills the customer usage page (currently `usage: []`) and an admin
-    Usage view.
-  - Analytics Engine samples at volume, so use it for dashboards and soft
-    quotas only. Billable counts must come from Durable Object counters or the
-    outbox.
+     Confirm the permission names in the dashboard when writing the docs. The
+     token stays local and encrypted; CI gets a narrow deploy token.
+   - **`trestle setup` flow:**
+     1. Verify the token and each permission with read-only calls.
+     2. Show a diff of what it will create.
+     3. Apply it idempotently: DNS records, Pages projects, custom domains, and
+        the Turnstile widget.
+     4. Record what it created.
+     5. Write keys and variables back.
+   - **Sender domain.** Create Resend's SPF and DKIM records in the zone and poll
+     until the domain is verified.
+   - **`trestle doctor`** checks the zone, hostname resolution and certificates,
+     sender verification, and that variables match the manifest.
+4. **Turnstile** on sign-up, sign-in, password reset, and the admin sign-in.
+   The widget is created by the provisioning flow for the configured hostnames.
+   Cloudflare's always-pass and always-fail test keys keep local runs and the
+   canary credential-free.
+5. **`trestle destroy --env <environment>`.** Remove exactly the resources that
+   setup recorded, so abandoned environments stop accruing cost.
 
-### Security
+### Later (after the selected items)
 
-- **Turnstile** on sign-up, sign-in, and password reset.
-- **Cloudflare Access (Zero Trust)** in front of the platform admin origin, as
-  defense in depth before platform sign-in.
-- **SSO (SAML/OIDC)** through Better Auth plugins, with domain verification and
-  enforced sign-in. This is deferred in `ADMIN_SPEC.md`.
-- **Service-account suspension routes.** The status column and credential
-  handling already exist.
+- **Cloudflare Access in front of the platform admin.** It needs the custom
+  admin domains from item 3. The admin Worker verifies the Access JWT and
+  disables its `workers.dev` route.
+- **Generated scheduled jobs** (`trestle generate job`) on the item-1
+  scheduler.
+- **Exact per-API-key rate limits** in Durable Objects, sized by entitlements.
+  Use the Workers Rate Limiting binding for cheap abuse protection.
+- **Customer UI for shipped APIs:** service accounts and keys, audit history,
+  application roles, and regional settings.
+- **OpenAPI from the central route policies,** with a typed client for API keys.
+- **Secret rotation automation** (`trestle secrets rotate`), building on
+  dual-value secrets.
 
-### Deferred admin and product gaps
+### Parked (only when a real application needs it)
 
-- **Notifications.** In-app and email digests driven by the outbox.
-- **Invitations and onboarding.** A generated flow: create organization, invite
-  team, create first resource.
-- **Trials, dunning, coupons, and referral codes** over the Stripe projection,
-  using entitlements to downgrade gracefully.
-- **Audit retention and per-organization audit export.**
-- **Backup evidence in the admin.** Show the last verified restore from
-  `backup-verify.yml` in Health.
-- **Public status page** generated from the smoke and Health data.
-- **`trestle doctor` checks for the admin:** its secrets, variables, and
-  Pages project, checked before deploy.
-
-### Additional Cloudflare capabilities
-
-- **Workers AI and AI Gateway** for AI features within a daily free allowance.
-- **Vectorize** for tenant-scoped semantic search.
-- **Images** for resizing and transforming R2 uploads.
-- **Browser Rendering** for PDF invoices and reports.
-- **Email Routing** for inbound support and reply-to flows.
-- **Custom Hostnames (Cloudflare for SaaS)** so customers can use their own
-  domains.
-- **D1** for edge-local, non-tenant data such as feature-flag snapshots.
-  Tenant data stays in PostgreSQL.
-
-### External services with useful free tiers
-
-- **Sentry** for errors across Workers and the SPAs.
-- **PostHog** for product analytics and feature flags, paired with entitlements.
-- **An uptime monitor** on the deployed smoke endpoints.
-- **Grafana Cloud** for searchable structured logs.
-
-### Agent and developer experience
-
-- **An MCP server for the tenant API,** authorized by scoped API keys, so
-  customers' agents act within the existing plane and scope boundaries.
+- **Cost and caching:** Hyperdrive, KV caching of execution-context lookups,
+  Analytics Engine usage metering and quotas, and an admin cost view.
+- **Realtime:** hibernating Durable Object WebSockets.
+- **Data and tenancy:** regional data placement, staging built from anonymized
+  production data, and per-tenant custom domains (Cloudflare for SaaS).
+- **Cloudflare services:** Workers AI and AI Gateway, Vectorize, Images, Browser
+  Rendering, Email Routing, and D1.
+- **External services:** Sentry, PostHog, an uptime monitor, and Grafana Cloud.
+- **Product features:**
+  - SSO through Better Auth plugins;
+  - notifications and digests;
+  - invitations and onboarding flows;
+  - trials, dunning, coupons, and referral codes;
+  - audit retention and export;
+  - backup evidence in Health;
+  - a public status page;
+  - per-organization data export and deletion;
+  - an MCP server for the tenant API.
+- **Preview environments:** a seeded demo in every preview.
 
 ### Admin follow-ups from the spec review (not yet fixed)
 
@@ -1156,94 +1177,8 @@ services. Provider free tiers change; confirm them before scheduling.
 - **Customer webhook management:** edit, delete, test event, and secret
   rotation where they are not yet generated.
 
-### Operations and cost watch-points
+### Housekeeping
 
-- **The first deployed run of the admin staging path.** It needs an
-  admin-enabled staging project with isolated resources; see
-  `ADMIN_INTEGRATION_PLAN.md`.
-- **Neon compute.** Expect compute cost once steady traffic keeps it from
-  scaling to zero. Hyperdrive and caching reduce it.
-- **Per-PR preview teardown.** Every preview creates Neon branches, Workers,
-  Pages projects, and R2 buckets. Keep teardown reliable and audited so
-  orphaned resources never accrue cost.
-- **Breadth versus upgrade safety.** Each optional capability multiplies the
-  combinations that `trestle upgrade` and the canary must cover. Prefer
-  hardening and canary coverage of existing capabilities over adding new ones.
-- **Housekeeping.** Close #54 and #57; the merged admin slices supersede them.
-
-### Design principle: scale to zero
-
-An idle generated project should cost close to nothing in every provider, not
-only in Cloudflare. No component may poll PostgreSQL on a fixed short interval,
-keep compute awake, or require an always-on server. Work is triggered by
-events. The only timers left are due-time alarms, set when work exists, and
-infrequent safety sweeps. Any new capability must state its idle cost.
-
-### Scale-to-zero scheduling (candidate to schedule soon)
-
-Today `queue-config.mjs` adds an every-minute cron whenever Queues or R2 are
-enabled. Each run queries Neon: outbox dispatch, native webhook recovery, and
-artifact maintenance. Neon suspends after about five idle minutes, so this keeps
-compute awake around the clock, even for a project with no users. Moving the
-beat to another host would not help; the database would still never sleep.
-
-- **Event-driven dispatch.** After the request transaction commits its outbox
-  row, send the Queue wake-up immediately. Keep a slow safety sweep
-  (10–15 minutes) for anything missed.
-- **Durable Object "dirty flag" scheduler.**
-  - Code that creates future work pokes a single scheduler Durable Object with
-    the work's due time: an outbox row, a webhook retry with backoff, a pending
-    artifact upload.
-  - The object sets an alarm for the earliest due time. The alarm drains due
-    work and re-arms only if more remains.
-  - With nothing pending there is no alarm, and the database sleeps.
-- **"Anything pending?" before connecting.** The scheduler's own state answers
-  whether work exists, so a quiet period opens no database connection.
-- **Slower maintenance.** Artifact cleanup, retention, and reference audits run
-  hourly or daily, not every minute.
-- **Canary proof.**
-  - An idle generated project makes no database queries over a sampled window.
-  - A created event is still dispatched promptly.
-  - A scheduled webhook retry fires at its due time.
-- **Heavy or long work** that Workers cannot run goes to Cloudflare Workflows
-  or Containers, not a VM on another cloud. This keeps one vendor and the
-  scale-to-zero model.
-
-### Provisioning token and automated project identity
-
-- **One identity block in `.trestle/project.yaml`:**
-  - project name and Cloudflare zone domain;
-  - hostnames derived from the domain: site, app, api, admin, admin-api;
-  - per-environment subdomains, such as `staging`;
-  - email sender, reply-to, and sender domain;
-  - support address.
-
-  Trestle derives `APP_URL`, `API_URL`, `WEB_ORIGIN`, `EMAIL_FROM`, admin
-  origins, and CORS origins from it, replacing every `CHANGE_ME` and
-  hand-set GitHub variable.
-- **Setup token, created by the user from documented permissions.** Scope it to
-  one account and one zone:
-  - **Account:** Workers Scripts, Pages, R2, Queues, Turnstile, and Access apps
-    and policies, all Edit. Add KV and Analytics only when those capabilities
-    are enabled.
-  - **Zone:** Zone Read, plus DNS, Workers Routes, and Email Routing, all Edit.
-
-  Confirm the permission names in the Cloudflare dashboard when writing the
-  docs.
-- **Two tokens.** The broad setup token stays local and encrypted, used by
-  `trestle setup` and `trestle apply`. CI gets a narrow deploy token (Workers,
-  Pages, R2, Queues), so a compromised pipeline cannot rewrite DNS or remove
-  Access.
-- **`trestle setup` provisioning flow:**
-  1. Verify the token and each required permission with read-only calls.
-  2. Show a diff of what it will create: DNS records, Pages projects, custom
-     domains, the Turnstile widget, the Access application, and Resend's
-     SPF/DKIM records.
-  3. Apply it idempotently, in the style of `cloudflare-pages.mjs`.
-  4. Record what it created, so it can be verified or torn down.
-  5. Write keys and derived variables back.
-- **Sender domain automation.** Read Resend's required DNS records, create them
-  in the Cloudflare zone, and poll until Resend reports the domain verified.
-- **`trestle doctor` checks:** the zone exists; hostnames resolve and have
-  certificates; the sender domain is verified; `workers.dev` routes are
-  disabled where custom domains apply; GitHub variables match the manifest.
+- Close #54 and #57; the merged admin slices supersede them.
+- Run the admin staging path for the first time once an admin-enabled staging
+  project has isolated resources (see `ADMIN_INTEGRATION_PLAN.md`).
