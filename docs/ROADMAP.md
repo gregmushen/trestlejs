@@ -1170,3 +1170,80 @@ services. Provider free tiers change; confirm them before scheduling.
   combinations that `trestle upgrade` and the canary must cover. Prefer
   hardening and canary coverage of existing capabilities over adding new ones.
 - **Housekeeping.** Close #54 and #57; the merged admin slices supersede them.
+
+### Design principle: scale to zero
+
+An idle generated project should cost close to nothing in every provider, not
+only in Cloudflare. No component may poll PostgreSQL on a fixed short interval,
+keep compute awake, or require an always-on server. Work is triggered by
+events. The only timers left are due-time alarms, set when work exists, and
+infrequent safety sweeps. Any new capability must state its idle cost.
+
+### Scale-to-zero scheduling (candidate to schedule soon)
+
+Today `queue-config.mjs` adds an every-minute cron whenever Queues or R2 are
+enabled. Each run queries Neon: outbox dispatch, native webhook recovery, and
+artifact maintenance. Neon suspends after about five idle minutes, so this keeps
+compute awake around the clock, even for a project with no users. Moving the
+beat to another host would not help; the database would still never sleep.
+
+- **Event-driven dispatch.** After the request transaction commits its outbox
+  row, send the Queue wake-up immediately. Keep a slow safety sweep
+  (10–15 minutes) for anything missed.
+- **Durable Object "dirty flag" scheduler.**
+  - Code that creates future work pokes a single scheduler Durable Object with
+    the work's due time: an outbox row, a webhook retry with backoff, a pending
+    artifact upload.
+  - The object sets an alarm for the earliest due time. The alarm drains due
+    work and re-arms only if more remains.
+  - With nothing pending there is no alarm, and the database sleeps.
+- **"Anything pending?" before connecting.** The scheduler's own state answers
+  whether work exists, so a quiet period opens no database connection.
+- **Slower maintenance.** Artifact cleanup, retention, and reference audits run
+  hourly or daily, not every minute.
+- **Canary proof.**
+  - An idle generated project makes no database queries over a sampled window.
+  - A created event is still dispatched promptly.
+  - A scheduled webhook retry fires at its due time.
+- **Heavy or long work** that Workers cannot run goes to Cloudflare Workflows
+  or Containers, not a VM on another cloud. This keeps one vendor and the
+  scale-to-zero model.
+
+### Provisioning token and automated project identity
+
+- **One identity block in `.trestle/project.yaml`:**
+  - project name and Cloudflare zone domain;
+  - hostnames derived from the domain: site, app, api, admin, admin-api;
+  - per-environment subdomains, such as `staging`;
+  - email sender, reply-to, and sender domain;
+  - support address.
+
+  Trestle derives `APP_URL`, `API_URL`, `WEB_ORIGIN`, `EMAIL_FROM`, admin
+  origins, and CORS origins from it, replacing every `CHANGE_ME` and
+  hand-set GitHub variable.
+- **Setup token, created by the user from documented permissions.** Scope it to
+  one account and one zone:
+  - **Account:** Workers Scripts, Pages, R2, Queues, Turnstile, and Access apps
+    and policies, all Edit. Add KV and Analytics only when those capabilities
+    are enabled.
+  - **Zone:** Zone Read, plus DNS, Workers Routes, and Email Routing, all Edit.
+
+  Confirm the permission names in the Cloudflare dashboard when writing the
+  docs.
+- **Two tokens.** The broad setup token stays local and encrypted, used by
+  `trestle setup` and `trestle apply`. CI gets a narrow deploy token (Workers,
+  Pages, R2, Queues), so a compromised pipeline cannot rewrite DNS or remove
+  Access.
+- **`trestle setup` provisioning flow:**
+  1. Verify the token and each required permission with read-only calls.
+  2. Show a diff of what it will create: DNS records, Pages projects, custom
+     domains, the Turnstile widget, the Access application, and Resend's
+     SPF/DKIM records.
+  3. Apply it idempotently, in the style of `cloudflare-pages.mjs`.
+  4. Record what it created, so it can be verified or torn down.
+  5. Write keys and derived variables back.
+- **Sender domain automation.** Read Resend's required DNS records, create them
+  in the Cloudflare zone, and poll until Resend reports the domain verified.
+- **`trestle doctor` checks:** the zone exists; hostnames resolve and have
+  certificates; the sender domain is verified; `workers.dev` routes are
+  disabled where custom domains apply; GitHub variables match the manifest.
