@@ -182,6 +182,19 @@ describe("platform admin Worker", () => {
     expect(await call("POST", "/api/auth/two-factor/enable", { body: {} })).toMatchObject({ status: 200 });
   });
 
+  it("treats an unset APP_ENV as deployed for the local account and the platform connection", async () => {
+    const { APP_ENV: _unset, ...unset } = environment;
+    adminDependencies.session = async () => ({ user: { id: "local-admin", email: "admin@trestle.local" }, session: { id: "session-1" } });
+    const configured = { ...unset, DATABASE_ADMIN_URL: environment.DATABASE_URL };
+    expect(await call("GET", "/api/admin/session", {}, configured)).toMatchObject({ status: 403, body: { reason: "local_account" } });
+    expect(await call("POST", "/api/auth/two-factor/enable", { body: {} }, configured)).toMatchObject({ status: 403, body: { reason: "local_account" } });
+    expect(state.forwarded).toBe(0);
+
+    // Without APP_ENV the admin never falls back to the application's database login.
+    adminDependencies.session = async () => ({ user: { id: state.userId, email: `${state.userId}@example.test` }, session: { id: "session-1" } });
+    expect(await call("GET", "/api/admin/session", {}, unset)).toMatchObject({ status: 503, body: { error: "not_configured", repair: "pnpm exec trestle setup --env production" } });
+  });
+
   it("checks assurance only where it is needed and fails closed", async () => {
     // Reads never require step-up, and do not look assurance up.
     adminDependencies.assurance = async () => { throw new Error("assurance lookup failed"); };

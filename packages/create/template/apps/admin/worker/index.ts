@@ -64,14 +64,14 @@ function authDatabase(environment: AdminEnvironment): Database {
   return createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER);
 }
 
-/** Step-up fails closed: a Worker without APP_ENV is treated as deployed. */
-function assuranceEnvironment(environment: AdminEnvironment) {
+/** The only reader of APP_ENV. Fails closed: a Worker without it is treated as production. */
+function adminEnvironment(environment: AdminEnvironment): NonNullable<AdminEnvironment["APP_ENV"]> {
   return environment.APP_ENV ?? "production";
 }
 
 function platformConnection(environment: AdminEnvironment): string {
   if (environment.DATABASE_ADMIN_URL) return environment.DATABASE_ADMIN_URL;
-  if ((environment.APP_ENV ?? "local") === "local") return environment.DATABASE_URL;
+  if (adminEnvironment(environment) === "local") return environment.DATABASE_URL;
   throw new AdminConfigurationError("DATABASE_ADMIN_URL is required outside local development");
 }
 
@@ -117,7 +117,7 @@ function stepUpRequired(context: AdminContext, requirement: AssuranceRequirement
 
 /** The seeded local operator (admin/admin) can never operate a deployed platform. */
 function localAccountDenied(context: AdminContext, session: Session): Response | null {
-  return session.user.email === localAdminEmail && (context.env.APP_ENV ?? "local") !== "local" ? context.json({ error: "forbidden", reason: "local_account", message: "The default local admin account cannot be used outside local development" }, 403) : null;
+  return session.user.email === localAdminEmail && adminEnvironment(context.env) !== "local" ? context.json({ error: "forbidden", reason: "local_account", message: "The default local admin account cannot be used outside local development" }, 403) : null;
 }
 
 /**
@@ -182,7 +182,7 @@ admin.use("/api/admin/*", async (context, next) => {
     const assurance = change || context.req.path === "/api/admin/session" ? await adminDependencies.assurance(authDatabase(context.env), session.session.id) : null;
     context.set("assurance", assurance);
     if (change) {
-      const requirement = platformAssuranceRequirement(policy.permission!, assuranceEnvironment(context.env));
+      const requirement = platformAssuranceRequirement(policy.permission!, adminEnvironment(context.env));
       const result = meetsRequirement(assurance, requirement, new Date());
       if (!result.ok) return stepUpRequired(context, requirement, result.reason);
     }
@@ -192,7 +192,6 @@ admin.use("/api/admin/*", async (context, next) => {
     await next();
   } catch (error) {
     if (error instanceof AccessDeniedError) return context.json(publicDenial(error.decision), error.status);
-    if (error instanceof AdminConfigurationError) return context.json({ error: "not_configured", message: error.message, repair: `pnpm exec trestle setup --env ${context.env.APP_ENV ?? "local"}` }, 503);
     throw error;
   }
 });
@@ -200,7 +199,7 @@ admin.use("/api/admin/*", async (context, next) => {
 admin.get("/api/admin/session", async (context) => {
   const access = context.get("access");
   const operator = context.get("operator");
-  const environment = context.env.APP_ENV ?? "local";
+  const environment = adminEnvironment(context.env);
   const database = platformDatabase(context.env);
   // Display context only: authority is checked on every request, so a failed lookup shows no support banner rather than failing sign-in.
   const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" });
@@ -238,7 +237,7 @@ type AdminContext = Context<{ Bindings: AdminEnvironment; Variables: Variables }
 async function actionContext(context: AdminContext, body?: { reason?: unknown }): Promise<PlatformChangeContext> {
   body ??= await context.req.json().catch(() => ({})) as { reason?: unknown };
   if (typeof body.reason !== "string") throw new PlatformOperationError("invalid", "A reason is required");
-  return { actor: { type: "platform_operator", id: context.get("operator").id }, reason: body.reason, environment: context.env.APP_ENV ?? "local", correlationId: context.get("correlationId") };
+  return { actor: { type: "platform_operator", id: context.get("operator").id }, reason: body.reason, environment: adminEnvironment(context.env), correlationId: context.get("correlationId") };
 }
 
 const iso = (value: Date | null) => value?.toISOString() ?? null;
@@ -441,7 +440,7 @@ admin.get("/api/admin/support/sessions/:id/organization", async (context) => {
   // Tenant data is readable only inside the operator's own open, unexpired session.
   const session = await activeSupportSession(database, context.req.param("id"), operator.id);
   if (!session) return context.json({ error: "forbidden", reason: "support_session_required", message: "Start a support session for this organization first" }, 403);
-  const view = await supportOrganizationView(database, session, { actor: { type: "platform_operator", id: operator.id }, environment: context.env.APP_ENV ?? "local", correlationId: context.get("correlationId") });
+  const view = await supportOrganizationView(database, session, { actor: { type: "platform_operator", id: operator.id }, environment: adminEnvironment(context.env), correlationId: context.get("correlationId") });
   return context.json({
     ...view,
     organization: view.organization && { ...view.organization, createdAt: view.organization.createdAt.toISOString() },
@@ -517,7 +516,7 @@ export function capabilityGuidance(status: unknown, environment: string) {
 }
 
 admin.get("/api/admin/health", async (context) => {
-  const environment = context.env.APP_ENV ?? "local";
+  const environment = adminEnvironment(context.env);
   const reachable = await databaseReachable(platformDatabase(context.env));
   let application: { reachable: boolean; capabilities: ReturnType<typeof capabilityGuidance> };
   try {
@@ -535,7 +534,7 @@ admin.get("/api/admin/health", async (context) => {
 const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const;
 
 admin.onError((error, context) => {
-  if (error instanceof AdminConfigurationError) return context.json({ error: "not_configured", message: error.message, repair: `pnpm exec trestle setup --env ${context.env.APP_ENV ?? "local"}` }, 503);
+  if (error instanceof AdminConfigurationError) return context.json({ error: "not_configured", message: error.message, repair: `pnpm exec trestle setup --env ${adminEnvironment(context.env)}` }, 503);
   if (error instanceof PlatformOperationError || error instanceof MachineAccessError || error instanceof PlatformRoleError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code as keyof typeof operationStatus] ?? 400);
   createLogger({ correlationId: context.get("correlationId"), surface: "admin" }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);
