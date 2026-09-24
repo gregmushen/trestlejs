@@ -71,6 +71,20 @@ describe("generated CI deployment contract", () => {
     expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.checkout-write", status: "fail" }));
   });
 
+  it("requires protected Resend delivery to verify the actual redirected recipient", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const sourcePath = path.join(templateRoot, "packages", "integrations", "src", "provider.integration.test.ts");
+    const targetPath = path.join(root, "packages", "integrations", "src", "provider.integration.test.ts");
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(targetPath, source);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.resend-delivery", status: "pass" }));
+    await writeFile(targetPath, source.replace("expect(accepted.to).toEqual([staging.EMAIL_STAGING_REDIRECT])", "expect(accepted.to).toHaveLength(1)"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.resend-delivery", status: "fail" }));
+  });
+
   it("rejects preview email that can bypass recipient redirection", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);

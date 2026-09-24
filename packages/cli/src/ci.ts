@@ -91,6 +91,11 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     && (providerTests.match(/adapter\.createCheckoutSession\(input\)/gu) ?? []).length >= 2
     && providerTests.includes("expect(retry.id).toBe(first.id)"),
   "protected provider verification creates a test-mode Checkout session and checks idempotent retry"));
+  checks.push(check("ci.providers.resend-delivery", providerTests.includes("createEmailService")
+    && (providerTests.match(/service\.send\(message, options\)/gu) ?? []).length >= 2
+    && providerTests.includes("api.resend.com/emails/")
+    && providerTests.includes("expect(accepted.to).toEqual([staging.EMAIL_STAGING_REDIRECT])"),
+  "protected provider verification checks accepted Resend mail reaches only the staging redirect and is idempotent"));
   const emailFactory = await readFile(path.join(root, "packages", "integrations", "src", "email", "index.ts"), "utf8").catch(() => "");
   const emailTests = await readFile(path.join(root, "packages", "integrations", "src", "email", "email.test.tsx"), "utf8").catch(() => "");
   checks.push(check("ci.email.nonproduction-redirect", emailFactory.includes('environment === "preview" || environment === "staging"')

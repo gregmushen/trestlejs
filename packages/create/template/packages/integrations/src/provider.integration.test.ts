@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
 
 import { readStagingProviderVariables } from "./provider-staging-config.js";
 import { StripeBillingAdapter } from "./payments/adapters/stripe.js";
+import { createEmailService } from "./email/index.js";
 
 const enabled = process.env.TRESTLE_PROVIDER_INTEGRATION_TESTS === "1";
 const provider = enabled ? describe : describe.skip;
@@ -17,6 +19,33 @@ provider("protected staging providers", () => {
     expect(redirect).toMatch(/^[^@\s]+@[^@\s]+$/u);
     const response = await fetch("https://api.resend.com/domains", { headers: { authorization: `Bearer ${key}` } });
     expect(response.ok, `Resend returned HTTP ${response.status}`).toBe(true);
+  });
+
+  it("sends one safely redirected staging message across an idempotent retry", async () => {
+    const key = process.env.RESEND_API_KEY;
+    const staging = await readStagingProviderVariables();
+    expect(key).toMatch(/^re_/u);
+    expect(staging.EMAIL_DELIVERY_MODE).toBe("resend");
+    expect(staging.EMAIL_STAGING_REDIRECT).toMatch(/^[^@\s]+@[^@\s]+$/u);
+    const service = createEmailService({
+      mode: "resend", environment: "staging", resendApiKey: key!, from: staging.EMAIL_FROM!,
+      stagingRedirect: staging.EMAIL_STAGING_REDIRECT!,
+    });
+    const message = {
+      to: `trestle-provider-${crypto.randomUUID()}@example.test`,
+      subject: "Trestle provider verification",
+      template: { name: "ProviderVerification", props: {}, render: () => createElement("p", null, "Trestle staging provider verification") },
+    };
+    const options = { idempotencyKey: `provider-verification:${crypto.randomUUID()}` };
+    const first = await service.send(message, options);
+    const retry = await service.send(message, options);
+    expect(first.id.length).toBeGreaterThan(0);
+    expect(retry.id).toBe(first.id);
+    const response = await fetch(`https://api.resend.com/emails/${encodeURIComponent(first.id)}`, { headers: { authorization: `Bearer ${key}` } });
+    expect(response.ok, `Resend email inspection returned HTTP ${response.status}`).toBe(true);
+    const accepted = await response.json() as { to?: string[]; subject?: string };
+    expect(accepted.to).toEqual([staging.EMAIL_STAGING_REDIRECT]);
+    expect(accepted.subject).toBe(`[STAGING → ${message.to}] ${message.subject}`);
   });
 
   it("authenticates to Stripe test mode without creating resources", async () => {

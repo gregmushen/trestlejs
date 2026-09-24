@@ -214,8 +214,9 @@ pnpm exec trestle email doctor --env staging
 ```
 
 Application code depends on `EmailService`, templates are application-owned
-React Email components, and production uses the Resend adapter. Staging has a
-safe recipient policy so test traffic does not silently reach real users.
+React Email components, and production uses the Resend adapter. Preview and
+staging require recipient redirection so test traffic does not silently reach
+real users.
 
 ## Billing without a Stripe account
 

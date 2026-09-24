@@ -59,14 +59,20 @@ DATABASE_URL: postgres://trestle:trestle@localhost:55432/__TRESTLE_PROJECT_NAME_
 Email is captured locally by default. Use `pnpm exec trestle email list`,
 `pnpm exec trestle email show <id>`, `pnpm exec trestle email open <id>`, and
 `pnpm exec trestle email clear` while the
-Worker is running. Staging and production use the Resend adapter with
+Worker is running. Preview, staging, and production use the Resend adapter with
 `RESEND_API_KEY` and `RESEND_WEBHOOK_SECRET` stored through `trestle secrets`;
-`EMAIL_FROM`, `EMAIL_REPLY_TO`, and the staging redirect recipient are typed
-non-secret deployment configuration.
+`EMAIL_FROM`, `EMAIL_REPLY_TO`, and the preview/staging redirect recipient are
+typed non-secret deployment configuration. Preview and staging require that
+redirect: direct provider delivery to the original recipient is reserved for
+production.
 
 Verify provider lifecycle and staging safety with `pnpm exec trestle email
 doctor --env staging`. The generated protected provider workflow performs a
-read-only Resend-domain and Stripe-test-account check when manually dispatched.
+real staging test only when manually dispatched: it authenticates the provider
+keys, sends one harmless Resend message through the recipient redirect and
+verifies the accepted recipient and idempotent retry, then creates a Stripe
+test-mode Checkout session and verifies its idempotent retry. It sends no
+email to the original `example.test` address and completes no payment.
 
 Cloud deployments use Neon's Worker-native WebSocket driver so interactive
 PostgreSQL transactions work. The legacy `neon-http` driver setting is treated
