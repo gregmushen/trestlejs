@@ -85,6 +85,30 @@ test("staging signs up through redirected Resend verification and switches organ
     expect((await changed).status()).toBe(200);
     await expect(selector).toHaveValue(organizationId);
   };
+
+  await switchOrganization(firstId!);
+  const checkoutInput = { plan: "pro", requestId: `staging-${nonce}` };
+  const checkoutHeaders = { "content-type": "application/json", "x-trestle-tenant": firstId! };
+  const checkoutRequest = () => page.context().request.post(`${apiOrigin}/api/billing/checkout`, {
+    headers: checkoutHeaders,
+    data: checkoutInput,
+  });
+  const checkoutResponse = await checkoutRequest();
+  expect(checkoutResponse.status()).toBe(200);
+  const checkout = await checkoutResponse.json() as { id: string; url: string };
+  expect(checkout.id).toMatch(/^cs_test_/u);
+  expect(new URL(checkout.url).origin).toBe("https://checkout.stripe.com");
+  const checkoutRetry = await checkoutRequest();
+  expect(checkoutRetry.status()).toBe(200);
+  expect((await checkoutRetry.json() as { id: string }).id).toBe(checkout.id);
+  const beforePayment = await page.context().request.get(`${apiOrigin}/api/billing/subscription`, { headers: { "x-trestle-tenant": firstId! } });
+  expect(beforePayment.status()).toBe(200);
+  expect((await beforePayment.json() as { subscription: unknown }).subscription).toBeNull();
+  const forgedCheckout = await page.context().request.post(`${apiOrigin}/api/billing/checkout`, {
+    headers: { ...checkoutHeaders, "x-trestle-tenant": crypto.randomUUID() }, data: checkoutInput,
+  });
+  expect(forgedCheckout.status()).toBe(404);
+
   if (articleDeclared) {
     const firstName = `Staging first ${nonce}`;
     const editedName = `Staging edited ${nonce}`;

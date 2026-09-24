@@ -76,6 +76,9 @@ const createWebhookEndpointSchema = z.object({
   destinationUrl: z.url().max(2048),
   subscriptions: webhookSubscriptionsSchema,
 }).strict();
+const billingRequestIdSchema = z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/u);
+const checkoutRequestSchema = z.object({ plan: z.string().trim().min(1).max(64), requestId: billingRequestIdSchema }).strict();
+const portalRequestSchema = z.object({ requestId: billingRequestIdSchema }).strict();
 
 app.get("/api/developer/webhooks/events", requireExecutionContext, (context) => {
   const execution = context.get("execution");
@@ -395,7 +398,10 @@ app.post("/webhooks/stripe", async (context) => {
 app.post("/api/billing/checkout", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
   execution.access.require({ permission: "organization.billing.manage" });
-  const input = await context.req.json<{ plan: string; requestId: string }>();
+  const parsed = checkoutRequestSchema.safeParse(await context.req.json().catch(() => null));
+  if (!parsed.success) return context.json({ error: "Invalid checkout request" }, 400);
+  const input = parsed.data;
+  if (!getPlan(input.plan)) return context.json({ error: "Unknown billing plan" }, 400);
   execution.log.info("billing.checkout.started", { plan: input.plan });
   const checkout = await execution.services.billing.createCheckoutSession({ organizationId: execution.tenant.organizationId, plan: input.plan, requestId: input.requestId, ...(execution.principal.email ? { customerEmail: execution.principal.email } : {}) });
   execution.log.info("billing.checkout.created", { plan: input.plan, checkoutSessionId: checkout.id });
@@ -406,7 +412,9 @@ app.post("/api/billing/checkout", requireExecutionContext, async (context) => {
 app.post("/api/billing/portal", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
   execution.access.require({ permission: "organization.billing.manage" });
-  const input = await context.req.json<{ requestId: string }>();
+  const parsed = portalRequestSchema.safeParse(await context.req.json().catch(() => null));
+  if (!parsed.success) return context.json({ error: "Invalid portal request" }, 400);
+  const input = parsed.data;
   const portal = await execution.services.billing.createPortalSession({ organizationId: execution.tenant.organizationId, requestId: input.requestId });
   execution.log.info("billing.portal.created", { portalSessionId: portal.id });
   return context.json(portal);

@@ -113,7 +113,10 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.preview.environment", preview.includes("environment: preview"), "preview uses the protected preview environment"));
   checks.push(check("ci.preview.runtime-role", preview.includes("bootstrap-managed") && preview.includes("db:roles:configure") && preview.includes("db:roles:verify"), "preview bootstraps, configures, and verifies a restricted database runtime role"));
   checks.push(check("ci.preview.migrate-before-role", occursInOrder(preview, "Bootstrap restricted preview runtime role", "Migrate preview database") && occursInOrder(preview, "Migrate preview database", "Configure preview database roles"), "preview bootstraps its runtime login, then migrates before configuring database roles"));
-  checks.push(check("ci.preview.isolated-cloudflare", preview.includes("--worker-name") && preview.includes("cloudflare-pages.mjs ensure"), "preview uses isolated Worker and Pages resources"));
+  checks.push(check("ci.preview.isolated-cloudflare", preview.includes("--worker-name") && preview.includes("cloudflare-pages.mjs ensure")
+    && preview.includes("--worker-config .trestle-queues.wrangler.jsonc")
+    && preview.includes("secret put DATABASE_URL --env preview --config .trestle-queues.wrangler.jsonc")
+    && preview.includes("secret put BETTER_AUTH_URL --env preview --config .trestle-queues.wrangler.jsonc"), "preview secrets and deployment target the same isolated Worker configuration"));
   checks.push(check("ci.preview.cleanup", preview.includes("types: [opened, synchronize, reopened, closed]") && preview.includes("cloudflare-worker.mjs delete") && preview.includes("cloudflare-pages.mjs delete"), "closed pull requests clean up isolated Cloudflare resources"));
   checks.push(check("ci.preview.dynamic-smoke", preview.includes("steps.preview.outputs.api_url") && preview.includes("steps.preview.outputs.app_url") && preview.includes("steps.preview.outputs.site_url"), "preview smoke tests use derived per-PR URLs"));
   checks.push(check("ci.preview.operational-smoke", preview.includes("TRESTLE_DEPLOY_ENV: preview"), "preview smoke verifies the Worker operational environment"));

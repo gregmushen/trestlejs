@@ -46,6 +46,19 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.transactional-provider-preflight", status: "fail" }));
   });
 
+  it("requires preview secrets and overrides to use the rendered isolated Worker config", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.isolated-cloudflare", status: "pass" }));
+    await writeFile(workflowPath, source.replace("--worker-config .trestle-queues.wrangler.jsonc", ""));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.isolated-cloudflare", status: "fail" }));
+    await writeFile(workflowPath, source.replace("secret put DATABASE_URL --env preview --config .trestle-queues.wrangler.jsonc", "secret put DATABASE_URL --env preview --name wrong-worker"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.isolated-cloudflare", status: "fail" }));
+  });
+
   it("requires verified Resend sender domain in preview and staging preflight", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);

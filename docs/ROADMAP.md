@@ -859,11 +859,10 @@ Workflow retry remains part of the open staging evidence gate.
 Alpha 113 adds a read-only Resend/Stripe credential preflight to generated
 preview, staging, and production deployment workflows before resource
 provisioning. It checks active API access and test/live key separation without
-printing credentials. The canary's encrypted preview/staging Resend key is
-currently rejected by Resend, and its Stripe test restricted key is rejected
-by Stripe (HTTP 401); these external credentials must be replaced before the
-deployed beta gates can pass. A live Stripe publishable key does not satisfy
-the required staging `pk_test_` configuration.
+printing credentials. The canary's original encrypted preview/staging Resend
+and Stripe keys were rejected by their providers; they have since been
+replaced and the test Stripe key can create a test Checkout session. The
+canary still needs a matching `pk_test_` publishable key before deployment.
 Alpha 114 makes those deployment preflights also check that the configured
 Resend sender domain is verified in the selected account. Its staging browser
 test probes the generated Article table through the restricted runtime database
@@ -873,6 +872,17 @@ beta gate; they cannot replace its first successful staging run.
 The published Alpha 112 → 113 upgrade rehearsal narrowly reviews the two
 protected deployment workflow additions against their recorded baseline;
 application-owned workflows still require review during real upgrades.
+Alpha 115 extends the deployed staging browser gate through the authenticated
+billing route: it creates a test-mode Stripe Checkout session, retries the
+same logical request without creating a second session, verifies a forged
+tenant cannot start Checkout, and confirms that merely creating Checkout does
+not grant a subscription. Billing commands now reject malformed or
+client-supplied tenant fields before reaching the provider. Its preview
+secret projection also targets the exact rendered isolated Worker config;
+the first provider-backed preview exposed that Wrangler otherwise appended
+`-preview` to secret uploads while deploying the unsuffixed Worker. This is not a
+completed Stripe payment, signed webhook, or entitlement activation; those
+remain part of the deployed beta evidence gate.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

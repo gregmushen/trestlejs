@@ -453,16 +453,25 @@ export function createProgram(runtime: CliRuntime): Command {
     .command("push")
     .requiredOption("--env <environment>", "remote environment", environment)
     .option("--worker-name <name>", "override the generated Worker target for an isolated preview")
-    .action(async (options: { env: ReturnType<typeof environment>; workerName?: string }, command: Command) => {
+    .option("--worker-config <file>", "rendered Wrangler config in the Worker package for an isolated preview")
+    .action(async (options: { env: ReturnType<typeof environment>; workerName?: string; workerConfig?: string }, command: Command) => {
       if (options.env === "local") throw new CliFailure("local credentials are injected by trestle dev and cannot be pushed remotely");
       if (options.workerName && !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(options.workerName)) throw new CliFailure("worker name must be a lowercase DNS-safe name of at most 63 characters");
       if (options.workerName && options.env !== "preview") throw new CliFailure("worker name overrides are only allowed for isolated previews");
+      if (Boolean(options.workerName) !== Boolean(options.workerConfig)) throw new CliFailure("isolated preview secrets require both --worker-name and --worker-config");
+      if (options.workerConfig && (path.basename(options.workerConfig) !== options.workerConfig || !/^[A-Za-z0-9._-]+\.jsonc$/u.test(options.workerConfig))) throw new CliFailure("worker config must name a JSONC file in the Worker package");
       const context = await projectContext(command, runtime);
+      if (options.workerConfig) {
+        const workerPath = context.manifest.apps.worker;
+        if (!workerPath) throw new CliFailure("project has no Worker application");
+        const configSource = await readFile(path.join(context.root, workerPath, options.workerConfig), "utf8").catch(() => { throw new CliFailure("rendered preview Worker config is missing"); });
+        if (wranglerStringVariable(wranglerEnvironmentBlock(configSource, "preview"), "name") !== options.workerName) throw new CliFailure("rendered preview Worker name does not match the requested isolated Worker");
+      }
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
       const problems = validateSecrets(values, context.manifest, options.env);
       if (problems.length > 0) throw new CliFailure(`credentials check failed:\n${problems.join("\n")}`);
       const workerValues = Object.fromEntries(Object.entries(values).filter(([name]) => context.manifest.secrets?.[name]?.target === "worker"));
-      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", "secret", "bulk", "--env", options.env, ...(options.workerName ? ["--name", options.workerName] : [])], { cwd: context.root, env: process.env, input: JSON.stringify(workerValues) });
+      await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", "secret", "bulk", "--env", options.env, ...(options.workerConfig ? ["--config", options.workerConfig] : [])], { cwd: context.root, env: process.env, input: JSON.stringify(workerValues) });
       runtime.stdout(`Pushed ${Object.keys(workerValues).length} Worker secrets to ${options.env}; local encrypted credentials remain authoritative\n`);
       if (context.manifest.capabilities.admin && !options.workerName) {
         // The platform admin Worker receives only admin-targeted and explicitly shared values.

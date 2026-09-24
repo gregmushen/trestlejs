@@ -155,6 +155,20 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toContain("only allowed for isolated previews");
   });
 
+  it("requires the rendered preview config to name the exact Worker before reading secrets", async () => {
+    const root = await fixture();
+    const missing = capture(root);
+    expect(await executeCli(["secrets", "push", "--env", "preview", "--worker-name", "fixture-worker-pr-42"], missing.runtime)).toBe(1);
+    expect(missing.stderr()).toContain("both --worker-name and --worker-config");
+    const escaped = capture(root);
+    expect(await executeCli(["secrets", "push", "--env", "preview", "--worker-name", "fixture-worker-pr-42", "--worker-config", "../other.jsonc"], escaped.runtime)).toBe(1);
+    expect(escaped.stderr()).toContain("JSONC file in the Worker package");
+    await writeFile(path.join(root, "apps", "worker", ".trestle-queues.wrangler.jsonc"), JSON.stringify({ env: { preview: { name: "another-worker" } } }));
+    const mismatch = capture(root);
+    expect(await executeCli(["secrets", "push", "--env", "preview", "--worker-name", "fixture-worker-pr-42", "--worker-config", ".trestle-queues.wrangler.jsonc"], mismatch.runtime)).toBe(1);
+    expect(mismatch.stderr()).toContain("does not match the requested isolated Worker");
+  });
+
   it("requires explicit confirmation before bootstrapping a remote runtime role", async () => {
     const root = await fixture();
     const output = capture(root);
