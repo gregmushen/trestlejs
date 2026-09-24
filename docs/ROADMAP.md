@@ -975,6 +975,12 @@ Queue/Workflow evidence.
 Alpha 125 makes the safe remote log tail show debug-level semantic events and
 UUID-shaped causation IDs alongside correlation IDs. Free-form IDs, raw
 requests, payloads, and unknown Cloudflare trace fields remain withheld.
+Alpha 126 keeps ephemeral preview Workers free of cron triggers by default,
+while staging and production retain scheduled delivery. The generated preview
+workflow states this explicitly and CI rejects a preview workflow that drops
+the guard. This removes unnecessary account-wide cron consumption from new
+previews; it does not resolve the existing Free-plan capacity needed for the
+cron-enabled staging gate.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

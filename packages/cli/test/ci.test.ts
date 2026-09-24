@@ -25,6 +25,17 @@ describe("generated CI deployment contract", () => {
     expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.cron-capacity-preflight", status: "fail" }));
   });
 
+  it("requires isolated preview Workers to omit cron triggers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.no-cron", status: "pass" }));
+    await writeFile(workflowPath, source.replace(" --without-cron", ""));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.no-cron", status: "fail" }));
+  });
+
   it("pins external Actions and uses the project-local Trestle CLI", async () => {
     const report = await validateCi(templateRoot);
     expect(report.valid).toBe(true);
