@@ -23,6 +23,32 @@ describe("remote provider preflight", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "billing.stripe.configuration", status: "fail" }));
   });
 
+  it("requires every declared Stripe price and a safe return URL before reporting readiness", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-stripe-readiness-doctor-"));
+    try {
+      await mkdir(path.join(root, "apps", "worker"), { recursive: true });
+      await mkdir(path.join(root, "packages", "billing"), { recursive: true });
+      await writeFile(path.join(root, "packages", "billing", "stripe.json"), JSON.stringify({ schemaVersion: 1, currency: "usd", plans: {
+        starter: { version: 1, name: "Starter", unitAmount: 1900, interval: "month" },
+        pro: { version: 1, name: "Pro", unitAmount: 4900, interval: "month" },
+      } }));
+      const variables = { STRIPE_MODE: "test", STRIPE_PUBLISHABLE_KEY: "pk_test_example",
+        STRIPE_PRICES: JSON.stringify({ pro: "price_pro" }), BILLING_RETURN_URL: "https://example.test/settings/billing" };
+      const configPath = path.join(root, "apps", "worker", "wrangler.jsonc");
+      await writeFile(configPath, JSON.stringify({ env: { preview: { vars: variables } } }));
+      const incomplete = await runDoctor(root, manifest, "preview");
+      expect(incomplete.checks).toContainEqual(expect.objectContaining({ id: "billing.stripe.configuration", status: "fail",
+        evidence: expect.stringContaining("starter") }));
+      await writeFile(configPath, JSON.stringify({ env: { preview: { vars: {
+        ...variables, STRIPE_PRICES: JSON.stringify({ starter: "price_starter", pro: "price_pro" }),
+      } } } }));
+      const ready = await runDoctor(root, manifest, "preview");
+      expect(ready.checks).toContainEqual(expect.objectContaining({ id: "billing.stripe.configuration", status: "pass" }));
+      expect(JSON.stringify(ready)).not.toContain("pk_test_example");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("distinguishes readable but incomplete credentials from unreadable credentials", async () => {
     const manifest = await loadProjectManifest(templateRoot);
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-readable-secrets-doctor-"));

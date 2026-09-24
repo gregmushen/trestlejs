@@ -28,6 +28,7 @@ import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readAppl
 import { runCommand, runDevelopment } from "./processes.js";
 import { inspectResendSender } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
+import { stripeDeploymentIssues } from "./stripe-deployment.js";
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
@@ -840,7 +841,12 @@ export function createProgram(runtime: CliRuntime): Command {
       const workerConfig = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
       const mode = wranglerStringVariable(wranglerEnvironmentBlock(workerConfig, options.env), "STRIPE_MODE") ?? (options.env === "local" ? "local" : "missing");
       const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json"), "utf8")) as unknown);
-      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${Object.keys(catalog.plans).length}`, ""].join("\n"));
+      const block = wranglerEnvironmentBlock(workerConfig, options.env);
+      const problems = options.env === "local" ? [] : stripeDeploymentIssues(options.env, {
+        mode, publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
+        prices: wranglerStringVariable(block, "STRIPE_PRICES"), returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
+      }, catalog);
+      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${Object.keys(catalog.plans).length}`, `Configuration:      ${problems.length ? `${problems.length} issue(s)` : "ready"}`, ""].join("\n"));
     });
   stripe.command("doctor")
     .option("--env <environment>", "billing environment", environment, "local")
@@ -849,7 +855,14 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.env === "local") { runtime.stdout("✓ LocalBillingAdapter requires no Stripe account\n"); return; }
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
       const expected = options.env === "production" ? "sk_live_" : "sk_test_";
-      const problems = [!values.STRIPE_SECRET_KEY?.startsWith(expected) ? `STRIPE_SECRET_KEY must use ${expected} in ${options.env}` : "", !values.STRIPE_WEBHOOK_SECRET?.startsWith("whsec_") ? "STRIPE_WEBHOOK_SECRET must start with whsec_" : ""].filter(Boolean);
+      const workerPath = context.manifest.apps.worker ?? "apps/worker";
+      const workerConfig = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
+      const block = wranglerEnvironmentBlock(workerConfig, options.env);
+      const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json"), "utf8")) as unknown);
+      const problems = [!values.STRIPE_SECRET_KEY || !new RegExp(`^${expected}[A-Za-z0-9_]+$`, "u").test(values.STRIPE_SECRET_KEY) ? `STRIPE_SECRET_KEY must use ${expected} in ${options.env}` : "", !values.STRIPE_WEBHOOK_SECRET || !/^whsec_[A-Za-z0-9_]+$/u.test(values.STRIPE_WEBHOOK_SECRET) ? "STRIPE_WEBHOOK_SECRET must start with whsec_" : "", ...stripeDeploymentIssues(options.env, {
+        mode: wranglerStringVariable(block, "STRIPE_MODE"), publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
+        prices: wranglerStringVariable(block, "STRIPE_PRICES"), returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
+      }, catalog)].filter(Boolean);
       runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Stripe ${options.env} credentials and mode agree\n`);
       if (problems.length) throw new CliFailure("Stripe doctor found failures");
     });

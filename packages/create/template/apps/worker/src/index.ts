@@ -20,7 +20,7 @@ import { regionalRoutes } from "./regional-routes.js";
 import { auditTenantAction } from "./audit.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
-import { createBillingService } from "./services.js";
+import { createBillingService, stripeConfigurationReady } from "./services.js";
 import { projectWebhookForEvent } from "./webhook-runtime.js";
 import { maintainWebhookPayloads } from "./webhook-retention.js";
 import { maintainReadyArtifacts } from "./artifact-retention.js";
@@ -57,14 +57,6 @@ function localEmailEnabled(environment: AuthEnvironment): boolean {
 
 function configuredValue(value: string | undefined): boolean {
   return Boolean(value?.trim() && value.trim() !== "CHANGE_ME");
-}
-
-function configuredPrices(value: string | undefined): boolean {
-  if (!configuredValue(value)) return false;
-  try {
-    const prices: unknown = JSON.parse(value!);
-    return Boolean(prices && typeof prices === "object" && !Array.isArray(prices) && Object.keys(prices).length > 0);
-  } catch { return false; }
 }
 
 function inspectionPageSize(value: string | undefined): number | null {
@@ -461,7 +453,7 @@ app.get("/api/health/operational", (context) => context.json({
   capabilities: {
     database: { configured: Boolean(context.env.DATABASE_URL) },
     email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && configuredValue(context.env.EMAIL_FROM)), stagingProtected: !["preview", "staging"].includes(context.env.APP_ENV ?? "local") || configuredValue(context.env.EMAIL_STAGING_REDIRECT) },
-    billing: { mode: context.env.STRIPE_MODE ?? "local", configured: (context.env.STRIPE_MODE ?? "local") === "local" || Boolean(context.env.STRIPE_SECRET_KEY && context.env.STRIPE_WEBHOOK_SECRET && configuredValue(context.env.STRIPE_PUBLISHABLE_KEY) && configuredPrices(context.env.STRIPE_PRICES) && configuredValue(context.env.BILLING_RETURN_URL)), plans: Object.keys(plans).length },
+    billing: { mode: context.env.STRIPE_MODE ?? "local", configured: stripeConfigurationReady(context.env), plans: Object.keys(plans).length },
     queues: { configured: Boolean((context.env as WorkerEnvironment).TRESTLE_EVENTS) },
     artifacts: { configured: artifactRuntimeReady(context.env), mode: context.env.TRESTLE_ARTIFACTS ? "r2" : context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" : "unavailable" },
     workflows: { enabled: (context.env as WorkerEnvironment).TRESTLE_WORKFLOWS_ENABLED === "true", configured: Boolean((context.env as WorkerEnvironment).TRESTLE_WORKFLOW) },
