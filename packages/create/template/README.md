@@ -129,6 +129,17 @@ producer/consumer binding with a dead-letter queue and cron dispatcher, and
 isolate preview Queue names by pull request. Preview cleanup deletes only its
 own Queues after deleting its Worker. Queues remain opt-in until this hosted
 path has been verified against a real account.
+If a Cloudflare account has exhausted its cron-trigger quota, a preview-only
+Worker can be rendered with
+`node scripts/queue-config.mjs render preview <worker-name> --without-cron`.
+This keeps Queue, R2, and Workflow bindings for deployment and browser checks,
+but scheduled dispatch and maintenance do not run in that preview. Use the
+same rendered config for secret uploads and deployment. Staging and production
+still require the cron trigger; a cron-free preview does not verify scheduled
+behavior or establish production readiness.
+The preview browser gate verifies redirected email sign-up and test-mode
+Checkout against the deployed services; it does not complete a payment or
+process a signed Stripe webhook. Those remain staging release gates.
 If `capabilities.r2` is enabled, grant `Workers R2 Storage Write`. The workflows
 provision a separate bucket per environment; preview cleanup deletes its bucket
 only when empty and never purges application artifacts.

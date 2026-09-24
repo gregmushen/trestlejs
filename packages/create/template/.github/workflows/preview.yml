@@ -182,8 +182,12 @@ jobs:
       - name: Install deployed browser runtime
         run: pnpm exec playwright install --with-deps --only-shell chromium
       - name: Verify deployed site and application in Chromium
-        run: pnpm test:deployed
+        run: |
+          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env preview --raw)"
+          echo "::add-mask::$RESEND_API_KEY"
+          pnpm test:deployed
         env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           SITE_URL: "${{ steps.preview.outputs.site_url }}"
           APP_URL: "${{ steps.preview.outputs.app_url }}"
           API_URL: "${{ steps.preview.outputs.api_url }}"

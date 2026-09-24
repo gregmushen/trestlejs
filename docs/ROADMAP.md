@@ -862,7 +862,7 @@ provisioning. It checks active API access and test/live key separation without
 printing credentials. The canary's original encrypted preview/staging Resend
 and Stripe keys were rejected by their providers; they have since been
 replaced and the test Stripe key can create a test Checkout session. The
-canary still needs a matching `pk_test_` publishable key before deployment.
+canary now has a matching `pk_test_` publishable key in preview and staging.
 Alpha 114 makes those deployment preflights also check that the configured
 Resend sender domain is verified in the selected account. Its staging browser
 test probes the generated Article table through the restricted runtime database
@@ -883,6 +883,16 @@ the first provider-backed preview exposed that Wrangler otherwise appended
 `-preview` to secret uploads while deploying the unsuffixed Worker. This is not a
 completed Stripe payment, signed webhook, or entitlement activation; those
 remain part of the deployed beta evidence gate.
+Alpha 116 makes the generated Queue/R2 preview renderer support an explicit
+`--without-cron` escape hatch when an existing Cloudflare free account has
+exhausted its five cron slots. It preserves the other bindings but cannot test
+scheduled dispatch; staging and production still require cron. The canary's
+first fully credentialed preview exposed this quota after its Worker secrets
+and database were configured, so its preview opts out while the cron-enabled
+production path remains an unverified beta gate. The preview browser gate now
+requires a real redirected verification email, sign-in, tenant-safe test-mode
+Stripe Checkout, idempotent retry, and no subscription before a verified
+webhook. A green site-handoff check alone is not sufficient evidence.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
