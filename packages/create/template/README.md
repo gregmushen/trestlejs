@@ -140,6 +140,9 @@ behavior or establish production readiness.
 The preview browser gate verifies redirected email sign-up and test-mode
 Checkout against the deployed services; it does not complete a payment or
 process a signed Stripe webhook. Those remain staging release gates.
+`BETTER_AUTH_URL` in deployed preview must be the Worker API origin so
+verification and reset links reach the auth handler; the Pages app origin is
+passed separately as `WEB_ORIGIN` for trusted browser requests.
 If `capabilities.r2` is enabled, grant `Workers R2 Storage Write`. The workflows
 provision a separate bucket per environment; preview cleanup deletes its bucket
 only when empty and never purges application artifacts.

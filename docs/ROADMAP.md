@@ -893,6 +893,10 @@ production path remains an unverified beta gate. The preview browser gate now
 requires a real redirected verification email, sign-in, tenant-safe test-mode
 Stripe Checkout, idempotent retry, and no subscription before a verified
 webhook. A green site-handoff check alone is not sufficient evidence.
+That deeper gate also caught a preview auth URL mistake: Better Auth was
+generating email links on the static Pages app domain rather than the Worker
+API domain. Preview now binds `BETTER_AUTH_URL` to the API origin and keeps the
+app origin in `WEB_ORIGIN`.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

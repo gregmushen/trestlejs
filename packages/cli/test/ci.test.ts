@@ -333,7 +333,7 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.provider-preflight", status: "fail" }));
   });
 
-  it("rejects a preview whose authentication URL is not bound to the isolated application", async () => {
+  it("rejects a preview whose authentication URL is not bound to the isolated Worker API", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
     await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
@@ -342,6 +342,9 @@ describe("generated CI deployment contract", () => {
     await writeFile(workflowPath, source.replace("secret put BETTER_AUTH_URL", "secret put STATIC_AUTH_URL"));
     const report = await validateCi(root);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.dynamic-auth-url", status: "fail" }));
+    await writeFile(workflowPath, source.replace('BETTER_AUTH_URL: "${{ steps.preview.outputs.api_url }}"', 'BETTER_AUTH_URL: "${{ steps.preview.outputs.app_url }}"'));
+    const wrongOrigin = await validateCi(root);
+    expect(wrongOrigin.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.dynamic-auth-url", status: "fail" }));
   });
 
   it("rejects database role configuration before migrations", async () => {

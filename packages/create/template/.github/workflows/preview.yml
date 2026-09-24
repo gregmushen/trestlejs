@@ -137,10 +137,10 @@ jobs:
           DATABASE_URL: "${{ steps.runtime-role.outputs.runtime_url }}"
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
-      - name: Bind Better Auth to the isolated preview application
+      - name: Bind Better Auth to the isolated preview API
         run: printf '%s' "$BETTER_AUTH_URL" | pnpm --filter @__TRESTLE_PROJECT_NAME__/worker exec wrangler secret put BETTER_AUTH_URL --env preview --config .trestle-queues.wrangler.jsonc
         env:
-          BETTER_AUTH_URL: "${{ steps.preview.outputs.app_url }}"
+          BETTER_AUTH_URL: "${{ steps.preview.outputs.api_url }}"
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3

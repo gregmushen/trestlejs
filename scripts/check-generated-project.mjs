@@ -72,6 +72,10 @@ try {
   if (!sourceDiff.data.baselineTrusted || sourceDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
     throw new Error("Fresh generated project did not match its bundled target template");
   }
+  const previewWorkflow = await readFile(path.join(project, ".github/workflows/preview.yml"), "utf8");
+  if (!previewWorkflow.includes('BETTER_AUTH_URL: "${{ steps.preview.outputs.api_url }}"')) {
+    throw new Error("Preview verification links must target the Worker API origin");
+  }
   const migrationAudit = JSON.parse(execFileSync("pnpm", ["exec", "trestle", "upgrade", "migrations", "--check", "--json"], { cwd: project, encoding: "utf8" }));
   if (migrationAudit.data.classification !== "matching" || migrationAudit.data.commonPrefix < 1) {
     throw new Error("Fresh generated project did not match its bundled migration history");
