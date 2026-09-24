@@ -72,6 +72,10 @@ try {
   if (!sourceDiff.data.baselineTrusted || sourceDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
     throw new Error("Fresh generated project did not match its bundled target template");
   }
+  const previewWorkflow = await readFile(path.join(project, ".github/workflows/preview.yml"), "utf8");
+  if (!previewWorkflow.includes('BETTER_AUTH_URL: "${{ steps.preview.outputs.api_url }}"')) {
+    throw new Error("Preview verification links must target the Worker API origin");
+  }
   const migrationAudit = JSON.parse(execFileSync("pnpm", ["exec", "trestle", "upgrade", "migrations", "--check", "--json"], { cwd: project, encoding: "utf8" }));
   if (migrationAudit.data.classification !== "matching" || migrationAudit.data.commonPrefix < 1) {
     throw new Error("Fresh generated project did not match its bundled migration history");
@@ -213,6 +217,12 @@ try {
       APP_URL: "https://app.example.test",
       API_URL: "https://api.example.test",
     });
+    await run("pnpm", ["exec", "playwright", "test", "tests/browser/preview-product.spec.ts", "--list"], project, {
+      TRESTLE_BROWSER_MODE: "deployed",
+      SITE_URL: "https://site.example.test",
+      APP_URL: "https://app.example.test",
+      API_URL: "https://api.example.test",
+    });
   }
   const generatedProjectManifest = path.join(project, ".trestle", "project.yaml");
   const manifestSource = await readFile(generatedProjectManifest, "utf8");
@@ -232,6 +242,12 @@ try {
   }
   if (queueDoctorReport.data.checks.find((item) => item.id === "cloudflare.workflows.binding")?.status !== "pass") {
     throw new Error("Doctor did not recognize the opt-in preview Workflow binding");
+  }
+  await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);
+  await run(process.execPath, ["scripts/queue-config.mjs", "render", "preview", "release-canary-worker-pr-1", "--without-cron"], project);
+  const cronFreePreview = JSON.parse(await readFile(path.join(project, "apps/worker/.trestle-queues.wrangler.jsonc"), "utf8"));
+  if (cronFreePreview.env.preview.triggers || !cronFreePreview.env.preview.queues || !cronFreePreview.env.preview.r2_buckets || !cronFreePreview.env.preview.workflows) {
+    throw new Error("Explicit cron-free preview lost required bindings or kept a cron trigger");
   }
   await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);
   // Admin disabled (the default): no admin app and no admin deployment configuration.

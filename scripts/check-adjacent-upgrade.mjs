@@ -202,6 +202,31 @@ try {
     }
     console.log("Reviewed the known Alpha 113 → 114 protected provider preflights; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.114" && after === "0.1.0-alpha.115") {
+    // Alpha 115 aligned preview secret uploads with the exact rendered Worker
+    // config. Protected workflow edits remain review-only: require the pristine
+    // Alpha 114 baseline and exactly these three target changes.
+    const relative = ".github/workflows/preview.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 114 preview workflow differs from its recorded baseline");
+    }
+    let reviewed = replaceExactlyOnce(source,
+      'run: pnpm exec trestle secrets push --env preview --worker-name "${{ steps.preview.outputs.worker_name }}"',
+      'run: pnpm exec trestle secrets push --env preview --worker-name "${{ steps.preview.outputs.worker_name }}" --worker-config .trestle-queues.wrangler.jsonc');
+    for (const name of ["DATABASE_URL", "BETTER_AUTH_URL"]) {
+      reviewed = replaceExactlyOnce(reviewed,
+        `secret put ${name} --env preview --name "${'${{ steps.preview.outputs.worker_name }}'}"`,
+        `secret put ${name} --env preview --config .trestle-queues.wrangler.jsonc`);
+    }
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 115 preview workflow differs from the narrowly reviewed transition");
+    await writeFile(workflowPath, target);
+    console.log("Reviewed the known Alpha 114 → 115 protected preview secret-target transition; all other source remains subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });

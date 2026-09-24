@@ -64,3 +64,11 @@ test("rendered Worker config binds producer, consumer, DLQ, and cron only to tar
   assert.equal(rendered.env.production.queues, undefined);
   assert.throws(() => renderQueueConfig(wrangler, "local", "example-worker"), /requires preview/u);
 });
+
+test("preview can explicitly omit cron without losing Queue and Workflow bindings", () => {
+  const rendered = JSON.parse(renderQueueConfig(wrangler, "preview", "example-worker-pr-12", { queues: true, r2: true, workflows: true }, { cron: false }));
+  assert.equal(rendered.env.preview.triggers, undefined);
+  assert.ok(rendered.env.preview.queues);
+  assert.ok(rendered.env.preview.r2_buckets);
+  assert.ok(rendered.env.preview.workflows);
+});
