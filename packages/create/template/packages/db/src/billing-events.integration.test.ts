@@ -34,6 +34,7 @@ suite("billing provider event atomicity", () => {
       await sql!`delete from organization_subscription where organization_id = any(${organizationIds})`;
     }
     if (eventIds.length) await sql!`delete from billing_provider_event where provider='stripe' and provider_event_id = any(${eventIds})`;
+    if (eventIds.length) await sql!`delete from outbox_message where idempotency_key = any(${eventIds.map((id) => `billing:stripe:${id}`)})`;
     if (subscriptionIds.length) await sql!`delete from billing_subscription_reconciliation where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
     if (subscriptionIds.length) await sql!`delete from billing_subscription_ownership where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
     await applicationSql!.end();
@@ -46,8 +47,17 @@ suite("billing provider event atomicity", () => {
     expect((await sql!`select status, error from billing_provider_event where provider='stripe' and provider_event_id=${input.providerEventId}`)[0]).toEqual({ status: "processed", error: null });
     expect((await sql!`select plan, status from organization_subscription where organization_id=${input.projection.organizationId}`)[0]).toEqual({ plan: "pro", status: "active" });
     expect((await sql!`select entitlement from organization_entitlement where organization_id=${input.projection.organizationId} order by entitlement`).map((row) => row.entitlement)).toEqual(["article.basic", "workflows.advanced"]);
+    const [outbox] = await sql!`select event_name, resource_type, resource_id, organization_id, correlation_id, causation_id, idempotency_key, payload, status from outbox_message where idempotency_key=${`billing:stripe:${input.providerEventId}`}`;
+    expect(outbox).toMatchObject({ event_name: "billing.subscription.activated", resource_type: "organization",
+      resource_id: input.projection.organizationId, organization_id: input.projection.organizationId,
+      correlation_id: input.providerEventId, causation_id: input.providerEventId,
+      idempotency_key: `billing:stripe:${input.providerEventId}`, status: "pending",
+      payload: { organizationId: input.projection.organizationId, plan: "pro", status: "active" } });
+    expect(JSON.stringify(outbox?.payload)).not.toContain("cus_test");
+    expect(JSON.stringify(outbox?.payload)).not.toContain(input.projection.providerSubscriptionId);
     expect(await applyBillingProviderEvent({ ...input, projection: { ...input.projection, plan: "starter", entitlements: [] } })).toEqual({ duplicate: true });
     expect((await sql!`select plan from organization_subscription where organization_id=${input.projection.organizationId}`)[0]?.plan).toBe("pro");
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${input.providerEventId}`}`).toHaveLength(1);
   });
 
   it("rolls back an invalid entitlement projection, records failure, then safely retries", async () => {
@@ -56,9 +66,11 @@ suite("billing provider event atomicity", () => {
     expect((await sql!`select status, error from billing_provider_event where provider='stripe' and provider_event_id=${input.providerEventId}`)[0]).toEqual({ status: "failed", error: "projection_failed" });
     expect(await sql!`select organization_id from organization_subscription where organization_id=${input.projection.organizationId}`).toHaveLength(0);
     expect(await sql!`select organization_id from organization_entitlement where organization_id=${input.projection.organizationId}`).toHaveLength(0);
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${input.providerEventId}`}`).toHaveLength(0);
     expect(await applyBillingProviderEvent({ ...input, projection: { ...input.projection, entitlements: ["duplicate"] } })).toEqual({ duplicate: false });
     expect((await sql!`select status, error from billing_provider_event where provider='stripe' and provider_event_id=${input.providerEventId}`)[0]).toEqual({ status: "processed", error: null });
     expect((await sql!`select entitlement from organization_entitlement where organization_id=${input.projection.organizationId}`).map((row) => row.entitlement)).toEqual(["duplicate"]);
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${input.providerEventId}`}`).toHaveLength(1);
   });
 
   it("serializes concurrent duplicate deliveries so the projection runs once", async () => {
@@ -67,6 +79,42 @@ suite("billing provider event atomicity", () => {
     expect(results.map((result) => result.duplicate).sort()).toEqual([false, true]);
     expect(await sql!`select provider_event_id from billing_provider_event where provider='stripe' and provider_event_id=${input.providerEventId}`).toHaveLength(1);
     expect(await sql!`select entitlement from organization_entitlement where organization_id=${input.projection.organizationId}`).toHaveLength(2);
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${input.providerEventId}`}`).toHaveLength(1);
+  });
+
+  it("rolls back the projection and receipt finalization when a domain event is invalid", async () => {
+    const input = fixture({ entitlements: [""] });
+    await expect(applyBillingProviderEvent(input)).rejects.toThrow("Internal event payload fails its schema");
+    expect((await sql!`select status from billing_provider_event where provider_event_id=${input.providerEventId}`)[0]?.status).toBe("failed");
+    expect(await sql!`select organization_id from organization_subscription where organization_id=${input.projection.organizationId}`).toHaveLength(0);
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${input.providerEventId}`}`).toHaveLength(0);
+    expect(await applyBillingProviderEvent({ ...input, projection: { ...input.projection, entitlements: ["article.basic"] } }))
+      .toEqual({ duplicate: false });
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${input.providerEventId}`}`).toHaveLength(1);
+  });
+
+  it("publishes normalized plan, past-due, and cancellation transitions with request correlation", async () => {
+    const activated = fixture();
+    expect(await applyBillingProviderEvent({ ...activated, correlationId: "request-billing-1" })).toEqual({ duplicate: false });
+    const updatedId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const pastDueId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const cancelledId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    eventIds.push(updatedId, pastDueId, cancelledId);
+    expect(await applyBillingProviderEvent({ ...activated, providerEventId: updatedId, type: "SubscriptionUpdated",
+      projection: { ...activated.projection, plan: "starter", entitlements: ["article.basic"] } })).toEqual({ duplicate: false });
+    expect(await applyBillingProviderEvent({ ...activated, providerEventId: pastDueId, type: "SubscriptionPastDue",
+      projection: { ...activated.projection, plan: "starter", status: "past_due", entitlements: [] } })).toEqual({ duplicate: false });
+    expect(await applyBillingProviderEvent({ ...activated, providerEventId: cancelledId, type: "SubscriptionCancelled",
+      projection: { ...activated.projection, plan: "starter", status: "cancelled", entitlements: [] } })).toEqual({ duplicate: false });
+    expect((await sql!`select event_name, correlation_id, payload from outbox_message where idempotency_key=${`billing:stripe:${activated.providerEventId}`}`)[0])
+      .toMatchObject({ event_name: "billing.subscription.activated", correlation_id: "request-billing-1" });
+    expect((await sql!`select event_name, payload from outbox_message where idempotency_key=${`billing:stripe:${updatedId}`}`)[0])
+      .toMatchObject({ event_name: "billing.subscription.updated", payload: { previousPlan: "pro", previousStatus: "active", plan: "starter" } });
+    expect((await sql!`select event_name, payload from outbox_message where idempotency_key=${`billing:stripe:${pastDueId}`}`)[0])
+      .toMatchObject({ event_name: "billing.subscription.past_due", payload: { previousStatus: "active", status: "past_due" } });
+    expect((await sql!`select event_name, payload from outbox_message where idempotency_key=${`billing:stripe:${cancelledId}`}`)[0])
+      .toMatchObject({ event_name: "billing.subscription.cancelled", payload: { previousStatus: "past_due", status: "cancelled" } });
+    expect(await sql!`select entitlement from organization_entitlement where organization_id=${activated.projection.organizationId}`).toHaveLength(0);
   });
 
   it("never transfers one provider subscription to a second organization", async () => {
@@ -160,6 +208,9 @@ suite("billing provider event atomicity", () => {
     expect((await sql!`select status from organization_subscription where organization_id=${older.projection.organizationId}`)[0]?.status).toBe("cancelled");
     expect(await sql!`select entitlement from organization_entitlement where organization_id=${older.projection.organizationId}`).toHaveLength(0);
     expect((await sql!`select status from billing_provider_event where provider_event_id=${older.providerEventId}`)[0]?.status).toBe("superseded");
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${older.providerEventId}`}`).toHaveLength(0);
+    expect((await sql!`select event_name, payload from outbox_message where idempotency_key=${`billing:stripe:${newer.providerEventId}`}`)[0])
+      .toMatchObject({ event_name: "billing.subscription.cancelled", payload: { status: "cancelled" } });
     expect(await beginBillingSubscriptionReconciliation({ ...older, providerSubscriptionId: older.projection.providerSubscriptionId! })).toEqual({ duplicate: true });
   });
 

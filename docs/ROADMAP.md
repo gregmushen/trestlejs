@@ -706,6 +706,16 @@ transfer, active replacement, canceled replacement, late old events, and
 concurrent claims. Live provider and billing outbox evidence remain open.
 The generated release canary also selects isolated browser-test ports, so
 testing a clean project does not interrupt a developer's running Trestle app.
+Alpha 93 publishes normalized, internal subscription lifecycle events through
+the transactional outbox. A verified projection, entitlements, outbox message,
+and processed provider receipt commit together. Duplicate and superseded
+webhooks do not publish twice; failed event validation rolls the projection
+back for safe retry. Billing payloads omit provider customer/subscription IDs,
+and internal billing events are not customer webhook products. PostgreSQL and
+signed Worker tests cover atomicity, deduplication, redaction, and correlation.
+Checkout and invoice notifications still need a deliberate tenant-resolution
+policy before they can become domain events. Live Stripe test-mode and deployed
+Resend evidence remain beta gates.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
