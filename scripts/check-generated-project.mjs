@@ -265,6 +265,8 @@ try {
       // Minimum sign-in level: an operator with a factor must have signed in with it, on every admin request.
       "requires a second-factor sign-in for every admin request once the operator has a factor",
       "refuses a password session for a passkey-only operator",
+      "applies the minimum sign-in level to operator-only factor routes, but not to sign-in challenges or a first enrollment",
+      "reports the operator's enrolled factors in the session through the shared auth database handle",
       "lets a factorless operator in with a password session so they can enroll a factor",
       "skips freshness for stepUp: false routes but keeps the minimum sign-in level",
       "reports step-up as due when the session is below the environment's action level",

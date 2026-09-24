@@ -122,11 +122,12 @@ suite("platform admin Worker against PostgreSQL", () => {
     expect(allowed.status).toBe(200);
     // The sign-in recorded its own evidence, which the session reports for step-up.
     await expect(allowed.json()).resolves.toMatchObject({ roles: ["security_admin"], operator: { email }, assurance: { level: "password", method: "password" } });
-    // A fresh password starts the first enrollment; once a passkey exists, factor changes need a passkey.
+    // A fresh password starts the first enrollment; once a passkey exists, this password session is below the minimum sign-in level.
     const enable = () => admin.request("/api/auth/two-factor/enable", { method: "POST", headers: { cookie: cookie!, "content-type": "application/json", origin: "http://localhost:42070" }, body: JSON.stringify({ password }) }, environment);
     expect((await enable()).status).toBe(200);
     await sql!`insert into passkey (id, user_id, public_key, credential_id, counter, device_type, backed_up) values (${`${run}-pk`}, ${String(account!.id)}, 'key', ${`${run}-cred`}, 0, 'singleDevice', false)`;
-    await expect((await enable()).json()).resolves.toMatchObject({ error: "step_up_required", required: "phishing_resistant" });
+    await expect((await enable()).json()).resolves.toMatchObject({ error: "step_up_required", required: "mfa", scope: "session" });
+    expect((await admin.request("/api/admin/session", { headers: { cookie: cookie! } }, environment)).status).toBe(428);
     expect((await admin.request("/api/auth/sign-up/email", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x", email: `${run}-new@example.test`, password }) }, environment)).status).toBe(404);
   });
 });

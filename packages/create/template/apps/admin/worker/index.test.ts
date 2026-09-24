@@ -29,6 +29,7 @@ describe("platform admin Worker", () => {
     state.forwarded = 0;
     assured("password");
     adminDependencies.enrolledFactor = async () => null;
+    adminDependencies.factors = async () => ({ totp: false, passkeys: 0 });
     adminDependencies.forwardAuth = async () => { state.forwarded += 1; return new Response(JSON.stringify({ forwarded: true }), { headers: { "content-type": "application/json" } }); };
     adminDependencies.platformRoles = async () => state.roles;
     adminDependencies.operationalStatus = async () => ({ capabilities: { database: { configured: true }, email: { configured: false, mode: "resend" }, billing: { configured: true, mode: "local" }, queues: { configured: false } } });
@@ -119,7 +120,8 @@ describe("platform admin Worker", () => {
     const send = async () => await call(method, path, method === "POST" ? { body: {} } : {});
     const cases: Array<{ enrolled: "mfa" | "phishing_resistant" | null; weak: [Level, number]; strong: Level; required: Level; reason: string }> = [
       { enrolled: null, weak: ["password", 20], strong: "password", required: "password", reason: "stale" },
-      { enrolled: "mfa", weak: ["password", 0], strong: "mfa", required: "mfa", reason: "insufficient_level" },
+      // (A password session for an account with TOTP is below the minimum sign-in level; see the tests below.)
+      { enrolled: "mfa", weak: ["mfa", 20], strong: "mfa", required: "mfa", reason: "stale" },
       // A phished TOTP code must not add or remove passkeys once the account has one.
       { enrolled: "phishing_resistant", weak: ["mfa", 0], strong: "phishing_resistant", required: "phishing_resistant", reason: "insufficient_level" },
     ];
@@ -245,6 +247,33 @@ describe("platform admin Worker", () => {
     assured("mfa", 600);
     expect((await call("GET", "/api/admin/session")).status).toBe(200);
     expect((await call("GET", "/api/admin/health")).status).toBe(200);
+  });
+
+  it("applies the minimum sign-in level to operator-only factor routes, but not to sign-in challenges or a first enrollment", async () => {
+    adminDependencies.enrolledFactor = async () => "mfa";
+    assured("password");
+    expect(await call("GET", "/api/auth/passkey/list-user-passkeys")).toMatchObject({ status: 428, body: { scope: "session", reason: "insufficient_level" } });
+    expect(await call("POST", "/api/auth/two-factor/enable", { body: {} })).toMatchObject({ status: 428, body: { scope: "session" } });
+    expect(await call("POST", "/api/auth/two-factor/verify-totp", { body: { code: "000000" } })).toMatchObject({ status: 428, body: { scope: "session" } });
+    expect(state.forwarded).toBe(0);
+    // Sign-in challenges have no session yet.
+    state.userId = "";
+    expect(await call("POST", "/api/auth/two-factor/verify-totp", { body: { code: "000000" } })).toMatchObject({ status: 200, body: { forwarded: true } });
+    // Until the first factor is verified the account has none, so a password session can enroll one.
+    state.userId = "operator-1";
+    adminDependencies.enrolledFactor = async () => null;
+    expect(await call("POST", "/api/auth/two-factor/enable", { body: {} })).toMatchObject({ status: 200, body: { forwarded: true } });
+    expect(await call("POST", "/api/auth/two-factor/verify-totp", { body: { code: "000000" } })).toMatchObject({ status: 200, body: { forwarded: true } });
+  });
+
+  it("reports the operator's enrolled factors in the session through the shared auth database handle", async () => {
+    const seen: unknown[] = [];
+    adminDependencies.assurance = async (database) => { seen.push(database); return { sessionId: "session-1", userId: state.userId, level: "mfa", method: "totp", verifiedAt: new Date() }; };
+    adminDependencies.factors = async (database) => { seen.push(database); return { totp: true, passkeys: 1 }; };
+    const session = await call("GET", "/api/admin/session");
+    expect(session.body.factors).toEqual({ totp: true, passkeys: 1 });
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(seen[1]);
   });
 
   it("refuses a password session for a passkey-only operator", async () => {

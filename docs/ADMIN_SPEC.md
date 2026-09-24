@@ -646,8 +646,9 @@ the operator verifies again. A failed write also leaves the session without a
 row (fail closed). Rows cascade with their session.
 
 **Minimum sign-in level.** Every `/api/admin/*` request, including reads and
-`GET /api/admin/session`, in every environment, checks how the session was
-signed in. When the operator has any enrolled factor (TOTP or a passkey), the
+`GET /api/admin/session`, and every operator-only auth route (the factor
+endpoints below, except sign-in challenges without a session), in every
+environment, checks how the session was signed in. When the operator has any enrolled factor (TOTP or a passkey), the
 session must prove at least `mfa` (a passkey counts); how long ago does not
 matter. A session with no assurance row counts as below it. Otherwise the
 Worker answers 428 with `scope: "session"` (below) and the shell shows the
@@ -675,7 +676,8 @@ minimum sign-in level still applies. Two routes use it: `POST
 | deployed | `platform.roles.manage` | `phishing_resistant` | 15 minutes |
 
 A higher level satisfies a lower one. `GET /api/admin/session` reports
-`assurance` (`{ level, method, verifiedAt }` or `null`) and
+`assurance` (`{ level, method, verifiedAt }` or `null`),
+`factors` (`{ totp, passkeys }`, the operator's enrolled factors), and
 `stepUpRequiredAfter` (when the evidence stops being fresh for ordinary
 actions, or `null` when none is recorded or the recorded level is below what
 actions need in this environment, for example a password session when
@@ -701,8 +703,11 @@ dialog:
 ```
 
 The admin UI answers a 428 with a re-authentication dialog that offers only
-the paths that reach `required` (`phishing_resistant`: a passkey; `mfa`: a
-password and code, or a passkey; `password`: a password). A confirmed action
+the paths that reach `required`: a passkey at every level, and a password
+(followed by a code when the account has TOTP) for `mfa` and `password`. An
+operator with a passkey but no TOTP is not offered a password, because that
+sign-in would prove only a password and fall below the minimum sign-in
+level. A confirmed action
 retries after each successful verification; a factor change (below) retries
 once and then reports the second 428. The new session must belong to the
 operator who opened the dialog; another account's session is signed out and

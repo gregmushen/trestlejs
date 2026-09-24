@@ -73,6 +73,8 @@ export type AdminSession = {
   supportSession?: SupportSession | null;
   /** How this session was authenticated; sensitive actions require a level and freshness from it. Null when nothing is recorded. */
   assurance: { level: "password" | "mfa" | "phishing_resistant"; method: string; verifiedAt: string } | null;
+  /** The operator's enrolled factors, so step-up offers only paths that keep them signed in. */
+  factors: { totp: boolean; passkeys: number };
 };
 /** True when the next sensitive action will ask the operator to re-authenticate (no evidence, or evidence past its window). */
 export const stepUpDue = (session: Pick<AdminSession, "stepUpRequiredAfter">, now = Date.now()): boolean =>

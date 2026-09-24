@@ -15,9 +15,19 @@ describe("step-up", () => {
   });
 
   it("offers only the re-authentication paths that can reach the required level", () => {
+    // A passkey satisfies every level, so it is always offered.
     expect(stepUpMethods("phishing_resistant")).toEqual({ password: false, passkey: true });
     expect(stepUpMethods("mfa")).toEqual({ password: true, passkey: true });
-    expect(stepUpMethods("password")).toEqual({ password: true, passkey: false });
+    expect(stepUpMethods("password")).toEqual({ password: true, passkey: true });
+    expect(stepUpMethods("password", { totp: true, passkeys: 0 })).toEqual({ password: true, passkey: true });
+    expect(stepUpMethods("password", { totp: false, passkeys: 0 })).toEqual({ password: true, passkey: true });
+  });
+
+  it("hides the password path from a passkey-only account, whose password sign-in would fall below the minimum sign-in level", () => {
+    expect(stepUpMethods("password", { totp: false, passkeys: 2 })).toEqual({ password: false, passkey: true });
+    expect(stepUpMethods("mfa", { totp: false, passkeys: 1 })).toEqual({ password: false, passkey: true });
+    // With TOTP the password path continues with a code, which keeps the session at mfa.
+    expect(stepUpMethods("mfa", { totp: true, passkeys: 1 })).toEqual({ password: true, passkey: true });
   });
 
   it("explains the Worker's operator-only refusals", () => {

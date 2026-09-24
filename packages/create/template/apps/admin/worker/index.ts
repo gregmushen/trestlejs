@@ -16,7 +16,7 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 
 import { adminViews, stepUpExemptRoutes, type AdminCapability } from "../src/api-registry.js";
-import { databaseReachable, overview, platformRolesFor, strongestEnrolledFactor } from "./data.js";
+import { databaseReachable, enrolledFactors, overview, platformRolesFor, strongestEnrolledFactor } from "./data.js";
 import { adminFactorPlugins } from "./factors.js";
 import { adminPolicyFor } from "./route-policies.js";
 
@@ -39,7 +39,7 @@ type Session = { user: { id: string; email: string; name?: string }; session: { 
 
 /** The local-only default operator seeded by `trestle dev` (packages/auth/src/local-admin.ts). */
 const localAdminEmail = "admin@trestle.local";
-type Variables = { correlationId: string; operator: Session["user"]; access: AccessEvaluator; roles: string[]; assurance: SessionAssurance | null };
+type Variables = { correlationId: string; operator: Session["user"]; access: AccessEvaluator; roles: string[]; assurance: SessionAssurance | null; authDatabase: Database };
 
 /** Replaceable in tests. */
 export const adminDependencies = {
@@ -47,6 +47,7 @@ export const adminDependencies = {
   platformRoles: async (environment: AdminEnvironment, userId: string): Promise<string[]> => await platformRolesFor(platformDatabase(environment), userId),
   assurance: async (database: Database, sessionId: string): Promise<SessionAssurance | null> => await sessionAssurance(database, sessionId),
   enrolledFactor: async (database: Database, userId: string): Promise<"phishing_resistant" | "mfa" | null> => await strongestEnrolledFactor(database, userId),
+  factors: async (database: Database, userId: string): Promise<{ totp: boolean; passkeys: number }> => await enrolledFactors(database, userId),
   forwardAuth: async (environment: AdminEnvironment, request: Request): Promise<Response> => await adminAuth(environment).handler(request),
   operationalStatus: async (environment: AdminEnvironment): Promise<unknown> => {
     const response = await fetch(new URL("/api/health/operational", environment.API_URL ?? "http://127.0.0.1:8787"), { headers: { accept: "application/json" } });
@@ -58,7 +59,7 @@ export const adminDependencies = {
 /**
  * Better Auth for the admin origin. The same accounts sign in here with their own cookies, but the secret
  * and session table are shared with the customer app, so a customer-app session cookie is also a valid
- * session here. The admin API's minimum sign-in level (see `signInLevelDenied`) is what refuses such a
+ * session here. The admin API's minimum sign-in level (see `signInLevel`) is what refuses such a
  * session for an operator with a second factor; APP_ENV is the admin's fail-closed reading.
  */
 export function adminAuthEnvironment(environment: AdminEnvironment): AuthEnvironment {
@@ -151,9 +152,13 @@ async function authGateDenied(context: AdminContext, gate: AuthGate): Promise<Re
   if (local) return local;
   // Tenant membership or ownership never grants access to the admin's factor endpoints.
   if ((await adminDependencies.platformRoles(context.env, session.user.id)).length === 0) return context.json({ error: "forbidden", reason: "no_platform_roles", message: "This account has no platform role" }, 403);
-  if (gate !== "step_up") return null;
+  // The same minimum sign-in level as the admin API. A first enrollment passes: the account has no factor until it is verified.
   const database = authDatabase(context.env);
-  const [assurance, enrolled] = await Promise.all([adminDependencies.assurance(database, session.session.id), adminDependencies.enrolledFactor(database, session.user.id)]);
+  const assurance = await adminDependencies.assurance(database, session.session.id);
+  const signIn = await signInLevel(context, database, session.user.id, assurance);
+  if (signIn.denied) return signIn.denied;
+  if (gate !== "step_up") return null;
+  const enrolled = signIn.enrolled !== undefined ? signIn.enrolled : await adminDependencies.enrolledFactor(database, session.user.id);
   const requirement: AssuranceRequirement = { level: enrolled ?? "password", maxAgeMinutes: stepUpWindowMinutes };
   const result = meetsRequirement(assurance, requirement, new Date());
   return result.ok ? null : stepUpRequired(context, requirement, result.reason);
@@ -178,11 +183,12 @@ for (const [method, path, gate] of authRoutes) {
  * a passkey, or a replayed customer-app session, which never had a factor challenge) would read the admin.
  * The factor lookup is skipped when the session already proves a second factor.
  */
-async function signInLevelDenied(context: AdminContext, database: Database, userId: string, assurance: SessionAssurance | null): Promise<Response | null> {
-  if (assurance && assuranceRank[assurance.level] >= assuranceRank.mfa) return null;
-  const result = meetsSignInLevel(assurance, await adminDependencies.enrolledFactor(database, userId));
-  if (result.ok) return null;
-  return context.json({ error: "step_up_required", required: "mfa", reason: result.reason, scope: "session", message: "Sign in with your second factor or passkey" }, 428);
+async function signInLevel(context: AdminContext, database: Database, userId: string, assurance: SessionAssurance | null): Promise<{ denied: Response | null; enrolled?: AssuranceLevel | null }> {
+  if (assurance && assuranceRank[assurance.level] >= assuranceRank.mfa) return { denied: null };
+  const enrolled = await adminDependencies.enrolledFactor(database, userId);
+  const result = meetsSignInLevel(assurance, enrolled);
+  if (result.ok) return { denied: null, enrolled };
+  return { denied: context.json({ error: "step_up_required", required: "mfa", reason: result.reason, scope: "session", message: "Sign in with your second factor or passkey" }, 428), enrolled };
 }
 
 /** Platform authentication and authority for every admin API route. */
@@ -203,9 +209,10 @@ admin.use("/api/admin/*", async (context, next) => {
     if (!policy) return context.json({ error: "not_found" }, 404);
     const database = authDatabase(context.env);
     const assurance = await adminDependencies.assurance(database, session.session.id);
-    const signIn = await signInLevelDenied(context, database, session.user.id, assurance);
-    if (signIn) return signIn;
+    const signIn = await signInLevel(context, database, session.user.id, assurance);
+    if (signIn.denied) return signIn.denied;
     context.set("assurance", assurance);
+    context.set("authDatabase", database);
     if (policy.permission) access.require({ permission: policy.permission });
     // Every platform change needs recent authentication at the environment's level; reads, and the few
     // actions the view registry marks `stepUp: false` (a read over POST, ending a support session), do not.
@@ -232,7 +239,9 @@ admin.get("/api/admin/session", async (context) => {
   const database = platformDatabase(context.env);
   // Display context only: authority is checked on every request, so a failed lookup shows no support banner rather than failing sign-in.
   const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" });
-  const [sessions, organizations, status] = await Promise.all([
+  const [factors, sessions, organizations, status] = await Promise.all([
+    // Which step-up paths the shell may offer; on the same auth database handle as the request's assurance lookup.
+    adminDependencies.factors(context.get("authDatabase"), operator.id),
     listSupportSessions(database, { operatorId: operator.id, limit: 5 }).catch((error: unknown) => { log.warn("admin.session.support_lookup_failed", { errorName: error instanceof Error ? error.name : "unknown" }); return []; }),
     supportableOrganizations(database).catch(() => []),
     adminDependencies.operationalStatus(context.env).catch(() => undefined),
@@ -248,6 +257,7 @@ admin.get("/api/admin/session", async (context) => {
     capabilities: shellCapabilities(status, environment),
     assurance: assurance ? { level: assurance.level, method: assurance.method, verifiedAt: assurance.verifiedAt.toISOString() } : null,
     // Null when actions will ask for step-up regardless: no evidence, or evidence below what actions need here.
+    factors,
     stepUpRequiredAfter: assurance && assuranceRank[assurance.level] >= assuranceRank[actionAssuranceLevel(environment)] ? new Date(assurance.verifiedAt.getTime() + stepUpWindowMinutes * 60_000).toISOString() : null,
     supportSession: open ? {
       id: open.id, operatorId: open.operatorId, organizationId: open.organizationId,

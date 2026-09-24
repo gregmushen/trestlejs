@@ -27,13 +27,14 @@ export function stepUpRequirement(error: unknown): AssuranceLevel | null {
 
 /**
  * Which re-authentication paths can reach `required`. A passkey satisfies every
- * level; only a passkey reaches phishing-resistant. The password path continues
- * with a code when the account has an authenticator enrolled.
+ * level, so it is always offered; only a passkey reaches phishing-resistant. The
+ * password path continues with a code when the account has TOTP. An account with
+ * a passkey but no TOTP is not offered a password: that sign-in would prove only
+ * a password and fall below the admin's minimum sign-in level.
  */
-export function stepUpMethods(required: AssuranceLevel): Readonly<{ password: boolean; passkey: boolean }> {
-  if (required === "phishing_resistant") return { password: false, passkey: true };
-  if (required === "mfa") return { password: true, passkey: true };
-  return { password: true, passkey: false };
+export function stepUpMethods(required: AssuranceLevel, factors?: Readonly<{ totp: boolean; passkeys: number }>): Readonly<{ password: boolean; passkey: boolean }> {
+  const passwordFallsBelowSignIn = factors !== undefined && factors.passkeys > 0 && !factors.totp;
+  return { password: required !== "phishing_resistant" && !passwordFallsBelowSignIn, passkey: true };
 }
 
 /** A readable message for a failed factor call, including the Worker's operator-only refusals. */

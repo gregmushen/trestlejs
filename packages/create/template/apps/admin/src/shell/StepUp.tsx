@@ -13,8 +13,9 @@ import { useAdminToast } from "./ui";
 const intro: Record<AssuranceLevel, ReactNode> = {
   phishing_resistant: "This requires a passkey verified in the last 15 minutes.",
   mfa: "This requires a recent sign-in with a second factor. Confirm your password, then enter your authenticator code, or use a passkey.",
-  password: "This requires a recent sign-in. Confirm your password to continue.",
+  password: "This requires a recent sign-in. Confirm your password, or use a passkey, to continue.",
 };
+const passkeyOnly = "This requires a recent sign-in. Verify with your passkey to continue.";
 const cancelledNotice = "Verification cancelled. Sign in again to continue.";
 const noSecondFactor = "This account has no authenticator app enrolled, so a password alone cannot satisfy this. Use a passkey, or set up an authenticator in Account security.";
 
@@ -34,7 +35,7 @@ export function StepUpForm(props: { required: AssuranceLevel; onVerified: () => 
   const operator = useRef(session.operator).current;
   const toast = useAdminToast();
   const queryClient = useQueryClient();
-  const methods = stepUpMethods(props.required);
+  const methods = stepUpMethods(props.required, session.factors);
   const [state, dispatch] = useReducer(stepUpFormReducer, props.notice, initialStepUpForm);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -112,7 +113,7 @@ export function StepUpForm(props: { required: AssuranceLevel; onVerified: () => 
     </div>
   </form>;
   return <form className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); if (methods.password && !busy) void withPassword(); }}>
-    <p className="text-sm text-kumo-default">{intro[props.required]} You are signed in as <strong>{operator.email}</strong>.</p>
+    <p className="text-sm text-kumo-default">{props.required !== "phishing_resistant" && !methods.password ? passkeyOnly : intro[props.required]} You are signed in as <strong>{operator.email}</strong>.</p>
     {methods.password && <SensitiveInput label="Password" autoFocus autoComplete="current-password" value={password} onChange={(event: { target: { value: string } }) => setPassword(event.target.value)} />}
     {error && <p role="alert" className="text-sm text-kumo-danger">{error}</p>}
     <div className="flex flex-wrap items-center justify-between gap-2">
