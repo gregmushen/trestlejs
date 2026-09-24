@@ -966,6 +966,12 @@ cron maintenance, native webhook queues, Workflows, the platform admin, and
 the local console. Declared admin and platform database credentials join the
 redaction registry. This closes the generated logger-entry-point gap; further
 cross-boundary correlation and provider-internal diagnostics still need review.
+Alpha 124 carries validated event IDs, names, correlation IDs, and causation
+IDs into semantic Queue acknowledgment/retry logs. Invalid Queue bodies are
+reported without raw content or untrusted identifiers; diagnostic observers
+receive metadata only and cannot change delivery settlement. This narrows the
+remaining cross-boundary observability gap but does not replace deployed
+Queue/Workflow evidence.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

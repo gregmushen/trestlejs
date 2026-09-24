@@ -10,11 +10,12 @@ const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "trestle-release-cana
 const project = path.join(temporaryRoot, "release-canary");
 // The release canary once hit EADDRINUSE while binding the generated site's
 // fixed 42068 default, even after localhost readiness probes refused it.
-// Give this isolated browser exercise a per-run port without changing the
-// generated application's normal local-development default.
-const browserSitePort = process.env.TRESTLE_BROWSER_SITE_PORT ?? String(randomInt(20_000, 30_000));
-const browserAppPort = process.env.TRESTLE_BROWSER_APP_PORT ?? String(randomInt(30_000, 40_000));
-const browserWorkerPort = process.env.TRESTLE_BROWSER_WORKER_PORT ?? String(randomInt(40_000, 50_000));
+// Give this isolated browser exercise distinct per-run ports without changing
+// the generated application's defaults. Keep them below Linux's default
+// ephemeral-client range so an outbound connection cannot race Vite's bind.
+const browserSitePort = process.env.TRESTLE_BROWSER_SITE_PORT ?? String(randomInt(20_000, 23_000));
+const browserAppPort = process.env.TRESTLE_BROWSER_APP_PORT ?? String(randomInt(23_000, 26_000));
+const browserWorkerPort = process.env.TRESTLE_BROWSER_WORKER_PORT ?? String(randomInt(26_000, 29_000));
 for (const [name, port] of [["SITE", browserSitePort], ["APP", browserAppPort], ["WORKER", browserWorkerPort]]) {
   if (!/^[0-9]+$/u.test(port) || Number(port) < 1024 || Number(port) > 65535) {
     throw new Error(`TRESTLE_BROWSER_${name}_PORT must be an unprivileged TCP port`);
