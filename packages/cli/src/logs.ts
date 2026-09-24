@@ -13,9 +13,10 @@ export type LogOptions = Readonly<{
 
 export type SafeLogRecord = Readonly<{
   timestamp: string;
-  level: "info" | "warn" | "error";
+  level: "debug" | "info" | "warn" | "error";
   event: string;
   correlationId?: string;
+  causationId?: string;
   durationMs?: number;
   status?: number;
 }>;
@@ -24,7 +25,7 @@ const eventPattern = /^[a-z][a-z0-9_]{0,31}(?:\.[a-z][a-z0-9_]{0,31})+$/u;
 const credentialPattern = /(?:sk|rk|pk)_(?:test|live)_[a-z0-9]+|whsec_[a-z0-9]+|re_[a-z0-9]{20,}/iu;
 // The Worker generates UUID correlation IDs. A free-form inbound header might
 // contain a credential, so never repeat it through this diagnostic surface.
-const correlationPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const traceIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export function buildLogTailArguments(options: LogOptions): string[] {
   if (options.environment === "local") throw new Error("remote log tailing requires preview, staging, or production");
@@ -53,10 +54,11 @@ export function safeTailRecords(value: unknown, search?: string): SafeLogRecord[
     if (!plainObject(source)) continue;
     const { timestamp, level, event } = source;
     if (typeof timestamp !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/u.test(timestamp) || Number.isNaN(Date.parse(timestamp))) continue;
-    if (level !== "info" && level !== "warn" && level !== "error") continue;
+    if (level !== "debug" && level !== "info" && level !== "warn" && level !== "error") continue;
     if (typeof event !== "string" || event.length > 120 || !eventPattern.test(event) || credentialPattern.test(event) || (search && !event.includes(search))) continue;
-    const record: { timestamp: string; level: "info" | "warn" | "error"; event: string; correlationId?: string; durationMs?: number; status?: number } = { timestamp, level, event };
-    if (typeof source.correlationId === "string" && correlationPattern.test(source.correlationId)) record.correlationId = source.correlationId;
+    const record: { timestamp: string; level: "debug" | "info" | "warn" | "error"; event: string; correlationId?: string; causationId?: string; durationMs?: number; status?: number } = { timestamp, level, event };
+    if (typeof source.correlationId === "string" && traceIdPattern.test(source.correlationId)) record.correlationId = source.correlationId;
+    if (typeof source.causationId === "string" && traceIdPattern.test(source.causationId)) record.causationId = source.causationId;
     if (typeof source.durationMs === "number" && Number.isFinite(source.durationMs) && source.durationMs >= 0 && source.durationMs <= 1_000_000_000) record.durationMs = source.durationMs;
     if (typeof source.status === "number" && Number.isInteger(source.status) && source.status >= 100 && source.status <= 599) record.status = source.status;
     records.push(record);
@@ -66,7 +68,7 @@ export function safeTailRecords(value: unknown, search?: string): SafeLogRecord[
 
 export function formatSafeLog(record: SafeLogRecord, format: "pretty" | "json"): string {
   if (format === "json") return `${JSON.stringify(record)}\n`;
-  return `${record.timestamp} ${record.level.toUpperCase()} ${record.event}${record.correlationId ? ` correlation=${record.correlationId}` : ""}${record.status !== undefined ? ` status=${record.status}` : ""}${record.durationMs !== undefined ? ` duration=${record.durationMs}ms` : ""}\n`;
+  return `${record.timestamp} ${record.level.toUpperCase()} ${record.event}${record.correlationId ? ` correlation=${record.correlationId}` : ""}${record.causationId ? ` causation=${record.causationId}` : ""}${record.status !== undefined ? ` status=${record.status}` : ""}${record.durationMs !== undefined ? ` duration=${record.durationMs}ms` : ""}\n`;
 }
 
 export function createTailLineConsumer(options: LogOptions, output: (line: string) => void): (chunk: string) => void {
