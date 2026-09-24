@@ -1,6 +1,6 @@
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
-import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import { captureLocalWebhookDelivery, createTenantDatabase, loadCurrentWebhookSigningSecret, projectCommittedWebhook, webhookDelivery, webhookEndpoint, type Database, type LocalWebhookScenario, type NativeWebhookWakeup, type WebhookProjectionResult } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type OutboxEntry, type defineEventCatalog } from "@__TRESTLE_PROJECT_NAME__/events";
 import { and, eq, isNull } from "drizzle-orm";
@@ -89,7 +89,7 @@ export async function projectWebhookForEvent(input: {
       });
     }
   }
-  createLogger({ correlationId: actual.correlationId, organizationId: committed.organizationId }).info(
+  createLogger({ correlationId: actual.correlationId, organizationId: committed.organizationId }, undefined, { secretValues: loggerSecretsFromEnvironment(input.environment) }).info(
     result.state === "private" ? "webhook.projection.private" : result.state === "suppressed" ? "webhook.projection.suppressed" : "webhook.projection.ready",
     { eventId: actual.id, ...(result.state === "private" ? {} : { webhookMessageId: result.messageId, deliveries: result.deliveries, created: result.created }) },
   );

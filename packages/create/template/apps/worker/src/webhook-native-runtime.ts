@@ -1,5 +1,5 @@
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import { claimNativeWebhookDelivery, createSignedWebhookHeaders, createTenantDatabase, loadCurrentWebhookSigningSecret, loadNativeWebhookAttempt, resolveNativeWebhookWork, settleNativeWebhookAttempt, type Database, type NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { OutboxEntry } from "@__TRESTLE_PROJECT_NAME__/events";
 
@@ -31,7 +31,7 @@ export async function runNativeWebhookWakeup(input: {
   if (work.state !== "ready") return { state: "ignored" };
   const claim = await claimNativeWebhookDelivery({ organizationId: work.organizationId, deliveryId: work.deliveryId, tenantDatabase, clock, leaseMs: 60_000 });
   if (claim.state === "capacity") {
-    createLogger({ organizationId: work.organizationId }).info("webhook.native.capacity.deferred", { webhookDeliveryId: work.deliveryId });
+    createLogger({ organizationId: work.organizationId }, undefined, { secretValues: loggerSecretsFromEnvironment(input.environment) }).info("webhook.native.capacity.deferred", { webhookDeliveryId: work.deliveryId });
     return { state: "retry", delaySeconds: 30 };
   }
   if (claim.state !== "leased") return { state: "ignored" };
@@ -46,7 +46,7 @@ export async function runNativeWebhookWakeup(input: {
     tenantDatabase, clock, result: sent.kind === "response" ? { kind: "response", status: sent.status } : { kind: "failure", category: sent.category }, durationMs: sent.durationMs,
   });
   if (settled.state === "stale") return { state: "stale" };
-  createLogger({ correlationId: payload.correlationId, organizationId: work.organizationId }).info("webhook.native.attempt.settled", {
+  createLogger({ correlationId: payload.correlationId, organizationId: work.organizationId }, undefined, { secretValues: loggerSecretsFromEnvironment(input.environment) }).info("webhook.native.attempt.settled", {
     webhookDeliveryId: work.deliveryId, state: settled.state, attemptNumber: settled.attemptNumber,
   });
   if (settled.state !== "retry") return { state: settled.state };

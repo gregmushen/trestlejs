@@ -49,6 +49,18 @@ describe("worker routes", () => {
     await expect(response.json()).resolves.toMatchObject({ status: "ok" });
   });
 
+  it("redacts a runtime credential embedded in a request path", async () => {
+    const secret = "worker-credential-unique-123456";
+    const output: string[] = [];
+    const original = console.log;
+    console.log = (...items: unknown[]) => { output.push(items.map(String).join(" ")); };
+    try {
+      await app.request(`/api/${secret}`, undefined, { ...environment, BETTER_AUTH_SECRET: secret });
+    } finally { console.log = original; }
+    expect(output.join("\n")).toContain("[REDACTED]");
+    expect(output.join("\n")).not.toContain(secret);
+  });
+
   it("reports provider capability readiness without returning credential values", async () => {
     const response = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "staging" as const, EMAIL_DELIVERY_MODE: "resend" as const, RESEND_API_KEY: "re_sensitive", EMAIL_FROM: "sender@example.test", EMAIL_STAGING_REDIRECT: "capture@example.test", STRIPE_MODE: "test" as const, STRIPE_SECRET_KEY: "sk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive", STRIPE_PUBLISHABLE_KEY: "pk_test_example", STRIPE_PRICES: JSON.stringify({ starter: "price_starter", pro: "price_pro", business: "price_business" }), BILLING_RETURN_URL: "https://example.test/billing" });
     expect(response.status).toBe(200);

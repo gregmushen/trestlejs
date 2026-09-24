@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import { PostgresEventInbox, PostgresOutboxStore, type NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
 import { eventEnvelopeSchema, safeErrorCategory, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { handleEventWithInbox } from "./async-runtime.js";
@@ -19,9 +19,9 @@ export class TrestleWorkflow extends WorkflowEntrypoint<AuthEnvironment, EventEn
           const queue = (environment as AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBinding<NativeWebhookWakeup> }).TRESTLE_EVENTS;
           await projectWebhookForEvent({ envelope: message, environment, outbox, ...(queue ? { queue } : {}) });
         });
-        createLogger({ correlationId: envelope.correlationId }).info("workflow.event.completed", { workflowId: event.instanceId, eventName: envelope.name });
+        createLogger({ correlationId: envelope.correlationId }, undefined, { secretValues: loggerSecretsFromEnvironment(this.env) }).info("workflow.event.completed", { workflowId: event.instanceId, eventName: envelope.name });
       } catch (error) {
-        createLogger({ correlationId: envelope.correlationId }).warn("workflow.event.retrying", { workflowId: event.instanceId, eventName: envelope.name, errorCategory: safeErrorCategory(error) });
+        createLogger({ correlationId: envelope.correlationId }, undefined, { secretValues: loggerSecretsFromEnvironment(this.env) }).warn("workflow.event.retrying", { workflowId: event.instanceId, eventName: envelope.name, errorCategory: safeErrorCategory(error) });
         throw new Error("Workflow handler failed");
       } finally {
         await Promise.all([inbox.close(), outbox.close()]);

@@ -1,5 +1,5 @@
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import { parseNativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
 import { safeErrorCategory, type OutboxEntry, type QueueBatchMessage } from "@__TRESTLE_PROJECT_NAME__/events";
 
@@ -26,7 +26,7 @@ export async function consumeNativeWebhookQueueMessages(input: {
       if (result.state === "retry") { item.retry({ delaySeconds: result.delaySeconds }); retried++; }
       else { item.ack(); acknowledged++; }
     } catch (error) {
-      createLogger({ environment: input.environment.APP_ENV ?? "local" }).warn("webhook.native.wakeup.retrying", { errorCategory: safeErrorCategory(error) });
+      createLogger({ environment: input.environment.APP_ENV ?? "local" }, undefined, { secretValues: loggerSecretsFromEnvironment(input.environment) }).warn("webhook.native.wakeup.retrying", { errorCategory: safeErrorCategory(error) });
       item.retry({ delaySeconds: 30 });
       retried++;
     }
