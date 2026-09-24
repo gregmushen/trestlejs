@@ -991,10 +991,11 @@ deploy may restore it sooner, so recheck capacity before Trestle promotion.
 Alpha 127 makes the generated disabled-Queue and disabled-R2 CLI tests use
 isolated false-capability fixtures. They now pass even when an application
 enables both capabilities, as the beta canary does; no production Cloudflare
-behavior changes. A deployed staging run also exposed a browser-test assertion
-that expected signed artifact URLs on the direct Worker origin; Pages-bound
-requests correctly return app-origin URLs, and the generated test now checks
-that public origin. Its published-adjacent upgrade rehearsal also narrowly
+behavior changes. A deployed staging run also exposed a signed-artifact URL
+bug: Pages forwards the access request under the app hostname, but its static
+route cannot serve the Worker-only download path. The Worker now signs an
+absolute URL using its configured direct API origin, with a regression test
+that simulates the Pages-forwarded hostname. Its published-adjacent upgrade rehearsal also narrowly
 reviews the Alpha 125 → 126 protected preview workflow change against the
 recorded source hash and exact target content rather than bypassing workflow
 review.

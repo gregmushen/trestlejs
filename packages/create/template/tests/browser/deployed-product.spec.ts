@@ -212,7 +212,7 @@ test("staging signs up through redirected Resend verification and switches organ
     const access = await page.context().request.get(`${appOrigin}/api/artifacts/${artifactId}/access`, { headers: firstHeaders });
     expect(access.status()).toBe(200);
     const signedUrl = (await access.json() as { url: string }).url;
-    expect(new URL(signedUrl).origin).toBe(new URL(appOrigin).origin);
+    expect(new URL(signedUrl).origin).toBe(new URL(apiOrigin).origin);
     const downloaded = await page.context().request.get(signedUrl);
     expect(downloaded.status()).toBe(200);
     expect(await downloaded.text()).toBe(artifactBody);

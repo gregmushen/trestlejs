@@ -102,9 +102,12 @@ suite("local product path", () => {
       }, environment);
       expect(upload.status).toBe(201);
       artifactId = (await upload.json() as { artifact: { id: string } }).artifact.id;
-      const access = await app.request(`http://localhost:8787/api/artifacts/${artifactId}/access`, { headers: artifactHeaders }, environment);
+      // Pages forwards API requests under the app hostname, while signed
+      // downloads must resolve to the Worker's direct artifact route.
+      const access = await app.request(`http://localhost:42069/api/artifacts/${artifactId}/access`, { headers: artifactHeaders }, environment);
       expect(access.status).toBe(200);
       const signedUrl = (await access.json() as { url: string }).url;
+      expect(new URL(signedUrl).origin).toBe(environment.BETTER_AUTH_URL);
       const downloaded = await app.request(signedUrl, undefined, environment);
       expect(downloaded.status).toBe(200);
       expect(await downloaded.text()).toBe("private artifact");
