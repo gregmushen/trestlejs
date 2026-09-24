@@ -296,15 +296,21 @@ app.post("/api/webhooks/resend", async (context) => {
   const timestamp = context.req.header("svix-timestamp");
   const signature = context.req.header("svix-signature");
   if (!id || !timestamp || !signature) return context.json({ error: "Missing webhook signature" }, 400);
+  let event: Awaited<ReturnType<typeof verifyResendWebhook>>;
   try {
-    const event = await verifyResendWebhook({ apiKey: context.env.RESEND_API_KEY, webhookSecret: context.env.RESEND_WEBHOOK_SECRET, rawBody: await context.req.text(), headers: { id, timestamp, signature } });
+    event = await verifyResendWebhook({ apiKey: context.env.RESEND_API_KEY, webhookSecret: context.env.RESEND_WEBHOOK_SECRET, rawBody: await context.req.text(), headers: { id, timestamp, signature } });
+  } catch {
+    log.warn("email.webhook.rejected", { reason: "invalid_signature_or_payload" });
+    return context.json({ error: "Invalid webhook" }, 400);
+  }
+  try {
     const inserted = await createDatabase(context.env.DATABASE_URL, context.env.DATABASE_DRIVER).insert(emailDeliveryEvent).values(event).onConflictDoNothing().returning();
     const duplicate = inserted.length === 0;
     log.info(duplicate ? "email.webhook.duplicate" : "email.webhook.processed", { providerEventId: event.id, emailDeliveryId: event.emailDeliveryId, deliveryStatus: event.status });
     return context.json({ duplicate, event }, duplicate ? 200 : 202);
   } catch {
-    log.warn("email.webhook.rejected", { reason: "invalid_signature_or_payload" });
-    return context.json({ error: "Invalid webhook" }, 400);
+    log.error("email.webhook.persistence_failed", { providerEventId: event.id, emailDeliveryId: event.emailDeliveryId });
+    return context.json({ error: "Email webhook could not be recorded" }, 503);
   }
 });
 

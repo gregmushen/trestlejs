@@ -772,6 +772,12 @@ that only the configured staging mailbox was addressed. The authorized canary
 Resend key passed this test. Provider acceptance and recipient metadata do not
 prove inbox delivery or webhook processing; deployed sign-up, verification,
 and delivery-event evidence remain beta gates.
+Alpha 101 separates Resend webhook verification from database persistence.
+Invalid signatures and payloads still return HTTP 400, but a database outage
+after a valid webhook returns HTTP 503 so the provider can redeliver it. The
+generated Worker tests rejection, first receipt, duplicate receipt, and
+recovery after a transient persistence failure. Live webhook registration and
+deployed delivery-event evidence remain open.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
