@@ -1,9 +1,14 @@
 import { expect, test } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
+import postgres from "postgres";
 
 import { waitForStagingVerificationLink } from "../../scripts/staging-email.js";
+import { waitForStagingAsyncEvent } from "../../scripts/staging-async.js";
 
 const articleDeclared = existsSync(new URL("../../.trestle/resources/article.json", import.meta.url));
+const queuesDeclaration = /^  queues: (true|false)$/mu.exec(readFileSync(new URL("../../.trestle/project.yaml", import.meta.url), "utf8"));
+if (!queuesDeclaration) throw new Error("The generated project must declare its Queue capability");
+const queuesDeclared = queuesDeclaration[1] === "true";
 const r2Declaration = /^  r2: (true|false)$/mu.exec(readFileSync(new URL("../../.trestle/project.yaml", import.meta.url), "utf8"));
 if (!r2Declaration) throw new Error("The generated project must declare its R2 capability");
 const r2Declared = r2Declaration[1] === "true";
@@ -97,6 +102,30 @@ test("staging signs up through redirected Resend verification and switches organ
     const firstArticle = ((await firstList.json()) as { articles: Array<{ id: string; name: string }> }).articles.find((article) => article.name === editedName);
     expect(firstArticle?.id).toBeTruthy();
     if (!firstArticle) throw new Error("Created staging Article was not returned by the API");
+
+    if (queuesDeclared) {
+      const databaseUrl = process.env.DATABASE_URL;
+      if (!databaseUrl) throw new Error("The deployed Queue gate requires the staging runtime DATABASE_URL");
+      const sql = postgres(databaseUrl, { max: 1, connect_timeout: 10 });
+      try {
+        const completed = await waitForStagingAsyncEvent(async () => {
+          const [outbox] = await sql<{ id: string; status: string }[]>`
+            select id, status from outbox_message
+            where event_name = 'resource.article.created'
+              and resource_id = ${firstArticle.id}
+              and organization_id = ${firstId!}
+            limit 1
+          `;
+          if (!outbox) return null;
+          const [inbox] = await sql<{ status: string }[]>`select status from event_inbox where event_id = ${outbox.id} limit 1`;
+          return { eventId: outbox.id, outboxStatus: outbox.status, inboxStatus: inbox?.status ?? null };
+        });
+        expect(completed.outboxStatus).toBe("succeeded");
+        expect(completed.inboxStatus).toBe("completed");
+      } finally {
+        await sql.end();
+      }
+    }
 
     await switchOrganization(secondId!);
     await expect(page.getByRole("listitem").getByText(editedName)).toHaveCount(0);
