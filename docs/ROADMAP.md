@@ -835,6 +835,13 @@ URL must return the uploaded bytes, a forged tenant and cross-tenant access
 must fail, and deletion must revoke the URL. Existing local R2/system tests
 cover these mechanics before release; live provider evidence remains open
 until staging deploys and runs the browser gate.
+Alpha 110 adds a conditional deployed asynchronous smoke when Article and
+Queues are declared. The staging browser creates an Article, then uses the
+restricted runtime database role to verify that its committed outbox event
+was dispatched and its Queue/Workflow consumer receipt completed. This checks
+the real hosted path without exposing an internal status endpoint. The
+deterministic Workflow retry and duplicate-delivery challenge, as well as
+the first live staging run, remain open beta evidence.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.

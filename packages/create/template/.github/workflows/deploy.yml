@@ -16,7 +16,7 @@ jobs:
   staging:
     environment: staging
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -167,10 +167,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Install deployed browser runtime
         run: pnpm exec playwright install --with-deps --only-shell chromium
-      - name: Verify deployed staging signup, email, and organizations in Chromium
+      - name: Verify deployed staging signup, email, organizations, and async delivery in Chromium
         run: |
           export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env staging --raw)"
           echo "::add-mask::$RESEND_API_KEY"
+          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"
+          echo "::add-mask::$DATABASE_URL"
           pnpm test:staging
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
