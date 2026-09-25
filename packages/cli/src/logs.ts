@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import type { EnvironmentName } from "@trestlejs/core";
+import type { EnvironmentName } from "./core.js";
 
 export type LogOptions = Readonly<{
   environment: EnvironmentName;

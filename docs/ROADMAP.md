@@ -1349,7 +1349,8 @@ with application crons using P3's rules.
 
      Confirm the permission names in the dashboard when writing the docs. The
      token stays local and encrypted; CI gets a narrow deploy token.
-   - **`trestle setup` flow:**
+   - **Provisioning flow** (reviewed with `trestle plan diff`, applied with
+     `trestle apply --yes`):
      1. Verify the token and each permission with read-only calls.
      2. Show a diff of what it will create.
      3. Apply it idempotently: DNS records, Pages projects, custom domains, and

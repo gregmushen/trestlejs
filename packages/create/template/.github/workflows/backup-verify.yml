@@ -26,6 +26,7 @@ jobs:
       - name: Verify isolated production restore
         run: pnpm exec trestle backup verify --env production --to restore-test --yes --json | tee recovery-evidence.json
         env:
+          TRESTLE_EXPERIMENTAL: "1"
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           NEON_PROJECT_ID: "${{ vars.NEON_PROJECT_ID }}"
           NEON_DATABASE: "${{ vars.NEON_DATABASE }}"

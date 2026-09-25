@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { TRESTLEJS_VERSION } from "@trestlejs/core";
+import { TRESTLEJS_VERSION } from "../src/core.js";
 import { applyUpgrade, planUpgrade } from "../src/upgrade.js";
 
 const roots: string[] = [];
@@ -71,5 +71,42 @@ describe("versioned project upgrades", () => {
     expect(plan.operations).toContainEqual(expect.objectContaining({ id: "cli-version", classification: "manual-review" }));
     await expect(applyUpgrade(root)).rejects.toThrow("Upgrade requires manual review");
     expect((await readFile(path.join(root, "pnpm-lock.yaml"), "utf8"))).toContain("alpha.37");
+  });
+
+  it("flags a pre-upgrade backup-verify workflow that lacks the experimental opt-in for manual review", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-upgrade-backup-")); roots.push(root);
+    await mkdir(path.join(root, ".trestle"));
+    await mkdir(path.join(root, ".github", "workflows"), { recursive: true });
+    await writeFile(path.join(root, "package.json"), `${JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } })}\n`);
+    await writeFile(
+      path.join(root, ".github", "workflows", "backup-verify.yml"),
+      [
+        "on:",
+        "  schedule:",
+        "    - cron: \"17 10 * * 1\"",
+        "steps:",
+        "  - name: Verify isolated production restore",
+        "    run: pnpm exec trestle backup verify --env production --to restore-test --yes --json",
+        "    env:",
+        "      TRESTLE_MASTER_KEY: \"${{ secrets.TRESTLE_MASTER_KEY }}\"",
+        "",
+      ].join("\n"),
+    );
+    const plan = await planUpgrade(root);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      id: "backup-verify-experimental",
+      classification: "manual-review",
+      description: expect.stringContaining('add TRESTLE_EXPERIMENTAL: "1" to the env: of the trestle backup verify step in .github/workflows/backup-verify.yml'),
+    }));
+  });
+
+  it("does not flag a freshly generated project's backup-verify workflow, which already opts in", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-upgrade-backup-fresh-")); roots.push(root);
+    await mkdir(path.join(root, ".trestle"));
+    await mkdir(path.join(root, ".github", "workflows"), { recursive: true });
+    await writeFile(path.join(root, "package.json"), `${JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } })}\n`);
+    await cp(path.join("packages", "create", "template", ".github", "workflows", "backup-verify.yml"), path.join(root, ".github", "workflows", "backup-verify.yml"));
+    const plan = await planUpgrade(root);
+    expect(plan.operations).toContainEqual(expect.objectContaining({ id: "backup-verify-experimental", classification: "already-correct" }));
   });
 });

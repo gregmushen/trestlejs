@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { findProjectRoot, loadProjectManifest, type ProjectManifest } from "@trestlejs/core";
+import { findProjectRoot, loadProjectManifest, type ProjectManifest } from "./core.js";
 import type { Command } from "commander";
 
 import type { CliRuntime } from "./runtime.js";

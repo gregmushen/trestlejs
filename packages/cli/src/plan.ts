@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { parseSetupPlan, structuredOutput, type ProjectManifest, type SetupPlan, TRESTLEJS_VERSION } from "@trestlejs/core";
+import { parseSetupPlan, structuredOutput, type ProjectManifest, type SetupPlan, TRESTLEJS_VERSION } from "./core.js";
 
-import { generateResource, generateResourceMigration } from "./generate-resource.js";
+import { generateResource, generateResourceMigration, names } from "./generate-resource.js";
+import { hasForcedRlsMigration, missingFiles, readMigrationSql } from "./resource-checks.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
 import { enableAdminCapability } from "./upgrade-source.js";
 
@@ -86,27 +87,15 @@ async function hasMigration(root: string, manifest: ProjectManifest, state: Reso
   try {
     const dbPath = manifest.packages.db ?? "packages/db";
     await access(path.join(root, dbPath, "package.json"));
-    const directory = path.join(root, dbPath, "migrations");
-    const sql = (await Promise.all((await readdir(directory)).filter((file) => file.endsWith(".sql")).map((file) => readFile(path.join(directory, file), "utf8")))).join("\n");
-    return sql.includes(`CREATE TABLE "${table}"`) && sql.includes(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY`);
+    return hasForcedRlsMigration(await readMigrationSql(root, dbPath), table);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT" && !manifest.packages.db) return true;
     return false;
   }
 }
 
-function resourceNames(name: string): { camel: string; kebab: string; pluralKebab: string } {
-  const words = name.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").split(" ").map((word) => word.toLowerCase());
-  const kebab = words.join("-");
-  return {
-    camel: `${words[0]}${words.slice(1).map((word) => `${word[0]?.toUpperCase()}${word.slice(1)}`).join("")}`,
-    kebab,
-    pluralKebab: kebab.endsWith("s") ? `${kebab}es` : `${kebab}s`,
-  };
-}
-
 async function resourceArtifactsComplete(root: string, manifest: ProjectManifest, name: string, state: ResourceState): Promise<boolean> {
-  const resource = resourceNames(name);
+  const resource = names(name);
   const contractsPath = manifest.packages.contracts ?? "packages/contracts";
   const domainPath = manifest.packages.domain ?? "packages/domain";
   const dataPath = manifest.packages.data ?? "packages/data";
@@ -123,7 +112,7 @@ async function resourceArtifactsComplete(root: string, manifest: ProjectManifest
     path.join(contractsPath, "src", "resources", `${resource.kebab}.test.ts`),
     path.join(dbPath, "src", `${resource.kebab}-rls.integration.test.ts`),
   ];
-  if ((await Promise.all(expectedFiles.map((file) => access(path.join(root, file)).then(() => true, () => false)))).some((present) => !present)) return false;
+  if ((await missingFiles(root, expectedFiles)).length > 0) return false;
   try {
     const [contracts, domain, data, database, worker, app] = await Promise.all([
       readFile(path.join(root, contractsPath, "src", "index.ts"), "utf8"),
@@ -180,12 +169,6 @@ export async function diffSetupPlan(root: string, manifest: ProjectManifest, pla
     if (current && current.tenant === resource.tenant && current.crud === resource.crud && !(await hasMigration(root, manifest, current))) {
       items.push({ id: `resources.${resource.name}.migration`, classification: "create", summary: `${resource.name} journaled forced-RLS migration` });
     }
-  }
-  for (const external of plan.externalResources) {
-    items.push({ id: `external.${external.environment}.${external.name}`, classification: external.environment === "local" ? "unknown" : "blocked", summary: `${external.name} requires provider reconciliation in ${external.environment}` });
-  }
-  for (const [index, operation] of plan.destructiveOperations.entries()) {
-    items.push({ id: `destructive.${index}`, classification: "delete", summary: `${operation.environment}: ${operation.description}` });
   }
   return { planHash: planHash(input), items, converged: items.every(({ classification }) => classification === "already correct") };
 }
@@ -244,4 +227,29 @@ export async function readApplyState(root: string): Promise<ApplyState | undefin
 
 export function formatPlanJson(data: unknown): string {
   return `${JSON.stringify(structuredOutput(data), null, 2)}\n`;
+}
+
+function setupPlanFromManifest(manifest: ProjectManifest): SetupPlan {
+  return parseSetupPlan(JSON.stringify({
+    schemaVersion: 1,
+    minimumTrestleVersion: TRESTLEJS_VERSION,
+    project: manifest.project,
+    apps: { site: Boolean(manifest.apps.site), app: Boolean(manifest.apps.app), worker: Boolean(manifest.apps.worker) },
+    tenancy: manifest.tenancy,
+    database: { engine: manifest.database.engine, provider: manifest.database.defaultProvider },
+    capabilities: manifest.capabilities,
+    integrations: { email: Boolean(manifest.packages.integrations), billing: Boolean(manifest.packages.billing) },
+    environments: manifest.environments,
+    secrets: Object.entries(manifest.secrets ?? {}).map(([name, declaration]) => ({ name, target: declaration.target, required: declaration.required })),
+    resources: [],
+  }));
+}
+
+/** Writes .trestle/setup.json describing the current project; never overwrites an existing plan. */
+export async function initSetupPlan(root: string, manifest: ProjectManifest): Promise<string> {
+  const file = path.join(root, ".trestle", "setup.json");
+  if (await access(file).then(() => true, () => false)) throw new CliFailure(".trestle/setup.json already exists; edit it, or delete it to start over");
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(setupPlanFromManifest(manifest), null, 2)}\n`, "utf8");
+  return path.relative(root, file);
 }

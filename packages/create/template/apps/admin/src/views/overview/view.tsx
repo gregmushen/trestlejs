@@ -45,7 +45,7 @@ export default function OverviewView() {
     "overview.focus-unhealthy": { enabled: Boolean(overview.data?.exceptions?.length), run: () => document.querySelector<HTMLElement>("[data-exceptions] a")?.focus() },
   });
   return <>
-    <AdminPageHeader title="Overview" description="What needs attention, linked to the affected resource. Healthy systems are summarized below; configuration changes happen through trestle setup." />
+    <AdminPageHeader title="Overview" description="What needs attention, linked to the affected resource. Healthy systems are summarized below; configuration changes happen through .trestle/setup.json and trestle apply; trestle doctor shows what to fix." />
     <AdminQueryState query={overview}>{(data) => {
       const exceptions = data.exceptions ?? [];
       const healthy = data.capabilities.filter((status) => status.state !== "disabled" && status.healthy && status.state !== "declared");

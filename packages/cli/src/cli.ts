@@ -1,5 +1,4 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -7,7 +6,7 @@ import {
   environmentNameSchema,
   structuredOutput,
   TRESTLEJS_VERSION,
-} from "@trestlejs/core";
+} from "./core.js";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 
 import { formatCiValidation, validateCi } from "./ci.js";
@@ -24,7 +23,7 @@ import { addResourceField, generateResource, generateResourceMigration, parseRes
 import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
-import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, readApplyState, readSetupPlan } from "./plan.js";
+import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, initSetupPlan, readApplyState, readSetupPlan } from "./plan.js";
 import { runCommand, runDevelopment } from "./processes.js";
 import { emailDeploymentIssues, inspectResendSender, validEmailAddress, type RemoteEmailEnvironment } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
@@ -35,7 +34,6 @@ import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { applySourceUpgrade, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { auditMigrations, formatMigrationAudit } from "./upgrade-migrations.js";
-import { loadSetupPlan, startSetupConsole } from "./setup.js";
 import {
   adminSecretValues,
   credentialsPaths,
@@ -45,8 +43,10 @@ import {
   parseSecretDocument,
   readSecrets,
   rotateMasterKey,
+  SecretsError,
   validateSecrets,
   writeSecrets,
+  type SecretValues,
 } from "./secrets.js";
 
 function environment(value: string) {
@@ -92,13 +92,25 @@ function reveal(values: Record<string, string>, format: "yaml" | "json" | "doten
   return formatSecretDocument(values);
 }
 
+/** Beta freezes only proven commands; the rest run only with an explicit, per-invocation opt-in. */
+function experimental(command: Command, runtime: CliRuntime): Command {
+  command.description(`[experimental] ${command.description()}`);
+  command.hook("preAction", (_hooked, actionCommand) => {
+    if (actionCommand.optsWithGlobals<{ experimental?: boolean }>().experimental === true || runtimeValue(runtime, "TRESTLE_EXPERIMENTAL") === "1") return;
+    const names: string[] = [];
+    for (let current: Command | null = command; current?.parent; current = current.parent) names.unshift(current.name());
+    throw new CliFailure(`${names.join(" ")} is experimental in beta and may change; rerun with --experimental or set TRESTLE_EXPERIMENTAL=1`);
+  });
+  return command;
+}
+
 export function createProgram(runtime: CliRuntime): Command {
   const program = new Command()
     .name("trestle")
     .description("Build and operate conventional TrestleJS applications")
     .version(TRESTLEJS_VERSION)
     .option("--cwd <path>", "start project discovery from this directory")
-    .option("--no-color", "disable color output")
+    .option("--experimental", "allow experimental beta commands for this invocation")
     .showSuggestionAfterError()
     .showHelpAfterError()
     .exitOverride()
@@ -136,20 +148,6 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const env = program.command("env").description("inspect declared environments");
-  env
-    .command("list")
-    .description("list declared environments")
-    .option("--json", "emit versioned structured output")
-    .action(async (options: { json?: boolean }, command: Command) => {
-      const context = await projectContext(command, runtime);
-      if (options.json) {
-        runtime.stdout(
-          `${JSON.stringify(structuredOutput({ environments: context.manifest.environments }), null, 2)}\n`,
-        );
-        return;
-      }
-      runtime.stdout(`${context.manifest.environments.join("\n")}\n`);
-    });
   env
     .command("status")
     .description("inspect one declared environment without contacting providers")
@@ -222,21 +220,28 @@ export function createProgram(runtime: CliRuntime): Command {
         async () => { await runCommand("pnpm", ["check"], { cwd: context.root, env: process.env }); });
       runtime.stdout("Local checks passed and application source matches the target template. The source version and baseline were advanced; deployed provider readiness remains unverified.\n");
     });
+  async function reportUpgradeCompatibility(root: string, json: boolean | undefined): Promise<void> {
+    const report = await planUpgrade(root);
+    const compatible = report.operations.every(({ classification }) => classification === "already-correct");
+    runtime.stdout(json ? `${JSON.stringify(structuredOutput({ compatible, ...report }), null, 2)}\n` : compatible ? `✓ Project metadata, managed guidance, and CLI are compatible with ${report.targetVersion}\n` : formatUpgradePlan(report));
+    if (!compatible) throw new CliFailure("project requires a reviewed upgrade");
+  }
   upgrade.command("plan")
     .option("--json", "emit versioned structured output")
-    .action(async (options: { json?: boolean }, command: Command) => {
+    .option("--check", "exit non-zero unless the project is already compatible")
+    .action(async (options: { json?: boolean; check?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
+      if (options.check) { await reportUpgradeCompatibility(context.root, options.json); return; }
       const report = await planUpgrade(context.root);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatUpgradePlan(report));
     });
-  upgrade.command("check")
+  // Hidden alias for `upgrade plan --check`, kept only until scripts/check-adjacent-upgrade.mjs
+  // runs a previously published CLI that ships --check; see "Not in this plan" in the subtraction-3 plan.
+  upgrade.command("check", { hidden: true })
     .option("--json", "emit versioned structured output")
     .action(async (options: { json?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
-      const report = await planUpgrade(context.root);
-      const compatible = report.operations.every(({ classification }) => classification === "already-correct");
-      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ compatible, ...report }), null, 2)}\n` : compatible ? `✓ Project metadata, managed guidance, and CLI are compatible with ${report.targetVersion}\n` : formatUpgradePlan(report));
-      if (!compatible) throw new CliFailure("project requires a reviewed upgrade");
+      await reportUpgradeCompatibility(context.root, options.json);
     });
   upgrade.command("apply")
     .option("--yes", "confirm the reviewed upgrade plan")
@@ -246,37 +251,6 @@ export function createProgram(runtime: CliRuntime): Command {
       const report = await applyUpgrade(context.root);
       await runCommand("pnpm", ["install", "--lockfile-only"], { cwd: context.root, env: process.env });
       runtime.stdout(`Applied upgrade to ${report.targetVersion}\n${report.operations.filter(({ classification }) => classification === "update").map(({ id }) => `✓ ${id}`).join("\n")}\nApplication-owned source was preserved.\n`);
-    });
-
-  program.command("setup")
-    .description("review and apply a guided local SetupPlan with encrypted credentials")
-    .option("--env <environment>", "credential and Doctor environment", environment, "local")
-    .option("--resume", "require an existing saved SetupPlan")
-    .option("--plan-only", "print the current SetupPlan diff without starting the console")
-    .option("--no-open", "print the local console URL without opening a browser")
-    .action(async (options: { env: ReturnType<typeof environment>; resume?: boolean; planOnly?: boolean; open: boolean }, command: Command) => {
-      const context = await projectContext(command, runtime);
-      if (!context.manifest.environments.includes(options.env)) throw new CliFailure(`${options.env} is not declared in this project`);
-      const loaded = await loadSetupPlan(context.root, context.manifest, options.resume);
-      if (options.planOnly) {
-        const diff = await diffSetupPlan(context.root, context.manifest, loaded.plan, loaded.input);
-        runtime.stdout(formatPlanDiff(diff));
-        return;
-      }
-      const console = await startSetupConsole(context.root, context.manifest, options.env, selectedMasterKey(runtime), options.resume);
-      runtime.stdout(`Trestle setup: ${console.url}\nOne-time access code: ${console.accessCode}\nPress Ctrl+C to close.\n`);
-      if (options.open) {
-        const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-        const arguments_ = process.platform === "win32" ? ["/c", "start", "", console.url] : [console.url];
-        const child = spawn(opener, arguments_, { stdio: "ignore", detached: true });
-        child.on("error", () => runtime.stderr(`Open ${console.url} in a browser to continue.\n`));
-        child.unref();
-      }
-      const stop = () => { void console.close(); };
-      process.once("SIGINT", stop);
-      process.once("SIGTERM", stop);
-      try { await console.closed; }
-      finally { process.off("SIGINT", stop); process.off("SIGTERM", stop); await console.close().catch(() => undefined); }
     });
 
   program
@@ -294,6 +268,13 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const plan = program.command("plan").description("validate and inspect a versioned SetupPlan");
+  plan.command("init")
+    .description("write a starter SetupPlan describing the current project")
+    .action(async (_options: object, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const file = await initSetupPlan(context.root, context.manifest);
+      runtime.stdout(`Wrote ${file}\nNext: edit it, then run trestle plan diff ${file}\n`);
+    });
   plan.command("validate")
     .argument("<file>", "SetupPlan JSON path or - for standard input")
     .option("--json", "emit versioned structured output")
@@ -399,20 +380,18 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(`Updated ${options.env} credentials\n`);
     });
 
-  for (const name of ["show", "export"] as const) {
-    secrets
-      .command(name)
-      .option("--env <environment>", "credentials environment", environment, "local")
-      .option("--format <format>", "yaml, json, or dotenv", "yaml")
-      .action(async (options: { env: ReturnType<typeof environment>; format: string }, command: Command) => {
-        if (!(["yaml", "json", "dotenv"] as const).includes(options.format as "yaml" | "json" | "dotenv")) {
-          throw new InvalidArgumentError("format must be yaml, json, or dotenv");
-        }
-        const context = await projectContext(command, runtime);
-        if (runtime.isTTY?.()) runtime.stderr("Warning: printing plaintext credentials to the terminal\n");
-        runtime.stdout(reveal(await readSecrets(context.root, options.env, selectedMasterKey(runtime)), options.format as "yaml" | "json" | "dotenv"));
-      });
-  }
+  secrets
+    .command("show")
+    .option("--env <environment>", "credentials environment", environment, "local")
+    .option("--format <format>", "yaml, json, or dotenv", "yaml")
+    .action(async (options: { env: ReturnType<typeof environment>; format: string }, command: Command) => {
+      if (!(["yaml", "json", "dotenv"] as const).includes(options.format as "yaml" | "json" | "dotenv")) {
+        throw new InvalidArgumentError("format must be yaml, json, or dotenv");
+      }
+      const context = await projectContext(command, runtime);
+      if (runtime.isTTY?.()) runtime.stderr("Warning: printing plaintext credentials to the terminal\n");
+      runtime.stdout(reveal(await readSecrets(context.root, options.env, selectedMasterKey(runtime)), options.format as "yaml" | "json" | "dotenv"));
+    });
 
   secrets
     .command("get")
@@ -498,21 +477,19 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(`Set ${name} for ${options.env}\n`);
     });
 
-  for (const name of ["unset", "delete"] as const) {
-    secrets
-      .command(name)
-      .argument("<secret>")
-      .option("--env <environment>", "credentials environment", environment, "local")
-      .action(async (secret: string, options: { env: ReturnType<typeof environment> }, command: Command) => {
-        const context = await projectContext(command, runtime);
-        const declaration = context.manifest.secrets?.[secret];
-        if (declaration?.required.includes(options.env)) throw new CliFailure(`${secret} is required for ${options.env}; update the manifest before removing it`);
-        const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-        delete values[secret];
-        await writeSecrets(context.root, options.env, values, selectedMasterKey(runtime));
-        runtime.stdout(`Removed ${secret} from ${options.env}\n`);
-      });
-  }
+  secrets
+    .command("unset")
+    .argument("<secret>")
+    .option("--env <environment>", "credentials environment", environment, "local")
+    .action(async (secret: string, options: { env: ReturnType<typeof environment> }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const declaration = context.manifest.secrets?.[secret];
+      if (declaration?.required.includes(options.env)) throw new CliFailure(`${secret} is required for ${options.env}; update the manifest before removing it`);
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      delete values[secret];
+      await writeSecrets(context.root, options.env, values, selectedMasterKey(runtime));
+      runtime.stdout(`Removed ${secret} from ${options.env}\n`);
+    });
 
   const key = secrets.command("key").description("manage credentials master keys");
   key.command("rotate")
@@ -552,11 +529,14 @@ export function createProgram(runtime: CliRuntime): Command {
       await clearLocalEmail(options.apiUrl);
       runtime.stdout("Cleared locally captured email\n");
     });
-  email.command("status")
+  email.command("doctor")
     .option("--env <environment>", "email environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
-      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime)).catch((error) => {
+        if (options.env === "local" && error instanceof SecretsError) return {} as SecretValues;
+        throw error;
+      });
       const workerPath = context.manifest.apps.worker ?? "apps/worker";
       const config = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
       const block = wranglerEnvironmentBlock(config, options.env);
@@ -565,28 +545,18 @@ export function createProgram(runtime: CliRuntime): Command {
       const redirect = wranglerStringVariable(block, "EMAIL_STAGING_REDIRECT");
       const redirectStatus = options.env === "local" || options.env === "production" ? "not required" : validEmailAddress(redirect) ? "configured" : "missing";
       runtime.stdout(["Email", `Environment:        ${options.env}`, `Adapter:            ${mode}`, `API key:            ${values.RESEND_API_KEY?.startsWith("re_") && values.RESEND_API_KEY.length > 3 ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.RESEND_WEBHOOK_SECRET?.startsWith("whsec_") && values.RESEND_WEBHOOK_SECRET.length > 6 ? "present" : mode === "local" ? "not required" : "missing"}`, `Sender:             ${validEmailAddress(sender) ? "configured" : mode === "local" ? "local default" : "missing"}`, `Recipient redirect: ${redirectStatus}`, ""].join("\n"));
-    });
-  email.command("doctor")
-    .option("--env <environment>", "email environment", environment, "local")
-    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       if (options.env === "local") { runtime.stdout("✓ Local email capture requires no provider account\n"); return; }
-      const context = await projectContext(command, runtime);
-      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      const workerPath = context.manifest.apps.worker ?? "apps/worker";
-      const config = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
-      const block = wranglerEnvironmentBlock(config, options.env);
-      const senderValue = wranglerStringVariable(block, "EMAIL_FROM");
-      const sender = senderValue && senderValue !== "CHANGE_ME" ? senderValue : undefined;
-      const problems = emailDeploymentIssues({ environment: options.env as RemoteEmailEnvironment, mode: wranglerStringVariable(block, "EMAIL_DELIVERY_MODE"), apiKey: values.RESEND_API_KEY, webhookSecret: values.RESEND_WEBHOOK_SECRET, sender, recipientRedirect: wranglerStringVariable(block, "EMAIL_STAGING_REDIRECT") });
-      if (problems.length === 0 && values.RESEND_API_KEY && sender) {
-        try { const provider = await inspectResendSender(values.RESEND_API_KEY, sender); if (!provider.verified) problems.push(`Resend sender domain ${provider.domain} is ${provider.providerStatus ?? "not registered"}`); }
+      const senderValue = sender && sender !== "CHANGE_ME" ? sender : undefined;
+      const problems = emailDeploymentIssues({ environment: options.env as RemoteEmailEnvironment, mode: wranglerStringVariable(block, "EMAIL_DELIVERY_MODE"), apiKey: values.RESEND_API_KEY, webhookSecret: values.RESEND_WEBHOOK_SECRET, sender: senderValue, recipientRedirect: redirect });
+      if (problems.length === 0 && values.RESEND_API_KEY && senderValue) {
+        try { const provider = await inspectResendSender(values.RESEND_API_KEY, senderValue); if (!provider.verified) problems.push(`Resend sender domain ${provider.domain} is ${provider.providerStatus ?? "not registered"}`); }
         catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
       }
       runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Resend ${options.env} lifecycle and delivery safety are configured\n`);
       if (problems.length) throw new CliFailure("email doctor found failures");
     });
 
-  const queue = program.command("queue").description("operate asynchronous delivery queues");
+  const queue = experimental(program.command("queue").description("operate asynchronous delivery queues"), runtime);
   const dlq = queue.command("dlq").description("inspect dead-lettered outbox messages");
   dlq.command("list")
     .requiredOption("--env <environment>", "remote environment", environment)
@@ -633,10 +603,10 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(`${options.apply ? "Pruned" : "Eligible"} ${summary.count} succeeded outbox record(s) in ${options.env} before ${options.before}${options.apply ? ` (limit ${limit})` : " (dry run)"}\n`);
     });
 
-  const admin = program.command("admin").description("bootstrap and manage platform admin operators");
+  const admin = experimental(program.command("admin").description("bootstrap and manage platform admin operators"), runtime);
   const platformAdmin = async (command: Command, env: ReturnType<typeof environment>, args: string[]) => {
     const context = await projectContext(command, runtime);
-    if (!context.manifest.capabilities.admin) throw new CliFailure("The platform admin is not enabled; set capabilities.admin with trestle setup first");
+    if (!context.manifest.capabilities.admin) throw new CliFailure("The platform admin is not enabled; set capabilities.admin in .trestle/setup.json and run trestle apply first");
     const values = await readSecrets(context.root, env, selectedMasterKey(runtime));
     const connection = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
     if (!connection) throw new CliFailure(`DATABASE_MIGRATION_URL or DATABASE_URL is not set for ${env}`);
@@ -664,7 +634,7 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(grants.length ? `${grants.map((grant) => `${grant.userId}\t${grant.role}\t${grant.grantedBy}`).join("\n")}\n` : "No platform-role assignments\n");
     });
 
-  const workflow = program.command("workflow").description("inspect and retry Cloudflare Workflow instances");
+  const workflow = experimental(program.command("workflow").description("inspect and retry Cloudflare Workflow instances"), runtime);
   workflow.command("list")
     .argument("<name>", "workflow name")
     .option("--env <environment>", "target environment", environment, "local")
@@ -693,7 +663,7 @@ export function createProgram(runtime: CliRuntime): Command {
       await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", ...workflowArguments("retry", name, id, options.env)], { cwd: context.root, env: process.env });
     });
 
-  const backup = program.command("backup").description("inspect and verify declared provider recovery capability");
+  const backup = experimental(program.command("backup").description("inspect and verify declared provider recovery capability"), runtime);
   backup.command("status")
     .requiredOption("--env <environment>", "protected environment", environment)
     .option("--json", "emit versioned structured output")
@@ -765,7 +735,7 @@ export function createProgram(runtime: CliRuntime): Command {
       if (evidence.status !== "passed") throw new CliFailure("recovery verification failed, remained unverifiable, exceeded RTO, or isolated cleanup was incomplete");
     });
 
-  const restore = program.command("restore").description("create an isolated Neon point-in-time recovery branch");
+  const restore = experimental(program.command("restore").description("create an isolated Neon point-in-time recovery branch"), runtime);
   restore.command("create")
     .requiredOption("--env <environment>", "source environment", environment)
     .requiredOption("--to <target>", "declared isolated restore target")
@@ -811,17 +781,13 @@ export function createProgram(runtime: CliRuntime): Command {
     });
   generate.command("resource")
     .argument("<name>")
-    .option("--tenant", "generate organization ownership and forced RLS", true)
-    .option("--no-tenant", "generate without organization ownership")
-    .option("--crud", "generate CRUD contracts, routes, and UI", true)
-    .option("--no-crud", "generate persistence without CRUD surfaces")
     .option("--field <definition...>", "additional field as name:type[?] or name:relation:Resource[:onDelete]")
     .option("--webhook-event <kind...>", "explicitly expose created, updated, or deleted as a versioned customer webhook")
     .option("--read-permission <permission>", "application permission required to list/read", "resource.read")
     .option("--write-permission <permission>", "application permission required to create/update/delete", "resource.write")
     .option("--page-size <size>", "default cursor page size", Number, 25)
     .option("--max-page-size <size>", "maximum cursor page size", Number, 100)
-    .action(async (name: string, options: { tenant: boolean; crud: boolean; field?: string[]; webhookEvent?: string[]; readPermission: string; writePermission: string; pageSize: number; maxPageSize: number }, command: Command) => {
+    .action(async (name: string, options: { field?: string[]; webhookEvent?: string[]; readPermission: string; writePermission: string; pageSize: number; maxPageSize: number }, command: Command) => {
       const context = await projectContext(command, runtime);
       const additional = (options.field ?? []).map(parseResourceField);
       if (additional.some(({ name: fieldName }) => fieldName === "name")) throw new CliFailure("the required name:string field is generated automatically; do not redeclare it");
@@ -829,7 +795,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const webhookEvents = options.webhookEvent ?? [];
       if (webhookEvents.some((kind) => !["created", "updated", "deleted"].includes(kind)) || new Set(webhookEvents).size !== webhookEvents.length) throw new CliFailure("--webhook-event accepts each of created, updated, and deleted at most once");
       if (!Number.isInteger(options.pageSize) || !Number.isInteger(options.maxPageSize) || options.pageSize < 1 || options.maxPageSize > 250 || options.pageSize > options.maxPageSize) throw new CliFailure("page sizes must be integers with 1 <= default <= maximum <= 250");
-      const resource = { name, tenant: options.tenant, crud: options.crud, fields: [{ name: "name", type: "string", required: true } as const, ...additional], webhookEvents: webhookEvents as Array<"created" | "updated" | "deleted">, authorization: { read: options.readPermission, write: options.writePermission }, pagination: { defaultLimit: options.pageSize, maxLimit: options.maxPageSize } };
+      const resource = { name, tenant: true as const, crud: true as const, fields: [{ name: "name", type: "string", required: true } as const, ...additional], webhookEvents: webhookEvents as Array<"created" | "updated" | "deleted">, authorization: { read: options.readPermission, write: options.writePermission }, pagination: { defaultLimit: options.pageSize, maxLimit: options.maxPageSize } };
       const files = await generateResource(context.root, context.manifest, resource);
       files.push(...await generateResourceMigration(context.root, context.manifest, [resource]));
       runtime.stdout(`Generated ${name}\n${files.map((file) => `  ${file}`).join("\n")}\n`);
@@ -837,48 +803,32 @@ export function createProgram(runtime: CliRuntime): Command {
 
   const payments = program.command("payments").description("manage application payments integrations");
   const stripe = payments.command("stripe").description("operate the Stripe golden-path adapter");
-  stripe.command("init").action(async (_options: object, command: Command) => {
-    const context = await projectContext(command, runtime);
-    const required = ["packages/integrations/src/payments/index.ts", "packages/billing/src/index.ts", "packages/db/src/billing-schema.ts", "apps/worker/src/index.ts"];
-    for (const file of required) await readFile(path.join(context.root, file), "utf8").catch(() => { throw new CliFailure(`billing scaffold is incomplete: ${file} is missing`); });
-    runtime.stdout("Stripe billing\n✓ BillingService contract\n✓ Stripe adapter\n✓ Local billing adapter\n✓ subscription and entitlement projections\n✓ webhook endpoint and replay protection\n✓ Stripe configuration\nNo live Stripe resources created.\n");
-  });
-  stripe.command("status")
-    .option("--env <environment>", "billing environment", environment, "local")
-    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
-      const context = await projectContext(command, runtime);
-      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      const workerPath = context.manifest.apps.worker ?? "apps/worker";
-      const routeSource = await readFile(path.join(context.root, workerPath, "src/index.ts"), "utf8");
-      const workerConfig = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
-      const mode = wranglerStringVariable(wranglerEnvironmentBlock(workerConfig, options.env), "STRIPE_MODE") ?? (options.env === "local" ? "local" : "missing");
-      const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json"), "utf8")) as unknown);
-      const block = wranglerEnvironmentBlock(workerConfig, options.env);
-      const problems = options.env === "local" ? [] : stripeDeploymentIssues(options.env, {
-        mode, publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
-        prices: wranglerStringVariable(block, "STRIPE_PRICES"), returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
-      }, catalog);
-      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present (remote match unverified)" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${Object.keys(catalog.plans).length}`, `Configuration:      ${problems.length ? `${problems.length} issue(s)` : "ready"}`, ""].join("\n"));
-    });
   stripe.command("doctor")
     .option("--env <environment>", "billing environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
-      if (options.env === "local") { runtime.stdout("✓ LocalBillingAdapter requires no Stripe account\n"); return; }
-      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      const expected = options.env === "production" ? "live" : "test";
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime)).catch((error) => {
+        if (options.env === "local" && error instanceof SecretsError) return {} as SecretValues;
+        throw error;
+      });
       const workerPath = context.manifest.apps.worker ?? "apps/worker";
+      const routeSource = await readFile(path.join(context.root, workerPath, "src/index.ts"), "utf8");
       const workerConfig = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
       const block = wranglerEnvironmentBlock(workerConfig, options.env);
+      const mode = wranglerStringVariable(block, "STRIPE_MODE") ?? (options.env === "local" ? "local" : "missing");
       const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json"), "utf8")) as unknown);
-      const problems = [!stripeServerKeyMatchesMode(values.STRIPE_SECRET_KEY, options.env) ? `STRIPE_SECRET_KEY must be a sk_${expected}_ or rk_${expected}_ server key in ${options.env}` : "", !values.STRIPE_WEBHOOK_SECRET || !/^whsec_[A-Za-z0-9_]+$/u.test(values.STRIPE_WEBHOOK_SECRET) ? "STRIPE_WEBHOOK_SECRET must start with whsec_" : "", ...stripeDeploymentIssues(options.env, {
-        mode: wranglerStringVariable(block, "STRIPE_MODE"), publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
+      const deploymentIssues = options.env === "local" ? [] : stripeDeploymentIssues(options.env, {
+        mode, publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
         prices: wranglerStringVariable(block, "STRIPE_PRICES"), returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
-      }, catalog)].filter(Boolean);
+      }, catalog);
+      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present (remote match unverified)" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${Object.keys(catalog.plans).length}`, `Configuration:      ${deploymentIssues.length ? `${deploymentIssues.length} issue(s)` : "ready"}`, ""].join("\n"));
+      if (options.env === "local") { runtime.stdout("✓ LocalBillingAdapter requires no Stripe account\n"); return; }
+      const expected = options.env === "production" ? "live" : "test";
+      const problems = [!stripeServerKeyMatchesMode(values.STRIPE_SECRET_KEY, options.env) ? `STRIPE_SECRET_KEY must be a sk_${expected}_ or rk_${expected}_ server key in ${options.env}` : "", !values.STRIPE_WEBHOOK_SECRET || !/^whsec_[A-Za-z0-9_]+$/u.test(values.STRIPE_WEBHOOK_SECRET) ? "STRIPE_WEBHOOK_SECRET must start with whsec_" : "", ...deploymentIssues].filter(Boolean);
       runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Stripe ${options.env} credentials and mode agree\n! Remote webhook signing-secret match requires endpoint setup and provider delivery evidence\n`);
       if (problems.length) throw new CliFailure("Stripe doctor found failures");
     });
-  stripe.command("sync")
+  experimental(stripe.command("sync").description("reconcile the Stripe product and price catalog"), runtime)
     .requiredOption("--env <environment>", "remote environment", environment)
     .option("--apply", "create missing products/prices after reviewing the plan")
     .option("--yes", "confirm production provider mutation")
@@ -894,8 +844,7 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout([`Stripe sync plan (${options.env})`, ...report.items.map((item) => `${item.classification.padEnd(16)} ${item.plan}@${catalog.plans[item.plan]?.version ?? "?"}${item.reason ? ` — ${item.reason}` : ""}`), ...(Object.keys(report.prices).length ? [`STRIPE_PRICES=${JSON.stringify(report.prices)}`] : []), options.apply ? "Provider reconciliation complete." : "Review only; rerun with --apply to create missing resources.", ""].join("\n"));
       if (report.items.some((item) => item.classification === "blocked")) throw new CliFailure("Stripe sync found blocked immutable drift");
     });
-  stripe.command("listen").action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("stripe", ["listen", "--forward-to", "localhost:8787/webhooks/stripe"], { cwd: context.root, env: process.env }); });
-  const stripeWebhook = stripe.command("webhook").description("test or configure a Stripe billing webhook");
+  const stripeWebhook = stripe.command("webhook").description("configure a Stripe billing webhook");
   stripeWebhook.command("configure")
     .requiredOption("--env <environment>", "remote environment", environment)
     .requiredOption("--url <url>", "exact deployed /webhooks/stripe URL")
@@ -928,8 +877,7 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.apply && report.createdEndpointId) return;
       if (options.apply) throw new CliFailure("Stripe webhook setup did not apply");
     });
-  stripeWebhook.action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("stripe", ["trigger", "customer.subscription.updated"], { cwd: context.root, env: process.env }); });
-  stripe.command("seed")
+  experimental(stripe.command("seed").description("activate a local billing plan for an organization"), runtime)
     .requiredOption("--organization <id>", "local organization ID")
     .option("--plan <plan>", "plan to activate", "pro")
     .option("--api-url <url>", "local Worker URL", "http://localhost:8787")
@@ -942,7 +890,6 @@ export function createProgram(runtime: CliRuntime): Command {
       if (!response.ok) throw new CliFailure(`local billing seed failed with HTTP ${response.status}`);
       runtime.stdout(`${JSON.stringify(await response.json(), null, 2)}\n`);
     });
-  stripe.command("test").action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/billing`, "test"], { cwd: context.root, env: process.env }); });
 
   program.command("logs")
     .description("tail redacted structured Worker logs")
@@ -1075,8 +1022,7 @@ export function createProgram(runtime: CliRuntime): Command {
     await runCommand("docker", ["compose", "down", "--volumes"], { cwd: context.root, env: composeEnvironment });
   });
 
-  program.command("console")
-    .description("open an application-aware TypeScript console")
+  experimental(program.command("console").description("open an application-aware TypeScript console"), runtime)
     .option("--env <environment>", "console environment", environment, "local")
     .option("--tenant <tenant>", "tenant id or slug")
     .option("--write", "allow application writes")

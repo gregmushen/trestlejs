@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
-import { loadProjectManifest, TRESTLEJS_VERSION } from "@trestlejs/core";
+import { loadProjectManifest, TRESTLEJS_VERSION } from "trestlejs";
 import { readSecrets } from "trestlejs";
 import { afterEach, describe, expect, it } from "vitest";
 

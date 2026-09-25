@@ -159,6 +159,7 @@ Trestle architecture can be expressed as a versioned, secret-free
 `.trestle/setup.json`. Plans separate architectural intent from mutation:
 
 ```bash
+pnpm exec trestle plan init
 pnpm exec trestle plan validate .trestle/setup.json
 pnpm exec trestle plan diff .trestle/setup.json
 pnpm exec trestle apply .trestle/setup.json --yes
@@ -215,7 +216,6 @@ pnpm exec trestle email list
 pnpm exec trestle email show <id>
 pnpm exec trestle email open <id>
 pnpm exec trestle email clear
-pnpm exec trestle email status --env staging
 pnpm exec trestle email doctor --env staging
 ```
 
@@ -231,21 +231,22 @@ subscription and entitlement projections used by the application. Staging
 uses Stripe test mode; production uses live mode.
 
 ```bash
-pnpm exec trestle payments stripe status
 pnpm exec trestle payments stripe doctor
-pnpm exec trestle payments stripe sync --env staging
-pnpm exec trestle payments stripe listen
-pnpm exec trestle payments stripe test
+pnpm exec trestle --experimental payments stripe sync --env staging
 ```
+
+Use the Stripe CLI directly for local webhook forwarding:
+`stripe listen --forward-to localhost:8787/webhooks/stripe`. Run the billing
+package's own tests with `pnpm --filter <project>/billing test`.
 
 Application code depends on `BillingService`, never Stripe SDK types. Verified
 webhooks update local subscription state, and authorization reads local
 entitlements rather than making live Stripe requests.
 
 For a deployed webhook, first review the exact endpoint URL using a Stripe
-management key on standard input. `status` and `doctor` cannot prove that an
-existing encrypted `whsec_` matches Stripe's endpoint: Stripe returns that
-secret only when the endpoint is created.
+management key on standard input. `doctor` cannot prove that an existing
+encrypted `whsec_` matches Stripe's endpoint: Stripe returns that secret only
+when the endpoint is created.
 
 ```bash
 trestle payments stripe webhook configure --env staging \
@@ -299,7 +300,8 @@ for the reasoning behind those decisions.
 trestle dev                         boot the complete local application
 trestle dev --fresh --yes           reset only declared local state and reseed
 trestle doctor [--env <env>]        verify project and environment health
-trestle console --tenant <slug>     open the audited tenant-safe TS console
+trestle --experimental console --tenant <slug>
+                                    open the audited tenant-safe TS console
 trestle db ...                      operate local PostgreSQL
 trestle secrets ...                 manage encrypted credentials
 trestle email ...                   inspect local transactional email
@@ -308,16 +310,20 @@ trestle generate email <Name>       generate a React Email template
 trestle generate resource <Name>    generate a tenant-safe vertical slice
 trestle generate resource <Name> --webhook-event created updated
                                     expose only selected public event contracts
+trestle plan init                   write a starter SetupPlan for this project
 trestle plan ...                    validate and inspect setup intent
 trestle apply <plan> --yes          apply reviewed supported mutations
 trestle resources                   inspect declared domain resources
 trestle routes                      inspect API routes and auth posture
 trestle logs --env <env>            tail safe semantic Worker events
-trestle queue dlq list --env <env>  inspect dead-lettered outbox delivery
-trestle workflow status <name> <id> inspect a Cloudflare Workflow instance
-trestle backup verify ... --yes     prove an isolated Neon restore and RLS
+trestle --experimental queue dlq list --env <env>
+                                    inspect dead-lettered outbox delivery
+trestle --experimental workflow status <name> <id>
+                                    inspect a Cloudflare Workflow instance
+trestle --experimental backup verify ... --yes
+                                    prove an isolated Neon restore and RLS
 trestle architecture check          enforce static application boundaries
-trestle upgrade plan                preview an application-preserving upgrade
+trestle upgrade plan [--check]      preview an application-preserving upgrade
 trestle upgrade apply --yes         update metadata only after source-version review
 trestle upgrade diff                inventory target-template source changes
 trestle upgrade migrations          compare journal order and SQL identities without writes
@@ -325,6 +331,11 @@ trestle upgrade source-apply --yes  apply pristine adjacent-alpha source only
 trestle upgrade source-finalize --yes  run local checks and certify source parity
 trestle resource add-field ...      add an optional field and tracked migration
 ```
+
+Commands labelled `[experimental]` in `--help` (`queue`, `workflow`, `backup`,
+`restore`, `console`, `admin`, `payments stripe sync` and `payments stripe
+seed`) may change during beta and refuse to run unless the invocation passes
+`--experimental` or the environment sets `TRESTLE_EXPERIMENTAL=1`.
 
 This is a representative subset. `pnpm exec trestle --help` and each
 subcommand's `--help` are authoritative for your installed release. The
@@ -364,8 +375,7 @@ This repository contains the TrestleJS toolchain:
 | Package | Purpose |
 | --- | --- |
 | [`create-trestlejs`](https://www.npmjs.com/package/create-trestlejs) | project generator and canonical application template |
-| [`trestlejs`](https://www.npmjs.com/package/trestlejs) | the `trestle` command-line interface |
-| [`@trestlejs/core`](https://www.npmjs.com/package/@trestlejs/core) | versioned manifests, SetupPlan schema, and deterministic shared logic |
+| [`trestlejs`](https://www.npmjs.com/package/trestlejs) | the `trestle` command-line interface, plus versioned manifests, SetupPlan schema, and deterministic shared logic |
 
 ## Working on TrestleJS
 

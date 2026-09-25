@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseProjectManifest } from "@trestlejs/core";
+import { parseProjectManifest } from "../src/core.js";
 
 import { adminSecretValues, decryptSecrets, encryptSecrets, validateSecrets } from "../src/secrets.js";
 

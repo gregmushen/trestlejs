@@ -1,12 +1,13 @@
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { wranglerCapabilityBinding, wranglerEnvironmentBlock, wranglerStringVariable, type CloudflareBindingCapability } from "./wrangler-config.js";
 
-import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "@trestlejs/core";
+import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "./core.js";
 
 import { validateCi } from "./ci.js";
 import { inspectResources } from "./inspect.js";
 import { diffSetupPlan } from "./plan.js";
+import { hasForcedRlsMigration, missingFiles, readMigrationSql } from "./resource-checks.js";
 import { readSecrets, validateSecrets } from "./secrets.js";
 import { emailDeploymentIssues } from "./resend-status.js";
 import { stripeDeploymentIssues } from "./stripe-deployment.js";
@@ -150,13 +151,10 @@ export async function runDoctor(
 
   try {
     const resources = await inspectResources(root);
-    const migrationDirectory = path.join(root, manifest.packages.db ?? "packages/db", "migrations");
-    const migrationSql = resources.length
-      ? (await Promise.all((await readdir(migrationDirectory)).filter((file) => file.endsWith(".sql")).map((file) => readFile(path.join(migrationDirectory, file), "utf8")))).join("\n")
-      : "";
+    const migrationSql = resources.length ? await readMigrationSql(root, manifest.packages.db ?? "packages/db") : "";
     for (const resource of resources) {
       const required = resource.files ?? [resource.contracts, resource.persistence?.schema].filter((value): value is string => Boolean(value));
-      const missing = (await Promise.all(required.map(async (relativePath) => access(path.join(root, relativePath)).then(() => undefined, () => relativePath)))).filter(Boolean);
+      const missing = await missingFiles(root, required);
       checks.push({
         id: `resources.${resource.name.toLowerCase()}.sources`,
         group: "architecture",
@@ -166,7 +164,7 @@ export async function runDoctor(
       });
       if (resource.persistence?.table) {
         const table = resource.persistence.table;
-        const migrated = migrationSql.includes(`CREATE TABLE "${table}"`) && migrationSql.includes(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY`);
+        const migrated = hasForcedRlsMigration(migrationSql, table);
         checks.push({
           id: `resources.${resource.name.toLowerCase()}.migration`,
           group: "architecture",

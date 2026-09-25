@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { applyManifestCapabilities, loadProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "@trestlejs/core";
+import { applyManifestCapabilities, loadProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "trestlejs";
 import { initializeSecrets } from "trestlejs";
 
 export type CreateProjectOptions = {

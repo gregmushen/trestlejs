@@ -6,7 +6,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const expectedVersion = process.argv.slice(2).find((argument) => argument !== "--");
 const repositoryUrl = "git+https://github.com/gregmushen/trestlejs.git";
 const packages = [
-  ["packages/core", "@trestlejs/core"],
   ["packages/cli", "trestlejs"],
   ["packages/create", "create-trestlejs"],
 ];
@@ -43,7 +42,7 @@ if (expectedVersion && version !== expectedVersion) {
   throw new Error(`Release tag version ${expectedVersion} does not match package version ${version}.`);
 }
 
-const versionSource = await readFile(path.join(root, "packages/core/src/version.ts"), "utf8");
+const versionSource = await readFile(path.join(root, "packages/cli/src/version.ts"), "utf8");
 if (!versionSource.includes(`TRESTLEJS_VERSION = "${version}"`)) {
   throw new Error(`TRESTLEJS_VERSION must match package version ${version}.`);
 }

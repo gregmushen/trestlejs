@@ -294,7 +294,7 @@ export type ViewAvailability =
   | Readonly<{ kind: "unconfigured"; message: string; repair: string }>;
 
 export const repairCommand = (environment: Environment | undefined): string =>
-  !environment || environment === "local" ? "pnpm exec trestle setup" : `pnpm exec trestle setup --env ${environment}`;
+  !environment || environment === "local" ? "pnpm exec trestle doctor" : `pnpm exec trestle doctor --env ${environment}`;
 
 /** Usability only. Every API operation enforces its own authorization server-side. */
 export function viewAvailability(view: Pick<AdminViewDescriptor, "permission" | "capability">, context: NavigationContext): ViewAvailability {

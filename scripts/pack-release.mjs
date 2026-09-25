@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const releaseDirectory = path.join(root, "release");
 const packages = [
-  ["packages/core", "trestlejs-core.tgz"],
   ["packages/cli", "trestlejs.tgz"],
   ["packages/create", "create-trestlejs.tgz"],
 ];
@@ -35,6 +34,5 @@ for (const [, archive] of packages) {
     throw new Error(`${archive} contains an unresolved workspace dependency.`);
   }
   if (manifest.private === true) throw new Error(`${archive} is marked private.`);
-  await readFile(archivePath);
   console.log(`Verified ${archive}: ${manifest.name}@${manifest.version}`);
 }

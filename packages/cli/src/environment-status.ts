@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { wranglerCapabilityBinding, wranglerEnvironmentBlock, type CloudflareBindingCapability } from "./wrangler-config.js";
 
-import type { EnvironmentName, ProjectManifest } from "@trestlejs/core";
+import type { EnvironmentName, ProjectManifest } from "./core.js";
 
 export type EnvironmentStatus = {
   environment: EnvironmentName;

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 
-import { applyManifestCapabilities, TRESTLEJS_VERSION } from "@trestlejs/core";
+import { applyManifestCapabilities, TRESTLEJS_VERSION } from "../src/core.js";
 import { describe, expect, it } from "vitest";
 
 import { applySourceUpgrade, enableAdminCapability, finalizeSourceUpgrade, planSourceDiff } from "../src/upgrade-source.js";

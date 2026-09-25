@@ -1,6 +1,7 @@
-import { access, readdir, readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { hasForcedRlsMigration, missingFiles, readMigrationSql } from "./resource-checks.js";
 import { MANAGED_GUIDANCE_VERSION, planUpgrade } from "./upgrade.js";
 
 export type ArchitectureCheck = Readonly<{ id: string; status: "pass" | "fail"; message: string; evidence?: string }>;
@@ -27,15 +28,13 @@ export async function checkArchitecture(root: string): Promise<ArchitectureRepor
 
   const resourceDirectory = path.join(root, ".trestle", "resources");
   const declarations = (await readdir(resourceDirectory).catch(() => [])).filter((entry) => entry.endsWith(".json"));
-  const migrationDirectory = path.join(root, "packages", "db", "migrations");
-  const migrationFiles = (await readdir(migrationDirectory).catch(() => [])).filter((file) => file.endsWith(".sql")).map((file) => path.join(migrationDirectory, file));
-  const migrations = (await Promise.all(migrationFiles.map((file) => readFile(file, "utf8")))).join("\n");
+  const migrations = await readMigrationSql(root, "packages/db");
   for (const declarationFile of declarations) {
     const declaration = JSON.parse(await readFile(path.join(resourceDirectory, declarationFile), "utf8")) as { name?: string; tenant?: boolean; persistence?: { table?: string }; files?: string[] };
-    const missing = (await Promise.all((declaration.files ?? []).map(async (file) => access(path.join(root, file)).then(() => undefined, () => file)))).filter((value): value is string => Boolean(value));
+    const missing = await missingFiles(root, declaration.files ?? []);
     checks.push(result(`architecture.resource.${declaration.name ?? declarationFile}.files`, missing.length === 0, `${declaration.name ?? declarationFile} declared source exists`, missing.join(", ") || undefined));
     const table = declaration.persistence?.table;
-    const forced = !declaration.tenant || Boolean(table && new RegExp(`ALTER TABLE ["']?${table}["']? FORCE ROW LEVEL SECURITY`, "u").test(migrations));
+    const forced = !declaration.tenant || Boolean(table && hasForcedRlsMigration(migrations, table));
     checks.push(result(`architecture.resource.${declaration.name ?? declarationFile}.rls`, forced, `${declaration.name ?? declarationFile} tenant table forces PostgreSQL RLS`, table));
   }
   const skill = await readFile(path.join(root, ".agents", "skills", "trestle-setup", "SKILL.md"), "utf8").catch(() => "");

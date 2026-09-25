@@ -1,10 +1,9 @@
 # Publishing TrestleJS
 
-TrestleJS publishes three public npm packages from this workspace:
+TrestleJS publishes two public npm packages from this workspace:
 
-1. `@trestlejs/core`
-2. `trestlejs`
-3. `create-trestlejs`
+1. `trestlejs`
+2. `create-trestlejs`
 
 All packages use one version. Prerelease versions publish under the `next`
 distribution tag; stable versions publish under `latest`.
@@ -17,11 +16,10 @@ configured.
 1. Create or confirm the `trestlejs` organization on npm.
 2. Sign in locally with an npm account that can publish under that scope.
 3. Run `pnpm check`, `pnpm release:check`, and `pnpm release:pack`.
-4. Inspect the three archives in `release/`.
+4. Inspect the two archives in `release/`.
 5. Publish them in dependency order:
 
    ```bash
-   npm publish ./release/trestlejs-core.tgz --access public --tag next
    npm publish ./release/trestlejs.tgz --access public --tag next
    npm publish ./release/create-trestlejs.tgz --access public --tag next
    ```
@@ -46,7 +44,7 @@ authentication and disallow traditional tokens.
 
 ## Subsequent releases
 
-Update all three package versions and `TRESTLEJS_VERSION`, run the release
+Update both package versions and `TRESTLEJS_VERSION`, run the release
 checks, commit the change, then push a matching tag:
 
 ```bash

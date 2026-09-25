@@ -2,10 +2,10 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { TRESTLEJS_VERSION } from "@trestlejs/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { TRESTLEJS_VERSION } from "../src/core.js";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 
-import { executeCli } from "../src/index.js";
+import { executeCli, initializeSecrets } from "../src/index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -80,6 +80,39 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toContain("production webhook mutation requires --apply --yes");
   });
 
+  it("prints the folded status summary at the top of email doctor for local", async () => {
+    const root = await fixture();
+    await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "{}");
+    await initializeSecrets(root, "local");
+    const output = capture(root);
+    expect(await executeCli(["email", "doctor", "--env", "local"], output.runtime)).toBe(0);
+    expect(output.stdout()).toContain("Adapter:");
+  });
+
+  it("prints local defaults from email doctor when local credentials have not been initialized", async () => {
+    const root = await fixture();
+    await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "{}");
+    const output = capture(root);
+    expect(await executeCli(["email", "doctor", "--env", "local"], output.runtime)).toBe(0);
+    expect(output.stdout()).toContain("API key:            not required");
+    expect(output.stdout()).toContain("Local email capture requires no provider account");
+    expect(output.stderr()).toBe("");
+  });
+
+  it("prints local defaults from Stripe doctor when local credentials have not been initialized", async () => {
+    const root = await fixture();
+    await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "{}");
+    await mkdir(path.join(root, "apps", "worker", "src"), { recursive: true });
+    await writeFile(path.join(root, "apps", "worker", "src", "index.ts"), "// no /webhooks/stripe route yet\n");
+    await mkdir(path.join(root, "packages", "billing"), { recursive: true });
+    await writeFile(path.join(root, "packages", "billing", "stripe.json"), JSON.stringify({ schemaVersion: 1, currency: "usd", plans: {} }));
+    const output = capture(root);
+    expect(await executeCli(["payments", "stripe", "doctor", "--env", "local"], output.runtime)).toBe(0);
+    expect(output.stdout()).toContain("API key:            not required");
+    expect(output.stdout()).toContain("LocalBillingAdapter requires no Stripe account");
+    expect(output.stderr()).toBe("");
+  });
+
   it("does not generate application routes against a pre-registry authority model", async () => {
     const root = await fixture();
     await mkdir(path.join(root, "packages", "context", "src"), { recursive: true });
@@ -107,15 +140,17 @@ describe("TrestleJS CLI", () => {
     await expect(readFile(path.join(root, ".trestle/resources/article.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("previews setup without creating or changing a plan", async () => {
+  it("writes a converged starter plan once", async () => {
     const root = await fixture();
-    const output = capture(root);
-    expect(await executeCli(["setup", "--plan-only"], output.runtime)).toBe(0);
-    expect(output.stdout()).toContain("Plan converged.");
-    await expect(readFile(path.join(root, ".trestle", "setup.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    const resume = capture(root);
-    expect(await executeCli(["setup", "--resume", "--plan-only"], resume.runtime)).toBe(1);
-    expect(resume.stderr()).toContain("No saved SetupPlan");
+    const init = capture(root);
+    expect(await executeCli(["plan", "init"], init.runtime)).toBe(0);
+    expect(init.stdout()).toContain(".trestle/setup.json");
+    const diff = capture(root);
+    expect(await executeCli(["plan", "diff", ".trestle/setup.json"], diff.runtime)).toBe(0);
+    expect(diff.stdout()).toContain("Plan converged.");
+    const again = capture(root);
+    expect(await executeCli(["plan", "init"], again.runtime)).toBe(1);
+    expect(again.stderr()).toContain("already exists");
   });
 
   it("emits a versioned project description", async () => {
@@ -191,55 +226,106 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toContain("production log access requires --yes");
   });
 
+  it("requires an explicit opt-in for experimental commands", async () => {
+    const shellOptIn = process.env.TRESTLE_EXPERIMENTAL;
+    delete process.env.TRESTLE_EXPERIMENTAL;
+    onTestFinished(() => {
+      if (shellOptIn === undefined) delete process.env.TRESTLE_EXPERIMENTAL;
+      else process.env.TRESTLE_EXPERIMENTAL = shellOptIn;
+    });
+    const root = await fixture();
+    const blocked = capture(root);
+    expect(await executeCli(["workflow", "retry", "publish", "instance-1", "--env", "production"], blocked.runtime)).toBe(1);
+    expect(blocked.stderr()).toContain("workflow is experimental in beta");
+    expect(blocked.stderr()).not.toContain("requires --yes");
+    expect(blocked.stderr()).toContain("--experimental");
+    expect(blocked.stderr()).toContain("TRESTLE_EXPERIMENTAL=1");
+    for (const argv of [
+      ["queue", "dlq", "list", "--env", "staging"],
+      ["backup", "status", "--env", "production"],
+      ["restore", "create", "--env", "production", "--to", "restore-test"],
+      ["console", "--tenant", "acme"],
+      ["admin", "grant", "ops@example.test", "security_admin", "--env", "local", "--reason", "bootstrap"],
+      ["payments", "stripe", "sync", "--env", "staging"],
+      ["payments", "stripe", "seed", "--organization", "org-1"],
+    ]) {
+      const output = capture(root);
+      expect(await executeCli(argv, output.runtime), argv.join(" ")).toBe(1);
+      expect(output.stderr(), argv.join(" ")).toContain("is experimental in beta");
+    }
+    const stable = capture(root);
+    await executeCli(["payments", "stripe", "webhook", "configure", "--env", "production", "--url", "https://example.test/webhooks/stripe", "--api-key-stdin", "--apply", "--operation-id", "operation123"], stable.runtime);
+    expect(stable.stderr()).not.toContain("is experimental in beta");
+    const help = capture(root);
+    await executeCli(["--help"], help.runtime);
+    for (const name of ["queue", "workflow", "backup", "restore", "console", "admin"]) expect(help.stdout()).toMatch(new RegExp(`\\n\\s+${name}\\b[^\\n]*\\[experimental\\]`, "u"));
+    expect(help.stdout()).not.toMatch(/\n\s+payments\b[^\n]*\[experimental\]/u);
+    const stripeHelp = capture(root);
+    await executeCli(["payments", "stripe", "--help"], stripeHelp.runtime);
+    expect(stripeHelp.stdout()).toMatch(/\n\s+sync\b[^\n]*\[experimental\]/u);
+    expect(stripeHelp.stdout()).toMatch(/\n\s+seed\b[^\n]*\[experimental\]/u);
+    expect(stripeHelp.stdout()).not.toMatch(/\n\s+doctor\b[^\n]*\[experimental\]/u);
+    const flagFirst = capture(root);
+    expect(await executeCli(["--experimental", "workflow", "retry", "publish", "instance-1", "--env", "production"], flagFirst.runtime)).toBe(1);
+    expect(flagFirst.stderr()).toContain("requires --yes");
+    const flagAfter = capture(root);
+    expect(await executeCli(["queue", "prune", "--env", "local", "--before", "2026-01-01T00:00:00Z", "--experimental"], flagAfter.runtime)).toBe(1);
+    expect(flagAfter.stderr()).toContain("local outbox retention");
+    const fromEnvironment = capture(root);
+    const environment = (name: string) => (name === "TRESTLE_EXPERIMENTAL" ? "1" : undefined);
+    expect(await executeCli(["payments", "stripe", "seed", "--organization", "org-1"], { ...fromEnvironment.runtime, environment })).toBe(1);
+    expect(fromEnvironment.stderr()).toContain("requires --cookie-stdin");
+  });
+
   it("requires an authenticated local session before seeding billing", async () => {
     const root = await fixture();
     const output = capture(root);
-    expect(await executeCli(["payments", "stripe", "seed", "--organization", "org-1"], output.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "payments", "stripe", "seed", "--organization", "org-1"], output.runtime)).toBe(1);
     expect(output.stderr()).toContain("requires --cookie-stdin");
   });
 
   it("requires an explicit console authority plane", async () => {
     const root = await fixture();
     const output = capture(root);
-    expect(await executeCli(["console"], output.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "console"], output.runtime)).toBe(1);
     expect(output.stderr()).toContain("requires --tenant or --platform-admin");
     const mixed = capture(root);
-    expect(await executeCli(["console", "--tenant", "acme", "--platform-admin"], mixed.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "console", "--tenant", "acme", "--platform-admin"], mixed.runtime)).toBe(1);
     expect(mixed.stderr()).toContain("different authority planes");
   });
 
   it("refuses platform admin operations until the admin capability is enabled", async () => {
     const root = await fixture();
     const output = capture(root);
-    expect(await executeCli(["admin", "grant", "ops@example.test", "security_admin", "--env", "local", "--reason", "bootstrap"], output.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "admin", "grant", "ops@example.test", "security_admin", "--env", "local", "--reason", "bootstrap"], output.runtime)).toBe(1);
     expect(output.stderr()).toContain("platform admin is not enabled");
     const missingReason = capture(root);
-    expect(await executeCli(["admin", "revoke", "ops@example.test", "security_admin", "--env", "local"], missingReason.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "admin", "revoke", "ops@example.test", "security_admin", "--env", "local"], missingReason.runtime)).toBe(1);
   });
 
   it("validates outbox retention cutoffs and limits before reading secrets", async () => {
     const root = await fixture();
     const local = capture(root);
-    expect(await executeCli(["queue", "prune", "--env", "local", "--before", "2026-01-01T00:00:00Z"], local.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "queue", "prune", "--env", "local", "--before", "2026-01-01T00:00:00Z"], local.runtime)).toBe(1);
     expect(local.stderr()).toContain("local outbox retention");
     const cutoff = capture(root);
-    expect(await executeCli(["queue", "prune", "--env", "staging", "--before", "2026-01-01"], cutoff.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "queue", "prune", "--env", "staging", "--before", "2026-01-01"], cutoff.runtime)).toBe(1);
     expect(cutoff.stderr()).toContain("--before must be an ISO UTC timestamp");
     const limit = capture(root);
-    expect(await executeCli(["queue", "prune", "--env", "staging", "--before", "2026-01-01T00:00:00Z", "--limit", "10001"], limit.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "queue", "prune", "--env", "staging", "--before", "2026-01-01T00:00:00Z", "--limit", "10001"], limit.runtime)).toBe(1);
     expect(limit.stderr()).toContain("--limit must be between 1 and 10000");
   });
 
   it("requires confirmation before creating recovery resources or retrying remote workflows", async () => {
     const root = await fixture();
     const backup = capture(root);
-    expect(await executeCli(["backup", "verify", "--env", "production", "--to", "restore-test"], backup.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "backup", "verify", "--env", "production", "--to", "restore-test"], backup.runtime)).toBe(1);
     expect(backup.stderr()).toContain("temporary Neon branch");
     const restore = capture(root);
-    expect(await executeCli(["restore", "create", "--env", "production", "--to", "restore-test"], restore.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "restore", "create", "--env", "production", "--to", "restore-test"], restore.runtime)).toBe(1);
     expect(restore.stderr()).toContain("requires --yes");
     const workflow = capture(root);
-    expect(await executeCli(["workflow", "retry", "publish", "instance-1", "--env", "production"], workflow.runtime)).toBe(1);
+    expect(await executeCli(["--experimental", "workflow", "retry", "publish", "instance-1", "--env", "production"], workflow.runtime)).toBe(1);
     expect(workflow.stderr()).toContain("requires --yes");
   });
 
@@ -277,9 +363,6 @@ describe("TrestleJS CLI", () => {
       environments: ["local", "preview", "staging", "production"],
       secrets: [],
       resources: [],
-      externalResources: [],
-      destructiveOperations: [],
-      verification: { commands: ["pnpm check"] },
     };
     await writeFile(path.join(root, ".trestle", "setup.json"), JSON.stringify(plan));
     const diff = capture(root);
@@ -404,9 +487,6 @@ export const applicationEventCatalog = defineEventCatalog([
       environments: ["local", "preview", "staging", "production"],
       secrets: [],
       resources: [{ name: "Article", tenant: true, crud: true, webhookEvents: ["created", "updated"] }],
-      externalResources: [],
-      destructiveOperations: [],
-      verification: { commands: ["pnpm check"] },
     };
     const planPath = path.join(root, ".trestle", "setup.json");
     await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`);

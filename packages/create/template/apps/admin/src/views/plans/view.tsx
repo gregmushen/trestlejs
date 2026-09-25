@@ -12,7 +12,7 @@ export default function PlansView() {
   const catalog = useAdminQuery(["features"], api.features);
   const plans = planCatalog();
   return <>
-    <AdminPageHeader title="Plans" description="Plans and features are defined in application source (packages/billing/src/plans.ts). Change them in code, then sync Stripe prices with trestle payments stripe sync." />
+    <AdminPageHeader title="Plans" description="Plans and features are defined in application source (packages/billing/src/plans.ts). Change them in code, then sync Stripe prices with trestle --experimental payments stripe sync." />
     <AdminSection title="Comparison" description="Every feature against each plan's current version.">
       <AdminQueryState query={catalog}>{(data) => <AdminDataTable caption="Plan comparison" rows={data.features} rowKey={(feature) => feature.code} columns={[
         { header: "Feature", minWidth: "14rem", cell: (feature) => <><p className="font-medium">{feature.description}</p><p className="text-xs text-kumo-subtle"><AdminCode>{feature.code}</AdminCode></p></> },

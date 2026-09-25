@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSetupPlan, SetupPlanError } from "../src/index.js";
+import { parseSetupPlan, SetupPlanError } from "../src/core.js";
 
 const validPlan = {
   schemaVersion: 1,
@@ -14,9 +14,6 @@ const validPlan = {
   environments: ["local", "staging", "production"],
   secrets: [{ name: "DATABASE_URL", target: "worker", required: ["local"] }],
   resources: [{ name: "Article", tenant: true, crud: true }],
-  externalResources: [],
-  destructiveOperations: [],
-  verification: { commands: ["pnpm check"] },
 } as const;
 
 describe("SetupPlan", () => {
@@ -24,9 +21,22 @@ describe("SetupPlan", () => {
     expect(parseSetupPlan(JSON.stringify(validPlan)).resources[0]?.name).toBe("Article");
   });
 
-  it("rejects unapproved paid resources", () => {
-    const input = { ...validPlan, externalResources: [{ name: "database", environment: "production", paid: true, estimatedMonthlyCost: "$20", approved: false }] };
+  it("accepts empty legacy sections so earlier schemaVersion 1 plans still parse", () => {
+    const legacy = { ...validPlan, externalResources: [], destructiveOperations: [], verification: { commands: ["pnpm check"] } };
+    expect(parseSetupPlan(JSON.stringify(legacy)).resources[0]?.name).toBe("Article");
+  });
+
+  it("rejects intents that trestle apply can never perform", () => {
+    const external = { ...validPlan, externalResources: [{ name: "database", environment: "production" }] };
+    expect(() => parseSetupPlan(JSON.stringify(external))).toThrow(SetupPlanError);
+    const destructive = { ...validPlan, destructiveOperations: [{ description: "drop", environment: "production", approved: true }] };
+    expect(() => parseSetupPlan(JSON.stringify(destructive))).toThrow(SetupPlanError);
+  });
+
+  it("only accepts tenant-owned CRUD resources", () => {
+    const input = { ...validPlan, resources: [{ name: "Article", tenant: false }] };
     expect(() => parseSetupPlan(JSON.stringify(input))).toThrow(SetupPlanError);
+    expect(parseSetupPlan(JSON.stringify({ ...validPlan, resources: [{ name: "Article" }] })).resources[0]).toMatchObject({ tenant: true, crud: true });
   });
 
   it("rejects duplicate resource names", () => {

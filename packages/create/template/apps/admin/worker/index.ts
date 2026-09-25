@@ -523,7 +523,7 @@ type ReportedCapability = { configured?: unknown; enabled?: unknown; mode?: unkn
  */
 export function shellCapabilities(status: unknown, environment: string) {
   const reported = (status && typeof status === "object" ? (status as { capabilities?: Record<string, ReportedCapability> }).capabilities : undefined) ?? {};
-  const repair = `pnpm exec trestle setup --env ${environment}`;
+  const repair = `pnpm exec trestle doctor --env ${environment}`;
   const entry = (id: string, label: string, state: ShellCapabilityState, source?: ReportedCapability) => {
     const mode = typeof source?.mode === "string" && /^[a-z0-9-]{1,32}$/u.test(source.mode) ? source.mode : undefined;
     return { id, label, state, healthy: state !== "declared", ...(mode ? { mode } : {}), ...(state === "declared" ? { message: `${label} is not configured for ${environment}.`, repair } : {}) };
@@ -545,7 +545,7 @@ const capabilityLabels: Record<AdminCapability, string> = { database: "Database"
 /** Sanitized: configured flags and modes only, never values. Unconfigured capabilities carry a setup command. */
 export function capabilityGuidance(status: unknown, environment: string) {
   const reported = (status && typeof status === "object" ? (status as { capabilities?: Record<string, { configured?: unknown; mode?: unknown; enabled?: unknown }> }).capabilities : undefined) ?? {};
-  const repair = `pnpm exec trestle setup --env ${environment}`;
+  const repair = `pnpm exec trestle doctor --env ${environment}`;
   return (Object.keys(capabilityLabels) as AdminCapability[]).map((id) => {
     const entry = reported[id];
     if (!entry) return { id, label: capabilityLabels[id], state: "unknown" as const, repair };
@@ -574,7 +574,7 @@ admin.get("/api/admin/health", async (context) => {
 const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const;
 
 admin.onError((error, context) => {
-  if (error instanceof AdminConfigurationError) return context.json({ error: "not_configured", message: error.message, repair: `pnpm exec trestle setup --env ${adminEnvironment(context.env)}` }, 503);
+  if (error instanceof AdminConfigurationError) return context.json({ error: "not_configured", message: error.message, repair: `pnpm exec trestle doctor --env ${adminEnvironment(context.env)}` }, 503);
   if (error instanceof PlatformOperationError || error instanceof MachineAccessError || error instanceof PlatformRoleError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code as keyof typeof operationStatus] ?? 400);
   createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);

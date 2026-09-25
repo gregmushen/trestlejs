@@ -1,4 +1,4 @@
-import { TRESTLEJS_VERSION } from "@trestlejs/core";
+import { TRESTLEJS_VERSION } from "trestlejs";
 import { Command, CommanderError } from "commander";
 
 import { createProject } from "./create-project.js";

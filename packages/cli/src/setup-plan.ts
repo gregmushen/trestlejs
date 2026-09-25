@@ -2,14 +2,6 @@ import { z } from "zod";
 
 import { environmentNameSchema } from "./manifest.js";
 
-const namedIntent = z.object({
-  name: z.string().min(1),
-  environment: environmentNameSchema,
-  paid: z.boolean().default(false),
-  estimatedMonthlyCost: z.string().min(1).optional(),
-  approved: z.boolean().default(false),
-}).strict();
-
 export const setupResourceFieldSchema = z.object({
   name: z.string().regex(/^[a-z][A-Za-z0-9]*$/u, "must be camelCase"),
   type: z.enum(["string", "text", "integer", "boolean", "datetime", "relation"]),
@@ -24,8 +16,8 @@ export const setupResourceFieldSchema = z.object({
 
 export const setupResourceSchema = z.object({
   name: z.string().regex(/^[A-Z][A-Za-z0-9]*$/u, "must be PascalCase"),
-  tenant: z.boolean().default(true),
-  crud: z.boolean().default(true),
+  tenant: z.literal(true).default(true),
+  crud: z.literal(true).default(true),
   fields: z.array(setupResourceFieldSchema).min(1).default([{ name: "name", type: "string", required: true }]),
   webhookEvents: z.array(z.enum(["created", "updated", "deleted"])).default([]),
   authorization: z.object({ read: z.string().min(1), write: z.string().min(1) }).strict().optional(),
@@ -60,13 +52,11 @@ export const setupPlanSchema = z.object({
     required: z.array(environmentNameSchema).min(1),
   }).strict()).default([]),
   resources: z.array(setupResourceSchema).default([]),
-  externalResources: z.array(namedIntent).default([]),
-  destructiveOperations: z.array(z.object({
-    description: z.string().min(1),
-    environment: environmentNameSchema,
-    approved: z.boolean().default(false),
-  }).strict()).default([]),
-  verification: z.object({ commands: z.array(z.string().min(1)).default([]) }).strict(),
+  // Accepted only when empty, so schemaVersion 1 plans written by earlier releases still parse.
+  externalResources: z.array(z.unknown()).max(0, "externalResources are not supported; provision provider resources outside the SetupPlan").optional(),
+  destructiveOperations: z.array(z.unknown()).max(0, "destructiveOperations are not supported; perform destructive changes explicitly outside the SetupPlan").optional(),
+  // Accepted for schemaVersion 1 compatibility; ignored by plan/apply.
+  verification: z.object({ commands: z.array(z.string().min(1)).default([]) }).strict().optional(),
 }).strict().superRefine((plan, context) => {
   const uniqueEnvironments = new Set(plan.environments);
   if (uniqueEnvironments.size !== plan.environments.length) {
@@ -81,18 +71,7 @@ export const setupPlanSchema = z.object({
       context.addIssue({ code: "custom", path: [field], message: `${field} must not contain duplicate names` });
     }
   }
-  plan.externalResources.forEach((resource, index) => {
-    if (resource.paid && !resource.estimatedMonthlyCost) {
-      context.addIssue({ code: "custom", path: ["externalResources", index, "estimatedMonthlyCost"], message: "paid resources require an estimated cost" });
-    }
-    if (resource.paid && !resource.approved) {
-      context.addIssue({ code: "custom", path: ["externalResources", index, "approved"], message: "paid resources require explicit approval" });
-    }
-  });
   plan.resources.forEach((resource, index) => {
-    if (!resource.tenant || !resource.crud) {
-      context.addIssue({ code: "custom", path: ["resources", index], message: "the v1 resource generator currently requires tenant=true and crud=true" });
-    }
     const fields = resource.fields.map(({ name }) => name);
     if (new Set(fields).size !== fields.length) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "resource fields must not contain duplicates" });
     if (new Set(resource.webhookEvents).size !== resource.webhookEvents.length) context.addIssue({ code: "custom", path: ["resources", index, "webhookEvents"], message: "public webhook events must not contain duplicates" });
@@ -100,11 +79,6 @@ export const setupPlanSchema = z.object({
     if (!resource.fields.some((field) => field.name === "name" && field.type === "string" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "generated CRUD screens require a required name:string field" });
     if (resource.fields.some((field) => field.name !== "name" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "additional generated fields must initially be optional for additive migration safety" });
     if (resource.pagination.defaultLimit > resource.pagination.maxLimit) context.addIssue({ code: "custom", path: ["resources", index, "pagination"], message: "default pagination limit cannot exceed max limit" });
-  });
-  plan.destructiveOperations.forEach((operation, index) => {
-    if (!operation.approved) {
-      context.addIssue({ code: "custom", path: ["destructiveOperations", index, "approved"], message: "destructive operations require explicit approval" });
-    }
   });
 });
 
