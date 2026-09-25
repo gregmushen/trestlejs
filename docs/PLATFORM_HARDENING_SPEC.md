@@ -1,6 +1,6 @@
 # TrestleJS Platform Hardening Specification
 
-**Status:** Open implementation contract. Rebased on `main` at `0.1.0-beta.1` (`6a331a0`). The first draft was written against `0.1.0-alpha.42`.
+**Status:** Implementation contract; P2, P3 and P5 done, P1 existing-app migration and P4 gaps open. Rebased on `main` at `0.1.0-beta.1` (`6a331a0`). The first draft was written against `0.1.0-alpha.42`.
 
 **Parent specification:** [TrestleJS Specification](TRESTLEJS_SPEC.md)
 
@@ -16,13 +16,15 @@ These are focused changes to existing mechanisms, not new subsystems. Existing g
 
 | Change | Status on `main` | Needed before |
 |---|---|---|
-| P1 Tenant-safe generated relationships | Not started | relying on generated tenant relationships |
-| P2 Trusted background execution | Webhook paths only | private background handlers |
-| P3 Preserve application crons | Not started | deploying application crons |
-| P4 Order-safe billing reconciliation | Done (alpha 91–94); gaps in §5 | paid launch |
-| P5 Provenance lifetime and replay | Manual pruning only | provenance cleanup; required by P2 |
+| P1 Tenant-safe generated relationships | Done for newly generated relations; existing-app migration open | relying on generated tenant relationships |
+| P2 Trusted background execution | Done (§3) | private background handlers |
+| P3 Preserve application crons | Done | deploying application crons |
+| P4 Order-safe billing reconciliation | Done (alpha 91–94); gaps in §5 open | paid launch |
+| P5 Provenance lifetime and replay | Done (§6) | provenance cleanup; required by P2 |
 
-Suggested order: P3, P1, then P5 with P2 as linked changes, then the P4 gaps.
+Remaining: the P1 preflight and constraint migration for existing applications, and the P4 gaps.
+
+**Lifecycle rule (P2 + P5).** A private handler executes (start, retry, dead-letter replay or Workflow resume) only while its committed event is at most 14 days old, measured from the committed `occurredAt` with an injected clock. Workflows reverify at every step execution. Committed provenance is retained for 30 days. So pruning never removes provenance that permitted work can still need, and needs no Workflow-state exclusion.
 
 ## 2. P1: Tenant-safe generated relationships
 
@@ -56,6 +58,13 @@ Suggested order: P3, P1, then P5 with P2 as linked changes, then the P4 gaps.
 - the existing isolation suites still pass.
 
 ## 3. P2: Trusted background execution
+
+**Status: done.** Implemented in the generated template:
+- `verifyCommittedEvent` (`packages/db/src/event-provenance.ts`) reloads the committed outbox row and compares every execution-relevant field canonically (`occurredAt` by instant), then rejects rows older than 14 days. `handleEventWithInbox` (Queue) and the Workflow step use it, with or without webhooks. The Workflow Queue consumer also verifies before `create`, so a forged message cannot claim the stable instance ID.
+- **Authority.** Undeclared registrations are `"verified"`: the committed event, `organizationId`, `log` and `clock`, and no database. `{ authority: "tenant" }` adds `context.data`, a lazily opened tenant database under forced RLS. `{ authority: "system" }` needs no tenant and gets neither. Missing tenant provenance is `tenant_provenance_missing`, never wider access. Generated handlers declare `"tenant"`.
+- **Entitlements.** `{ requires: { entitlement } }` reads the tenant's current entitlements at handling time. If absent, only that handler is skipped (`event.handler.skipped`, reason `not_entitled`); webhook projection still runs and the event completes. A later grant does not re-run it.
+- **Failures.** `PermanentEventError` (`provenance_missing`, `provenance_mismatch`, `provenance_expired`, `tenant_provenance_missing`) never reaches the handler and leaves no inbox row. Queues log `queue.event.rejected` with ID and reason, no payload, and retry into Cloudflare's dead-letter queue; Workflows throw `NonRetryableError`. Neither is acknowledged as handled. Store and other transient errors stay retryable.
+- **Known limit.** Handlers still receive the raw Worker `environment`. The context is the supported seam, not a sandbox; closing this needs a breaking handler signature.
 
 **Problem.** Re-reading the committed event (`findCommitted`, `packages/db/src/outbox.ts`) is used only on the webhook paths (`webhook-projection.ts`, `webhook-runtime.ts`, `webhook-work.ts`). Application handlers in `apps/worker/src/async-runtime.ts` receive the queue envelope without verification, and the Workflow path doesn't verify anything.
 
@@ -132,7 +141,7 @@ Remaining:
 
 ## 6. P5: Provenance lifetime and replay
 
-**Status.** The window is declared and enforced. Supported delivery and replay last 14 days (`EVENT_REPLAY_WINDOW_DAYS`) and committed provenance is kept for 30 (`EVENT_PROVENANCE_RETENTION_DAYS`). `pruneSucceeded` and `countPrunableSucceeded` refuse a cutoff newer than now − 30 days, with the latest allowed cutoff in the error. Pruning goes through migration-created SECURITY DEFINER functions (`trestle_prune_outbox_provenance`, `trestle_count_prunable_outbox_provenance`), owned and run by the migration role. They see every tenant's rows despite forced RLS and skip any row still referenced by an inbox claim active within the replay window or by a non-terminal webhook delivery. `trestle queue prune` reports the count and the age of the oldest succeeded row kept. A missing or expired row surfaces as P2's `provenance_missing` rejection.
+**Status: done.** The window is declared and enforced. Supported delivery and replay last 14 days (`EVENT_REPLAY_WINDOW_DAYS`) and committed provenance is kept for 30 (`EVENT_PROVENANCE_RETENTION_DAYS`). `pruneSucceeded` and `countPrunableSucceeded` refuse a cutoff newer than now − 30 days, with the latest allowed cutoff in the error. Pruning goes through migration-created SECURITY DEFINER functions (`trestle_prune_outbox_provenance`, `trestle_count_prunable_outbox_provenance`), owned and run by the migration role. They see every tenant's rows despite forced RLS and skip any row still referenced by an inbox claim active within the replay window or by a non-terminal webhook delivery. `trestle queue prune` reports the count and the age of the oldest succeeded row kept. A pruned row surfaces as P2's `provenance_missing`; an older row that still exists is `provenance_expired`. "Succeeded" means *sent to the Queue*, not consumed: a message still queued has no inbox row, so only the 30-day window protects its provenance. Migration 0033 adds the functions, a `webhook_message(source_event_id)` index and, for a migration owner without `BYPASSRLS`, owner-only SELECT policies on `webhook_message` and `webhook_delivery`.
 
 **Problem.** `trestle queue prune --before <cutoff> [--apply]` deletes succeeded outbox rows older than a cutoff the operator chooses (`pruneSucceeded`, `packages/db/src/outbox.ts`). A row is marked succeeded when it's published, which can happen before downstream work finishes. Pruning can therefore delete the provenance P2 needs to authenticate a delayed message, retry, dead-letter replay or Workflow.
 

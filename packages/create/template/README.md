@@ -214,6 +214,44 @@ recovery. Handlers that call external services must still pass the event's
 stable `idempotencyKey`: a crash after an external side effect but before the
 inbox completion record can cause that operation to be retried.
 
+A Queue or Workflow message only refers to committed work. Before any handler
+runs, the Worker reloads the committed outbox row by event ID and requires an
+exact match on identity, type, version, resource, payload, idempotency and
+correlation data. The handler receives the committed event, and the tenant
+always comes from the committed row, never from the message.
+
+Register a handler with the authority it needs:
+`eventConsumers.register(event, handler)` (undeclared, "verified") gets the
+verified event and its `organizationId` but no database;
+`{ authority: "tenant" }` adds `context.data`, a database scoped to that
+organization under forced RLS and opened only when first read;
+`{ authority: "system" }` is for work that has no tenant and gets neither.
+Generated resource handlers declare `"tenant"`. An event without a committed
+organization never reaches a verified or tenant handler. Handlers are called
+as `(payload, envelope, environment, context)`; `context` also carries
+`event`, `authority`, a correlated secret-redacting `log`, and an injectable
+`clock`. Handlers still receive the raw Worker `environment`: the scoped
+context is the supported seam, not a sandbox.
+
+`{ requires: { entitlement: "..." } }` checks the tenant's current plan
+entitlements each time the handler would run. If the tenant lacks it, only
+that handler is skipped (logged as `event.handler.skipped`, reason
+`not_entitled`); webhook projection still runs and the event completes. The
+handler is not re-run if the entitlement is granted later.
+
+Handlers run only while the committed event is at most 14 days old, measured
+from its committed `occurredAt`: this covers first delivery, retries,
+dead-letter replay and Workflow resumption, and Workflows reverify at every
+step execution. Committed provenance is kept for 30 days, so pruning never
+removes a row that permitted work can still need. Messages whose
+provenance is missing, mismatched, expired or tenantless never reach the
+handler: the Queue path logs
+`queue.event.rejected` with the event ID and reason (never the payload) and
+retries the message into Cloudflare's dead-letter queue; a Workflow fails
+with a non-retryable error (`workflow.event.rejected`). Rejected messages are
+never acknowledged as handled. Database outages and other transient errors
+stay retryable.
+
 Define application events in `packages/events/src/application-catalog.ts` with
 `defineEvent(...)` and `defineEventCatalog(...)`. Internal event payloads have
 runtime schemas and are private by default. An explicit `webhook` projection
@@ -294,7 +332,9 @@ retain their committed identity and status.
 If `capabilities.workflows` is enabled, the deployment config binds the
 application-owned `TrestleWorkflow` class. Queue delivery starts a Workflow
 using the event ID as its stable instance ID; a repeated Queue delivery
-reuses the existing instance. The Workflow validates the versioned event,
+reuses the existing instance. The Queue consumer verifies the committed event
+before creating the instance, so a forged message cannot claim its ID. The
+Workflow validates and reverifies the event on every step execution,
 executes the registered handler as a retryable step, and records completion
 through the PostgreSQL inbox. Local development keeps direct Queue handling
 and offers an advanceable-clock Workflow scheduler for deterministic tests.
@@ -398,9 +438,11 @@ pnpm exec trestle --experimental workflow retry <name> <instance-id> --env stagi
 only succeeded outbox records processed before the explicit UTC cutoff, in
 bounded batches; pending, leased, and dead-lettered records are never pruned.
 The cutoff must be at least 30 days old, and records still referenced by an
-active inbox claim or an unfinished webhook delivery are kept. The command runs
-as the migration role (`DATABASE_MIGRATION_URL`, falling back to
-`DATABASE_URL`) and reports the age of the oldest succeeded record kept.
+active inbox claim or an unfinished webhook delivery are kept. The command
+reports the age of the oldest succeeded record kept. A succeeded record has
+only been sent to the Queue; its handler may not have run yet. `queue prune`
+and `queue dlq` run as the migration role (`DATABASE_MIGRATION_URL`, falling
+back to `DATABASE_URL`).
 Outbox failures record only a sanitized error category, never the error
 message, so provider secrets echoed in exceptions are not persisted.
 
