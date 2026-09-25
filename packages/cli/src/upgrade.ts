@@ -9,7 +9,7 @@ export const FRAMEWORK_METADATA_VERSION = 1;
 export const MANAGED_GUIDANCE_VERSION = 1;
 
 export type UpgradeOperation = Readonly<{
-  id: "template-source" | "framework-metadata" | "managed-guidance" | "cli-version" | "authority-model" | "database-runtime";
+  id: "template-source" | "framework-metadata" | "managed-guidance" | "cli-version" | "authority-model" | "database-runtime" | "backup-verify-experimental";
   classification: "already-correct" | "update" | "manual-review";
   description: string;
 }>;
@@ -52,6 +52,12 @@ export async function planUpgrade(root: string): Promise<UpgradePlan> {
   // Authority model 3: a permission registry with separately stored application-role assignments.
   const authorityCurrent = Boolean(context?.includes("AUTHORITY_MODEL_VERSION = 3") && executionContext?.includes("loadApplicationRoles") && migrations.includes('CREATE TABLE "application_role_assignment"'));
   const runtimeCurrent = Boolean(database?.includes("drizzle-orm/neon-serverless") && roles?.includes("verifyRuntimeRoleDataAccess") && billing?.includes("createTenantDatabase") && neonPreview?.includes("connectionUri(runtimeRole, false)"));
+  const backupVerifyWorkflow = await optionalText(path.join(root, ".github", "workflows", "backup-verify.yml"));
+  const backupVerifyMissingOptIn = Boolean(
+    backupVerifyWorkflow
+    && /trestle\s+backup(\s+verify)?/u.test(backupVerifyWorkflow)
+    && !backupVerifyWorkflow.includes('TRESTLE_EXPERIMENTAL: "1"'),
+  );
   const marker = `<!-- trestle-managed-guidance:${MANAGED_GUIDANCE_VERSION} -->`;
   return {
     installedVersion,
@@ -63,6 +69,7 @@ export async function planUpgrade(root: string): Promise<UpgradePlan> {
       { id: "cli-version", classification: installedVersion === TRESTLEJS_VERSION && lockedSpecifier === TRESTLEJS_VERSION && lockedVersion === TRESTLEJS_VERSION ? "already-correct" : "manual-review", description: `install trestlejs@${TRESTLEJS_VERSION} with pnpm so package.json and pnpm-lock.yaml agree` },
       { id: "authority-model", classification: authorityCurrent ? "already-correct" : "manual-review", description: "review application/organization authority separation and its database migration" },
       { id: "database-runtime", classification: runtimeCurrent ? "already-correct" : "manual-review", description: "review Neon transactional transport, restricted grants, tenant billing, and unpooled preview URLs" },
+      { id: "backup-verify-experimental", classification: backupVerifyMissingOptIn ? "manual-review" : "already-correct", description: 'add TRESTLE_EXPERIMENTAL: "1" to the env: of the trestle backup verify step in .github/workflows/backup-verify.yml so the scheduled backup verify run keeps working after upgrading the CLI' },
     ],
   };
 }

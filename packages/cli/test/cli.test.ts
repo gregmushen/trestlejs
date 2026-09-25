@@ -89,6 +89,30 @@ describe("TrestleJS CLI", () => {
     expect(output.stdout()).toContain("Adapter:");
   });
 
+  it("prints local defaults from email doctor when local credentials have not been initialized", async () => {
+    const root = await fixture();
+    await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "{}");
+    const output = capture(root);
+    expect(await executeCli(["email", "doctor", "--env", "local"], output.runtime)).toBe(0);
+    expect(output.stdout()).toContain("API key:            not required");
+    expect(output.stdout()).toContain("Local email capture requires no provider account");
+    expect(output.stderr()).toBe("");
+  });
+
+  it("prints local defaults from Stripe doctor when local credentials have not been initialized", async () => {
+    const root = await fixture();
+    await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "{}");
+    await mkdir(path.join(root, "apps", "worker", "src"), { recursive: true });
+    await writeFile(path.join(root, "apps", "worker", "src", "index.ts"), "// no /webhooks/stripe route yet\n");
+    await mkdir(path.join(root, "packages", "billing"), { recursive: true });
+    await writeFile(path.join(root, "packages", "billing", "stripe.json"), JSON.stringify({ schemaVersion: 1, currency: "usd", plans: {} }));
+    const output = capture(root);
+    expect(await executeCli(["payments", "stripe", "doctor", "--env", "local"], output.runtime)).toBe(0);
+    expect(output.stdout()).toContain("API key:            not required");
+    expect(output.stdout()).toContain("LocalBillingAdapter requires no Stripe account");
+    expect(output.stderr()).toBe("");
+  });
+
   it("does not generate application routes against a pre-registry authority model", async () => {
     const root = await fixture();
     await mkdir(path.join(root, "packages", "context", "src"), { recursive: true });

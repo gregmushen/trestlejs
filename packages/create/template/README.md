@@ -484,3 +484,8 @@ Upgrade state and framework compatibility are versioned under `.trestle`.
 Static architecture checks detect direct provider leakage into application or
 domain code, missing declared resource source, missing forced RLS, and stale
 managed-guidance markers. CI runs those checks on every change.
+
+Upgrading a project generated before scheduled backup verification required
+opting in to experimental commands: `trestle upgrade plan` will flag it for
+manual review, so add `TRESTLE_EXPERIMENTAL: "1"` to the `env:` of the
+`trestle backup verify` step in `.github/workflows/backup-verify.yml`.

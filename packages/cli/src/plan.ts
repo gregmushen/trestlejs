@@ -229,7 +229,7 @@ export function formatPlanJson(data: unknown): string {
   return `${JSON.stringify(structuredOutput(data), null, 2)}\n`;
 }
 
-export function setupPlanFromManifest(manifest: ProjectManifest): SetupPlan {
+function setupPlanFromManifest(manifest: ProjectManifest): SetupPlan {
   return parseSetupPlan(JSON.stringify({
     schemaVersion: 1,
     minimumTrestleVersion: TRESTLEJS_VERSION,

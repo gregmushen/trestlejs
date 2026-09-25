@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSetupPlan, SetupPlanError } from "../src/index.js";
+import { parseSetupPlan, SetupPlanError } from "../src/core.js";
 
 const validPlan = {
   schemaVersion: 1,

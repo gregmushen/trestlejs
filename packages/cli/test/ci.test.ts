@@ -33,7 +33,11 @@ describe("generated CI deployment contract", () => {
     const source = await readFile(workflowPath, "utf8");
     expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.backup.experimental-opt-in", status: "pass" }));
     await writeFile(workflowPath, source.replace('TRESTLE_EXPERIMENTAL: "1"', ""));
-    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.backup.experimental-opt-in", status: "fail" }));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({
+      id: "ci.backup.experimental-opt-in",
+      status: "fail",
+      message: expect.stringContaining('add TRESTLE_EXPERIMENTAL: "1" to the env: of the trestle backup verify step in .github/workflows/backup-verify.yml'),
+    }));
   });
 
   it("requires isolated preview Workers to omit cron triggers", async () => {

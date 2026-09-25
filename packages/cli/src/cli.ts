@@ -43,8 +43,10 @@ import {
   parseSecretDocument,
   readSecrets,
   rotateMasterKey,
+  SecretsError,
   validateSecrets,
   writeSecrets,
+  type SecretValues,
 } from "./secrets.js";
 
 function environment(value: string) {
@@ -218,15 +220,20 @@ export function createProgram(runtime: CliRuntime): Command {
         async () => { await runCommand("pnpm", ["check"], { cwd: context.root, env: process.env }); });
       runtime.stdout("Local checks passed and application source matches the target template. The source version and baseline were advanced; deployed provider readiness remains unverified.\n");
     });
+  async function reportUpgradeCompatibility(root: string, json: boolean | undefined): Promise<void> {
+    const report = await planUpgrade(root);
+    const compatible = report.operations.every(({ classification }) => classification === "already-correct");
+    runtime.stdout(json ? `${JSON.stringify(structuredOutput({ compatible, ...report }), null, 2)}\n` : compatible ? `✓ Project metadata, managed guidance, and CLI are compatible with ${report.targetVersion}\n` : formatUpgradePlan(report));
+    if (!compatible) throw new CliFailure("project requires a reviewed upgrade");
+  }
   upgrade.command("plan")
     .option("--json", "emit versioned structured output")
     .option("--check", "exit non-zero unless the project is already compatible")
     .action(async (options: { json?: boolean; check?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
+      if (options.check) { await reportUpgradeCompatibility(context.root, options.json); return; }
       const report = await planUpgrade(context.root);
-      const compatible = report.operations.every(({ classification }) => classification === "already-correct");
-      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(options.check ? { compatible, ...report } : report), null, 2)}\n` : options.check && compatible ? `✓ Project metadata, managed guidance, and CLI are compatible with ${report.targetVersion}\n` : formatUpgradePlan(report));
-      if (options.check && !compatible) throw new CliFailure("project requires a reviewed upgrade");
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatUpgradePlan(report));
     });
   // Hidden alias for `upgrade plan --check`, kept only until scripts/check-adjacent-upgrade.mjs
   // runs a previously published CLI that ships --check; see "Not in this plan" in the subtraction-3 plan.
@@ -234,10 +241,7 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--json", "emit versioned structured output")
     .action(async (options: { json?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
-      const report = await planUpgrade(context.root);
-      const compatible = report.operations.every(({ classification }) => classification === "already-correct");
-      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ compatible, ...report }), null, 2)}\n` : compatible ? `✓ Project metadata, managed guidance, and CLI are compatible with ${report.targetVersion}\n` : formatUpgradePlan(report));
-      if (!compatible) throw new CliFailure("project requires a reviewed upgrade");
+      await reportUpgradeCompatibility(context.root, options.json);
     });
   upgrade.command("apply")
     .option("--yes", "confirm the reviewed upgrade plan")
@@ -529,7 +533,10 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--env <environment>", "email environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
-      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime)).catch((error) => {
+        if (options.env === "local" && error instanceof SecretsError) return {} as SecretValues;
+        throw error;
+      });
       const workerPath = context.manifest.apps.worker ?? "apps/worker";
       const config = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
       const block = wranglerEnvironmentBlock(config, options.env);
@@ -800,7 +807,10 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--env <environment>", "billing environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
-      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime)).catch((error) => {
+        if (options.env === "local" && error instanceof SecretsError) return {} as SecretValues;
+        throw error;
+      });
       const workerPath = context.manifest.apps.worker ?? "apps/worker";
       const routeSource = await readFile(path.join(context.root, workerPath, "src/index.ts"), "utf8");
       const workerConfig = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");

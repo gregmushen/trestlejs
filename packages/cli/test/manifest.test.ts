@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ManifestError, parseProjectManifest } from "../src/index.js";
+import { ManifestError, parseProjectManifest } from "../src/core.js";
 
 const validManifest = `
 schemaVersion: 1

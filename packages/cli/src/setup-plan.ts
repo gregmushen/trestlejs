@@ -55,6 +55,7 @@ export const setupPlanSchema = z.object({
   // Accepted only when empty, so schemaVersion 1 plans written by earlier releases still parse.
   externalResources: z.array(z.unknown()).max(0, "externalResources are not supported; provision provider resources outside the SetupPlan").optional(),
   destructiveOperations: z.array(z.unknown()).max(0, "destructiveOperations are not supported; perform destructive changes explicitly outside the SetupPlan").optional(),
+  // Accepted for schemaVersion 1 compatibility; ignored by plan/apply.
   verification: z.object({ commands: z.array(z.string().min(1)).default([]) }).strict().optional(),
 }).strict().superRefine((plan, context) => {
   const uniqueEnvironments = new Set(plan.environments);
