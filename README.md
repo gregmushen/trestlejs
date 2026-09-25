@@ -364,8 +364,7 @@ This repository contains the TrestleJS toolchain:
 | Package | Purpose |
 | --- | --- |
 | [`create-trestlejs`](https://www.npmjs.com/package/create-trestlejs) | project generator and canonical application template |
-| [`trestlejs`](https://www.npmjs.com/package/trestlejs) | the `trestle` command-line interface |
-| [`@trestlejs/core`](https://www.npmjs.com/package/@trestlejs/core) | versioned manifests, SetupPlan schema, and deterministic shared logic |
+| [`trestlejs`](https://www.npmjs.com/package/trestlejs) | the `trestle` command-line interface, plus versioned manifests, SetupPlan schema, and deterministic shared logic |
 
 ## Working on TrestleJS
 

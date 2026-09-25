@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { parseProjectManifest } from "@trestlejs/core";
+import { parseProjectManifest } from "./core.js";
 import { wranglerEnvironmentBlock } from "./wrangler-config.js";
 
 export type CiValidationCheck = {

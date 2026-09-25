@@ -2,7 +2,7 @@ import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { wranglerCapabilityBinding, wranglerEnvironmentBlock, wranglerStringVariable, type CloudflareBindingCapability } from "./wrangler-config.js";
 
-import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "@trestlejs/core";
+import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "./core.js";
 
 import { validateCi } from "./ci.js";
 import { inspectResources } from "./inspect.js";

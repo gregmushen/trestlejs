@@ -3,7 +3,7 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import YAML from "yaml";
 
-import { TRESTLEJS_VERSION } from "@trestlejs/core";
+import { TRESTLEJS_VERSION } from "./core.js";
 
 export const FRAMEWORK_METADATA_VERSION = 1;
 export const MANAGED_GUIDANCE_VERSION = 1;

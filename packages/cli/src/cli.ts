@@ -7,7 +7,7 @@ import {
   environmentNameSchema,
   structuredOutput,
   TRESTLEJS_VERSION,
-} from "@trestlejs/core";
+} from "./core.js";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 
 import { formatCiValidation, validateCi } from "./ci.js";

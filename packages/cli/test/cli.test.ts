@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { TRESTLEJS_VERSION } from "@trestlejs/core";
+import { TRESTLEJS_VERSION } from "../src/core.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { executeCli } from "../src/index.js";

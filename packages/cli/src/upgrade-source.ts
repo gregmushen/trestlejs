@@ -4,7 +4,7 @@ import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { applyManifestCapabilities, parseProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "@trestlejs/core";
+import { applyManifestCapabilities, parseProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "./core.js";
 import { planUpgrade } from "./upgrade.js";
 
 export type SourceDiffClassification = "same" | "unchanged" | "modified" | "new" | "missing" | "unverified" | "unsafe"

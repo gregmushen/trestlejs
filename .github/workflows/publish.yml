@@ -104,6 +104,5 @@ jobs:
             npm publish "$archive" --access public --tag "$DISTRIBUTION_TAG"
           }
 
-          publish_if_missing "@trestlejs/core" ./release/trestlejs-core.tgz
           publish_if_missing trestlejs ./release/trestlejs.tgz
           publish_if_missing create-trestlejs ./release/create-trestlejs.tgz

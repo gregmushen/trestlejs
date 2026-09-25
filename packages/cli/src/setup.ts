@@ -3,7 +3,7 @@ import { access, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 
-import { parseSetupPlan, TRESTLEJS_VERSION, type EnvironmentName, type ProjectManifest, type SetupPlan } from "@trestlejs/core";
+import { parseSetupPlan, TRESTLEJS_VERSION, type EnvironmentName, type ProjectManifest, type SetupPlan } from "./core.js";
 
 import { runDoctor } from "./doctor.js";
 import { diffSetupPlan, applySetupPlan, formatPlanDiff } from "./plan.js";

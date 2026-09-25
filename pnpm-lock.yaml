@@ -20,18 +20,9 @@ importers:
 
   packages/cli:
     dependencies:
-      '@trestlejs/core':
-        specifier: workspace:*
-        version: link:../core
       commander:
         specifier: 15.0.0
         version: 15.0.0
-      yaml:
-        specifier: 2.9.1
-        version: 2.9.1
-
-  packages/core:
-    dependencies:
       yaml:
         specifier: 2.9.1
         version: 2.9.1
@@ -41,9 +32,6 @@ importers:
 
   packages/create:
     dependencies:
-      '@trestlejs/core':
-        specifier: workspace:*
-        version: link:../core
       commander:
         specifier: 15.0.0
         version: 15.0.0

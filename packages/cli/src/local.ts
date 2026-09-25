@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { EnvironmentName, ProjectManifest } from "@trestlejs/core";
+import type { EnvironmentName, ProjectManifest } from "./core.js";
 
 import type { CliRuntime } from "./runtime.js";
 import { readSecrets, validateSecrets } from "./secrets.js";

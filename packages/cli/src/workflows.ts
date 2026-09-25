@@ -1,4 +1,4 @@
-import type { EnvironmentName } from "@trestlejs/core";
+import type { EnvironmentName } from "./core.js";
 
 export function workflowArguments(operation: "list" | "status" | "retry", name: string, id: string | undefined, environment: EnvironmentName, json = false): string[] {
   if (!/^[A-Za-z0-9_-]{1,100}$/u.test(name)) throw new Error("workflow name is invalid");

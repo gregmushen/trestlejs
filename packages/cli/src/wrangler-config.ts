@@ -1,4 +1,4 @@
-import type { EnvironmentName } from "@trestlejs/core";
+import type { EnvironmentName } from "./core.js";
 
 function objectForKey(source: string, key: string, start = 0): string | undefined {
   const keyIndex = source.indexOf(`"${key}"`, start);

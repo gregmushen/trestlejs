@@ -1,10 +1,4 @@
-export * from "./cli.js";
-export * from "./ci.js";
-export * from "./environment-status.js";
-export * from "./doctor.js";
-export * from "./runtime.js";
-export * from "./secrets.js";
-export * from "./local.js";
-export * from "./plan.js";
-export * from "./inspect.js";
-export * from "./generate-resource.js";
+export * from "./core.js";
+export { executeCli } from "./cli.js";
+export type { CliRuntime } from "./runtime.js";
+export { initializeSecrets, readSecrets } from "./secrets.js";

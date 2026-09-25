@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { ProjectManifest, SetupResource } from "@trestlejs/core";
+import type { ProjectManifest, SetupResource } from "./core.js";
 
 import { runCommand } from "./processes.js";
 import { CliFailure } from "./runtime.js";

@@ -51,16 +51,13 @@ async function run(command, arguments_, cwd, extraEnvironment = {}) {
 }
 
 try {
-  const coreArchive = path.join(temporaryRoot, "trestlejs-core.tgz");
   const cliArchive = path.join(temporaryRoot, "trestlejs.tgz");
   await run("pnpm", ["build"], root);
-  await run("pnpm", ["--dir", "packages/core", "pack", "--out", coreArchive], root);
   await run("pnpm", ["--dir", "packages/cli", "pack", "--out", cliArchive], root);
   await run(process.execPath, [path.join(root, "packages/create/dist/bin.js"), project, "--no-git", "--no-install"], root);
   const manifestPath = path.join(project, "package.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   manifest.devDependencies.trestlejs = `file:${cliArchive}`;
-  manifest.pnpm = { ...(manifest.pnpm ?? {}), overrides: { ...(manifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await run("pnpm", ["install"], project);
   const lockfilePath = path.join(project, "pnpm-lock.yaml");
@@ -275,7 +272,6 @@ try {
   const adminManifestPath = path.join(adminProject, "package.json");
   const adminManifest = JSON.parse(await readFile(adminManifestPath, "utf8"));
   adminManifest.devDependencies.trestlejs = `file:${cliArchive}`;
-  adminManifest.pnpm = { ...(adminManifest.pnpm ?? {}), overrides: { ...(adminManifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
   await writeFile(adminManifestPath, `${JSON.stringify(adminManifest, null, 2)}\n`);
   await run("pnpm", ["install"], adminProject);
   const adminDiff = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "diff", "--json"], { cwd: adminProject, encoding: "utf8" }));
@@ -334,7 +330,6 @@ try {
   const applyManifestPath = path.join(applyProject, "package.json");
   const applyManifest = JSON.parse(await readFile(applyManifestPath, "utf8"));
   applyManifest.devDependencies.trestlejs = `file:${cliArchive}`;
-  applyManifest.pnpm = { ...(applyManifest.pnpm ?? {}), overrides: { ...(applyManifest.pnpm?.overrides ?? {}), "@trestlejs/core": `file:${coreArchive}` } };
   await writeFile(applyManifestPath, `${JSON.stringify(applyManifest, null, 2)}\n`);
   await run("pnpm", ["install"], applyProject);
   const described = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "project", "--json"], { cwd: applyProject, encoding: "utf8" })).data.manifest;

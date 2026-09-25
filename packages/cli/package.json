@@ -39,8 +39,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@trestlejs/core": "workspace:*",
     "commander": "15.0.0",
-    "yaml": "2.9.1"
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
   }
 }

@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
-import type { ProjectManifest } from "@trestlejs/core";
+import type { ProjectManifest } from "./core.js";
 
 export type ResourceDeclaration = {
   schemaVersion: number;

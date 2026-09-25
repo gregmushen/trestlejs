@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "no
 import os from "node:os";
 import path from "node:path";
 
-import type { EnvironmentName, ProjectManifest } from "@trestlejs/core";
+import type { EnvironmentName, ProjectManifest } from "./core.js";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 export type SecretValues = Record<string, string>;

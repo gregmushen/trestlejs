@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 
-import { loadProjectManifest } from "@trestlejs/core";
+import { loadProjectManifest } from "../src/core.js";
 import { describe, expect, it } from "vitest";
 
 import { formatDoctorHuman, runDoctor } from "../src/doctor.js";
