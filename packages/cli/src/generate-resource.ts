@@ -168,7 +168,6 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
   if (contextSource && !/export const AUTHORITY_MODEL_VERSION\s*=\s*(?:[3-9]|\d{2,})\s*;/u.test(contextSource)) {
     throw new CliFailure("resource generation requires independent application authority; migrate to the permission-registry ExecutionContext (authority model 3) before generating new routes");
   }
-  if (!resource.tenant || !resource.crud) throw new CliFailure("the v1 resource generator requires --tenant and --crud");
   const n = names(resource.name);
   const webhookEvents = (["created", "updated", "deleted"] as const).filter((kind) => resource.webhookEvents.includes(kind));
   const project = manifest.project.name;

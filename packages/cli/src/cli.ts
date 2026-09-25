@@ -811,17 +811,13 @@ export function createProgram(runtime: CliRuntime): Command {
     });
   generate.command("resource")
     .argument("<name>")
-    .option("--tenant", "generate organization ownership and forced RLS", true)
-    .option("--no-tenant", "generate without organization ownership")
-    .option("--crud", "generate CRUD contracts, routes, and UI", true)
-    .option("--no-crud", "generate persistence without CRUD surfaces")
     .option("--field <definition...>", "additional field as name:type[?] or name:relation:Resource[:onDelete]")
     .option("--webhook-event <kind...>", "explicitly expose created, updated, or deleted as a versioned customer webhook")
     .option("--read-permission <permission>", "application permission required to list/read", "resource.read")
     .option("--write-permission <permission>", "application permission required to create/update/delete", "resource.write")
     .option("--page-size <size>", "default cursor page size", Number, 25)
     .option("--max-page-size <size>", "maximum cursor page size", Number, 100)
-    .action(async (name: string, options: { tenant: boolean; crud: boolean; field?: string[]; webhookEvent?: string[]; readPermission: string; writePermission: string; pageSize: number; maxPageSize: number }, command: Command) => {
+    .action(async (name: string, options: { field?: string[]; webhookEvent?: string[]; readPermission: string; writePermission: string; pageSize: number; maxPageSize: number }, command: Command) => {
       const context = await projectContext(command, runtime);
       const additional = (options.field ?? []).map(parseResourceField);
       if (additional.some(({ name: fieldName }) => fieldName === "name")) throw new CliFailure("the required name:string field is generated automatically; do not redeclare it");
@@ -829,7 +825,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const webhookEvents = options.webhookEvent ?? [];
       if (webhookEvents.some((kind) => !["created", "updated", "deleted"].includes(kind)) || new Set(webhookEvents).size !== webhookEvents.length) throw new CliFailure("--webhook-event accepts each of created, updated, and deleted at most once");
       if (!Number.isInteger(options.pageSize) || !Number.isInteger(options.maxPageSize) || options.pageSize < 1 || options.maxPageSize > 250 || options.pageSize > options.maxPageSize) throw new CliFailure("page sizes must be integers with 1 <= default <= maximum <= 250");
-      const resource = { name, tenant: options.tenant, crud: options.crud, fields: [{ name: "name", type: "string", required: true } as const, ...additional], webhookEvents: webhookEvents as Array<"created" | "updated" | "deleted">, authorization: { read: options.readPermission, write: options.writePermission }, pagination: { defaultLimit: options.pageSize, maxLimit: options.maxPageSize } };
+      const resource = { name, tenant: true as const, crud: true as const, fields: [{ name: "name", type: "string", required: true } as const, ...additional], webhookEvents: webhookEvents as Array<"created" | "updated" | "deleted">, authorization: { read: options.readPermission, write: options.writePermission }, pagination: { defaultLimit: options.pageSize, maxLimit: options.maxPageSize } };
       const files = await generateResource(context.root, context.manifest, resource);
       files.push(...await generateResourceMigration(context.root, context.manifest, [resource]));
       runtime.stdout(`Generated ${name}\n${files.map((file) => `  ${file}`).join("\n")}\n`);

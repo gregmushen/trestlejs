@@ -346,9 +346,6 @@ try {
     environments: described.environments,
     secrets: [],
     resources: [],
-    externalResources: [],
-    destructiveOperations: [],
-    verification: { commands: ["pnpm check"] },
   };
   await writeFile(path.join(applyProject, ".trestle", "setup.json"), `${JSON.stringify(setupPlan, null, 2)}\n`);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "apply", ".trestle/setup.json", "--yes"], applyProject);

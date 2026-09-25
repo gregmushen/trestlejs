@@ -277,9 +277,6 @@ describe("TrestleJS CLI", () => {
       environments: ["local", "preview", "staging", "production"],
       secrets: [],
       resources: [],
-      externalResources: [],
-      destructiveOperations: [],
-      verification: { commands: ["pnpm check"] },
     };
     await writeFile(path.join(root, ".trestle", "setup.json"), JSON.stringify(plan));
     const diff = capture(root);
@@ -404,9 +401,6 @@ export const applicationEventCatalog = defineEventCatalog([
       environments: ["local", "preview", "staging", "production"],
       secrets: [],
       resources: [{ name: "Article", tenant: true, crud: true, webhookEvents: ["created", "updated"] }],
-      externalResources: [],
-      destructiveOperations: [],
-      verification: { commands: ["pnpm check"] },
     };
     const planPath = path.join(root, ".trestle", "setup.json");
     await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`);

@@ -181,12 +181,6 @@ export async function diffSetupPlan(root: string, manifest: ProjectManifest, pla
       items.push({ id: `resources.${resource.name}.migration`, classification: "create", summary: `${resource.name} journaled forced-RLS migration` });
     }
   }
-  for (const external of plan.externalResources) {
-    items.push({ id: `external.${external.environment}.${external.name}`, classification: external.environment === "local" ? "unknown" : "blocked", summary: `${external.name} requires provider reconciliation in ${external.environment}` });
-  }
-  for (const [index, operation] of plan.destructiveOperations.entries()) {
-    items.push({ id: `destructive.${index}`, classification: "delete", summary: `${operation.environment}: ${operation.description}` });
-  }
   return { planHash: planHash(input), items, converged: items.every(({ classification }) => classification === "already correct") };
 }
 
