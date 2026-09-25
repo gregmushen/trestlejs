@@ -24,7 +24,7 @@ These are focused changes to existing mechanisms, not new subsystems. Existing g
 
 Remaining: the P1 preflight and constraint migration for existing applications, and the P4 gaps.
 
-**Lifecycle rule (P2 + P5).** A private handler executes (start, retry, dead-letter replay or Workflow resume) only while its committed event is at most 14 days old, measured from the committed `occurredAt` with an injected clock. Workflows reverify at every step execution. Committed provenance is retained for 30 days. So pruning never removes provenance that permitted work can still need, and needs no Workflow-state exclusion.
+**Lifecycle rule (P2 + P5).** A private handler executes (start, retry, dead-letter replay or Workflow resume) only while its committed event is at most 14 days old, measured from the committed `occurredAt` with an injected clock. Workflows reverify at every execution of the consume step. Committed provenance is retained for 30 days. So pruning never removes provenance that permitted work can still need, and needs no Workflow-state exclusion.
 
 ## 2. P1: Tenant-safe generated relationships
 
@@ -60,11 +60,11 @@ Remaining: the P1 preflight and constraint migration for existing applications, 
 ## 3. P2: Trusted background execution
 
 **Status: done.** Implemented in the generated template:
-- `verifyCommittedEvent` (`packages/db/src/event-provenance.ts`) reloads the committed outbox row and compares every execution-relevant field canonically (`occurredAt` by instant), then rejects rows older than 14 days. `handleEventWithInbox` (Queue) and the Workflow step use it, with or without webhooks. The Workflow Queue consumer also verifies before `create`, so a forged message cannot claim the stable instance ID.
-- **Authority.** Undeclared registrations are `"verified"`: the committed event, `organizationId`, `log` and `clock`, and no database. `{ authority: "tenant" }` adds `context.data`, a lazily opened tenant database under forced RLS. `{ authority: "system" }` needs no tenant and gets neither. Missing tenant provenance is `tenant_provenance_missing`, never wider access. Generated handlers declare `"tenant"`.
+- `verifyCommittedEvent` (`packages/db/src/event-provenance.ts`) reloads the committed outbox row and compares every execution-relevant field canonically (`occurredAt` by instant), then rejects rows older than 14 days. `handleEventWithInbox` (Queue) and the Workflow step use it, with or without webhooks. The Workflow Queue consumer also verifies and authorizes (tenant provenance) before `create`, so a forged message cannot claim the stable instance ID and an event the Workflow would reject goes to the dead-letter queue without starting an instance.
+- **Authority.** Undeclared registrations are `"verified"`: the committed event, `organizationId`, `log` and `clock`, and no database. `{ authority: "tenant" }` adds `context.data`, a lazily opened tenant database under forced RLS, closed after the handler completes or fails. `{ authority: "system" }` needs no tenant and gets neither. Missing tenant provenance is `tenant_provenance_missing`, never wider access. Generated handlers declare `"tenant"`.
+- **Not a sandbox.** Handlers still receive the raw Worker `environment`, including `DATABASE_URL`, so a handler can bypass its declared authority. The context is the supported seam; closing this needs a breaking handler signature.
 - **Entitlements.** `{ requires: { entitlement } }` reads the tenant's current entitlements at handling time. If absent, only that handler is skipped (`event.handler.skipped`, reason `not_entitled`); webhook projection still runs and the event completes. A later grant does not re-run it.
 - **Failures.** `PermanentEventError` (`provenance_missing`, `provenance_mismatch`, `provenance_expired`, `tenant_provenance_missing`) never reaches the handler and leaves no inbox row. Queues log `queue.event.rejected` with ID and reason, no payload, and retry into Cloudflare's dead-letter queue; Workflows throw `NonRetryableError`. Neither is acknowledged as handled. Store and other transient errors stay retryable.
-- **Known limit.** Handlers still receive the raw Worker `environment`. The context is the supported seam, not a sandbox; closing this needs a breaking handler signature.
 
 **Problem.** Re-reading the committed event (`findCommitted`, `packages/db/src/outbox.ts`) is used only on the webhook paths (`webhook-projection.ts`, `webhook-runtime.ts`, `webhook-work.ts`). Application handlers in `apps/worker/src/async-runtime.ts` receive the queue envelope without verification, and the Workflow path doesn't verify anything.
 

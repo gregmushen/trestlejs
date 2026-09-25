@@ -221,17 +221,22 @@ correlation data. The handler receives the committed event, and the tenant
 always comes from the committed row, never from the message.
 
 Register a handler with the authority it needs:
-`eventConsumers.register(event, handler)` (undeclared, "verified") gets the
-verified event and its `organizationId` but no database;
-`{ authority: "tenant" }` adds `context.data`, a database scoped to that
-organization under forced RLS and opened only when first read;
-`{ authority: "system" }` is for work that has no tenant and gets neither.
+
+| Registration | `context.organizationId` | `context.data` |
+| --- | --- | --- |
+| `eventConsumers.register(event, handler)` (undeclared, `"verified"`) | the committed organization | none |
+| `eventConsumers.register(event, handler, { authority: "tenant" })` | the committed organization | a database scoped to that organization under forced RLS, opened when first read and closed after the handler |
+| `eventConsumers.register(event, handler, { authority: "system" })` | none (work without a tenant) | none |
+
+This is not a sandbox: handlers still receive the raw Worker `environment`,
+including `DATABASE_URL`, and could use it to bypass their declared
+authority. The scoped context is the supported seam.
+
 Generated resource handlers declare `"tenant"`. An event without a committed
 organization never reaches a verified or tenant handler. Handlers are called
 as `(payload, envelope, environment, context)`; `context` also carries
 `event`, `authority`, a correlated secret-redacting `log`, and an injectable
-`clock`. Handlers still receive the raw Worker `environment`: the scoped
-context is the supported seam, not a sandbox.
+`clock`.
 
 `{ requires: { entitlement: "..." } }` checks the tenant's current plan
 entitlements each time the handler would run. If the tenant lacks it, only
@@ -242,7 +247,7 @@ handler is not re-run if the entitlement is granted later.
 Handlers run only while the committed event is at most 14 days old, measured
 from its committed `occurredAt`: this covers first delivery, retries,
 dead-letter replay and Workflow resumption, and Workflows reverify at every
-step execution. Committed provenance is kept for 30 days, so pruning never
+execution of the consume step. Committed provenance is kept for 30 days, so pruning never
 removes a row that permitted work can still need. Messages whose
 provenance is missing, mismatched, expired or tenantless never reach the
 handler: the Queue path logs
@@ -339,9 +344,11 @@ of waiting in retry.
 If `capabilities.workflows` is enabled, the deployment config binds the
 application-owned `TrestleWorkflow` class. Queue delivery starts a Workflow
 using the event ID as its stable instance ID; a repeated Queue delivery
-reuses the existing instance. The Queue consumer verifies the committed event
-before creating the instance, so a forged message cannot claim its ID. The
-Workflow validates and reverifies the event on every step execution,
+reuses the existing instance. The Queue consumer verifies and authorizes the
+committed event before creating the instance, so a forged message cannot claim
+its ID and an event the Workflow would reject goes to the dead-letter queue. The
+Workflow validates and reverifies the event at every execution of the
+consume step,
 executes the registered handler as a retryable step, and records completion
 through the PostgreSQL inbox. Local development keeps direct Queue handling
 and offers an advanceable-clock Workflow scheduler for deterministic tests.
