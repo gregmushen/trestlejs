@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { parseProjectManifest } from "@trestlejs/core";
 import { wranglerEnvironmentBlock } from "./wrangler-config.js";
 
 export type CiValidationCheck = {
@@ -83,10 +84,40 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     && !providers.includes("secrets.RESEND_API_KEY") && !providers.includes("secrets.STRIPE_SECRET_KEY"), "protected provider verification reads Trestle encrypted staging credentials, not duplicate GitHub provider secrets"));
   checks.push(check("ci.providers.safety", providers.includes("TRESTLE_PROVIDER_INTEGRATION_TESTS")
     && providers.includes("provider.integration.test.ts") && providerTests.includes("EMAIL_STAGING_REDIRECT")
-    && providerTests.includes("STRIPE_MODE") && providerTests.includes("sk_test_")
+    && providerTests.includes("STRIPE_MODE") && providerTests.includes("(?:sk|rk)_test_") && providerTests.includes("checkout/sessions")
     && providerTests.includes("readStagingProviderVariables") && providerConfig.includes("apps/worker/wrangler.jsonc"), "provider verification checks the declared Resend staging redirect and Stripe test mode"));
+  checks.push(check("ci.providers.checkout-write", providerTests.includes("StripeBillingAdapter")
+    && providerTests.includes("STRIPE_PRICES")
+    && (providerTests.match(/adapter\.createCheckoutSession\(input\)/gu) ?? []).length >= 2
+    && providerTests.includes("expect(retry.id).toBe(first.id)"),
+  "protected provider verification creates a test-mode Checkout session and checks idempotent retry"));
+  checks.push(check("ci.providers.resend-delivery", providerTests.includes("createEmailService")
+    && (providerTests.match(/service\.send\(message, options\)/gu) ?? []).length >= 2
+    && providerTests.includes("api.resend.com/emails/")
+    && providerTests.includes("expect(accepted.to).toEqual([staging.EMAIL_STAGING_REDIRECT])"),
+  "protected provider verification checks accepted Resend mail reaches only the staging redirect and is idempotent"));
+  const emailFactory = await readFile(path.join(root, "packages", "integrations", "src", "email", "index.ts"), "utf8").catch(() => "");
+  const emailTests = await readFile(path.join(root, "packages", "integrations", "src", "email", "email.test.tsx"), "utf8").catch(() => "");
+  checks.push(check("ci.email.nonproduction-redirect", emailFactory.includes('environment === "preview" || environment === "staging"')
+    && emailFactory.includes("Local email must use the local capture adapter")
+    && emailFactory.includes("StagingRedirectEmailService(service, configuration.stagingRedirect, environment)")
+    && emailTests.includes('it.each(["preview", "staging"]'),
+  "preview and staging provider email redirect every recipient; local email cannot use Resend"));
 
   const preview = sources.get("preview.yml") ?? "";
+  const projectPackage = await readFile(path.join(root, "package.json"), "utf8").then((source) => JSON.parse(source) as { scripts?: Record<string, string> }).catch(() => null);
+  const previewBrowser = await readFile(path.join(root, "tests/browser/preview-product.spec.ts"), "utf8").catch(() => "");
+  const previewEmail = await readFile(path.join(root, "tests/browser/preview-email.spec.ts"), "utf8").catch(() => "");
+  const previewFixture = await readFile(path.join(root, "packages/auth/src/preview-fixture.ts"), "utf8").catch(() => "");
+  checks.push(check("ci.browser.preview-only-billing", preview.includes("pnpm test:preview")
+    && projectPackage?.scripts?.["test:preview"]?.includes("preview-product.spec.ts") === true
+    && projectPackage?.scripts?.["test:deployed"]?.includes("preview-product.spec.ts") === false
+    && previewBrowser.includes('process.env.TRESTLE_DEPLOY_ENV !== "preview"')
+    && preview.includes("Create verified test account in the isolated preview database without sending email")
+    && preview.includes("steps.runtime-role.outputs.runtime_url")
+    && previewBrowser.includes("TRESTLE_PREVIEW_FIXTURE_EMAIL")
+    && previewFixture.includes('input.environment !== "preview"'),
+  "test Checkout runs automatically on an isolated preview account without email; production smoke cannot run it"));
   checks.push(check(
     "ci.preview.trusted-only",
     preview.includes("github.event.pull_request.head.repo.full_name == github.repository"),
@@ -95,28 +126,71 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.preview.environment", preview.includes("environment: preview"), "preview uses the protected preview environment"));
   checks.push(check("ci.preview.runtime-role", preview.includes("bootstrap-managed") && preview.includes("db:roles:configure") && preview.includes("db:roles:verify"), "preview bootstraps, configures, and verifies a restricted database runtime role"));
   checks.push(check("ci.preview.migrate-before-role", occursInOrder(preview, "Bootstrap restricted preview runtime role", "Migrate preview database") && occursInOrder(preview, "Migrate preview database", "Configure preview database roles"), "preview bootstraps its runtime login, then migrates before configuring database roles"));
-  checks.push(check("ci.preview.isolated-cloudflare", preview.includes("--worker-name") && preview.includes("cloudflare-pages.mjs ensure"), "preview uses isolated Worker and Pages resources"));
+  checks.push(check("ci.preview.isolated-cloudflare", preview.includes("--worker-name") && preview.includes("cloudflare-pages.mjs ensure")
+    && preview.includes("--worker-config .trestle-queues.wrangler.jsonc")
+    && preview.includes("secret put DATABASE_URL --env preview --config .trestle-queues.wrangler.jsonc")
+    && preview.includes("secret put BETTER_AUTH_URL --env preview --config .trestle-queues.wrangler.jsonc"), "preview secrets and deployment target the same isolated Worker configuration"));
+  checks.push(check("ci.preview.same-origin-api", preview.includes("cloudflare-pages.mjs bind-service")
+    && preview.includes('VITE_API_ORIGIN="${{ steps.preview.outputs.app_url }}"'), "preview app routes authenticated API calls through its own Pages origin"));
   checks.push(check("ci.preview.cleanup", preview.includes("types: [opened, synchronize, reopened, closed]") && preview.includes("cloudflare-worker.mjs delete") && preview.includes("cloudflare-pages.mjs delete"), "closed pull requests clean up isolated Cloudflare resources"));
   checks.push(check("ci.preview.dynamic-smoke", preview.includes("steps.preview.outputs.api_url") && preview.includes("steps.preview.outputs.app_url") && preview.includes("steps.preview.outputs.site_url"), "preview smoke tests use derived per-PR URLs"));
-  checks.push(check("ci.preview.operational-smoke", preview.includes("TRESTLE_DEPLOY_ENV: preview"), "preview smoke verifies the Worker operational environment"));
+  checks.push(check("ci.preview.operational-smoke", /- run: node scripts\/smoke\.mjs\n\s*env:\n\s*TRESTLE_DEPLOY_ENV: preview\b/u.test(preview), "preview smoke verifies the Worker operational environment"));
   checks.push(check("ci.preview.async-resources-verified", occursInOrder(preview, "node scripts/smoke.mjs", "cloudflare-queues.mjs verify")
     && occursInOrder(preview, "cloudflare-queues.mjs verify", "cloudflare-r2.mjs verify")
     && preview.includes('CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"'), "preview verifies exact Queue and R2 resources after HTTP smoke"));
   checks.push(check("ci.preview.deployment-evidence", (preview.match(/github-deployment\.mjs/gu) ?? []).length >= 2, "preview publishes and deactivates URL-bearing GitHub Deployments"));
   checks.push(check("ci.preview.isolated-database", preview.includes("neon-preview.mjs ensure") && preview.includes("neon-preview.mjs delete") && preview.includes("steps.runtime-role.outputs.runtime_url"), "preview provisions, configures, uses, and deletes an isolated Neon branch"));
   checks.push(check("ci.preview.provider-preflight", preview.includes("cloudflare-preflight.mjs") && /^\s+node scripts\/neon-preflight\.mjs\s*$/mu.test(preview) && /- id: cloudflare_access\n\s+name:[^\n]+\n\s+continue-on-error: true/u.test(preview) && /- id: neon_access\n\s+name:[^\n]+\n\s+continue-on-error: true/u.test(preview) && occursInOrder(preview, "Verify Cloudflare access before provisioning", "Verify Neon project access before provisioning") && occursInOrder(preview, "Verify Neon project access before provisioning", "Require both provider access checks") && occursInOrder(preview, "Require both provider access checks", "Validate preview configuration") && occursInOrder(preview, "Validate preview configuration", "Provision isolated Neon branch") && preview.includes("steps.cloudflare_access.outcome") && preview.includes("steps.neon_access.outcome") && preview.includes('CLOUDFLARE_WORKERS_SUBDOMAIN: "${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}"'), "preview independently verifies Cloudflare and Neon access before configuration gates and provisioning"));
+  checks.push(check("ci.preview.transactional-provider-preflight",
+    preview.includes("node scripts/transactional-provider-preflight.mjs")
+    && preview.includes("pnpm exec trestle email doctor --env preview")
+    && preview.includes("trestle secrets get RESEND_API_KEY --env preview --raw")
+    && preview.includes("trestle secrets get STRIPE_SECRET_KEY --env preview --raw")
+    && preview.includes('TRESTLE_STRIPE_MODE: test')
+    && preview.includes('echo "::add-mask::$RESEND_API_KEY"')
+    && preview.includes('echo "::add-mask::$STRIPE_SECRET_KEY"')
+    && occursInOrder(preview, "Validate preview configuration", "Verify preview Resend and Stripe credentials before provisioning")
+    && occursInOrder(preview, "Verify preview Resend and Stripe credentials before provisioning", "Provision isolated preview Queues"),
+  "preview verifies encrypted Resend and Stripe credentials before resource provisioning"));
   checks.push(check("ci.preview.encrypted-neon-credential", (preview.match(/trestle secrets get NEON_API_KEY --env preview --raw/gu) ?? []).length >= 2 && !preview.includes("secrets.NEON_API_KEY"), "preview creation and teardown use the declared encrypted Neon CI credential"));
-  checks.push(check("ci.preview.dynamic-auth-url", preview.includes("Bind Better Auth to the isolated preview application") && preview.includes("steps.preview.outputs.app_url") && preview.includes("secret put BETTER_AUTH_URL"), "preview binds Better Auth to its isolated application URL"));
+  checks.push(check("ci.preview.dynamic-auth-url", preview.includes("Bind Better Auth to the isolated preview API") && preview.includes('BETTER_AUTH_URL: "${{ steps.preview.outputs.api_url }}"') && preview.includes("secret put BETTER_AUTH_URL"), "preview binds Better Auth to its isolated Worker API URL"));
   checks.push(check("ci.preview.queues", preview.includes("queue-config.mjs render preview") && preview.includes("cloudflare-queues.mjs ensure") && preview.includes("cloudflare-queues.mjs delete-preview") && preview.includes("deploy --config .trestle-queues.wrangler.jsonc --env preview"), "preview prepares isolated Queue bindings, provisions Queues, and cleans them up"));
+  checks.push(check("ci.preview.no-cron", /queue-config\.mjs render preview[^\n]* --without-cron/u.test(preview), "preview Workers do not consume account-wide cron capacity"));
+  checks.push(check("ci.preview.billing-return", /command: deploy[^\n]* --var BILLING_RETURN_URL:\$\{\{ steps\.preview\.outputs\.app_url \}\}\/settings\/billing/u.test(preview), "preview Checkout returns to its own isolated app origin"));
   checks.push(check("ci.preview.r2", preview.includes("cloudflare-r2.mjs ensure") && preview.includes("cloudflare-r2.mjs delete-preview") && occursInOrder(preview, "Prepare isolated preview Queue bindings", "Provision isolated preview R2 bucket") && occursInOrder(preview, "Provision isolated preview R2 bucket", "Provision isolated Neon branch"), "preview prepares an opt-in isolated R2 bucket and cleans up only empty buckets"));
 
   const deploy = sources.get("deploy.yml") ?? "";
+  checks.push(check("ci.deploy.same-origin-api", /bind-service [a-zA-Z0-9_-]+-staging [a-zA-Z0-9_-]+-worker-staging/u.test(deploy)
+    && /bind-service [a-zA-Z0-9_-]+ [a-zA-Z0-9_-]+-worker\n/u.test(deploy)
+    && (deploy.match(/VITE_API_ORIGIN="\$\{\{ vars\.APP_URL \}\}"/gu) ?? []).length === 2,
+  "staging and production app APIs use their own Pages origins"));
   checks.push(check("ci.deploy.serialized", deploy.includes("cancel-in-progress: false"), "staging and production deployment is serialized"));
   checks.push(check("ci.deploy.promotion-gate", /production:[\s\S]*?needs:\s*staging/u.test(deploy), "production requires the staging job"));
   checks.push(check("ci.deploy.smoke", (deploy.match(/scripts\/smoke\.mjs/gu) ?? []).length >= 2, "staging and production run deployed smoke tests"));
   checks.push(check("ci.deploy.operational-smoke", deploy.includes("TRESTLE_DEPLOY_ENV: staging") && deploy.includes("TRESTLE_DEPLOY_ENV: production"), "staging and production smoke verify their operational environments"));
   const stagingDeploy = deploy.slice(0, deploy.indexOf("  production:"));
   const productionDeploy = deploy.slice(deploy.indexOf("  production:"));
+  checks.push(check("ci.deploy.cron-capacity-preflight",
+    ([[stagingDeploy, "staging"], [productionDeploy, "production"]] as const).every(([source, environment]) =>
+      source.includes("node scripts/cloudflare-cron-preflight.mjs")
+      && source.includes(`TRESTLE_CRON_DEPLOY_ENV: ${environment}`)
+      && source.includes('CLOUDFLARE_WORKERS_PLAN: "${{ vars.CLOUDFLARE_WORKERS_PLAN }}"')
+      && occursInOrder(source, `Prepare ${environment} Queue bindings`, "node scripts/cloudflare-cron-preflight.mjs")
+      && occursInOrder(source, "node scripts/cloudflare-cron-preflight.mjs", `Provision ${environment} Queues`)
+      && occursInOrder(source, "node scripts/cloudflare-cron-preflight.mjs", `Migrate ${environment}`)),
+  "staging and production check account cron capacity before provisioning or migration"));
+  checks.push(check("ci.deploy.transactional-provider-preflight",
+    ([[stagingDeploy, "staging", "test", "Provision staging Queues"], [productionDeploy, "production", "live", "Provision production Queues"]] as const).every(([source, environment, mode, provision]) =>
+      source.includes("node scripts/transactional-provider-preflight.mjs")
+      && source.includes(`pnpm exec trestle email doctor --env ${environment}`)
+      && source.includes(`trestle secrets get RESEND_API_KEY --env ${environment} --raw`)
+      && source.includes(`trestle secrets get STRIPE_SECRET_KEY --env ${environment} --raw`)
+      && source.includes(`TRESTLE_STRIPE_MODE: ${mode}`)
+      && source.includes('echo "::add-mask::$RESEND_API_KEY"')
+      && source.includes('echo "::add-mask::$STRIPE_SECRET_KEY"')
+      && occursInOrder(source, `Verify ${environment} configuration and Cloudflare access`, `Verify ${environment} Resend and Stripe credentials before provisioning`)
+      && occursInOrder(source, `Verify ${environment} Resend and Stripe credentials before provisioning`, provision)),
+  "staging and production verify encrypted Resend and Stripe access before provisioning"));
   checks.push(check("ci.deploy.async-resources-verified", [stagingDeploy, productionDeploy].every((source) =>
     occursInOrder(source, "node scripts/smoke.mjs", "cloudflare-queues.mjs verify")
     && occursInOrder(source, "cloudflare-queues.mjs verify", "cloudflare-r2.mjs verify")
@@ -124,6 +198,49 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.deploy.queues", deploy.includes("queue-config.mjs render staging") && deploy.includes("queue-config.mjs render production") && (deploy.match(/cloudflare-queues\.mjs ensure/gu) ?? []).length >= 2 && (deploy.match(/deploy --config \.trestle-queues\.wrangler\.jsonc/gu) ?? []).length >= 2, "staging and production prepare and provision opt-in Queues"));
   checks.push(check("ci.deploy.r2", (deploy.match(/cloudflare-r2\.mjs ensure/gu) ?? []).length >= 2 && occursInOrder(deploy, "Prepare staging Queue bindings", "Provision staging R2 bucket") && occursInOrder(deploy, "Prepare production Queue bindings", "Provision production R2 bucket"), "staging and production provision opt-in R2 buckets"));
   checks.push(check("ci.deploy.runtime-role", (deploy.match(/db:roles:bootstrap/gu) ?? []).length >= 2 && (deploy.match(/db:roles:configure/gu) ?? []).length >= 2 && (deploy.match(/db:roles:verify/gu) ?? []).length >= 2, "staging and production bootstrap, configure, and verify restricted database runtime roles"));
+  const deployedProduct = await readFile(path.join(root, "tests/browser/deployed-product.spec.ts"), "utf8").catch(() => "");
+  const stagingProduct = await readFile(path.join(root, "tests/browser/staging-product.spec.ts"), "utf8").catch(() => "");
+  const stagingFixture = await readFile(path.join(root, "packages/auth/src/staging-fixture.ts"), "utf8").catch(() => "");
+  checks.push(check("ci.deploy.staging-no-email-product",
+    projectPackage?.scripts?.["test:staging"]?.includes("staging-product.spec.ts") === true
+    && projectPackage?.scripts?.["test:staging"]?.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0") === true
+    && stagingDeploy.includes("pnpm --filter ./packages/auth exec tsx src/staging-fixture.ts")
+    && stagingDeploy.includes("pnpm test:staging")
+    && occursInOrder(stagingDeploy, "Rotate the staging browser fixture without sending email", "pnpm test:staging")
+    && stagingProduct.includes('process.env.TRESTLE_DEPLOY_ENV !== "staging"')
+    && stagingProduct.includes("TRESTLE_STAGING_FIXTURE_EMAIL")
+    && stagingProduct.includes("relforcerowsecurity")
+    && stagingFixture.includes('input.environment !== "staging"')
+    && stagingFixture.includes("emailVerified: true")
+    && !stagingProduct.includes("RESEND_API_KEY")
+    && !stagingFixture.includes("RESEND_API_KEY"),
+  "automatic staging browser gate signs in and checks tenant RLS without sending email"));
+  checks.push(check("ci.deploy.staging-article-rls",
+    stagingDeploy.includes("pnpm test:staging")
+    && projectPackage?.scripts?.["test:staging:live-email"]?.includes("deployed-product.spec.ts") === true
+    && deployedProduct.includes("expect(table?.relforcerowsecurity).toBe(true)")
+    && deployedProduct.includes("current_user")
+    && deployedProduct.includes("set_config('app.organization_id'")
+    && deployedProduct.includes("select id from article where id")
+    && deployedProduct.includes("expect(other).toHaveLength(0)"),
+  "opt-in staging browser gate retains the forced Article RLS probe through the restricted runtime database role"));
+  checks.push(check("ci.browser.live-email-opt-in",
+    ["preview", "staging"].every((environment) =>
+      projectPackage?.scripts?.[`test:${environment}`]?.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0") === true
+      && projectPackage?.scripts?.[`test:${environment}:live-email`]?.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1") === true)
+    && projectPackage?.scripts?.["test:preview:live-email"]?.includes("preview-email.spec.ts") === true
+    && previewEmail.includes('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"')
+    && !previewBrowser.includes("RESEND_API_KEY")
+    && deployedProduct.includes('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"')
+    && !preview.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1")
+    && !stagingDeploy.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1")
+    && !preview.includes("pnpm test:preview:live-email")
+    && !stagingDeploy.includes("pnpm test:staging:live-email"),
+  "automatic preview and staging deploys cannot send Resend mail; live-email product gates require explicit opt-in"));
+  const projectSource = await readFile(path.join(root, ".trestle", "project.yaml"), "utf8").catch(() => "");
+  let adminEnabled = true;
+  try { if (projectSource) adminEnabled = parseProjectManifest(projectSource).capabilities.admin; }
+  catch { /* An invalid manifest must not relax deployment validation. */ }
   // Every platform admin step runs only when capabilities.admin is true, so a project without the admin deploys no admin resources.
   const adminStepsGuarded = [stagingDeploy, productionDeploy].every((source) => {
     const steps = source.split(/\n {6}- /u);
@@ -131,7 +248,11 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     return source.includes("id: admin") && source.includes("admin-capability.mjs status") && source.includes("admin-capability.mjs smoke") && source.includes("db:platform:verify")
       && adminSteps.length >= 5 && adminSteps.every((step) => step.includes("if: steps.admin.outputs.enabled == 'true'"));
   });
-  checks.push(check("ci.deploy.admin", adminStepsGuarded && occursInOrder(stagingDeploy, "Migrate staging", "db:platform:configure") && occursInOrder(productionDeploy, "Migrate production", "db:platform:configure"), "staging and production deploy, verify, and smoke the platform admin only when capabilities.admin is true"));
+  const adminStepsAbsent = [stagingDeploy, productionDeploy].every((source) =>
+    !/apps\/admin|\/admin build|db:platform:|admin-capability\.mjs|-admin(?:-staging)?\b/u.test(source));
+  checks.push(check("ci.deploy.admin", (!adminEnabled && adminStepsAbsent) || (adminStepsGuarded
+    && occursInOrder(stagingDeploy, "Migrate staging", "db:platform:configure")
+    && occursInOrder(productionDeploy, "Migrate production", "db:platform:configure")), "staging and production deploy, verify, and smoke the platform admin only when capabilities.admin is true"));
   checks.push(check(
     "ci.deploy.migrate-before-role",
     occursInOrder(deploy, "Bootstrap staging runtime role", "Migrate staging")

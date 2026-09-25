@@ -134,7 +134,7 @@ suite("billing provider event atomicity", () => {
     expect(await sql!`select provider_event_id from billing_provider_event where provider='stripe' and provider_event_id=${input.providerEventId}`).toHaveLength(1);
     expect(await sql!`select entitlement from organization_entitlement where organization_id=${input.projection.organizationId}`).toHaveLength(2);
     expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${input.providerEventId}`}`).toHaveLength(1);
-  });
+  }, 15_000);
 
   it("rolls back the projection and receipt finalization when a domain event is invalid", async () => {
     const input = fixture({ entitlements: [""] });

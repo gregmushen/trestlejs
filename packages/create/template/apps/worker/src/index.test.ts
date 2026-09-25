@@ -19,6 +19,7 @@ vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
 }));
 
 import worker, { app } from "./index.js";
+import { eventEnvelopeSchema } from "@__TRESTLE_PROJECT_NAME__/events";
 
 const environment = {
   DATABASE_URL: "postgres://unused",
@@ -43,18 +44,74 @@ describe("worker routes", () => {
     await expect(health.json()).resolves.toMatchObject({ capabilities: { workflows: { enabled: true, configured: false } } });
   });
 
+  it("logs validated Queue correlation and causation without raw payloads", async () => {
+    const rawSecret = "untrusted-queue-payload-secret";
+    const event = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "billing.checkout.completed", schemaVersion: 1,
+      occurredAt: new Date().toISOString(), resource: { type: "organization", id: "org-1" }, correlationId: "corr-queue", causationId: "cause-queue",
+      idempotencyKey: "checkout:org-1", payload: { organizationId: "org-1", currentSubscription: false, extra: rawSecret } });
+    const output: string[] = [];
+    const states: string[] = [];
+    const original = console.log;
+    console.log = (...items: unknown[]) => { output.push(items.map(String).join(" ")); };
+    try {
+      expect(await worker.queue({ messages: [
+        { body: event, ack: () => states.push("ack"), retry: () => states.push("unexpected") },
+        { body: { payload: rawSecret }, ack: () => states.push("unexpected"), retry: () => states.push("retry") },
+      ] }, { ...environment, TRESTLE_WORKFLOWS_ENABLED: "true", TRESTLE_WORKFLOW: { create: async () => ({ id: event.id }), get: async () => null } })).toEqual({ acknowledged: 1, retried: 1 });
+    } finally { console.log = original; }
+    expect(states).toEqual(["ack", "retry"]);
+    const records = output.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ event: "queue.event.acknowledged", correlationId: "corr-queue", causationId: "cause-queue", eventId: event.id })]));
+    expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ event: "queue.event.retried", validated: false })]));
+    expect(output.join("\n")).not.toContain(rawSecret);
+  });
+
   it("reports health", async () => {
     const response = await app.request("/api/health", undefined, environment);
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: "ok" });
   });
 
+  it("redacts a runtime credential embedded in a request path", async () => {
+    const secret = "worker-credential-unique-123456";
+    const output: string[] = [];
+    const original = console.log;
+    console.log = (...items: unknown[]) => { output.push(items.map(String).join(" ")); };
+    try {
+      await app.request(`/api/${secret}`, undefined, { ...environment, BETTER_AUTH_SECRET: secret });
+    } finally { console.log = original; }
+    expect(output.join("\n")).toContain("[REDACTED]");
+    expect(output.join("\n")).not.toContain(secret);
+  });
+
   it("reports provider capability readiness without returning credential values", async () => {
-    const response = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "staging" as const, EMAIL_DELIVERY_MODE: "resend" as const, RESEND_API_KEY: "re_sensitive", EMAIL_FROM: "sender@example.test", EMAIL_STAGING_REDIRECT: "capture@example.test", STRIPE_MODE: "test" as const, STRIPE_SECRET_KEY: "sk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive", STRIPE_PUBLISHABLE_KEY: "pk_test_example", STRIPE_PRICES: "{\"pro\":\"price_1\"}", BILLING_RETURN_URL: "https://example.test/billing" });
+    const response = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "staging" as const, EMAIL_DELIVERY_MODE: "resend" as const, RESEND_API_KEY: "re_sensitive", EMAIL_FROM: "sender@example.test", EMAIL_STAGING_REDIRECT: "capture@example.test", STRIPE_MODE: "test" as const, STRIPE_SECRET_KEY: "sk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive", STRIPE_PUBLISHABLE_KEY: "pk_test_example", STRIPE_PRICES: JSON.stringify({ starter: "price_starter", pro: "price_pro", business: "price_business" }), BILLING_RETURN_URL: "https://example.test/billing" });
     expect(response.status).toBe(200);
     const body = await response.text();
     expect(body).toContain('"configured":true');
     expect(body).not.toContain("sensitive");
+  });
+
+  it("does not report billing ready for a partial price map or local mode in staging", async () => {
+    const partial = { ...environment, APP_ENV: "staging" as const, STRIPE_MODE: "test" as const,
+      STRIPE_SECRET_KEY: "sk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive",
+      STRIPE_PUBLISHABLE_KEY: "pk_test_example", STRIPE_PRICES: JSON.stringify({ pro: "price_pro" }),
+      BILLING_RETURN_URL: "https://example.test/billing" };
+    const response = await app.request("/api/health/operational", undefined, partial);
+    await expect(response.json()).resolves.toMatchObject({ capabilities: { billing: { configured: false } } });
+    const localMode = await app.request("/api/health/operational", undefined, { ...partial, STRIPE_MODE: "local" as const });
+    await expect(localMode.json()).resolves.toMatchObject({ capabilities: { billing: { configured: false } } });
+  });
+
+  it("accepts a restricted test-mode Stripe server key without accepting a live one", async () => {
+    const base = { ...environment, APP_ENV: "staging" as const, STRIPE_MODE: "test" as const,
+      STRIPE_SECRET_KEY: "rk_test_sensitive", STRIPE_WEBHOOK_SECRET: "whsec_sensitive",
+      STRIPE_PUBLISHABLE_KEY: "pk_test_example", STRIPE_PRICES: JSON.stringify({ starter: "price_starter", pro: "price_pro", business: "price_business" }),
+      BILLING_RETURN_URL: "https://example.test/billing" };
+    const accepted = await app.request("/api/health/operational", undefined, base);
+    await expect(accepted.json()).resolves.toMatchObject({ capabilities: { billing: { configured: true } } });
+    const rejected = await app.request("/api/health/operational", undefined, { ...base, STRIPE_SECRET_KEY: "rk_live_sensitive" });
+    await expect(rejected.json()).resolves.toMatchObject({ capabilities: { billing: { configured: false } } });
   });
 
   it("reports the deployed Queue binding independently of Workflow readiness", async () => {

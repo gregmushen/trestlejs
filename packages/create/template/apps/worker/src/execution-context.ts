@@ -3,7 +3,7 @@ import {
   AccessDeniedError, AccessEvaluator, apiKeyStatus, applicationRoles, bearerApiKey, defaultResourcePolicy, organizationRoles, parseApiKey, parseMembershipRoles, permissions, policyFor,
   publicDenial, verifyApiKey, type ApplicationEnvironment, type HttpMethod,
 } from "@__TRESTLE_PROJECT_NAME__/authz";
-import { createLogger, createMetrics, type EntitlementDecision, type Entitlements, type ExecutionContext } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, createMetrics, loggerSecretsFromEnvironment, type EntitlementDecision, type Entitlements, type ExecutionContext } from "@__TRESTLE_PROJECT_NAME__/context";
 import { activeApplicationRoles, createDatabase, createTenantDatabase, member, outboxApplicationConnectionString, resolveApiKey, type ResolvedApiKey } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { SubscriptionSummary } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -47,7 +47,7 @@ type ContextDependencies = {
 };
 
 const defaults: ContextDependencies = {
-  getSession: async (headers, environment) => await createAuth(environment).api.getSession({ headers }) as AuthenticatedSession | null,
+  getSession: async (headers, environment) => await createAuth(environment, { correlationId: correlationId(headers) }).api.getSession({ headers }) as AuthenticatedSession | null,
   findMembership: async (userId, organizationId, environment) => {
     const [record] = await createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER)
       .select({ role: member.role })
@@ -93,7 +93,7 @@ async function resolveApiKeyContext(token: string, headers: Headers, environment
   const appEnvironment = (environment.APP_ENV ?? "local") as ApplicationEnvironment;
   const status = apiKeyStatus(key, { now: clock.now(), environment: appEnvironment });
   const correlation = { correlationId: suppliedCorrelationId ?? correlationId(headers) };
-  const log = createLogger({ correlationId: correlation.correlationId, serviceAccountId: key.serviceAccountId, organizationId: key.organizationId });
+  const log = createLogger({ correlationId: correlation.correlationId, serviceAccountId: key.serviceAccountId, organizationId: key.organizationId }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
   if (status !== "active") {
     log.warn("auth.api_key.rejected", { keyId: parsed.publicId, status });
     throw unauthorized();
@@ -158,7 +158,7 @@ export async function resolveExecutionContext(
   const application = applicationRoles.resolve(applicationAssignments);
   const correlation = { correlationId: suppliedCorrelationId ?? correlationId(headers) };
   const clock = { now: () => new Date() };
-  const log = createLogger({ correlationId: correlation.correlationId, userId: session.user.id, organizationId });
+  const log = createLogger({ correlationId: correlation.correlationId, userId: session.user.id, organizationId }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
   const unknownRoles = [...organization.unknownRoles, ...application.unknownRoles];
   if (unknownRoles.length) log.warn("auth.roles.unknown", { unknownRoles });
   log.info("auth.context.resolved", { organizationRoles: organizationAssignments, applicationRoles: applicationAssignments });

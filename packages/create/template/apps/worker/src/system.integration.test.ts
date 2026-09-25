@@ -9,7 +9,7 @@ import { TrestleWorkflow } from "./cloudflare-workflow.js";
 import { runArtifactReferenceAudit } from "./artifact-reference-audit.js";
 import { runArtifactOrphanAudit } from "./artifact-orphan-audit.js";
 import { projectWebhookForEvent } from "./webhook-runtime.js";
-import worker, { app } from "./index.js";
+import worker, { app, eventConsumers } from "./index.js";
 
 const databaseUrl = process.env.TRESTLE_SYSTEM_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -102,9 +102,12 @@ suite("local product path", () => {
       }, environment);
       expect(upload.status).toBe(201);
       artifactId = (await upload.json() as { artifact: { id: string } }).artifact.id;
-      const access = await app.request(`http://localhost:8787/api/artifacts/${artifactId}/access`, { headers: artifactHeaders }, environment);
+      // Pages forwards API requests under the app hostname, while signed
+      // downloads must resolve to the Worker's direct artifact route.
+      const access = await app.request(`http://localhost:42069/api/artifacts/${artifactId}/access`, { headers: artifactHeaders }, environment);
       expect(access.status).toBe(200);
       const signedUrl = (await access.json() as { url: string }).url;
+      expect(new URL(signedUrl).origin).toBe(environment.BETTER_AUTH_URL);
       const downloaded = await app.request(signedUrl, undefined, environment);
       expect(downloaded.status).toBe(200);
       expect(await downloaded.text()).toBe("private artifact");
@@ -204,10 +207,15 @@ suite("local product path", () => {
         expect(outbox).toMatchObject({ eventName: "resource.article.created", resourceType: "article", resourceId: article.id, organizationId, status: "pending", payload: { resourceId: article.id } });
         expect(outbox?.correlationId).toBeTruthy();
         const queued: unknown[] = [];
-        await worker.scheduled(undefined, {
-          ...environment,
-          TRESTLE_EVENTS: { send: async (body: unknown) => { queued.push(body); } },
-        });
+        // Other integration scenarios can leave earlier committed outbox rows.
+        // A scheduled run leases only one bounded batch, so keep dispatching
+        // until this event is reached rather than assuming it is in batch one.
+        for (let batch = 0; batch < 100 && !queued.some((event) => (event as { id?: string }).id === outbox!.id); batch++) {
+          await worker.scheduled(undefined, {
+            ...environment,
+            TRESTLE_EVENTS: { send: async (body: unknown) => { queued.push(body); } },
+          });
+        }
         const queuedEvent = queued.find((event) => (event as { id?: string }).id === outbox!.id);
         expect(queuedEvent).toMatchObject({ id: outbox!.id, name: "resource.article.created", resource: { type: "article", id: article.id } });
         expect(queuedEvent).not.toHaveProperty("organizationId");
@@ -255,6 +263,34 @@ suite("local product path", () => {
         expect(duplicateDelivery).toEqual(["ack"]);
         const [inbox] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, outbox!.idempotencyKey)).limit(1);
         expect(inbox).toMatchObject({ status: "completed", attempts: 1 });
+        const retryKey = `system.workflow.retry:${article.id}`;
+        const retryEnvelope: EventEnvelope = {
+          id: crypto.randomUUID(), name: "system.workflow.retry", schemaVersion: 1,
+          occurredAt: new Date().toISOString(), resource: { type: "workflow_test", id: crypto.randomUUID() },
+          correlationId: crypto.randomUUID(), idempotencyKey: retryKey,
+          payload: { resourceId: article.id },
+        };
+        let handlerAttempts = 0;
+        eventConsumers.register({
+          name: retryEnvelope.name, schemaVersion: 1,
+          parse: (payload: unknown) => {
+            if (!payload || typeof payload !== "object" || (payload as { resourceId?: unknown }).resourceId !== article.id) throw new Error("Invalid workflow retry payload");
+            return payload;
+          },
+        }, async () => { if (++handlerAttempts === 1) throw new Error("Transient workflow handler failure"); });
+        const retryStore = new PostgresOutboxStore(databaseUrl!, { assumeApplicationRole: true });
+        try { await retryStore.append(retryEnvelope, { organizationId: organizationId! }); }
+        finally { await retryStore.close(); }
+        const retryWorkflow = Object.assign(new TrestleWorkflow(), { env: environment });
+        const retryEvent = { payload: retryEnvelope, instanceId: retryEnvelope.id, timestamp: new Date(), workflowName: "retry-test-workflow" };
+        await expect(retryWorkflow.run(retryEvent, step)).rejects.toThrow("Workflow handler failed");
+        const [released] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, retryKey)).limit(1);
+        expect(released).toMatchObject({ status: "processing", attempts: 1, lastError: "Error" });
+        await retryWorkflow.run(retryEvent, step);
+        await retryWorkflow.run(retryEvent, step);
+        const [completedRetry] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, retryKey)).limit(1);
+        expect(completedRetry).toMatchObject({ status: "completed", attempts: 2, lastError: null });
+        expect(handlerAttempts).toBe(2);
         const invalidDelivery: string[] = [];
         expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: 42 } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 0, retried: 1 });
         expect(invalidDelivery).toEqual(["retry"]);
@@ -391,6 +427,8 @@ suite("local product path", () => {
         await database.delete(webhookEndpoint).where(eq(webhookEndpoint.id, webhookEndpointId));
       }
       if (articleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${articleId}`));
+      if (articleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `system.workflow.retry:${articleId}`));
+      if (articleId) await database.delete(outboxMessage).where(eq(outboxMessage.idempotencyKey, `system.workflow.retry:${articleId}`));
       if (secondArticleId) await database.delete(eventInbox).where(eq(eventInbox.idempotencyKey, `resource.article.created:${secondArticleId}`));
       if (articleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, articleId));
       if (secondArticleId) await database.delete(outboxMessage).where(eq(outboxMessage.resourceId, secondArticleId));

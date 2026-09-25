@@ -29,5 +29,8 @@ trestle payments stripe sync --env staging
 trestle logs --env staging --status error
 ```
 
+`trestle logs` displays a bounded projection of Trestle semantic events, not
+raw Cloudflare requests, exception text, or arbitrary console output.
+
 See the [TrestleJS repository](https://github.com/gregmushen/trestlejs) for
 documentation and source code.

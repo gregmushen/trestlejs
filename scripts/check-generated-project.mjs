@@ -10,11 +10,12 @@ const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "trestle-release-cana
 const project = path.join(temporaryRoot, "release-canary");
 // The release canary once hit EADDRINUSE while binding the generated site's
 // fixed 42068 default, even after localhost readiness probes refused it.
-// Give this isolated browser exercise a per-run port without changing the
-// generated application's normal local-development default.
-const browserSitePort = process.env.TRESTLE_BROWSER_SITE_PORT ?? String(randomInt(20_000, 30_000));
-const browserAppPort = process.env.TRESTLE_BROWSER_APP_PORT ?? String(randomInt(30_000, 40_000));
-const browserWorkerPort = process.env.TRESTLE_BROWSER_WORKER_PORT ?? String(randomInt(40_000, 50_000));
+// Give this isolated browser exercise distinct per-run ports without changing
+// the generated application's defaults. Keep them below Linux's default
+// ephemeral-client range so an outbound connection cannot race Vite's bind.
+const browserSitePort = process.env.TRESTLE_BROWSER_SITE_PORT ?? String(randomInt(20_000, 23_000));
+const browserAppPort = process.env.TRESTLE_BROWSER_APP_PORT ?? String(randomInt(23_000, 26_000));
+const browserWorkerPort = process.env.TRESTLE_BROWSER_WORKER_PORT ?? String(randomInt(26_000, 29_000));
 for (const [name, port] of [["SITE", browserSitePort], ["APP", browserAppPort], ["WORKER", browserWorkerPort]]) {
   if (!/^[0-9]+$/u.test(port) || Number(port) < 1024 || Number(port) > 65535) {
     throw new Error(`TRESTLE_BROWSER_${name}_PORT must be an unprivileged TCP port`);
@@ -71,6 +72,10 @@ try {
   const sourceDiff = JSON.parse(execFileSync("pnpm", ["exec", "trestle", "upgrade", "diff", "--json"], { cwd: project, encoding: "utf8" }));
   if (!sourceDiff.data.baselineTrusted || sourceDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
     throw new Error("Fresh generated project did not match its bundled target template");
+  }
+  const previewWorkflow = await readFile(path.join(project, ".github/workflows/preview.yml"), "utf8");
+  if (!previewWorkflow.includes('BETTER_AUTH_URL: "${{ steps.preview.outputs.api_url }}"')) {
+    throw new Error("Preview verification links must target the Worker API origin");
   }
   const migrationAudit = JSON.parse(execFileSync("pnpm", ["exec", "trestle", "upgrade", "migrations", "--check", "--json"], { cwd: project, encoding: "utf8" }));
   if (migrationAudit.data.classification !== "matching" || migrationAudit.data.commonPrefix < 1) {
@@ -146,6 +151,14 @@ try {
   await run("pnpm", ["check"], project, browserSiteEnvironment);
   if (process.env.TRESTLE_GENERATED_DATABASE_URL) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    await requireScenarios(project, "./packages/auth", ["src/preview-fixture.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "rejects staging and production before touching their databases",
+      "signs in as a verified user without sending any email",
+    ]);
+    await requireScenarios(project, "./packages/auth", ["src/staging-fixture.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "rejects preview, production, and local before touching a database",
+      "rotates a verified account without email or extra users",
+    ]);
     await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await requireScenarios(project, "./packages/db", ["src/webhook-replay.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "creates one linked execution, signs a local attempt, and never alters the original",
@@ -175,7 +188,16 @@ try {
     ]);
     await run("pnpm", ["--filter", "./packages/data", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
-    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run"], project, { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" });
+    const workerSystemEnvironment = { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" };
+    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "--exclude", "src/system.integration.test.ts"], project, workerSystemEnvironment);
+    await requireScenarios(project, "./apps/worker", ["src/system.integration.test.ts"], workerSystemEnvironment, [
+      "verifies email, signs in, selects an organization, and reads tenant billing",
+    ]);
+    await requireScenarios(project, "./apps/worker", ["src/resend-webhook.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "persists a verified event once and acknowledges a signed duplicate",
+      "rejects a tampered raw body and an expired signature before persistence",
+      "returns a retryable response during a database outage and records redelivery",
+    ]);
     await requireScenarios(project, "./apps/worker", ["src/billing-webhook.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "activates entitlements from a signed subscription once and acknowledges duplicates",
       "rejects a signed subscription lacking tenant or plan metadata without an event receipt",
@@ -204,6 +226,19 @@ try {
       APP_URL: "https://app.example.test",
       API_URL: "https://api.example.test",
     });
+    await run("pnpm", ["exec", "playwright", "test", "tests/browser/preview-product.spec.ts", "--list"], project, {
+      TRESTLE_BROWSER_MODE: "deployed",
+      SITE_URL: "https://site.example.test",
+      APP_URL: "https://app.example.test",
+      API_URL: "https://api.example.test",
+    });
+    await run("pnpm", ["exec", "playwright", "test", "tests/browser/staging-product.spec.ts", "--list"], project, {
+      TRESTLE_BROWSER_MODE: "deployed",
+      TRESTLE_DEPLOY_ENV: "staging",
+      SITE_URL: "https://site.example.test",
+      APP_URL: "https://app.example.test",
+      API_URL: "https://api.example.test",
+    });
   }
   const generatedProjectManifest = path.join(project, ".trestle", "project.yaml");
   const manifestSource = await readFile(generatedProjectManifest, "utf8");
@@ -223,6 +258,12 @@ try {
   }
   if (queueDoctorReport.data.checks.find((item) => item.id === "cloudflare.workflows.binding")?.status !== "pass") {
     throw new Error("Doctor did not recognize the opt-in preview Workflow binding");
+  }
+  await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);
+  await run(process.execPath, ["scripts/queue-config.mjs", "render", "preview", "release-canary-worker-pr-1", "--without-cron"], project);
+  const cronFreePreview = JSON.parse(await readFile(path.join(project, "apps/worker/.trestle-queues.wrangler.jsonc"), "utf8"));
+  if (cronFreePreview.env.preview.triggers || !cronFreePreview.env.preview.queues || !cronFreePreview.env.preview.r2_buckets || !cronFreePreview.env.preview.workflows) {
+    throw new Error("Explicit cron-free preview lost required bindings or kept a cron trigger");
   }
   await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);
   // Admin disabled (the default): no admin app and no admin deployment configuration.

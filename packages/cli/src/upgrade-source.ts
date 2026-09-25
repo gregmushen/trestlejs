@@ -95,7 +95,8 @@ function protectedSourcePath(relative: string): boolean {
     || relative.endsWith("/wrangler.jsonc") || relative === "wrangler.jsonc";
 }
 
-function adjacentAlpha(from: string | null, to: string): boolean {
+function adjacentRelease(from: string | null, to: string): boolean {
+  if (from === "0.1.0-alpha.135" && to === "0.1.0-beta.1") return true;
   const before = /^0\.1\.0-alpha\.(\d+)$/u.exec(from ?? "");
   const after = /^0\.1\.0-alpha\.(\d+)$/u.exec(to);
   return Boolean(before && after && Number(after![1]) === Number(before![1]) + 1);
@@ -116,6 +117,32 @@ async function expectedPackageManifest(root: string, projectName: string, templa
     const current = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
     const target = JSON.parse(render(await readFile(path.join(templateRoot, "package.json"), "utf8"), projectName));
     return canonicalJson(current) === canonicalJson(target);
+  } catch { return false; }
+}
+
+/** pnpm must update the CLI dependency before source apply. Accept that one
+ * edit only against hash-verified generated source (or exact legacy bytes);
+ * other application manifest changes still need review. */
+async function pristinePackageVersionBump(root: string, previousVersion: string, baselineHash: string | undefined, baselineSource?: string): Promise<boolean> {
+  if (!baselineHash || !(await safeApplicationPath(root, "package.json"))) return false;
+  try {
+    const source = await readFile(path.join(root, "package.json"), "utf8");
+    const manifest = JSON.parse(source) as { devDependencies?: { trestlejs?: string } };
+    if (manifest.devDependencies?.trestlejs !== TRESTLEJS_VERSION) return false;
+    if (baselineSource !== undefined) {
+      if (digest(baselineSource) !== baselineHash) return false;
+      const previous = JSON.parse(baselineSource) as { devDependencies?: { trestlejs?: string } };
+      if (previous.devDependencies?.trestlejs !== previousVersion) return false;
+      previous.devDependencies.trestlejs = TRESTLEJS_VERSION;
+      return canonicalJson(manifest) === canonicalJson(previous);
+    }
+    let replacements = 0;
+    const restored = source.replace(/("trestlejs"\s*:\s*")([^"]+)(")/gu, (match, before: string, version: string, after: string) => {
+      if (version !== TRESTLEJS_VERSION) return match;
+      replacements += 1;
+      return `${before}${previousVersion}${after}`;
+    });
+    return replacements === 1 && digest(restored) === baselineHash;
   } catch { return false; }
 }
 
@@ -146,14 +173,16 @@ export async function planSourceDiff(root: string, projectName: string, template
     ? await optionalText(path.join(root, ".trestle", "template-baseline.json")) : undefined;
   const frameworkSource = await safeApplicationPath(root, ".trestle/framework.json")
     ? await optionalText(path.join(root, ".trestle", "framework.json")) : undefined;
-  let baseline: { schemaVersion?: number; templateVersion?: string; files?: Record<string, string> } | undefined;
+  let baseline: { schemaVersion?: number; templateVersion?: string; files?: Record<string, string>; packageSource?: unknown } | undefined;
   let framework: { templateVersion?: string } | undefined;
   try { baseline = baselineSource ? JSON.parse(baselineSource) : undefined; }
   catch { /* A corrupt baseline is never trusted. */ }
   try { framework = frameworkSource ? JSON.parse(frameworkSource) : undefined; }
   catch { /* A corrupt framework marker is never trusted. */ }
   const baselineTrusted = baseline?.schemaVersion === 1 && typeof baseline.templateVersion === "string"
-    && baseline.templateVersion === framework?.templateVersion && validBaselineFiles(baseline.files);
+    && baseline.templateVersion === framework?.templateVersion && validBaselineFiles(baseline.files)
+    && (baseline.packageSource === undefined || typeof baseline.packageSource === "string"
+      && baseline.packageSource.length <= 100_000 && digest(baseline.packageSource) === baseline.files["package.json"]);
   const summary: Record<SourceDiffClassification, number> = { same: 0, unchanged: 0, modified: 0, new: 0, missing: 0, unverified: 0, unsafe: 0, retired: 0, "retired-modified": 0, "retired-missing": 0 };
   const entries: SourceDiffEntry[] = [];
   // Optional capabilities (for example the platform admin) are part of the target only when the project enables them.
@@ -185,22 +214,24 @@ export async function planSourceDiff(root: string, projectName: string, template
   return { sourceTemplateVersion: framework?.templateVersion ?? null, targetTemplateVersion: TRESTLEJS_VERSION, baselineTrusted, entries, summary };
 }
 
-/** Applies only pristine files from the immediately preceding alpha. This is
+/** Applies only pristine files from the immediately preceding release. This is
  * intentionally not certification: framework metadata stays at its old source
  * version until migrations, generated tests, and provider wiring are reviewed. */
 export async function applySourceUpgrade(root: string, projectName: string, templateRoot = defaultTemplateRoot): Promise<readonly string[]> {
   const report = await planSourceDiff(root, projectName, templateRoot);
-  if (!report.baselineTrusted || !adjacentAlpha(report.sourceTemplateVersion, report.targetTemplateVersion)) {
-    throw new Error("Source apply requires a matching baseline from the immediately preceding alpha; use upgrade diff for manual review");
+  if (!report.baselineTrusted || !adjacentRelease(report.sourceTemplateVersion, report.targetTemplateVersion)) {
+    throw new Error("Source apply requires a matching baseline from the immediately preceding release; use upgrade diff for manual review");
   }
   const upgrade = await planUpgrade(root);
   if (upgrade.operations.find(({ id }) => id === "cli-version")?.classification !== "already-correct") {
     throw new Error("Source apply requires the target CLI version in both package.json and pnpm-lock.yaml");
   }
   const packageManifestMatches = await expectedPackageManifest(root, projectName, templateRoot);
+  const baseline = JSON.parse(await readFile(path.join(root, ".trestle", "template-baseline.json"), "utf8")) as { files: Record<string, string>; packageSource?: string };
+  const packageVersionOnly = await pristinePackageVersionBump(root, report.sourceTemplateVersion!, baseline.files["package.json"], baseline.packageSource);
   const conflicts = report.entries.filter(({ path: relative, classification }) => {
     if (relative === ".trestle/framework.json") return classification === "unsafe";
-    if (relative === "package.json" && packageManifestMatches) return false;
+    if (relative === "package.json" && (packageManifestMatches || packageVersionOnly)) return false;
     const safeChange = classification === "same" || classification === "unchanged" || classification === "new" || classification === "retired-missing";
     return !safeChange || (classification !== "same" && protectedSourcePath(relative));
   });
@@ -211,11 +242,17 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
   for (const entry of report.entries) {
     if (entry.path === ".trestle/framework.json") continue;
     if (entry.path === "package.json" && packageManifestMatches) continue;
+    if (entry.path === "package.json" && packageVersionOnly) {
+      if (!(await pristinePackageVersionBump(root, report.sourceTemplateVersion!, baseline.files["package.json"], baseline.packageSource))) {
+        throw new Error("Application package.json changed during source apply");
+      }
+      await writeFile(path.join(root, "package.json"), await targetContent(templateRoot, "package.json", projectName, enabled), "utf8");
+      changed.push(entry.path);
+      continue;
+    }
     if (entry.classification !== "unchanged" && entry.classification !== "new") continue;
     if (!(await safeApplicationPath(root, entry.path))) throw new Error(`Unsafe application path: ${entry.path}`);
     const current = await optionalText(path.join(root, entry.path));
-    const baselineSource = await readFile(path.join(root, ".trestle", "template-baseline.json"), "utf8");
-    const baseline = JSON.parse(baselineSource) as { files: Record<string, string> };
     if ((current === undefined && entry.classification !== "new")
       || (current !== undefined && (entry.classification !== "unchanged" || digest(current) !== baseline.files[entry.path]))) {
       throw new Error(`Application file changed during source apply: ${entry.path}`);
@@ -232,8 +269,8 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
 
 async function assertSourceReadyToFinalize(root: string, projectName: string, templateRoot: string): Promise<void> {
   const report = await planSourceDiff(root, projectName, templateRoot);
-  if (!report.baselineTrusted || !adjacentAlpha(report.sourceTemplateVersion, report.targetTemplateVersion)) {
-    throw new Error("Source finalization requires a matching baseline from the immediately preceding alpha");
+  if (!report.baselineTrusted || !adjacentRelease(report.sourceTemplateVersion, report.targetTemplateVersion)) {
+    throw new Error("Source finalization requires a matching baseline from the immediately preceding release");
   }
   const upgrade = await planUpgrade(root);
   if (upgrade.operations.find(({ id }) => id === "cli-version")?.classification !== "already-correct") {
@@ -276,7 +313,7 @@ export async function finalizeSourceUpgrade(
     files[relative] = digest(current);
   }
   await assertSourceReadyToFinalize(root, projectName, templateRoot);
-  await writeFile(path.join(root, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files }, null, 2)}\n`, "utf8");
+  await writeFile(path.join(root, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files, packageSource: await readFile(path.join(root, "package.json"), "utf8") }, null, 2)}\n`, "utf8");
   await writeFile(markerPath, updatedMarker, "utf8");
 }
 

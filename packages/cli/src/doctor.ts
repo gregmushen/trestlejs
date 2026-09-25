@@ -8,6 +8,9 @@ import { validateCi } from "./ci.js";
 import { inspectResources } from "./inspect.js";
 import { diffSetupPlan } from "./plan.js";
 import { readSecrets, validateSecrets } from "./secrets.js";
+import { emailDeploymentIssues } from "./resend-status.js";
+import { stripeDeploymentIssues } from "./stripe-deployment.js";
+import { validateStripeCatalog } from "./stripe-sync.js";
 
 export type DoctorCheck = {
   id: string;
@@ -352,13 +355,15 @@ export async function runDoctor(
         if (!workerPath) throw new Error("worker app is not declared");
         const workerConfig = await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8");
         const environmentBlock = wranglerEnvironmentBlock(workerConfig, environment);
-        const configured = wranglerStringVariable(environmentBlock, "EMAIL_DELIVERY_MODE") === "resend" && Boolean(wranglerStringVariable(environmentBlock, "EMAIL_FROM") && wranglerStringVariable(environmentBlock, "EMAIL_FROM") !== "CHANGE_ME") && (environment === "production" || Boolean(wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") && wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") !== "CHANGE_ME"));
+        const values = await readSecrets(root, environment, masterKey);
+        const issues = emailDeploymentIssues({ environment, mode: wranglerStringVariable(environmentBlock, "EMAIL_DELIVERY_MODE"), apiKey: values.RESEND_API_KEY, webhookSecret: values.RESEND_WEBHOOK_SECRET, sender: wranglerStringVariable(environmentBlock, "EMAIL_FROM"), recipientRedirect: wranglerStringVariable(environmentBlock, "EMAIL_STAGING_REDIRECT") });
+        const configured = issues.length === 0;
         checks.push({
           id: "email.provider.configuration",
           group: "architecture",
           status: configured ? "pass" : "fail",
-          message: configured ? `Resend and a sender are configured for ${environment}` : `${environment} email provider configuration is incomplete`,
-          ...(!configured ? { remediation: `Set EMAIL_FROM${environment !== "production" ? ", EMAIL_STAGING_REDIRECT," : " and"} the ${environment} Resend adapter variables in ${workerPath}/wrangler.jsonc` } : {}),
+          message: configured ? `Resend delivery configuration is complete for ${environment}` : `${environment} email provider configuration is incomplete`,
+          ...(!configured ? { evidence: issues.join("; "), remediation: `Set the ${environment} email variables in ${workerPath}/wrangler.jsonc and credentials with trestle secrets edit --env ${environment}` } : {}),
         });
       } catch (error) {
         checks.push({ id: "email.provider.configuration", group: "architecture", status: "fail", message: "email deployment configuration cannot be read", evidence: error instanceof Error ? error.message : String(error) });
@@ -379,9 +384,16 @@ export async function runDoctor(
         if (!workerPath) throw new Error("worker app is not declared");
         const workerConfig = await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8");
         const block = wranglerEnvironmentBlock(workerConfig, environment);
-        const expectedMode = environment === "production" ? "live" : "test";
-        const valid = wranglerStringVariable(block, "STRIPE_MODE") === expectedMode && Boolean(wranglerStringVariable(block, "STRIPE_PRICES")) && Boolean(wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY") && wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY") !== "CHANGE_ME");
-        checks.push({ id: "billing.stripe.configuration", group: "architecture", status: valid ? "pass" : "fail", message: valid ? `Stripe ${expectedMode} configuration is declared` : `${environment} Stripe configuration is incomplete`, ...(!valid ? { remediation: `Configure Stripe ${expectedMode} publishable key, prices, and return URL in ${workerPath}/wrangler.jsonc` } : {}) });
+        const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(root, manifest.packages.billing, "stripe.json"), "utf8")) as unknown);
+        const problems = stripeDeploymentIssues(environment, {
+          mode: wranglerStringVariable(block, "STRIPE_MODE"),
+          publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
+          prices: wranglerStringVariable(block, "STRIPE_PRICES"),
+          returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
+        }, catalog);
+        checks.push({ id: "billing.stripe.configuration", group: "architecture", status: problems.length ? "fail" : "pass",
+          message: problems.length ? `${environment} Stripe configuration is incomplete` : `Stripe ${environment === "production" ? "live" : "test"} configuration is declared`,
+          ...(problems.length ? { evidence: problems.join("; "), remediation: `Configure Stripe mode, publishable key, every declared price, and return URL in ${workerPath}/wrangler.jsonc` } : {}) });
       } catch (error) {
         checks.push({ id: "billing.stripe.configuration", group: "architecture", status: "fail", message: "Stripe deployment configuration cannot be read", evidence: error instanceof Error ? error.message : String(error) });
       }
@@ -410,6 +422,15 @@ export function formatDoctorHuman(report: DoctorReport): string {
     lines.push("", group[0]?.toUpperCase() + group.slice(1));
     for (const check of checks) {
       lines.push(`${check.status === "pass" ? "✓" : "✗"} ${check.message}`);
+      // These issue lists are produced by validators that report field names
+      // and expected shapes, never credential values. Other evidence may be
+      // an arbitrary thrown error and must remain JSON-only.
+      if (check.status === "fail" && check.evidence && (
+        (check.id === "email.provider.configuration" && check.message === `${report.environment} email provider configuration is incomplete`)
+        || (check.id === "billing.stripe.configuration" && check.message === `${report.environment} Stripe configuration is incomplete`)
+      )) {
+        for (const issue of check.evidence.split("; ")) lines.push(`  Issue: ${issue}`);
+      }
       if (check.status === "fail" && check.remediation) {
         lines.push(`  Fix: ${check.remediation}`);
       }

@@ -4,23 +4,23 @@ import { cors } from "hono/cors";
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { getPlan, planEntitlements, plans } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
-import { createLogger, createMetrics } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, createMetrics, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
 import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
-import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
+import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, retrieveCurrentStripeSubscription, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
 import { maintainArtifacts } from "./artifact-maintenance.js";
 import { auditArtifactReferences } from "./artifact-reference-audit.js";
 import { auditArtifactOrphans } from "./artifact-orphan-audit.js";
-import { artifactRuntimeReady, artifactSigner, artifactStore } from "./artifact-runtime.js";
+import { artifactRuntimeReady, artifactSigner, artifactStore, publicArtifactUrl } from "./artifact-runtime.js";
 import { accessRoutes } from "./access-routes.js";
 import { machineAccessRoutes } from "./machine-access-routes.js";
 import { regionalRoutes } from "./regional-routes.js";
 import { auditTenantAction } from "./audit.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
-import { createBillingService } from "./services.js";
+import { createBillingService, stripeConfigurationReady } from "./services.js";
 import { projectWebhookForEvent } from "./webhook-runtime.js";
 import { maintainWebhookPayloads } from "./webhook-retention.js";
 import { maintainReadyArtifacts } from "./artifact-retention.js";
@@ -39,7 +39,7 @@ app.use("*", async (context, next) => {
   context.set("correlationId", correlationId);
   context.set("requestStartedAt", requestStartedAt);
   context.header("x-correlation-id", correlationId);
-  const log = createLogger({ correlationId });
+  const log = createLogger({ correlationId }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   log.info("http.request.started", { method: context.req.method, path: new URL(context.req.url).pathname });
   await next();
   log.info("http.request.completed", { method: context.req.method, path: new URL(context.req.url).pathname, status: context.res.status, durationMs: Date.now() - requestStartedAt });
@@ -59,14 +59,6 @@ function configuredValue(value: string | undefined): boolean {
   return Boolean(value?.trim() && value.trim() !== "CHANGE_ME");
 }
 
-function configuredPrices(value: string | undefined): boolean {
-  if (!configuredValue(value)) return false;
-  try {
-    const prices: unknown = JSON.parse(value!);
-    return Boolean(prices && typeof prices === "object" && !Array.isArray(prices) && Object.keys(prices).length > 0);
-  } catch { return false; }
-}
-
 function inspectionPageSize(value: string | undefined): number | null {
   if (value === undefined) return 50;
   if (!/^[1-9][0-9]{0,2}$/u.test(value)) return null;
@@ -84,6 +76,9 @@ const createWebhookEndpointSchema = z.object({
   destinationUrl: z.url().max(2048),
   subscriptions: webhookSubscriptionsSchema,
 }).strict();
+const billingRequestIdSchema = z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/u);
+const checkoutRequestSchema = z.object({ plan: z.string().trim().min(1).max(64), requestId: billingRequestIdSchema }).strict();
+const portalRequestSchema = z.object({ requestId: billingRequestIdSchema }).strict();
 
 app.get("/api/developer/webhooks/events", requireExecutionContext, (context) => {
   const execution = context.get("execution");
@@ -298,32 +293,38 @@ app.post("/api/dev/emails/flush", async (context) => {
 });
 
 app.post("/api/webhooks/resend", async (context) => {
-  const log = createLogger({ correlationId: context.get("correlationId"), provider: "resend" });
+  const log = createLogger({ correlationId: context.get("correlationId"), provider: "resend" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   if (!context.env.RESEND_API_KEY || !context.env.RESEND_WEBHOOK_SECRET) return context.json({ error: "Email webhook is not configured" }, 503);
   const id = context.req.header("svix-id");
   const timestamp = context.req.header("svix-timestamp");
   const signature = context.req.header("svix-signature");
   if (!id || !timestamp || !signature) return context.json({ error: "Missing webhook signature" }, 400);
+  let event: Awaited<ReturnType<typeof verifyResendWebhook>>;
   try {
-    const event = await verifyResendWebhook({ apiKey: context.env.RESEND_API_KEY, webhookSecret: context.env.RESEND_WEBHOOK_SECRET, rawBody: await context.req.text(), headers: { id, timestamp, signature } });
+    event = await verifyResendWebhook({ apiKey: context.env.RESEND_API_KEY, webhookSecret: context.env.RESEND_WEBHOOK_SECRET, rawBody: await context.req.text(), headers: { id, timestamp, signature } });
+  } catch {
+    log.warn("email.webhook.rejected", { reason: "invalid_signature_or_payload" });
+    return context.json({ error: "Invalid webhook" }, 400);
+  }
+  try {
     const inserted = await createDatabase(context.env.DATABASE_URL, context.env.DATABASE_DRIVER).insert(emailDeliveryEvent).values(event).onConflictDoNothing().returning();
     const duplicate = inserted.length === 0;
     log.info(duplicate ? "email.webhook.duplicate" : "email.webhook.processed", { providerEventId: event.id, emailDeliveryId: event.emailDeliveryId, deliveryStatus: event.status });
     return context.json({ duplicate, event }, duplicate ? 200 : 202);
   } catch {
-    log.warn("email.webhook.rejected", { reason: "invalid_signature_or_payload" });
-    return context.json({ error: "Invalid webhook" }, 400);
+    log.error("email.webhook.persistence_failed", { providerEventId: event.id, emailDeliveryId: event.emailDeliveryId });
+    return context.json({ error: "Email webhook could not be recorded" }, 503);
   }
 });
 
 app.post("/webhooks/stripe", async (context) => {
-  const log = createLogger({ correlationId: context.get("correlationId"), provider: "stripe" });
+  const log = createLogger({ correlationId: context.get("correlationId"), provider: "stripe" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   if (!context.env.STRIPE_WEBHOOK_SECRET) return context.json({ error: "Stripe webhook is not configured" }, 503);
   const signature = context.req.header("stripe-signature");
   if (!signature) return context.json({ error: "Missing Stripe signature" }, 400);
-  let event: ReturnType<typeof verifyAndNormalizeStripeEvent>;
-  try { event = verifyAndNormalizeStripeEvent(await context.req.text(), signature, context.env.STRIPE_WEBHOOK_SECRET); }
-  catch { log.warn("billing.webhook.rejected", { reason: "invalid_signature_or_payload" }); return context.json({ error: "Invalid Stripe webhook" }, 400); }
+  let event: Awaited<ReturnType<typeof verifyAndNormalizeStripeEvent>>;
+  try { event = await verifyAndNormalizeStripeEvent(await context.req.text(), signature, context.env.STRIPE_WEBHOOK_SECRET); }
+  catch (error) { log.warn("billing.webhook.rejected", { reason: "invalid_signature_or_payload", ...safeErrorDiagnostic(error) }); return context.json({ error: "Invalid Stripe webhook" }, 400); }
   const subscriptionEvent = event.type.startsWith("Subscription");
   let generation: number | undefined;
   if (subscriptionEvent && (context.env.STRIPE_MODE ?? "local") !== "local") {
@@ -397,7 +398,10 @@ app.post("/webhooks/stripe", async (context) => {
 app.post("/api/billing/checkout", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
   execution.access.require({ permission: "organization.billing.manage" });
-  const input = await context.req.json<{ plan: string; requestId: string }>();
+  const parsed = checkoutRequestSchema.safeParse(await context.req.json().catch(() => null));
+  if (!parsed.success) return context.json({ error: "Invalid checkout request" }, 400);
+  const input = parsed.data;
+  if (!getPlan(input.plan)) return context.json({ error: "Unknown billing plan" }, 400);
   execution.log.info("billing.checkout.started", { plan: input.plan });
   const checkout = await execution.services.billing.createCheckoutSession({ organizationId: execution.tenant.organizationId, plan: input.plan, requestId: input.requestId, ...(execution.principal.email ? { customerEmail: execution.principal.email } : {}) });
   execution.log.info("billing.checkout.created", { plan: input.plan, checkoutSessionId: checkout.id });
@@ -408,7 +412,9 @@ app.post("/api/billing/checkout", requireExecutionContext, async (context) => {
 app.post("/api/billing/portal", requireExecutionContext, async (context) => {
   const execution = context.get("execution");
   execution.access.require({ permission: "organization.billing.manage" });
-  const input = await context.req.json<{ requestId: string }>();
+  const parsed = portalRequestSchema.safeParse(await context.req.json().catch(() => null));
+  if (!parsed.success) return context.json({ error: "Invalid portal request" }, 400);
+  const input = parsed.data;
   const portal = await execution.services.billing.createPortalSession({ organizationId: execution.tenant.organizationId, requestId: input.requestId });
   execution.log.info("billing.portal.created", { portalSessionId: portal.id });
   return context.json(portal);
@@ -432,7 +438,7 @@ app.post("/api/dev/billing", requireExecutionContext, async (context) => {
 });
 
 app.on(["GET", "POST"], "/api/auth/*", (context) =>
-  createAuth(context.env).handler(context.req.raw),
+  createAuth(context.env, { correlationId: context.get("correlationId") }).handler(context.req.raw),
 );
 
 app.route("/", accessRoutes);
@@ -440,7 +446,7 @@ app.route("/", machineAccessRoutes);
 app.route("/", regionalRoutes);
 
 app.get("/api/me", async (context) => {
-  const session = await createAuth(context.env).api.getSession({ headers: context.req.raw.headers });
+  const session = await createAuth(context.env, { correlationId: context.get("correlationId") }).api.getSession({ headers: context.req.raw.headers });
   if (!session) return context.json({ error: "Unauthorized" }, 401);
 
   return context.json({ user: session.user, session: session.session });
@@ -461,7 +467,7 @@ app.get("/api/health/operational", (context) => context.json({
   capabilities: {
     database: { configured: Boolean(context.env.DATABASE_URL) },
     email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && configuredValue(context.env.EMAIL_FROM)), stagingProtected: !["preview", "staging"].includes(context.env.APP_ENV ?? "local") || configuredValue(context.env.EMAIL_STAGING_REDIRECT) },
-    billing: { mode: context.env.STRIPE_MODE ?? "local", configured: (context.env.STRIPE_MODE ?? "local") === "local" || Boolean(context.env.STRIPE_SECRET_KEY && context.env.STRIPE_WEBHOOK_SECRET && configuredValue(context.env.STRIPE_PUBLISHABLE_KEY) && configuredPrices(context.env.STRIPE_PRICES) && configuredValue(context.env.BILLING_RETURN_URL)), plans: Object.keys(plans).length },
+    billing: { mode: context.env.STRIPE_MODE ?? "local", configured: stripeConfigurationReady(context.env), plans: Object.keys(plans).length },
     queues: { configured: Boolean((context.env as WorkerEnvironment).TRESTLE_EVENTS) },
     artifacts: { configured: artifactRuntimeReady(context.env), mode: context.env.TRESTLE_ARTIFACTS ? "r2" : context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" : "unavailable" },
     workflows: { enabled: (context.env as WorkerEnvironment).TRESTLE_WORKFLOWS_ENABLED === "true", configured: Boolean((context.env as WorkerEnvironment).TRESTLE_WORKFLOW) },
@@ -501,7 +507,7 @@ app.get("/api/artifacts/:id/access", requireExecutionContext, async (context) =>
   const artifact = await artifactStore(context.env, execution.tenant.organizationId).get(execution.tenant.organizationId, id);
   if (!artifact) return context.notFound();
   const signed = await artifactSigner(context.env).create(execution.tenant.organizationId, id);
-  return context.json({ url: new URL(signed.url, context.req.url).toString(), expiresAt: signed.expiresAt });
+  return context.json({ url: publicArtifactUrl(signed.url, context.env, context.req.url), expiresAt: signed.expiresAt });
 });
 
 app.delete("/api/artifacts/:id", requireExecutionContext, async (context) => {
@@ -536,7 +542,7 @@ app.get("/artifacts/:id", async (context) => {
 
 app.onError((error, context) => {
   const mapped = mapHttpError(error);
-  createLogger({ correlationId: context.get("correlationId") }).error("http.request.failed", { code: mapped.code, retryable: mapped.retryable, durationMs: Date.now() - context.get("requestStartedAt") });
+  createLogger({ correlationId: context.get("correlationId") }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("http.request.failed", { code: mapped.code, retryable: mapped.retryable, durationMs: Date.now() - context.get("requestStartedAt"), ...safeErrorDiagnostic(error) });
   return context.json({ error: mapped.code, message: mapped.message, retryable: mapped.retryable }, mapped.status);
 });
 
@@ -544,6 +550,12 @@ type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBin
 export default {
   fetch: app.fetch.bind(app),
   queue: async (batch: QueueBatch, environment: WorkerEnvironment) => {
+    const observeEvent = ({ outcome, event }: QueueSettlement) => {
+      const log = createLogger({ environment: environment.APP_ENV ?? "local", ...(event ? { correlationId: event.correlationId, ...(event.causationId ? { causationId: event.causationId } : {}) } : {}) }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
+      const fields = event ? { eventId: event.id, eventName: event.name, schemaVersion: event.schemaVersion } : { validated: false };
+      if (outcome === "acknowledged") log.info("queue.event.acknowledged", fields);
+      else log.warn("queue.event.retried", fields);
+    };
     if (environment.TRESTLE_WORKFLOWS_ENABLED === "true" && !environment.TRESTLE_WORKFLOW) {
       throw new Error("Enabled Workflows require the TRESTLE_WORKFLOW binding");
     }
@@ -558,7 +570,7 @@ export default {
     if (eventMessages.length === 0) return native;
     if (environment.TRESTLE_WORKFLOWS_ENABLED === "true") {
       if (!environment.TRESTLE_WORKFLOW) throw new Error("Enabled Workflows require the TRESTLE_WORKFLOW binding");
-      const events = await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW)({ messages: eventMessages });
+      const events = await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW, observeEvent)({ messages: eventMessages });
       return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     }
     const inbox = new PostgresEventInbox(environment.DATABASE_URL, { assumeApplicationRole: true });
@@ -566,11 +578,12 @@ export default {
     try {
       const events = await createQueueConsumer(eventConsumers, inbox, async (envelope, currentEnvironment) => {
         await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox, ...(environment.TRESTLE_EVENTS ? { queue: environment.TRESTLE_EVENTS } : {}) });
-      })({ messages: eventMessages }, environment);
+      }, observeEvent)({ messages: eventMessages }, environment);
       return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     } finally { await Promise.all([inbox.close(), outbox.close()]); }
   },
   scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
+    const log = createLogger({ environment: environment.APP_ENV ?? "local" }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
     if (!environment.TRESTLE_EVENTS && !environment.TRESTLE_ARTIFACTS && environment.WEBHOOK_DELIVERY_MODE !== "local") {
       if (!environment.APP_ENV || environment.APP_ENV === "local") return;
       throw new Error("Remote scheduled work requires a Queue or R2 binding");
@@ -579,7 +592,7 @@ export default {
       const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
       try {
         const result = await dispatchQueuedOutbox(store, environment.TRESTLE_EVENTS);
-        createLogger({ environment: environment.APP_ENV ?? "local" }).info("outbox.dispatch.completed", result);
+        log.info("outbox.dispatch.completed", result);
       } finally {
         await store.close();
       }
@@ -587,33 +600,33 @@ export default {
     if (environment.WEBHOOK_DELIVERY_MODE === "native") {
       if (!environment.TRESTLE_EVENTS) throw new Error("Native webhook recovery requires the TRESTLE_EVENTS Queue binding");
       const result = await maintainNativeWebhookDeliveries({ environment, queue: environment.TRESTLE_EVENTS });
-      createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.native.recovery.completed", result);
+      log.info("webhook.native.recovery.completed", result);
       if (result.failed > 0) throw new Error("Native webhook recovery left incomplete work");
     }
     let artifactUnresolved = false;
     if (environment.TRESTLE_ARTIFACTS) {
       try {
         const result = await maintainArtifacts(environment);
-        createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.maintenance.completed", result);
+        log.info("artifact.maintenance.completed", result);
         const retention = await maintainReadyArtifacts(environment);
-        if (retention) createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.retention.completed", retention);
+        if (retention) log.info("artifact.retention.completed", retention);
         const audit = await auditArtifactReferences(environment, (item) => {
-          createLogger({ environment: environment.APP_ENV ?? "local" }).error(`artifact.reference.${item.reason}`, item);
+          log.error(`artifact.reference.${item.reason}`, item);
         });
-        createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.reference.audit.completed", audit);
+        log.info("artifact.reference.audit.completed", audit);
         const orphans = await auditArtifactOrphans(environment, (item) => {
-          createLogger({ environment: environment.APP_ENV ?? "local" }).error(`artifact.orphan.${item.reason}`, item);
+          log.error(`artifact.orphan.${item.reason}`, item);
         });
-        createLogger({ environment: environment.APP_ENV ?? "local" }).info("artifact.orphan.audit.completed", orphans);
+        log.info("artifact.orphan.audit.completed", orphans);
         artifactUnresolved = result.failed > 0 || (retention?.failed ?? 0) > 0 || audit.missing > 0 || audit.mismatched > 0 || audit.failed > 0 || orphans.orphaned > 0 || orphans.failed > 0;
       } catch {
         artifactUnresolved = true;
-        createLogger({ environment: environment.APP_ENV ?? "local" }).error("artifact.maintenance.unavailable");
+        log.error("artifact.maintenance.unavailable");
       }
     }
     if (environment.WEBHOOK_DELIVERY_MODE === "local" || environment.WEBHOOK_DELIVERY_MODE === "native") {
       const result = await maintainWebhookPayloads(environment);
-      createLogger({ environment: environment.APP_ENV ?? "local" }).info("webhook.retention.completed", result);
+      log.info("webhook.retention.completed", result);
       if (result.failed > 0) throw new Error("Webhook retention left incomplete cleanup work");
     }
     if (artifactUnresolved) throw new Error("Artifact maintenance or storage audit found unresolved work");

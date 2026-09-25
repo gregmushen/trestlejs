@@ -13,6 +13,12 @@ function request(list: unknown, detail: unknown = { ...listed, text: `Confirm: $
 }
 
 describe("staging email verification canary", () => {
+  it("finds preview redirection under its own subject prefix", async () => {
+    const preview = { ...listed, subject: `[PREVIEW → ${email}] Verify your email` };
+    expect(await waitForStagingVerificationLink({ apiKey: "test-key", originalEmail: email, apiOrigin: "https://api.example.test", sentAfter,
+      environment: "preview", request: request({ data: [preview] }, { ...preview, text: `Confirm: ${link}` }) })).toBe(link);
+  });
+
   it("selects only the unique, redirected test email and validates the link origin", async () => {
     const fetcher = request({ data: [
       { ...listed, id: "other", subject: "Another customer's email" },

@@ -1,5 +1,5 @@
 import { assuranceForEndpoint, memberDefaultApplicationRoles, organizationCreatorApplicationRoles, securityEventForEndpoint } from "@__TRESTLE_PROJECT_NAME__/authz";
-import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
 import { createDatabase, createTenantDatabase, grantApplicationRoles, recordAssurance, sessionAssurance, type Database, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import * as schema from "@__TRESTLE_PROJECT_NAME__/db";
 import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate, type R2BucketBinding } from "@__TRESTLE_PROJECT_NAME__/integrations";
@@ -38,10 +38,12 @@ export interface AuthEnvironment {
 /**
  * `plugins` adds Better Auth plugins for one surface. The platform admin passes its sign-in factors
  * (TOTP, backup codes, passkeys; apps/admin/worker/factors.ts), so the customer Worker never bundles them.
+ * `correlationId` tags authentication failures logged for this request.
  */
-export type AuthOptions = Readonly<{ plugins?: readonly BetterAuthPlugin[] }>;
+export type AuthOptions = Readonly<{ plugins?: readonly BetterAuthPlugin[]; correlationId?: string | undefined }>;
 
 export function createAuth(environment: AuthEnvironment, options: AuthOptions = {}) {
+  const { correlationId } = options;
   const baseURL = environment.BETTER_AUTH_URL ?? "http://localhost:42069";
   const webOrigin = environment.WEB_ORIGIN ?? baseURL;
   const email = createEmailService({
@@ -57,6 +59,13 @@ export function createAuth(environment: AuthEnvironment, options: AuthOptions = 
     baseURL,
     secret: environment.BETTER_AUTH_SECRET,
     trustedOrigins: [baseURL, webOrigin],
+    onAPIError: {
+      onError: (error) => {
+        if (!shouldLogAuthError(error)) return;
+        createLogger(correlationId ? { correlationId } : {}, undefined, { secretValues: loggerSecretsFromEnvironment(environment) })
+          .error("auth.request.failed", safeErrorDiagnostic(error));
+      },
+    },
     database: drizzleAdapter(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), {
       provider: "pg",
       schema,
@@ -99,7 +108,7 @@ export function createAuth(environment: AuthEnvironment, options: AuthOptions = 
           // and its assurance row still exist; inside one (passkey registration with createSession)
           // Better Auth defers it until the transaction commits.
           after: async (created, context) => {
-            await recordSessionAssurance(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), created, context?.context.session?.session ?? null, context?.path ?? "");
+            await recordSessionAssurance(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), environment, created, context?.context.session?.session ?? null, context?.path ?? "");
           },
         },
       },
@@ -149,7 +158,7 @@ export function createAuth(environment: AuthEnvironment, options: AuthOptions = 
  * enrolling an authenticator never upgrades or refreshes a password-only session.
  * When the prior session has no evidence, the new one gets none either.
  */
-async function recordSessionAssurance(database: Database, created: Readonly<{ id: string; userId: string }>, prior: Readonly<{ id: string; userId: string }> | null, path: string): Promise<void> {
+async function recordSessionAssurance(database: Database, environment: AuthEnvironment, created: Readonly<{ id: string; userId: string }>, prior: Readonly<{ id: string; userId: string }> | null, path: string): Promise<void> {
   try {
     if (prior) {
       const carried = prior.userId === created.userId && prior.id !== created.id ? await sessionAssurance(database, prior.id) : null;
@@ -162,7 +171,7 @@ async function recordSessionAssurance(database: Database, created: Readonly<{ id
   } catch (error) {
     // Fail closed: the session stays usable for ordinary work, but with no assurance row
     // every step-up check reports "missing" and asks the person to verify again.
-    createLogger({ surface: "auth" }).error("auth.assurance.record_failed", { errorName: error instanceof Error ? error.name : "unknown" });
+    createLogger({ surface: "auth" }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) }).error("auth.assurance.record_failed", { errorName: error instanceof Error ? error.name : "unknown" });
   }
 }
 
@@ -172,7 +181,18 @@ async function recordSecurityEvent(database: Database, environment: AuthEnvironm
   try {
     await database.execute(sql`select trestle_record_security_event(${name}, ${userId}, ${`auth:${crypto.randomUUID()}`}, ${environment.APP_ENV ?? "local"})`);
   } catch (error) {
-    createLogger({ surface: "auth" }).error("security.audit.record_failed", { event: name, errorName: error instanceof Error ? error.name : "unknown" });
+    createLogger({ surface: "auth" }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) }).error("security.audit.record_failed", { event: name, errorName: error instanceof Error ? error.name : "unknown" });
+  }
+}
+
+/** Expected authentication denials are not infrastructure failures. */
+export function shouldLogAuthError(error: unknown): boolean {
+  try {
+    if (!error || typeof error !== "object") return true;
+    const status = (error as { status?: unknown }).status;
+    return !["BAD_REQUEST", "UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND", "CONFLICT", 400, 401, 403, 404, 409].includes(status as string | number);
+  } catch {
+    return true;
   }
 }
 

@@ -4,7 +4,7 @@ import {
   stepUpWindowMinutes, type AccessEvaluator, type AssuranceLevel, type AssuranceRequirement,
 } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { Entitlements, featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
-import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createDatabase, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportableOrganizations, supportOrganizationView,
@@ -195,7 +195,7 @@ async function signInLevel(context: AdminContext, database: Database, userId: st
 admin.use("/api/admin/*", async (context, next) => {
   const policy = adminPolicyFor(context.req.method, context.req.path);
   if (policy?.public) return await next();
-  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" });
+  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   try {
     const session = await adminDependencies.session(context.env, context.req.raw.headers);
     if (!session) return context.json({ error: "unauthorized", message: "Sign in to the platform admin" }, 401);
@@ -238,7 +238,7 @@ admin.get("/api/admin/session", async (context) => {
   const environment = adminEnvironment(context.env);
   const database = platformDatabase(context.env);
   // Display context only: authority is checked on every request, so a failed lookup shows no support banner rather than failing sign-in.
-  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" });
+  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   const [factors, sessions, organizations, status] = await Promise.all([
     // Which step-up paths the shell may offer; on the same auth database handle as the request's assurance lookup.
     adminDependencies.factors(context.get("authDatabase"), operator.id),
@@ -576,7 +576,7 @@ const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const
 admin.onError((error, context) => {
   if (error instanceof AdminConfigurationError) return context.json({ error: "not_configured", message: error.message, repair: `pnpm exec trestle setup --env ${adminEnvironment(context.env)}` }, 503);
   if (error instanceof PlatformOperationError || error instanceof MachineAccessError || error instanceof PlatformRoleError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code as keyof typeof operationStatus] ?? 400);
-  createLogger({ correlationId: context.get("correlationId"), surface: "admin" }).error("admin.request.failed", { errorName: error.name });
+  createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);
 });
 

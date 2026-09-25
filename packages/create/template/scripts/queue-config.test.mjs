@@ -36,7 +36,7 @@ test("R2-only Worker config binds the bucket without enabling Queues", () => {
   const rendered = JSON.parse(renderQueueConfig(wrangler, "preview", "example-worker-pr-12", { queues: false, r2: true }));
   assert.deepEqual(rendered.env.preview.r2_buckets, [{ binding: "TRESTLE_ARTIFACTS", bucket_name: "example-worker-pr-12-artifacts" }]);
   assert.equal(rendered.env.preview.queues, undefined);
-  assert.deepEqual(rendered.env.preview.triggers.crons, ["* * * * *"]);
+  assert.equal(rendered.env.preview.triggers, undefined);
   assert.equal(rendered.env.staging.r2_buckets, undefined);
 });
 
@@ -52,15 +52,29 @@ test("preview Queue names are isolated and bounded even for long Worker names", 
   assert.throws(() => queueNames("INVALID"), /invalid Worker name/u);
 });
 
-test("rendered Worker config binds producer, consumer, DLQ, and cron only to target environment", () => {
+test("rendered Worker config binds producer, consumer, and DLQ without a preview cron", () => {
   const rendered = JSON.parse(renderQueueConfig(wrangler, "preview", "example-worker-pr-12"));
   assert.deepEqual(rendered.env.preview.queues, {
     producers: [{ binding: "TRESTLE_EVENTS", queue: "example-worker-pr-12-events" }],
     consumers: [{ queue: "example-worker-pr-12-events", max_batch_size: 10, max_retries: 10, dead_letter_queue: "example-worker-pr-12-events-dlq" }],
   });
-  assert.deepEqual(rendered.env.preview.triggers.crons, ["* * * * *"]);
+  assert.equal(rendered.env.preview.triggers, undefined);
   assert.equal(rendered.env.preview.name, "example-worker-pr-12");
   assert.equal(rendered.env.staging.queues, undefined);
   assert.equal(rendered.env.production.queues, undefined);
   assert.throws(() => renderQueueConfig(wrangler, "local", "example-worker"), /requires preview/u);
+});
+
+test("staging retains its cron trigger for scheduled delivery", () => {
+  const rendered = JSON.parse(renderQueueConfig(wrangler, "staging", "example-worker-staging", { queues: true, r2: true, workflows: true }));
+  assert.deepEqual(rendered.env.staging.triggers.crons, ["* * * * *"]);
+  assert.equal(rendered.env.preview.triggers, undefined);
+});
+
+test("preview can explicitly omit cron without losing Queue and Workflow bindings", () => {
+  const rendered = JSON.parse(renderQueueConfig(wrangler, "preview", "example-worker-pr-12", { queues: true, r2: true, workflows: true }, { cron: false }));
+  assert.equal(rendered.env.preview.triggers, undefined);
+  assert.ok(rendered.env.preview.queues);
+  assert.ok(rendered.env.preview.r2_buckets);
+  assert.ok(rendered.env.preview.workflows);
 });

@@ -55,6 +55,19 @@ describe("platform admin Worker", () => {
     expect(await call("GET", "/api/admin/health")).toMatchObject({ status: 403, body: { reason: "permission_missing" } });
   });
 
+  it("redacts admin credentials from authorization diagnostics", async () => {
+    const secret = "admin-credential-unique-123456";
+    const output: string[] = [];
+    const original = console.log;
+    console.log = (...items: unknown[]) => { output.push(items.map(String).join(" ")); };
+    try {
+      adminDependencies.platformRoles = async () => [secret];
+      await admin.request("/api/admin/session", { headers: { origin: "http://localhost:42070" } }, { ...environment, DATABASE_ADMIN_URL: secret });
+    } finally { console.log = original; }
+    expect(output.join("\n")).toContain("[REDACTED]");
+    expect(output.join("\n")).not.toContain(secret);
+  });
+
   it("enforces each action's own permission, the admin origin, and a reason before touching data", async () => {
     const redrive = "/api/admin/operations/outbox/evt-1/redrive";
     state.roles = ["security_admin"];

@@ -58,6 +58,11 @@ jobs:
       - name: Build and test
         run: pnpm check
 
+      - name: Rehearse a published adjacent-version upgrade
+        run: pnpm check:upgrade
+        env:
+          TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
       - name: Install browser test runtime
         run: npx --yes playwright@1.63.0 install --with-deps --only-shell chromium
 
