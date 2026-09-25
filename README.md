@@ -215,7 +215,6 @@ pnpm exec trestle email list
 pnpm exec trestle email show <id>
 pnpm exec trestle email open <id>
 pnpm exec trestle email clear
-pnpm exec trestle email status --env staging
 pnpm exec trestle email doctor --env staging
 ```
 
@@ -231,7 +230,6 @@ subscription and entitlement projections used by the application. Staging
 uses Stripe test mode; production uses live mode.
 
 ```bash
-pnpm exec trestle payments stripe status
 pnpm exec trestle payments stripe doctor
 pnpm exec trestle payments stripe sync --env staging
 ```

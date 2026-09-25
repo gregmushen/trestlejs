@@ -5,7 +5,7 @@ import path from "node:path";
 import { TRESTLEJS_VERSION } from "../src/core.js";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { executeCli } from "../src/index.js";
+import { executeCli, initializeSecrets } from "../src/index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -78,6 +78,15 @@ describe("TrestleJS CLI", () => {
     expect(await executeCli(["payments", "stripe", "webhook", "configure", "--env", "production",
       "--url", "https://example.test/webhooks/stripe", "--api-key-stdin", "--apply", "--operation-id", "operation123"], output.runtime)).toBe(1);
     expect(output.stderr()).toContain("production webhook mutation requires --apply --yes");
+  });
+
+  it("prints the folded status summary at the top of email doctor for local", async () => {
+    const root = await fixture();
+    await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "{}");
+    await initializeSecrets(root, "local");
+    const output = capture(root);
+    expect(await executeCli(["email", "doctor", "--env", "local"], output.runtime)).toBe(0);
+    expect(output.stdout()).toContain("Adapter:");
   });
 
   it("does not generate application routes against a pre-registry authority model", async () => {

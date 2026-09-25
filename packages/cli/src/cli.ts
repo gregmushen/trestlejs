@@ -512,7 +512,7 @@ export function createProgram(runtime: CliRuntime): Command {
       await clearLocalEmail(options.apiUrl);
       runtime.stdout("Cleared locally captured email\n");
     });
-  email.command("status")
+  email.command("doctor")
     .option("--env <environment>", "email environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
@@ -525,21 +525,11 @@ export function createProgram(runtime: CliRuntime): Command {
       const redirect = wranglerStringVariable(block, "EMAIL_STAGING_REDIRECT");
       const redirectStatus = options.env === "local" || options.env === "production" ? "not required" : validEmailAddress(redirect) ? "configured" : "missing";
       runtime.stdout(["Email", `Environment:        ${options.env}`, `Adapter:            ${mode}`, `API key:            ${values.RESEND_API_KEY?.startsWith("re_") && values.RESEND_API_KEY.length > 3 ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.RESEND_WEBHOOK_SECRET?.startsWith("whsec_") && values.RESEND_WEBHOOK_SECRET.length > 6 ? "present" : mode === "local" ? "not required" : "missing"}`, `Sender:             ${validEmailAddress(sender) ? "configured" : mode === "local" ? "local default" : "missing"}`, `Recipient redirect: ${redirectStatus}`, ""].join("\n"));
-    });
-  email.command("doctor")
-    .option("--env <environment>", "email environment", environment, "local")
-    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       if (options.env === "local") { runtime.stdout("✓ Local email capture requires no provider account\n"); return; }
-      const context = await projectContext(command, runtime);
-      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      const workerPath = context.manifest.apps.worker ?? "apps/worker";
-      const config = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
-      const block = wranglerEnvironmentBlock(config, options.env);
-      const senderValue = wranglerStringVariable(block, "EMAIL_FROM");
-      const sender = senderValue && senderValue !== "CHANGE_ME" ? senderValue : undefined;
-      const problems = emailDeploymentIssues({ environment: options.env as RemoteEmailEnvironment, mode: wranglerStringVariable(block, "EMAIL_DELIVERY_MODE"), apiKey: values.RESEND_API_KEY, webhookSecret: values.RESEND_WEBHOOK_SECRET, sender, recipientRedirect: wranglerStringVariable(block, "EMAIL_STAGING_REDIRECT") });
-      if (problems.length === 0 && values.RESEND_API_KEY && sender) {
-        try { const provider = await inspectResendSender(values.RESEND_API_KEY, sender); if (!provider.verified) problems.push(`Resend sender domain ${provider.domain} is ${provider.providerStatus ?? "not registered"}`); }
+      const senderValue = sender && sender !== "CHANGE_ME" ? sender : undefined;
+      const problems = emailDeploymentIssues({ environment: options.env as RemoteEmailEnvironment, mode: wranglerStringVariable(block, "EMAIL_DELIVERY_MODE"), apiKey: values.RESEND_API_KEY, webhookSecret: values.RESEND_WEBHOOK_SECRET, sender: senderValue, recipientRedirect: redirect });
+      if (problems.length === 0 && values.RESEND_API_KEY && senderValue) {
+        try { const provider = await inspectResendSender(values.RESEND_API_KEY, senderValue); if (!provider.verified) problems.push(`Resend sender domain ${provider.domain} is ${provider.providerStatus ?? "not registered"}`); }
         catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
       }
       runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Resend ${options.env} lifecycle and delivery safety are configured\n`);
@@ -793,7 +783,7 @@ export function createProgram(runtime: CliRuntime): Command {
 
   const payments = program.command("payments").description("manage application payments integrations");
   const stripe = payments.command("stripe").description("operate the Stripe golden-path adapter");
-  stripe.command("status")
+  stripe.command("doctor")
     .option("--env <environment>", "billing environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
@@ -801,30 +791,17 @@ export function createProgram(runtime: CliRuntime): Command {
       const workerPath = context.manifest.apps.worker ?? "apps/worker";
       const routeSource = await readFile(path.join(context.root, workerPath, "src/index.ts"), "utf8");
       const workerConfig = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
-      const mode = wranglerStringVariable(wranglerEnvironmentBlock(workerConfig, options.env), "STRIPE_MODE") ?? (options.env === "local" ? "local" : "missing");
-      const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json"), "utf8")) as unknown);
       const block = wranglerEnvironmentBlock(workerConfig, options.env);
-      const problems = options.env === "local" ? [] : stripeDeploymentIssues(options.env, {
+      const mode = wranglerStringVariable(block, "STRIPE_MODE") ?? (options.env === "local" ? "local" : "missing");
+      const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json"), "utf8")) as unknown);
+      const deploymentIssues = options.env === "local" ? [] : stripeDeploymentIssues(options.env, {
         mode, publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
         prices: wranglerStringVariable(block, "STRIPE_PRICES"), returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
       }, catalog);
-      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present (remote match unverified)" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${Object.keys(catalog.plans).length}`, `Configuration:      ${problems.length ? `${problems.length} issue(s)` : "ready"}`, ""].join("\n"));
-    });
-  stripe.command("doctor")
-    .option("--env <environment>", "billing environment", environment, "local")
-    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
-      const context = await projectContext(command, runtime);
+      runtime.stdout(["Stripe", `Environment:        ${options.env}`, `Adapter:            configured`, `Mode:               ${mode}`, `API key:            ${values.STRIPE_SECRET_KEY ? "present" : mode === "local" ? "not required" : "missing"}`, `Webhook secret:     ${values.STRIPE_WEBHOOK_SECRET ? "present (remote match unverified)" : mode === "local" ? "not required" : "missing"}`, `Webhook route:      ${routeSource.includes('/webhooks/stripe') ? "configured" : "missing"}`, `Plans:              ${Object.keys(catalog.plans).length}`, `Configuration:      ${deploymentIssues.length ? `${deploymentIssues.length} issue(s)` : "ready"}`, ""].join("\n"));
       if (options.env === "local") { runtime.stdout("✓ LocalBillingAdapter requires no Stripe account\n"); return; }
-      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
       const expected = options.env === "production" ? "live" : "test";
-      const workerPath = context.manifest.apps.worker ?? "apps/worker";
-      const workerConfig = await readFile(path.join(context.root, workerPath, "wrangler.jsonc"), "utf8");
-      const block = wranglerEnvironmentBlock(workerConfig, options.env);
-      const catalog = validateStripeCatalog(JSON.parse(await readFile(path.join(context.root, context.manifest.packages.billing ?? "packages/billing", "stripe.json"), "utf8")) as unknown);
-      const problems = [!stripeServerKeyMatchesMode(values.STRIPE_SECRET_KEY, options.env) ? `STRIPE_SECRET_KEY must be a sk_${expected}_ or rk_${expected}_ server key in ${options.env}` : "", !values.STRIPE_WEBHOOK_SECRET || !/^whsec_[A-Za-z0-9_]+$/u.test(values.STRIPE_WEBHOOK_SECRET) ? "STRIPE_WEBHOOK_SECRET must start with whsec_" : "", ...stripeDeploymentIssues(options.env, {
-        mode: wranglerStringVariable(block, "STRIPE_MODE"), publishableKey: wranglerStringVariable(block, "STRIPE_PUBLISHABLE_KEY"),
-        prices: wranglerStringVariable(block, "STRIPE_PRICES"), returnUrl: wranglerStringVariable(block, "BILLING_RETURN_URL"),
-      }, catalog)].filter(Boolean);
+      const problems = [!stripeServerKeyMatchesMode(values.STRIPE_SECRET_KEY, options.env) ? `STRIPE_SECRET_KEY must be a sk_${expected}_ or rk_${expected}_ server key in ${options.env}` : "", !values.STRIPE_WEBHOOK_SECRET || !/^whsec_[A-Za-z0-9_]+$/u.test(values.STRIPE_WEBHOOK_SECRET) ? "STRIPE_WEBHOOK_SECRET must start with whsec_" : "", ...deploymentIssues].filter(Boolean);
       runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Stripe ${options.env} credentials and mode agree\n! Remote webhook signing-secret match requires endpoint setup and provider delivery evidence\n`);
       if (problems.length) throw new CliFailure("Stripe doctor found failures");
     });
