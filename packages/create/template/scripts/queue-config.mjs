@@ -39,7 +39,7 @@ export function artifactBucketName(workerName) {
   return resourceName(`${workerName}-artifacts`);
 }
 
-export function renderQueueConfig(source, environment, workerName, capabilities = { queues: true, r2: false, workflows: false }) {
+export function renderQueueConfig(source, environment, workerName, capabilities = { queues: true, r2: false, workflows: false }, options = {}) {
   if (!["preview", "staging", "production"].includes(environment)) throw new Error("Queue deployment requires preview, staging, or production");
   const config = JSON.parse(source);
   if (!config.env?.[environment]) throw new Error(`Wrangler environment ${environment} is not declared`);
@@ -52,7 +52,9 @@ export function renderQueueConfig(source, environment, workerName, capabilities 
     };
   }
   if (capabilities.r2) target.r2_buckets = [{ binding: "TRESTLE_ARTIFACTS", bucket_name: artifactBucketName(workerName) }];
-  if (capabilities.queues || capabilities.r2) target.triggers = { ...config.env[environment].triggers, crons: ["* * * * *"] };
+  // Ephemeral PR Workers must not consume account-wide cron capacity.
+  if (environment === "preview" || options.cron === false) delete target.triggers;
+  else if (capabilities.queues || capabilities.r2) target.triggers = { ...config.env[environment].triggers, crons: ["* * * * *"] };
   if (capabilities.workflows) {
     target.workflows = [{ binding: "TRESTLE_WORKFLOW", name: resourceName(`${workerName}-workflow`), class_name: "TrestleWorkflow" }];
     target.vars = { ...target.vars, TRESTLE_WORKFLOWS_ENABLED: "true" };
@@ -62,16 +64,17 @@ export function renderQueueConfig(source, environment, workerName, capabilities 
 }
 
 async function main() {
-  const [operation, environment, workerName] = process.argv.slice(2);
+  const [operation, environment, workerName, option] = process.argv.slice(2);
   const manifest = await readFile(new URL("../.trestle/project.yaml", import.meta.url), "utf8");
   const capabilities = { queues: queuesEnabled(manifest), r2: r2Enabled(manifest), workflows: workflowsEnabled(manifest) };
   if (operation === "status") {
     process.stdout.write(`queues=${capabilities.queues} r2=${capabilities.r2} workflows=${capabilities.workflows}\n`);
     return;
   }
-  if (operation !== "render" || !environment || !workerName) throw new Error("expected status or render <environment> <worker-name>");
+  if (operation !== "render" || !environment || !workerName || (option !== undefined && option !== "--without-cron")) throw new Error("expected status or render <environment> <worker-name> [--without-cron]");
+  if (option === "--without-cron" && environment !== "preview") throw new Error("--without-cron is permitted only for preview deployments");
   const source = await readFile(workerConfigUrl, "utf8");
-  const output = capabilities.queues || capabilities.r2 || capabilities.workflows ? renderQueueConfig(source, environment, workerName, capabilities) : source;
+  const output = capabilities.queues || capabilities.r2 || capabilities.workflows ? renderQueueConfig(source, environment, workerName, capabilities, { cron: option !== "--without-cron" }) : source;
   await writeFile(generatedConfigUrl, output);
   process.stdout.write(`${fileURLToPath(generatedConfigUrl)}\n`);
 }

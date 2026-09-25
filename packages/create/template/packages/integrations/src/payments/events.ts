@@ -27,9 +27,9 @@ function normalizeSubscription(subscription: Stripe.Subscription, base: Pick<Nor
   };
 }
 
-export function verifyAndNormalizeStripeEvent(rawBody: string, signature: string, secret: string): NormalizedBillingEvent {
+export async function verifyAndNormalizeStripeEvent(rawBody: string, signature: string, secret: string): Promise<NormalizedBillingEvent> {
   const stripe = new Stripe("sk_test_webhook_verification_only");
-  const event = stripe.webhooks.constructEvent(rawBody, signature, secret);
+  const event = await stripe.webhooks.constructEventAsync(rawBody, signature, secret, undefined, Stripe.createSubtleCryptoProvider());
   const object = event.data.object as Stripe.Checkout.Session | Stripe.Subscription | Stripe.Invoice;
   const base = { id: event.id, occurredAt: new Date(event.created * 1000) };
   if (event.type === "checkout.session.completed") {

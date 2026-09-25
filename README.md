@@ -30,26 +30,30 @@ Browser
 truth and tenant isolation.
 
 > [!IMPORTANT]
-> TrestleJS is currently a public alpha. The generated vertical slice works
-> end to end, but APIs and project structure may still change before v1.
+> TrestleJS `0.1.0-beta.1` is an opt-in beta candidate, **not a
+> production-readiness claim**. Local, preview, and staging paths have
+> evidence, while production deployment and several hosted capabilities
+> remain unverified. Read the [testing ledger](docs/BETA_CANDIDATE_TESTING_LEDGER.md)
+> before evaluating it. APIs and project structure may still change before v1.
 
 [Quick start](#quick-start) · [What you get](#what-you-get) ·
 [Resource generation](#generate-a-tenant-safe-resource) ·
 [Setup plans](#plans-humans-and-agents-can-review) ·
 [CLI](#cli-at-a-glance) · [Architecture specification](docs/TRESTLEJS_SPEC.md)
-· [Roadmap](docs/ROADMAP.md)
+· [Roadmap](docs/ROADMAP.md) · [Beta testing ledger](docs/BETA_CANDIDATE_TESTING_LEDGER.md)
 
 ## Quick start
 
 You need Node.js 22+, pnpm 10+, and Docker Desktop for local PostgreSQL.
 
 ```bash
-npx create-trestlejs my-app
+npx create-trestlejs@next my-app
 cd my-app
 pnpm dev
 ```
 
-That one command starts the complete local system:
+The `next` tag opts into the prerelease; the unqualified npm `latest` tag is
+not the beta candidate. `pnpm dev` starts the complete local system:
 
 | Surface | Local address |
 | --- | --- |
@@ -214,8 +218,9 @@ pnpm exec trestle email doctor --env staging
 ```
 
 Application code depends on `EmailService`, templates are application-owned
-React Email components, and production uses the Resend adapter. Staging has a
-safe recipient policy so test traffic does not silently reach real users.
+React Email components, and production uses the Resend adapter. Preview and
+staging require recipient redirection so test traffic does not silently reach
+real users.
 
 ## Billing without a Stripe account
 
@@ -234,6 +239,25 @@ pnpm exec trestle payments stripe test
 Application code depends on `BillingService`, never Stripe SDK types. Verified
 webhooks update local subscription state, and authorization reads local
 entitlements rather than making live Stripe requests.
+
+For a deployed webhook, first review the exact endpoint URL using a Stripe
+management key on standard input. `status` and `doctor` cannot prove that an
+existing encrypted `whsec_` matches Stripe's endpoint: Stripe returns that
+secret only when the endpoint is created.
+
+```bash
+trestle payments stripe webhook configure --env staging \
+  --url https://your-worker.example.com/webhooks/stripe --api-key-stdin
+```
+
+After review, add `--apply --operation-id <stable-id>` to create the endpoint
+and store its signing secret in encrypted staging credentials. To rotate an
+existing destination, also name its exact ID with `--replace-endpoint-id`;
+Trestle disables only that endpoint after local secret storage succeeds. Keep
+the same operation ID and add `--resume` if interrupted. Push the encrypted
+credentials to the Worker, then prove delivery with a provider-signed test
+event. Production additionally requires `--yes`. The management key is never
+stored with the application's restricted runtime key.
 
 ## The TrestleJS way
 
@@ -286,7 +310,7 @@ trestle plan ...                    validate and inspect setup intent
 trestle apply <plan> --yes          apply reviewed supported mutations
 trestle resources                   inspect declared domain resources
 trestle routes                      inspect API routes and auth posture
-trestle logs --env <env>            tail redacted structured Worker logs
+trestle logs --env <env>            tail safe semantic Worker events
 trestle queue dlq list --env <env>  inspect dead-lettered outbox delivery
 trestle workflow status <name> <id> inspect a Cloudflare Workflow instance
 trestle backup verify ... --yes     prove an isolated Neon restore and RLS

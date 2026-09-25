@@ -74,5 +74,8 @@ export function wranglerEnvironmentBlock(source: string, environment: Environmen
 }
 
 export function wranglerStringVariable(block: string, name: string): string | undefined {
-  return block.match(new RegExp(`"${name}"\\s*:\\s*"([^"]*)"`, "u"))?.[1];
+  const encoded = block.match(new RegExp(`"${name}"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")`, "u"))?.[1];
+  if (!encoded) return undefined;
+  try { return JSON.parse(encoded) as string; }
+  catch { return undefined; }
 }

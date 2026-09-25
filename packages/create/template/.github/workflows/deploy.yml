@@ -16,7 +16,7 @@ jobs:
   staging:
     environment: staging
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -32,11 +32,25 @@ jobs:
         run: |
           pnpm exec trestle doctor --env staging
           node scripts/cloudflare-preflight.mjs
+          node scripts/cloudflare-cron-preflight.mjs
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           TRESTLE_WRANGLER_CONFIG: apps/worker/.trestle-queues.wrangler.jsonc
+          TRESTLE_CRON_DEPLOY_ENV: staging
+          CLOUDFLARE_WORKERS_PLAN: "${{ vars.CLOUDFLARE_WORKERS_PLAN }}"
+      - name: Verify staging Resend and Stripe credentials before provisioning
+        run: |
+          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env staging --raw)"
+          echo "::add-mask::$RESEND_API_KEY"
+          export STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env staging --raw)"
+          echo "::add-mask::$STRIPE_SECRET_KEY"
+          node scripts/transactional-provider-preflight.mjs
+          pnpm exec trestle email doctor --env staging
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          TRESTLE_STRIPE_MODE: test
       - name: Provision staging Queues
         run: node scripts/cloudflare-queues.mjs ensure __TRESTLE_PROJECT_NAME__-worker-staging
         env:
@@ -83,6 +97,13 @@ jobs:
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
+      - name: Rotate the staging browser fixture without sending email
+        run: |
+          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"
+          pnpm --filter ./packages/auth exec tsx src/staging-fixture.ts
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          TRESTLE_DEPLOY_ENV: staging
       - name: Configure and verify the staging platform admin database role
         if: steps.admin.outputs.enabled == 'true'
         run: |
@@ -112,7 +133,12 @@ jobs:
           packageManager: pnpm
           workingDirectory: apps/worker
           command: deploy --config .trestle-queues.wrangler.jsonc --env staging --var WEB_ORIGIN:${{ vars.APP_URL }}
-      - run: VITE_API_ORIGIN="${{ vars.API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
+      - name: Bind staging Pages app to API Worker
+        run: node scripts/cloudflare-pages.mjs bind-service __TRESTLE_PROJECT_NAME__-staging __TRESTLE_PROJECT_NAME__-worker-staging
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+      - run: VITE_API_ORIGIN="${{ vars.APP_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
@@ -167,10 +193,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Install deployed browser runtime
         run: pnpm exec playwright install --with-deps --only-shell chromium
-      - name: Verify deployed staging signup, email, and organizations in Chromium
+      - name: Verify deployed staging site and product in Chromium without sending email
         run: |
-          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env staging --raw)"
-          echo "::add-mask::$RESEND_API_KEY"
+          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"
           pnpm test:staging
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
@@ -201,11 +226,25 @@ jobs:
         run: |
           pnpm exec trestle doctor --env production
           node scripts/cloudflare-preflight.mjs
+          node scripts/cloudflare-cron-preflight.mjs
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           TRESTLE_WRANGLER_CONFIG: apps/worker/.trestle-queues.wrangler.jsonc
+          TRESTLE_CRON_DEPLOY_ENV: production
+          CLOUDFLARE_WORKERS_PLAN: "${{ vars.CLOUDFLARE_WORKERS_PLAN }}"
+      - name: Verify production Resend and Stripe credentials before provisioning
+        run: |
+          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env production --raw)"
+          echo "::add-mask::$RESEND_API_KEY"
+          export STRIPE_SECRET_KEY="$(pnpm exec trestle secrets get STRIPE_SECRET_KEY --env production --raw)"
+          echo "::add-mask::$STRIPE_SECRET_KEY"
+          node scripts/transactional-provider-preflight.mjs
+          pnpm exec trestle email doctor --env production
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          TRESTLE_STRIPE_MODE: live
       - name: Provision production Queues
         run: node scripts/cloudflare-queues.mjs ensure __TRESTLE_PROJECT_NAME__-worker
         env:
@@ -281,7 +320,12 @@ jobs:
           packageManager: pnpm
           workingDirectory: apps/worker
           command: deploy --config .trestle-queues.wrangler.jsonc --env production --var WEB_ORIGIN:${{ vars.APP_URL }}
-      - run: VITE_API_ORIGIN="${{ vars.API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
+      - name: Bind production Pages app to API Worker
+        run: node scripts/cloudflare-pages.mjs bind-service __TRESTLE_PROJECT_NAME__ __TRESTLE_PROJECT_NAME__-worker
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+      - run: VITE_API_ORIGIN="${{ vars.APP_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/app build
       - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: "${{ secrets.CLOUDFLARE_API_TOKEN }}"

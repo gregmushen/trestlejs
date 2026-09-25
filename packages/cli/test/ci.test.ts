@@ -14,6 +14,39 @@ afterEach(async () => {
 });
 
 describe("generated CI deployment contract", () => {
+  it("requires cron capacity preflight before remote staging and production changes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "deploy.yml");
+    const source = await readFile(workflowPath, "utf8");
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.cron-capacity-preflight", status: "pass" }));
+    await writeFile(workflowPath, source.replace("node scripts/cloudflare-cron-preflight.mjs", "echo skip"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.cron-capacity-preflight", status: "fail" }));
+  });
+
+  it("requires isolated preview Workers to omit cron triggers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.no-cron", status: "pass" }));
+    await writeFile(workflowPath, source.replace(" --without-cron", ""));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.no-cron", status: "fail" }));
+  });
+
+  it("requires preview Checkout to return to that preview's app", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.billing-return", status: "pass" }));
+    await writeFile(workflowPath, source.replace(" --var BILLING_RETURN_URL:${{ steps.preview.outputs.app_url }}/settings/billing", ""));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.billing-return", status: "fail" }));
+  });
+
   it("pins external Actions and uses the project-local Trestle CLI", async () => {
     const report = await validateCi(templateRoot);
     expect(report.valid).toBe(true);
@@ -21,6 +54,17 @@ describe("generated CI deployment contract", () => {
     expect(pinned).toHaveLength(7);
     expect(pinned.every(({ status }) => status === "pass")).toBe(true);
     expect(report.checks.filter(({ id }) => id.endsWith("project-cli")).every(({ status }) => status === "pass")).toBe(true);
+  });
+
+  it("rejects a production smoke command that includes the preview Checkout test", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await cp(path.join(templateRoot, "tests/browser/preview-product.spec.ts"), path.join(root, "tests/browser/preview-product.spec.ts"), { recursive: true });
+    const manifest = JSON.parse(await readFile(path.join(templateRoot, "package.json"), "utf8")) as { scripts: Record<string, string> };
+    manifest.scripts["test:deployed"] += " tests/browser/preview-product.spec.ts";
+    await writeFile(path.join(root, "package.json"), JSON.stringify(manifest));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.browser.preview-only-billing", status: "fail" }));
   });
 
   it("rejects mutable Action references", async () => {
@@ -33,6 +77,97 @@ describe("generated CI deployment contract", () => {
     const report = await validateCi(root);
     expect(report.valid).toBe(false);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.workflow.ci.yml.actions-pinned", status: "fail", evidence: "actions/checkout@v4" }));
+  });
+
+  it("requires encrypted transactional provider preflight before preview provisioning", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replace("node scripts/transactional-provider-preflight.mjs", "echo skip"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.transactional-provider-preflight", status: "fail" }));
+  });
+
+  it("requires preview secrets and overrides to use the rendered isolated Worker config", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "preview.yml");
+    const source = await readFile(workflowPath, "utf8");
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.isolated-cloudflare", status: "pass" }));
+    await writeFile(workflowPath, source.replace("--worker-config .trestle-queues.wrangler.jsonc", ""));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.isolated-cloudflare", status: "fail" }));
+    await writeFile(workflowPath, source.replace("secret put DATABASE_URL --env preview --config .trestle-queues.wrangler.jsonc", "secret put DATABASE_URL --env preview --name wrong-worker"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.preview.isolated-cloudflare", status: "fail" }));
+  });
+
+  it("requires verified Resend sender domain in preview and staging preflight", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const previewPath = path.join(root, ".github", "workflows", "preview.yml");
+    await writeFile(previewPath, (await readFile(previewPath, "utf8")).replace("pnpm exec trestle email doctor --env preview", "echo skip"));
+    const deployPath = path.join(root, ".github", "workflows", "deploy.yml");
+    await writeFile(deployPath, (await readFile(deployPath, "utf8")).replace("pnpm exec trestle email doctor --env staging", "echo skip"));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.transactional-provider-preflight", status: "fail" }));
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.transactional-provider-preflight", status: "fail" }));
+  });
+
+  it("requires encrypted transactional provider preflight before staging and production provisioning", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "deploy.yml");
+    const source = await readFile(workflowPath, "utf8");
+    await writeFile(workflowPath, source.replace('TRESTLE_STRIPE_MODE: live', 'TRESTLE_STRIPE_MODE: test'));
+    const report = await validateCi(root);
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.transactional-provider-preflight", status: "fail" }));
+  });
+
+  it("requires a deployed Article RLS probe against the staging runtime database", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await cp(path.join(templateRoot, "package.json"), path.join(root, "package.json"));
+    const browserPath = path.join(root, "tests", "browser", "deployed-product.spec.ts");
+    await mkdir(path.dirname(browserPath), { recursive: true });
+    const source = await readFile(path.join(templateRoot, "tests", "browser", "deployed-product.spec.ts"), "utf8");
+    await writeFile(browserPath, source);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.staging-article-rls", status: "pass" }));
+    await writeFile(browserPath, source.replace("expect(table?.relforcerowsecurity).toBe(true);", "expect(table?.relforcerowsecurity).toBe(false);"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.staging-article-rls", status: "fail" }));
+  });
+
+  it("rejects automatic or unguarded live-email browser tests", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await cp(path.join(templateRoot, "tests", "browser"), path.join(root, "tests", "browser"), { recursive: true });
+    const packagePath = path.join(root, "package.json");
+    const original = await readFile(path.join(templateRoot, "package.json"), "utf8");
+    await writeFile(packagePath, original);
+    const checkStatus = async () => (await validateCi(root)).checks.find(({ id }) => id === "ci.browser.live-email-opt-in")?.status;
+    expect(await checkStatus()).toBe("pass");
+
+    const manifest = JSON.parse(original) as { scripts: Record<string, string> };
+    manifest.scripts["test:preview"] = manifest.scripts["test:preview"]!.replace("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0", "TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1");
+    await writeFile(packagePath, JSON.stringify(manifest));
+    expect(await checkStatus()).toBe("fail");
+    await writeFile(packagePath, original);
+
+    const previewSpec = path.join(root, "tests", "browser", "preview-email.spec.ts");
+    const spec = await readFile(previewSpec, "utf8");
+    await writeFile(previewSpec, spec.replace('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"', "false"));
+    expect(await checkStatus()).toBe("fail");
+    await writeFile(previewSpec, spec);
+
+    const previewWorkflow = path.join(root, ".github", "workflows", "preview.yml");
+    const workflow = await readFile(previewWorkflow, "utf8");
+    await writeFile(previewWorkflow, workflow.replace("run: pnpm test:preview", "run: pnpm test:preview:live-email"));
+    expect(await checkStatus()).toBe("fail");
   });
 
   it("rejects provider verification that bypasses encrypted staging credentials", async () => {
@@ -55,6 +190,49 @@ describe("generated CI deployment contract", () => {
     await writeFile(workflowPath, source.replace("pnpm exec trestle doctor --env staging", "pnpm exec trestle env status --env staging"));
     const report = await validateCi(root);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.providers.encrypted-secrets", status: "fail" }));
+  });
+
+  it("requires a protected test-mode Checkout write and idempotent retry", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const sourcePath = path.join(templateRoot, "packages", "integrations", "src", "provider.integration.test.ts");
+    const targetPath = path.join(root, "packages", "integrations", "src", "provider.integration.test.ts");
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(targetPath, source);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.checkout-write", status: "pass" }));
+    await writeFile(targetPath, source.replace("    const retry = await adapter.createCheckoutSession(input);", "    const retry = first;"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.checkout-write", status: "fail" }));
+  });
+
+  it("requires protected Resend delivery to verify the actual redirected recipient", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const sourcePath = path.join(templateRoot, "packages", "integrations", "src", "provider.integration.test.ts");
+    const targetPath = path.join(root, "packages", "integrations", "src", "provider.integration.test.ts");
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(targetPath, source);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.resend-delivery", status: "pass" }));
+    await writeFile(targetPath, source.replace("expect(accepted.to).toEqual([staging.EMAIL_STAGING_REDIRECT])", "expect(accepted.to).toHaveLength(1)"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.providers.resend-delivery", status: "fail" }));
+  });
+
+  it("rejects preview email that can bypass recipient redirection", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const emailRoot = path.join(root, "packages", "integrations", "src", "email");
+    await mkdir(emailRoot, { recursive: true });
+    const templateEmail = path.join(templateRoot, "packages", "integrations", "src", "email");
+    const factory = await readFile(path.join(templateEmail, "index.ts"), "utf8");
+    await writeFile(path.join(emailRoot, "index.ts"), factory);
+    await cp(path.join(templateEmail, "email.test.tsx"), path.join(emailRoot, "email.test.tsx"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.email.nonproduction-redirect", status: "pass" }));
+    await writeFile(path.join(emailRoot, "index.ts"), factory.replace('environment === "preview" || environment === "staging"', 'environment === "staging"'));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.email.nonproduction-redirect", status: "fail" }));
   });
 
   it("rejects omission of the local product system test", async () => {
@@ -127,6 +305,28 @@ describe("generated CI deployment contract", () => {
     await writeFile(workflowPath, source.replace("      - name: Verify the deployed production platform admin\n        if: steps.admin.outputs.enabled == 'true'\n", "      - name: Verify the deployed production platform admin\n"));
     const report = await validateCi(root);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "fail" }));
+  });
+
+  it("accepts legacy deployments without admin steps only when admin is disabled", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    await mkdir(path.join(root, ".trestle"), { recursive: true });
+    const manifestPath = path.join(root, ".trestle", "project.yaml");
+    const manifest = await readFile(path.join(templateRoot, ".trestle", "project.yaml"), "utf8");
+    await writeFile(manifestPath, manifest);
+    const workflowPath = path.join(root, ".github", "workflows", "deploy.yml");
+    const source = await readFile(workflowPath, "utf8");
+    const legacy = source.split(/\n(?=      - )/u)
+      .filter((step) => !/apps\/admin|\/admin build|db:platform:|admin-capability\.mjs|-admin(?:-staging)?\b/u.test(step))
+      .join("\n");
+    await writeFile(workflowPath, legacy);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "pass" }));
+    await writeFile(manifestPath, manifest.replace("  admin: false", "  admin: true"));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "fail" }));
+    await writeFile(manifestPath, manifest);
+    await writeFile(workflowPath, `${legacy}\n      - name: Unsafe admin deploy\n        run: pnpm --filter ./apps/admin build\n`);
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.admin", status: "fail" }));
   });
 
   it("rejects a workflow that downloads whatever CLI is currently latest", async () => {
@@ -207,7 +407,7 @@ describe("generated CI deployment contract", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.provider-preflight", status: "fail" }));
   });
 
-  it("rejects a preview whose authentication URL is not bound to the isolated application", async () => {
+  it("rejects a preview whose authentication URL is not bound to the isolated Worker API", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);
     await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
@@ -216,6 +416,9 @@ describe("generated CI deployment contract", () => {
     await writeFile(workflowPath, source.replace("secret put BETTER_AUTH_URL", "secret put STATIC_AUTH_URL"));
     const report = await validateCi(root);
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.dynamic-auth-url", status: "fail" }));
+    await writeFile(workflowPath, source.replace('BETTER_AUTH_URL: "${{ steps.preview.outputs.api_url }}"', 'BETTER_AUTH_URL: "${{ steps.preview.outputs.app_url }}"'));
+    const wrongOrigin = await validateCi(root);
+    expect(wrongOrigin.checks).toContainEqual(expect.objectContaining({ id: "ci.preview.dynamic-auth-url", status: "fail" }));
   });
 
   it("rejects database role configuration before migrations", async () => {

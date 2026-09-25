@@ -40,14 +40,35 @@ from `pnpm check` because it requires a real browser and database.
 The same browser suite also loads the Astro site and follows its sign-in and
 pricing links into the hydrated React application. Preview and production
 deploy workflows run the read-only `pnpm test:deployed` against their actual
-HTTPS URLs. Staging runs `pnpm test:staging`: it signs up with a unique
+HTTPS URLs. Preview and staging deploys run site-handoff browser checks.
+Preview also signs in with a unique verified test account created directly in
+its isolated database, then exercises tenant isolation, test Checkout, and
+webhook-projected entitlements without sending email. Staging rotates a dedicated
+verified fixture account and automatically checks sign-in, tenant switching,
+cross-tenant denial, and forced Article RLS when Article is declared. This
+staging check does not send email. The separate, explicit
+`pnpm test:staging:live-email` gate signs up with a unique
 `example.test` address, locates only that account's redirected verification
 message through Resend's sent-email API, verifies the link without printing
-the token, signs in, and checks that two organizations stay distinct. This
-requires a staging Resend key with sent-email list/read access. The test
+the token, signs in, and checks that two organizations stay distinct. When the
+application declares an Article resource, staging also creates, edits, reads,
+and deletes one through the deployed app and API, checks cross-tenant
+read/write denial, and verifies each organization's list remains isolated. If
+Queues are declared with Article, staging uses the restricted runtime
+`DATABASE_URL` to wait for that Article's committed outbox event to be sent
+and its Queue or Workflow consumer receipt to complete; this does not add a
+public introspection route. When R2 is declared, staging also uploads an
+artifact, reads a signed URL, rejects
+a forged tenant and cross-tenant access, and verifies deletion revokes that
+URL. This requires a staging Resend key with sent-email list/read access. The test
 confirms provider acceptance and redirection, not inbox delivery; staging
 canary accounts remain in the staging database until the application's
-retention policy removes them. Production never runs this mutating test.
+retention policy removes them. `pnpm test:preview:live-email` sends one
+redirected verification message and exercises preview signup and sign-in;
+the automatic preview product check covers billing separately. Neither live-email command is run
+by an automatic workflow: each invocation consumes Resend quota and creates a
+new test account. Local browser and CI tests use local email capture instead.
+Production never runs these mutating tests.
 
 ```yaml
 BETTER_AUTH_SECRET: <randomly generated>
@@ -59,14 +80,20 @@ DATABASE_URL: postgres://trestle:trestle@localhost:55432/__TRESTLE_PROJECT_NAME_
 Email is captured locally by default. Use `pnpm exec trestle email list`,
 `pnpm exec trestle email show <id>`, `pnpm exec trestle email open <id>`, and
 `pnpm exec trestle email clear` while the
-Worker is running. Staging and production use the Resend adapter with
+Worker is running. Preview, staging, and production use the Resend adapter with
 `RESEND_API_KEY` and `RESEND_WEBHOOK_SECRET` stored through `trestle secrets`;
-`EMAIL_FROM`, `EMAIL_REPLY_TO`, and the staging redirect recipient are typed
-non-secret deployment configuration.
+`EMAIL_FROM`, `EMAIL_REPLY_TO`, and the preview/staging redirect recipient are
+typed non-secret deployment configuration. Preview and staging require that
+redirect: direct provider delivery to the original recipient is reserved for
+production.
 
 Verify provider lifecycle and staging safety with `pnpm exec trestle email
 doctor --env staging`. The generated protected provider workflow performs a
-read-only Resend-domain and Stripe-test-account check when manually dispatched.
+real staging test only when manually dispatched: it authenticates the provider
+keys, sends one harmless Resend message through the recipient redirect and
+verifies the accepted recipient and idempotent retry, then creates a Stripe
+test-mode Checkout session and verifies its idempotent retry. It sends no
+email to the original `example.test` address and completes no payment.
 
 Cloud deployments use Neon's Worker-native WebSocket driver so interactive
 PostgreSQL transactions work. The legacy `neon-http` driver setting is treated
@@ -114,6 +141,30 @@ producer/consumer binding with a dead-letter queue and cron dispatcher, and
 isolate preview Queue names by pull request. Preview cleanup deletes only its
 own Queues after deleting its Worker. Queues remain opt-in until this hosted
 path has been verified against a real account.
+If a Cloudflare account has exhausted its cron-trigger quota, a preview-only
+Worker can be rendered with
+`node scripts/queue-config.mjs render preview <worker-name> --without-cron`.
+This keeps Queue, R2, and Workflow bindings for deployment and browser checks,
+but scheduled dispatch and maintenance do not run in that preview. Use the
+same rendered config for secret uploads and deployment. Staging and production
+still require the cron trigger; a cron-free preview does not verify scheduled
+behavior or establish production readiness.
+Staging and production check account-wide cron capacity before provisioning,
+database migration, or Worker upload. The check assumes the Cloudflare Workers
+Free plan (five triggers) unless the deployment environment sets
+`CLOUDFLARE_WORKERS_PLAN=paid` (250 triggers). It reads schedules and credits
+an existing trigger on the target Worker during redeployment; it does not
+change or remove other Workers' schedules. A full account must gain capacity
+before the cron-enabled deployment can proceed.
+The automatic preview browser gate checks deployed sign-in, organization
+isolation, test-mode Checkout, and signed Stripe webhook entitlements without
+sending email. It creates a verified credential fixture directly in the
+isolated preview database, so it does not prove provider email delivery. The
+explicit `pnpm test:preview:live-email` gate verifies redirected email signup
+and verification; run it sparingly when fresh Resend evidence is required.
+`BETTER_AUTH_URL` in deployed preview must be the Worker API origin so
+verification and reset links reach the auth handler; the Pages app origin is
+passed separately as `WEB_ORIGIN` for trusted browser requests.
 If `capabilities.r2` is enabled, grant `Workers R2 Storage Write`. The workflows
 provision a separate bucket per environment; preview cleanup deletes its bucket
 only when empty and never purges application artifacts.
@@ -253,7 +304,22 @@ an isolated Neon branch and unpooled runtime URL (required for PostgreSQL
 startup role options); closure deletes that branch. The preview workflow checks
 Cloudflare and Neon access independently before Doctor or resource creation.
 Doctor then requires real Resend and Stripe test-mode configuration before the
-preview can deploy; provider access alone does not mark a preview as ready.
+preview can deploy. A read-only provider preflight checks that the encrypted
+Resend and Stripe keys are active and have the required read access before
+provisioning; the email doctor also verifies that the configured sender domain
+belongs to and is verified in the chosen Resend account. Provider access alone
+does not mark a preview as ready.
+Stripe readiness requires a price ID for every declared plan, a matching
+test/live publishable key, and a safe HTTPS billing return URL. An empty or
+partial `STRIPE_PRICES` map is not deployment-ready. `trestle payments stripe
+sync --env staging` reports the intended mapping before it is applied to the
+environment configuration.
+The Stripe server key may be a full `sk_test_`/`sk_live_` key or a restricted
+`rk_test_`/`rk_live_` key with the permissions your application actually uses.
+Doctor checks the environment prefix; deployment preflight checks live API
+read access, and the protected staging provider gate checks a redirected send
+and test-mode Checkout. Verify write permissions through a controlled
+test-mode Checkout and webhook run before treating billing as production-ready.
 For Stripe test/live mode, the signed subscription webhook is a notification:
 the Worker retrieves the current subscription before projecting local billing
 state. A PostgreSQL reconciliation generation ensures an older, slower lookup
@@ -276,6 +342,14 @@ pnpm exec trestle ci validate
 pnpm exec trestle env status --env staging
 pnpm exec trestle logs --env staging --status error
 ```
+
+`trestle logs` projects Cloudflare's raw tail into validated semantic event
+records. It displays only timestamp, level, event, UUID correlation ID, status,
+and duration; request URLs, headers, exception text, arbitrary console output,
+and unknown metadata are withheld. `--search` filters event names locally, not
+raw provider payloads. Use `--format json` for the same bounded fields as JSON.
+Direct `wrangler tail` is a separate trusted diagnostic operation and may
+expose sensitive data.
 
 ## Operations and recovery
 

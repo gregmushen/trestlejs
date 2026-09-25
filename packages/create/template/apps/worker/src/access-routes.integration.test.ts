@@ -82,6 +82,22 @@ suite("tenant access routes", () => {
     expect((await call("POST", "/api/billing/checkout", { plan: "pro", requestId: "r" })).status).toBe(403);
   });
 
+  it("rejects malformed billing commands before calling a provider", async () => {
+    for (const body of [
+      {},
+      { plan: "pro" },
+      { plan: "pro", requestId: "" },
+      { plan: "pro", requestId: "bad request" },
+      { plan: "unknown", requestId: "request-1" },
+      { plan: "pro", requestId: "request-1", organizationId: orgB },
+    ]) {
+      expect((await call("POST", "/api/billing/checkout", body)).status).toBe(400);
+    }
+    for (const body of [{}, { requestId: "" }, { requestId: "bad request" }, { requestId: "request-1", organizationId: orgB }]) {
+      expect((await call("POST", "/api/billing/portal", body)).status).toBe(400);
+    }
+  });
+
   it("lets only application administrators assign application roles, within the tenant", async () => {
     expect((await call("PUT", `/api/tenant/users/${users.reader}/application-roles`, { roles: ["editor"] })).status).toBe(403);
     state.userId = users.editor;
@@ -149,4 +165,3 @@ suite("tenant access routes", () => {
     expect((await call("GET", "/api/tenant/audit")).body.events).toEqual([]);
   });
 });
-

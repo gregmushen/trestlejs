@@ -30,12 +30,13 @@ export function verificationLink(message: Pick<RetrievedEmail, "text" | "html">,
 }
 
 /** Locate only the unique test account's redirected verification email.
- * This requires a staging-only Resend API key with email-list/read permission. */
+ * This requires a preview/staging Resend API key with email-list/read permission. */
 export async function waitForStagingVerificationLink(input: {
   apiKey: string;
   originalEmail: string;
   apiOrigin: string;
   sentAfter: Date;
+  environment?: "preview" | "staging";
   timeoutMs?: number;
   request?: typeof fetch;
   now?: () => number;
@@ -46,7 +47,7 @@ export async function waitForStagingVerificationLink(input: {
   const now = input.now ?? Date.now;
   const pause = input.pause ?? (async (ms: number) => await new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const deadline = now() + (input.timeoutMs ?? 90_000);
-  const subject = `[STAGING → ${input.originalEmail}] Verify your email`;
+  const subject = `[${(input.environment ?? "staging").toUpperCase()} → ${input.originalEmail}] Verify your email`;
   do {
     let after: string | undefined;
     for (let page = 0; page < 10; page += 1) {

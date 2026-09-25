@@ -4,7 +4,9 @@ const token = process.env.GITHUB_TOKEN ?? "";
 const apiBase = (process.env.GITHUB_API_URL ?? "https://api.github.com").replace(/\/$/u, "");
 
 if (!['create', 'deactivate'].includes(operation ?? '')) throw new Error("expected create or deactivate");
-if (!/^[a-z0-9][a-z0-9-]*$/u.test(environment ?? "")) throw new Error("invalid deployment environment");
+const preview = /^preview-pr-[1-9][0-9]*$/u.test(environment ?? "");
+if (!preview && environment !== "staging" && environment !== "production") throw new Error("invalid deployment environment");
+if (operation === "deactivate" && !preview) throw new Error("only pull-request preview deployments may be deactivated");
 if (!/^[^/\s]+\/[^/\s]+$/u.test(repository)) throw new Error("GITHUB_REPOSITORY is required");
 if (!token) throw new Error("GITHUB_TOKEN is required");
 if (operation === "create" && (!/^[0-9a-f]{40}$/u.test(ref ?? "") || !/^https:\/\//u.test(environmentUrl ?? ""))) throw new Error("create requires a commit SHA and HTTPS environment URL");
@@ -29,8 +31,8 @@ async function status(deploymentId, state, url) {
       state,
       ...(url ? { environment_url: url } : {}),
       ...(process.env.GITHUB_RUN_ID ? { log_url: `https://github.com/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}` } : {}),
-      description: state === "success" ? "Preview smoke gate passed" : "Preview resources removed",
-      auto_inactive: state === "success",
+      description: state === "success" ? `${preview ? "Preview" : environment === "staging" ? "Staging" : "Production"} smoke gate passed` : "Preview resources removed",
+      auto_inactive: state === "success" && environment !== "production",
     }),
   });
 }
@@ -43,9 +45,9 @@ if (operation === "create") {
       environment,
       auto_merge: false,
       required_contexts: [],
-      transient_environment: true,
-      production_environment: false,
-      description: "Trestle isolated pull-request preview",
+      transient_environment: preview,
+      production_environment: environment === "production",
+      description: preview ? "Trestle isolated pull-request preview" : `Trestle ${environment} deployment`,
     }),
   });
   const deployment = await response.json();

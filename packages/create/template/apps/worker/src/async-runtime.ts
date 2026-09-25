@@ -1,4 +1,4 @@
-import { CloudflareQueuePublisher, dispatchOutbox, EventRegistry, processQueueBatch, type CloudflareQueueBinding, type EventDefinition, type EventEnvelope, type EventInboxStore, type OutboxStore, type QueueBatchMessage } from "@__TRESTLE_PROJECT_NAME__/events";
+import { CloudflareQueuePublisher, dispatchOutbox, EventRegistry, processQueueBatch, type CloudflareQueueBinding, type EventDefinition, type EventEnvelope, type EventInboxStore, type OutboxStore, type QueueBatchMessage, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import type { defineEventCatalog } from "@__TRESTLE_PROJECT_NAME__/events";
 
 export type QueueBatch = { messages: QueueBatchMessage[] };
@@ -57,12 +57,12 @@ export async function handleEventWithInbox<Environment>(registry: EventConsumerR
   }
 }
 
-export function createQueueConsumer<Environment>(registry: EventConsumerRegistry<Environment>, inbox: EventInboxStore, postCommit?: PostCommitEffect<Environment>) {
+export function createQueueConsumer<Environment>(registry: EventConsumerRegistry<Environment>, inbox: EventInboxStore, postCommit?: PostCommitEffect<Environment>, observe?: (settlement: QueueSettlement) => void) {
   return async (batch: QueueBatch, environment: Environment): Promise<{ acknowledged: number; retried: number }> =>
-    await processQueueBatch(batch.messages, async (envelope) => await handleEventWithInbox(registry, inbox, envelope, environment, postCommit));
+    await processQueueBatch(batch.messages, async (envelope) => await handleEventWithInbox(registry, inbox, envelope, environment, postCommit), 30, observe);
 }
 
-export function createWorkflowQueueConsumer<Environment>(registry: EventConsumerRegistry<Environment>, binding: CloudflareWorkflowBinding) {
+export function createWorkflowQueueConsumer<Environment>(registry: EventConsumerRegistry<Environment>, binding: CloudflareWorkflowBinding, observe?: (settlement: QueueSettlement) => void) {
   return async (batch: QueueBatch): Promise<{ acknowledged: number; retried: number }> =>
     await processQueueBatch(batch.messages, async (envelope) => {
       registry.validate(envelope);
@@ -74,7 +74,7 @@ export function createWorkflowQueueConsumer<Environment>(registry: EventConsumer
         try { if (!await binding.get(envelope.id)) throw error; }
         catch { throw error; }
       }
-    });
+    }, 30, observe);
 }
 
 export async function dispatchQueuedOutbox(store: OutboxStore, binding: CloudflareQueueBinding): Promise<{ sent: number; failed: number }> {

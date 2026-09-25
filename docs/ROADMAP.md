@@ -19,7 +19,8 @@ release.
 | Alpha 10 | Recovery, operational tooling, deterministic data, and safe remote access | Planned |
 | Alpha 11 | Resource evolution and framework upgrade lifecycle | Planned |
 | Alpha 12 | Optional admin, enforcement, full-system hardening, and beta preparation | Admin and access control shipped (see [ADMIN_SPEC.md](ADMIN_SPEC.md)); deployed admin evidence and beta hardening remain |
-| Beta | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
+| Beta candidate | Published prerelease with an explicit evidence ledger; production and several hosted paths remain open | In progress (see [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md)) |
+| Beta completion | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
 | v1 | Supported end-to-end product-development and deployment path with documented compatibility guarantees | Planned |
 
 ## Today’s push: Alpha 7/8 → Beta candidate
@@ -46,7 +47,9 @@ beta is complete before the evidence gates pass.
 - [ ] **Staging system gate:** run browser/API tests against the deployed
   Astro site, React application, Worker, authentication, email, billing,
   resource CRUD, tenant switching, forced RLS, CORS, deep links, health, and
-  invalid webhook signatures.
+  invalid webhook signatures. Confirm the target Workers account has a CPU
+  allowance suitable for the generated auth and database workload, then run
+  repeated and concurrent requests without `exceededCpu` outcomes.
 - [ ] **Promotion evidence:** publish GitHub Deployment records, verify the
   restricted runtime database role, promote the exact reviewed commit, and
   pass production smoke checks without exposing credentials.
@@ -74,10 +77,12 @@ beta is complete before the evidence gates pass.
 - [ ] Add operational checks for deployment identity, bindings, migration
   state, runtime role, queue/DLQ state, and provider mode.
 
-### Beta-candidate exit criteria
+### Full beta completion criteria
 
-We can call the result a **beta candidate** only when a clean generated
-project can complete the following without manual source repair:
+We can call the result **production-validated beta** only when a clean generated
+project can complete the following without manual source repair. An earlier
+beta candidate may be published with an explicit [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md)
+that labels unverified paths and does not imply production readiness:
 
 ```text
 create project
@@ -729,6 +734,415 @@ Notifications acknowledged by pre-94 installations without domain events need
 explicit provider replay or reconciliation; this release cannot reconstruct
 those historical events from a receipt alone. Live Stripe test-mode and
 deployed Resend evidence remain beta gates.
+Alpha 95 hardens Stripe deployment readiness. `trestle doctor` and
+`trestle payments stripe doctor` now reject malformed or incomplete plan-price
+maps, wrong test/live publishable keys, and unsafe return URLs; the Worker
+operational health endpoint applies the same fail-closed criteria. The CLI
+correctly decodes JSON-valued Wrangler strings instead of truncating escaped
+quotes. Tests cover every declared plan, duplicate or unknown mappings,
+environment separation, and redacted diagnostics. This makes readiness
+claims more trustworthy but is not live Stripe integration evidence.
+Alpha 96 accepts properly scoped Stripe restricted server keys (`rk_test_` /
+`rk_live_`) in the corresponding environment alongside full secret keys.
+Protected staging verification probes the prices, products, subscriptions,
+and Checkout read permissions used by the billing adapter instead of assuming
+restricted keys can read the Stripe account endpoint. The permission probes
+are read-only; successful reads do not prove write privileges for Checkout,
+catalog synchronization, or webhook endpoint management. Those remain live
+staging acceptance gates.
+Alpha 97 keeps the deployment contract compatible with applications that
+explicitly disable the optional platform admin. Such projects may retain an
+older staging/production workflow with no admin steps; admin-enabled projects
+still require fully capability-guarded admin deployment, verification, and
+smoke tests. An unguarded admin step fails validation even when admin is
+disabled. This removes an upgrade-only failure found in the live canary.
+Alpha 98 extends protected provider verification beyond Stripe read permissions:
+it creates a test-mode Checkout session through the application-owned
+`StripeBillingAdapter` and repeats the same logical request to verify Stripe
+idempotency. The authorized canary restricted key passed this test against a
+declared test-mode price. This proves Checkout creation with that key and
+price, not a completed payment, signed webhook delivery, or local entitlement
+projection. Those deployed end-to-end gates remain open.
+Alpha 99 closes a preview email safety gap. Resend delivery in both preview
+and staging now requires a configured recipient redirect and strips cc/bcc
+before immediate or scheduled delivery; preview subjects identify the
+original recipient without forwarding to it. Local mode cannot opt into
+direct Resend delivery, and only production can send provider email without
+redirection. Factory-level tests and CI contract checks protect these rules.
+The canary preview must pick up this source fix before Resend is enabled.
+Alpha 100 adds a protected, real Resend acceptance gate. The staging email
+service sends a harmless message addressed to a unique `example.test` identity,
+retries with the same idempotency key, and reads the provider receipt to assert
+that only the configured staging mailbox was addressed. The authorized canary
+Resend key passed this test. Provider acceptance and recipient metadata do not
+prove inbox delivery or webhook processing; deployed sign-up, verification,
+and delivery-event evidence remain beta gates.
+Alpha 101 separates Resend webhook verification from database persistence.
+Invalid signatures and payloads still return HTTP 400, but a database outage
+after a valid webhook returns HTTP 503 so the provider can redeliver it. The
+generated Worker tests rejection, first receipt, duplicate receipt, and
+recovery after a transient persistence failure. Live webhook registration and
+deployed delivery-event evidence remain open.
+Alpha 102 aligns `trestle email status|doctor` and top-level `trestle doctor`
+with preview/staging delivery safety: readiness requires Resend mode, a valid
+recipient redirect, a sender address, and credential shape; status reports the
+configured adapter rather than inferring it from the environment. This does
+not prove that the webhook endpoint is registered in Resend or that the
+configured signing secret belongs to that endpoint.
+The generated PostgreSQL acceptance gate runs the local product path after
+other Worker suites and drains bounded outbox batches; it no longer assumes a
+new event is among the first ten pending messages left by other tests.
+Alpha 103 exercises the Resend signature boundary against a real generated
+PostgreSQL schema, without provider credentials: a correctly signed raw-body
+event persists once, signed duplicates acknowledge idempotently, tampered
+bodies and expired signatures are rejected, and a transient database outage
+returns a retryable response before the same event succeeds on redelivery.
+This is stronger local evidence, not live provider delivery or endpoint
+registration.
+Alpha 104 adds a CI and release gate that creates a project with the published
+version two alphas behind the candidate and upgrades it using the next
+published CLI. It checks the trusted source baseline and migration history,
+applies pristine source, runs the generated project's local checks, finalizes
+the source version, validates the result, and proves application-owned content
+survives. For Alpha 104 this exercises the real Alpha 102 → 103 path. This
+does not yet prove database migration on live application data or deployed
+adjacent-version compatibility; those beta gates remain open.
+Alpha 105 extends the published adjacent-version rehearsal to PostgreSQL.
+It migrates the older generated schema, seeds two tenant-owned records,
+upgrades source and migrations with the next published CLI, verifies both
+records and forced RLS survive, and runs the generated RLS integration suite
+before source finalization. The test uses a fresh disposable database and
+does not claim deployed Neon migration or production data compatibility.
+Alpha 106 makes the human `trestle doctor` output name each safe Resend and
+Stripe configuration issue (for example an invalid webhook-secret shape or
+missing test publishable key). It keeps arbitrary exception evidence out of
+human output, so deployment failures are actionable without printing secret
+values. This does not relax the provider-readiness gate.
+Alpha 107 corrects the generated GitHub Deployment recorder: pull-request
+previews are transient, staging is persistent and non-production, and
+production is persistent and production-classified. Status descriptions now
+name the actual environment; cleanup can deactivate only pull-request
+previews. Request-level tests verify the records and guardrails, but this is
+not evidence that a hosted staging or production deployment has passed.
+Alpha 108 extends the generated staging browser gate to exercise deployed
+Article CRUD and cross-tenant read/write denial whenever the application
+declares that resource. The local PostgreSQL/browser canary covers the same
+behavior before release; hosted staging evidence remains open until provider
+configuration permits the test to run against a real deployment. It also
+records hash-verified generated package source so a future adjacent upgrade
+can distinguish pnpm's dependency-version edit from application changes even
+when pnpm reformats package.json. Alpha 108 recognizes older pristine
+byte-preserving baselines too; the published Alpha 106 → 107 rehearsal uses a
+strictly reviewed package-script transition because Alpha 107's CLI cannot
+apply that specific change automatically.
+Alpha 109 adds a conditional deployed R2 artifact smoke to staging: a signed
+URL must return the uploaded bytes, a forged tenant and cross-tenant access
+must fail, and deletion must revoke the URL. Existing local R2/system tests
+cover these mechanics before release; live provider evidence remains open
+until staging deploys and runs the browser gate.
+Alpha 110 adds a conditional deployed asynchronous smoke when Article and
+Queues are declared. The staging browser creates an Article, then uses the
+restricted runtime database role to verify that its committed outbox event
+was dispatched and its Queue/Workflow consumer receipt completed. This checks
+the real hosted path without exposing an internal status endpoint. The
+deterministic Workflow retry and duplicate-delivery challenge, as well as
+the first live staging run, remain open beta evidence.
+Alpha 111 gives that staging browser test a seven-and-a-half-minute timeout.
+The default 30-second Playwright limit was shorter than either the existing
+90-second Resend inspection window or the new 180-second Queue completion
+window, so a healthy deployed path could never complete reliably. This fixes
+the test budget; it is not evidence that staging has run.
+Its published-adjacent upgrade rehearsal also explicitly reviews the protected
+Alpha 109 → 110 deployment workflow: it requires an unchanged recorded
+baseline and the exact three-line staging transition before allowing the
+remaining source upgrade. Real application workflows still require review.
+Alpha 112 adds PostgreSQL-backed retry evidence for the generated
+`TrestleWorkflow`: a transient handler failure releases the inbox claim, a
+second execution completes it, and replay does not run the handler again.
+This exercises the real generated Workflow handler locally; a live Cloudflare
+Workflow retry remains part of the open staging evidence gate.
+Alpha 113 adds a read-only Resend/Stripe credential preflight to generated
+preview, staging, and production deployment workflows before resource
+provisioning. It checks active API access and test/live key separation without
+printing credentials. The canary's original encrypted preview/staging Resend
+and Stripe keys were rejected by their providers; they have since been
+replaced and the test Stripe key can create a test Checkout session. The
+canary now has a matching `pk_test_` publishable key in preview and staging.
+Alpha 114 makes those deployment preflights also check that the configured
+Resend sender domain is verified in the selected account. Its staging browser
+test probes the generated Article table through the restricted runtime database
+role, requiring forced PostgreSQL RLS and verifying that switching tenant
+context hides another organization's row. These checks prepare the deployed
+beta gate; they cannot replace its first successful staging run.
+The published Alpha 112 → 113 upgrade rehearsal narrowly reviews the two
+protected deployment workflow additions against their recorded baseline;
+application-owned workflows still require review during real upgrades.
+Alpha 115 extends the deployed staging browser gate through the authenticated
+billing route: it creates a test-mode Stripe Checkout session, retries the
+same logical request without creating a second session, verifies a forged
+tenant cannot start Checkout, and confirms that merely creating Checkout does
+not grant a subscription. Billing commands now reject malformed or
+client-supplied tenant fields before reaching the provider. Its preview
+secret projection also targets the exact rendered isolated Worker config;
+the first provider-backed preview exposed that Wrangler otherwise appended
+`-preview` to secret uploads while deploying the unsuffixed Worker. This is not a
+completed Stripe payment, signed webhook, or entitlement activation; those
+remain part of the deployed beta evidence gate.
+Alpha 116 makes the generated Queue/R2 preview renderer support an explicit
+`--without-cron` escape hatch when an existing Cloudflare free account has
+exhausted its five cron slots. It preserves the other bindings but cannot test
+scheduled dispatch; staging and production still require cron. The canary's
+first fully credentialed preview exposed this quota after its Worker secrets
+and database were configured, so its preview opts out while the cron-enabled
+production path remains an unverified beta gate. The preview browser gate now
+requires a real redirected verification email, sign-in, tenant-safe test-mode
+Stripe Checkout, idempotent retry, and no subscription before a verified
+webhook. A green site-handoff check alone is not sufficient evidence.
+That deeper gate also caught a preview auth URL mistake: Better Auth was
+generating email links on the static Pages app domain rather than the Worker
+API domain. Preview now binds `BETTER_AUTH_URL` to the API origin and keeps the
+app origin in `WEB_ORIGIN`.
+The published Alpha 114 → 115 upgrade rehearsal narrowly reviews the three
+preview secret-target changes against the recorded Alpha 114 workflow hash;
+unrelated protected workflow edits remain manual-review gates.
+Alpha 117 routes generated preview, staging, and production application API
+requests through a same-origin Pages Function and a bound API Worker. This
+avoids third-party session-cookie loss between `pages.dev` and `workers.dev`;
+the browser sign-in transition also performs a full navigation so the new
+session is read before dashboard guards run. The isolated canary preview
+[passed its hosted deployment and Chromium product gate](https://github.com/gregmushen/trestlejs-canary/actions/runs/36015119039):
+redirected verification email, sign-in, two-organization switching,
+test-mode Stripe Checkout, idempotent retry, and cross-tenant denial. This is
+preview evidence, not a completed staging run, signed Stripe webhook, or
+cron-enabled async-delivery proof; those beta gates remain open.
+Alpha 118 makes Stripe webhook signature verification asynchronous with the
+Web Crypto provider required by Cloudflare Workers. The earlier synchronous
+path rejected even a correctly signed request in the deployed Worker. The
+generated preview browser gate now completes a Stripe test-card Checkout and
+requires a provider-signed webhook to activate the local Pro subscription and
+`workflows.advanced` entitlement. This payment test is confined to preview;
+production smoke does not submit a test card. The isolated canary
+[passed hosted preview with both browser tests](https://github.com/gregmushen/trestlejs-canary/actions/runs/36022657568)
+after its preview-only Stripe webhook endpoint and encrypted signing secret
+were aligned. Its prior test endpoint was disabled, not deleted. This is
+provider-backed preview evidence; the separate mainline subscription
+reconciliation path, a protected staging run, and live production promotion
+remain beta gates. The published Alpha 116 → 117 adjacent upgrade rehearsal
+also narrowly reviews the protected preview and deployment workflow changes
+for same-origin Pages routing against recorded baseline hashes.
+Alpha 119 adds reviewed Stripe webhook endpoint setup. An existing `whsec_`
+value is no longer presented as proof of a remote signing-secret match:
+Stripe exposes the secret at endpoint creation, not later inspection. The
+CLI plans the exact URL and mode without mutation; apply requires a separate
+management key on standard input, a stable retry ID, and an explicit old
+endpoint ID for rotation. It stores the new secret in encrypted credentials
+before disabling only that old endpoint. The canary's preview endpoint was
+rotated through this command and [passed its hosted Checkout and signed-webhook
+browser gate](https://github.com/gregmushen/trestlejs-canary/actions/runs/36027059455).
+The first manual staging run passed credentials, tests, and migration but
+[failed at Cloudflare cron provisioning](https://github.com/gregmushen/trestlejs-canary/actions/runs/36025564283):
+all five Free-plan cron slots on that account belong to active Tidal House
+Workers. No unrelated schedule was removed, and production was skipped. A
+paid-plan capacity change or an explicitly selected schedule retirement is
+required before a complete cron-enabled staging gate can pass.
+Alpha 120 adds a read-only account cron-capacity gate to the generated staging
+and production deployment workflows. It compares the rendered Worker's desired
+schedule with all account schedules before provisioning or migration. Against
+the canary's real Cloudflare account, it detected 5/5 used triggers and
+stopped before remote changes. This prevents another partial staging update,
+but does not satisfy the blocked cron-enabled staging or beta gate.
+Alpha 121 makes `trestle logs` a safe projection of Cloudflare's raw tail:
+only validated Trestle semantic events, timestamp, level, UUID correlation ID,
+status, and duration reach the terminal. Request metadata, exception text,
+arbitrary console output, and unknown fields are withheld. The protected
+canary provider integration suite also passed locally against the supplied
+Stripe test and Resend credentials, including redirected email and idempotent
+test Checkout. This is provider evidence, not a protected GitHub Actions run
+or the missing cron-enabled staging gate. Full logging-spec conformance,
+including exact-value secret redaction and cross-boundary context, remains open.
+Alpha 122 hardens the generated structured logger with registered runtime-secret
+redaction, circular/depth/width/size limits, safe Error and BigInt handling,
+immutable parent context, child loggers, a debug level, and a non-throwing sink.
+HTTP and authenticated execution loggers register the declared Worker runtime
+secrets. This does not yet guarantee secret registration for every background
+entry point or correlation propagation across all asynchronous boundaries.
+Alpha 123 extends runtime-secret registration to webhook and billing handlers,
+cron maintenance, native webhook queues, Workflows, the platform admin, and
+the local console. Declared admin and platform database credentials join the
+redaction registry. This closes the generated logger-entry-point gap; further
+cross-boundary correlation and provider-internal diagnostics still need review.
+Alpha 124 carries validated event IDs, names, correlation IDs, and causation
+IDs into semantic Queue acknowledgment/retry logs. Invalid Queue bodies are
+reported without raw content or untrusted identifiers; diagnostic observers
+receive metadata only and cannot change delivery settlement. This narrows the
+remaining cross-boundary observability gap but does not replace deployed
+Queue/Workflow evidence.
+Alpha 125 makes the safe remote log tail show debug-level semantic events and
+UUID-shaped causation IDs alongside correlation IDs. Free-form IDs, raw
+requests, payloads, and unknown Cloudflare trace fields remain withheld.
+Alpha 126 keeps ephemeral preview Workers free of cron triggers by default,
+while staging and production retain scheduled delivery. The generated preview
+workflow states this explicitly and CI rejects a preview workflow that drops
+the guard. This removes unnecessary account-wide cron consumption from new
+previews; it does not resolve the existing Free-plan capacity needed for the
+cron-enabled staging gate.
+On 2026-09-24, the user authorized a temporary Tidal House cron pause to free
+one slot for Trestle staging. The `tidalhouse-ap-worker` receipt-matching sweep
+(`7 16 * * *` UTC) was removed through the Cloudflare schedule API, with its
+Worker and manual sweep endpoint preserved; account usage was verified at 4/5.
+Restore that exact schedule after the canary no longer requires the slot, and
+verify the account total and AP schedule afterward. A future Tidal House Worker
+deploy may restore it sooner, so recheck capacity before Trestle promotion.
+Alpha 127 makes the generated disabled-Queue and disabled-R2 CLI tests use
+isolated false-capability fixtures. They now pass even when an application
+enables both capabilities, as the beta canary does; no production Cloudflare
+behavior changes. A deployed staging run also exposed a signed-artifact URL
+bug: Pages forwards the access request under the app hostname, but its static
+route cannot serve the Worker-only download path. The Worker now signs an
+absolute URL using its configured direct API origin, with a regression test
+that simulates the Pages-forwarded hostname. Its published-adjacent upgrade rehearsal also narrowly
+reviews the Alpha 125 → 126 protected preview workflow change against the
+recorded source hash and exact target content rather than bypassing workflow
+review.
+Alpha 128 binds preview Stripe Checkout's return URL to that pull request's
+isolated Pages app at Worker deployment time. The generated CI contract now
+rejects a preview workflow missing the binding. The protected Alpha 127 → 128
+workflow edit is narrowly encoded for the next published-adjacent rehearsal;
+Alpha 128's rehearsal covers the already-published Alpha 126 → 127 pair.
+Alpha 129 tolerates Stripe Checkout's card-only presentation as well as its
+explicit Card selector in the deployed preview browser gate. The Alpha 127
+canary's staging deployment and two deployed browser tests passed after a new
+isolated Neon database was created for its divergent migration history; the
+previous staging database was retained. Preview PR 10 has a separately
+configured signed Stripe test webhook, but automatic per-preview endpoint
+provisioning and cleanup are still required for a repeatable beta gate.
+The merged canary PR exposed another preview lifecycle gap: Cloudflare refuses
+to delete a Worker while it consumes a Queue, and refuses to delete the Queue
+while the Worker still binds it. Alpha 130 makes generated preview cleanup
+detach the exact preview Queue consumer and Worker binding before deleting the
+Worker, then removes its Queues. PR 10's leftover Worker and Queues were
+removed after verifying exact identities, and its isolated Stripe test webhook
+endpoint was disabled. Automatic Stripe endpoint lifecycle remains open.
+The canary main-branch staging deployment completed its provider preflight,
+migrations, Worker/Pages rollout, and smoke checks, but its first browser gate
+lost the active organization after navigation. A rerun reached the final R2
+checks and then received HTTP 500 while switching organizations. The earlier
+manual staging run passed on the same source commit, so deployed browser
+reliability is an unresolved beta gate rather than a passed production signal.
+On 2026-09-24, a cache-disabled Hyperdrive configuration was created for the
+canary staging Worker's restricted Neon runtime role, using Neon's direct
+(non-pooler) endpoint and a five-connection origin limit. An isolated remote
+Worker probe confirmed that explicit transaction-local `SET ROLE trestle_app`
+and `app.organization_id` activate RLS, and that the login role and tenant
+setting reset after the transaction. Crucially, appending Trestle's existing
+tenant `options` to the Hyperdrive binding connection string did **not** set
+either value: the query remained under `trestle_runtime_sql`. A direct binding
+swap would therefore bypass the intended tenant connection model and is not
+permitted. Hyperdrive's default query cache must remain disabled for auth,
+permissions, billing, and other tenant-sensitive reads.
+A staging-only trial routed Better Auth's unscoped tables through Hyperdrive
+while tenant-owned tables stayed on the existing Neon driver. Typechecks and
+three targeted unit tests passed; one deployed product gate and three of five
+repeated product gates passed, while two repeats still failed at signup and
+`/api/me`. The staging Worker was rolled back to its previous version
+`5d57ad67-1972-4f1e-ae71-cd7ec888688e`; the Hyperdrive configuration remains
+unattached for further work. This trial is neither a reliability fix nor a
+full migration. Before any cutover, implement a tenant-scoped query/transaction
+adapter that sets the role and organization on every transaction, prove
+cross-tenant denial against Hyperdrive, and rerun the deployed gate repeatedly
+with diagnostic error classification.
+Alpha 131 adds bounded, message-free error names and known SQLSTATE/transport
+codes to generated HTTP failure logs, and a Better Auth error hook that reports
+unexpected server failures while suppressing ordinary authentication denials.
+The generated-project canary typecheck and tests cover malformed error objects
+and credential-bearing messages. This is diagnostic coverage, not a claim that
+the intermittent staging failure or Hyperdrive tenant migration is fixed.
+Live staging tails on 2026-09-24 established the immediate failure mode:
+Cloudflare terminated authenticated `/api/me`, Better Auth, and scheduled
+invocations with `exceededCpu` at 10 ms. A 12-request authenticated `/api/me`
+burst returned two HTTP 500 responses while successful requests used 8–33 ms
+of CPU. Successful sign-up and sign-in requests used 113 ms and 95 ms,
+respectively, under Cloudflare's occasional-overrun flexibility. This matches
+the Workers Free per-request ceiling; the account subscription itself has not
+been confirmed through the billing API. The beta deployed gate therefore needs
+an explicit Workers CPU-plan check and repeatable reliability evidence. Moving
+the Worker to a paid plan would be a billing decision requiring account-owner
+approval; no upgrade has been made. Hyperdrive may reduce connection overhead
+but does not resolve a CPU ceiling by itself: time spent waiting on Neon does
+not count as Worker CPU time. The tenant-safe Hyperdrive adapter remains a
+separate, uncompleted task.
+Alpha 132 provisions a test-mode Stripe webhook endpoint for each isolated
+pull-request preview, binds its one-time signing secret directly to that
+preview Worker, replaces only endpoints at the exact same preview URL on
+redeploy, and removes them on preview cleanup. This closes the missing-endpoint
+configuration gap observed in canary PR 11.
+The first live PR 11 run created the endpoint but placed its signing secret on
+an unintended `-preview` Worker variant, so Stripe signatures were rejected
+by the deployed Worker. The binding command now targets the exact PR Worker
+without an environment suffix. The unintended secret-only Worker was deleted;
+the intended preview Worker remained healthy. The corrected end-to-end gate
+passed in [canary run 36068738916](https://github.com/gregmushen/trestlejs-canary/actions/runs/36068738916):
+signed Stripe subscription events returned HTTP 202 and the browser observed
+the paid entitlement. One earlier notification returned retryable HTTP 503
+while ownership was not yet projected; eventual retry/reconciliation coverage
+remains a separate beta hardening item.
+The Alpha 132 published-adjacent rehearsal also reviews the exact Alpha 130
+→ 131 auth manifest dependency on `context` against the recorded baseline,
+updates the workspace lockfile, and then applies the published source upgrade.
+The local two-tenant PostgreSQL rehearsal passes with forced RLS preserved.
+Alpha 132 was published after a clean generated-project and adjacent-version
+upgrade gate in [release run 36071652219](https://github.com/gregmushen/trestlejs/actions/runs/36071652219).
+Alpha 133 makes generated preview and staging deployment browser checks
+non-sending by default: the live Resend signup and billing suites require an
+explicit opt-in command, while local capture remains in ordinary CI. The
+generated CI validator and tests reject accidental re-enablement. This
+prevents repeated deployments from consuming a shared Resend quota, but also
+means an automatic green preview/staging browser check is not evidence of
+live verification-email delivery, billing webhook entitlements, or forced
+Article RLS. Those deployed product gates remain required before beta and
+must be run deliberately with bounded provider usage.
+Alpha 134 restores the isolated preview product gate without using Resend.
+After migration and deployment, the preview workflow creates a unique,
+email-verified credential account directly in that preview's restricted Neon
+database. The deployed browser signs in through the real application, checks
+tenant switching and Checkout idempotency, completes Stripe test Checkout,
+and waits for webhook-projected entitlements. The account fixture never calls
+an email adapter, and its code refuses staging or production. The separate
+`test:preview:live-email` suite sends one verification message only when
+explicitly selected; automatic preview remains non-sending. This recovers
+deployed auth/billing evidence but does not certify Resend delivery, staging
+Article RLS, or production readiness. The isolated canary preview browser
+passed sign-in, test Checkout, and webhook-projected entitlements without
+sending email in [run 36078627876](https://github.com/gregmushen/trestlejs-canary/actions/runs/36078627876),
+attempt 2. Attempt 1 encountered a transient Cloudflare Pages HTTP 522; the
+app, site, and API returned HTTP 200 immediately afterward. The canary's
+main-branch staging deployment then passed its non-sending site browser gate
+in [run 36079291608](https://github.com/gregmushen/trestlejs-canary/actions/runs/36079291608).
+Production stopped before provisioning at read-only doctor checks: the
+production Resend webhook secret/sender and live Stripe publishable key,
+three price mappings, and return URL are not configured. This run is not
+production deployment evidence.
+Alpha 135 adds a dedicated, password-rotating staging fixture to restore an
+automatic authenticated product gate without Resend. It reuses one verified
+`example.test` account, checks tenant switching and cross-tenant denial, and
+checks forced Article RLS through the restricted database role when Article
+is declared. The fixture refuses non-staging environments. Live verification
+email remains a separate opt-in gate and is not run by ordinary deploys. The
+canary's manually triggered staging deployment passed the site and authenticated
+product browser checks without email in
+[run 36080565129](https://github.com/gregmushen/trestlejs-canary/actions/runs/36080565129).
+The canary does not yet declare Article, so this run does not prove deployed
+Article RLS; the generated local database suite and opt-in staging suite cover
+it separately until an Article-enabled staging deployment is exercised.
+Cloudflare Pages returned another transient HTTP 522 on a newly provisioned
+preview site in PR 14. The generated smoke checker now gives read-only Pages
+GET/HEAD requests a bounded retry on gateway/edge errors while preserving
+cross-origin redirect rejection, immediate failure for unsafe requests, and
+a final failure for persistent errors. This is propagation tolerance, not a
+substitute for a passing hosted preview browser run.
+The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
+protected preview-cleanup command against the recorded baseline before applying
+the source upgrade; the two-tenant database and RLS rehearsal passes.
 
 - Finish Resend and Stripe environment lifecycle, reconciliation, staging
   safety, and protected provider integration tests.
@@ -736,8 +1150,8 @@ deployed Resend evidence remain beta gates.
   route, including billing.
 - Standardize shared error mapping, semantic event names, correlation across
   asynchronous boundaries, redaction, metrics, and operational health.
-- Add `trestle logs` without turning it into a secret or request-body escape
-  hatch.
+- Complete cross-boundary correlation and review provider-internal diagnostics
+  against the standardized logging contract.
 
 ### Alpha 10: operations and recovery
 
@@ -846,3 +1260,195 @@ demonstrate a common need:
 The direction remains: strong conventions, visible application-owned source,
 local-first development, PostgreSQL-enforced tenant safety, and explicit
 operations.
+
+<!-- ===================== CUT LINE ===================== -->
+<!-- Everything below is an unscheduled proposal backlog. Release-loop and
+     implementation agents: do not implement, reorder, or edit anything below
+     this line unless the project owner explicitly schedules an item. -->
+
+---
+
+## Proposed Backlog (unscheduled, owner review)
+
+> **Do not act on this section.** These are proposals, not commitments. The
+> project owner moves an item above the cut line when it is scheduled.
+
+### Selection rule
+
+A capability joins the framework only if it removes manual work every project
+does, or closes a security or cost risk every project has. It must also be
+testable locally and in the canary without live provider accounts. Anything
+else is application code.
+
+Each capability ships behind a manifest flag, with:
+
+- generated files present only when the flag is enabled;
+- guarded deploy steps;
+- Health guidance when it is not configured;
+- a required canary scenario.
+
+### Design principle: scale to zero
+
+An idle generated project should cost close to nothing in every provider, not
+only in Cloudflare. No component may poll PostgreSQL on a fixed short interval,
+keep compute awake, or require an always-on server. Work is triggered by
+events. The only timers left are due-time alarms, set when work exists, and
+infrequent safety sweeps. Heavy or long work goes to Cloudflare Workflows or
+Containers, not a server on another cloud.
+
+### Selected (in order)
+
+1. **Due-time scheduler, replacing the every-minute cron.**
+   - **The problem.** `queue-config.mjs` adds `* * * * *` whenever Queues or R2
+     are enabled. Each run queries Neon for outbox dispatch, native webhook
+     recovery, and artifact maintenance, so compute never suspends, even with
+     no users.
+   - **Dispatch on commit.** Send the Queue wake-up after the request commits.
+   - **The scheduler.** A single Durable Object acts as a dirty flag:
+     - code that creates future work records the work's due time with it;
+     - it sets an alarm for the earliest due time;
+     - the alarm drains due work and re-arms only if more remains.
+   - **Idle behavior.** With nothing pending there is no alarm and no database
+     connection. The object's own state answers "anything pending?".
+   - **Slower background work.** Maintenance runs hourly or daily; a safety
+     sweep runs every 10–15 minutes.
+   - Durable Object alarms run under `wrangler dev` and Miniflare.
+2. **Idle check in the canary.** An idle generated project makes zero database
+   queries over a sampled window. Created events still dispatch promptly, and a
+   scheduled webhook retry fires at its due time. This keeps the scale-to-zero
+   principle from regressing.
+3. **Project identity and the provisioning token.**
+   - **One identity block in `.trestle/project.yaml`:**
+     - project name and Cloudflare zone domain;
+     - derived site, app, api, admin, and admin-api hostnames;
+     - per-environment subdomains;
+     - email sender, reply-to, and sender domain;
+     - support address.
+   - **What it replaces.** Trestle derives `APP_URL`, `API_URL`, `WEB_ORIGIN`,
+     `EMAIL_FROM`, admin origins, and CORS origins, replacing every
+     `CHANGE_ME` and hand-set GitHub variable.
+   - **The setup token.** The user creates it from documented permissions,
+     scoped to one account and one zone:
+     - **Account:** Workers Scripts, Pages, R2, Queues, Turnstile, and Access
+       apps and policies, all Edit.
+     - **Zone:** Zone Read, plus DNS and Workers Routes, both Edit.
+
+     Confirm the permission names in the dashboard when writing the docs. The
+     token stays local and encrypted; CI gets a narrow deploy token.
+   - **`trestle setup` flow:**
+     1. Verify the token and each permission with read-only calls.
+     2. Show a diff of what it will create.
+     3. Apply it idempotently: DNS records, Pages projects, custom domains, and
+        the Turnstile widget.
+     4. Record what it created.
+     5. Write keys and variables back.
+   - **Sender domain.** Create Resend's SPF and DKIM records in the zone and poll
+     until the domain is verified.
+   - **`trestle doctor`** checks the zone, hostname resolution and certificates,
+     sender verification, and that variables match the manifest.
+4. **Turnstile** on sign-up, sign-in, password reset, and the admin sign-in.
+   The widget is created by the provisioning flow for the configured hostnames.
+   Cloudflare's always-pass and always-fail test keys keep local runs and the
+   canary credential-free.
+5. **`trestle destroy --env <environment>`.** Remove exactly the resources that
+   setup recorded, so abandoned environments stop accruing cost.
+
+### Later (after the selected items)
+
+- **Cloudflare Access in front of the platform admin.** It needs the custom
+  admin domains from item 3. The admin Worker verifies the Access JWT and
+  disables its `workers.dev` route.
+- **Generated scheduled jobs** (`trestle generate job`) on the item-1
+  scheduler.
+- **Exact per-API-key rate limits** in Durable Objects, sized by entitlements.
+  Use the Workers Rate Limiting binding for cheap abuse protection.
+- **Customer UI for shipped APIs:** service accounts and keys, audit history,
+  application roles, and regional settings.
+- **OpenAPI from the central route policies,** with a typed client for API keys.
+- **Secret rotation automation** (`trestle secrets rotate`), building on
+  dual-value secrets.
+
+### Parked (only when a real application needs it)
+
+- **Cost and caching:** Hyperdrive, KV caching of execution-context lookups,
+  Analytics Engine usage metering and quotas, and an admin cost view.
+- **Realtime:** hibernating Durable Object WebSockets.
+- **Data and tenancy:** regional data placement, staging built from anonymized
+  production data, and per-tenant custom domains (Cloudflare for SaaS).
+- **Cloudflare services:** Workers AI and AI Gateway, Vectorize, Images, Browser
+  Rendering, Email Routing, and D1.
+- **External services:** Sentry, PostHog, an uptime monitor, and Grafana Cloud.
+- **Product features:**
+  - SSO through Better Auth plugins;
+  - notifications and digests;
+  - invitations and onboarding flows;
+  - trials, dunning, coupons, and referral codes;
+  - audit retention and export;
+  - backup evidence in Health;
+  - a public status page;
+  - per-organization data export and deletion;
+  - an MCP server for the tenant API.
+- **Preview environments:** a seeded demo in every preview.
+
+### Admin follow-ups from the spec review (not yet fixed)
+
+- **Unenforced platform permissions.** No admin route requires
+  `platform.organizations.read`, `platform.roles.read`, or
+  `platform.roles.manage`. Platform-role changes run only through the CLI as a
+  system actor. Either add the views that use them or remove them from the
+  registry.
+- **Unenforced registry flags.** `secret` on permissions and `revealsSecret` on
+  route policies are documented as refused in support sessions, but nothing
+  reads them.
+- **Dead code.** The custom-role code (`RoleCatalog.withCustomRoles`, the
+  `tenant` role source) is never called.
+- **Legacy column.** `member.application_role` is kept only for rollback from
+  authority model 2. Drop it in a later migration.
+- **One name for the platform database URL.** `trestle console
+  --platform-admin` uses `DATABASE_PLATFORM_URL`; everything else uses
+  `DATABASE_ADMIN_URL`.
+- **Narrower sign-in login for the admin Worker.** The admin Worker receives
+  the tenant runtime `DATABASE_URL` for Better Auth tables. Give it a narrower
+  login, so a compromised admin holds only platform authority.
+- **A database-level bound on support reads.** Support-session reads run on
+  `trestle_platform`, and the Worker's session check is the only boundary. A
+  policy tied to an open `support_session` would enforce it in PostgreSQL.
+- **Transactional webhook audit.** Tenant webhook endpoint changes are audited
+  after commit, not in the same transaction.
+- **API-key controls.**
+  - CIDR allowlists; the `network_denied` credential status exists but nothing
+    produces it.
+  - Scope profiles.
+  - Last-used tracking.
+
+### Deferred admin scope (from `ADMIN_SPEC.md` and `ADMIN_ADDITIONS_SPEC.md`)
+
+- **An Effective Access Explorer route and UI.** The explanation exists only as
+  a library function.
+- **More admin views and navigation:**
+  - Organizations, Users, Plans, Permissions, Email, and Audit views;
+  - global search, breadcrumbs, and a tenant-context indicator.
+- **Application-owned admin views** discovered by file convention, with a
+  generator.
+- **Custom and resource-scoped application roles.**
+- **Step-up authentication** for sensitive platform actions.
+- **Commercial depth:**
+  - stored plan versions and lifecycle transitions;
+  - admin plan editing;
+  - typed privilege values;
+  - entitlement compare and simulate;
+  - reconciliation records.
+- **Support sessions:** revocation by another operator, a banner that persists
+  across views, and access profiles.
+- **Regional settings:** user preferences, i18n language configuration in the
+  manifest, and the setup-wizard steps.
+- **Domain events for administrative mutations.** Today they produce audit rows
+  only.
+- **Customer webhook management:** edit, delete, test event, and secret
+  rotation where they are not yet generated.
+
+### Housekeeping
+
+- Close #54 and #57; the merged admin slices supersede them.
+- Run the admin staging path for the first time once an admin-enabled staging
+  project has isolated resources (see `ADMIN_INTEGRATION_PLAN.md`).

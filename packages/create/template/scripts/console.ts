@@ -1,7 +1,7 @@
 import repl from "node:repl";
 
 import { eq } from "drizzle-orm";
-import { createLogger } from "../packages/context/src/index.js";
+import { createLogger, loggerSecretsFromEnvironment } from "../packages/context/src/index.js";
 import { createDatabase, createTenantDatabase, organization, tenantRecord, type DatabaseDriver } from "../packages/db/src/index.js";
 
 function required(name: string): string {
@@ -24,7 +24,7 @@ const resolvedTenant = resolvedBySlug[0] ?? resolvedById[0];
 if (requestedTenant && !resolvedTenant) throw new Error(`Tenant ${requestedTenant} was not found`);
 if (mode !== "PLATFORM ADMIN" && !resolvedTenant) throw new Error("Application console requires --tenant unless --platform-admin is used");
 
-const log = createLogger({ eventSource: "console", consoleSessionId: sessionId, operatorId, environment, organizationId: resolvedTenant?.id });
+const log = createLogger({ eventSource: "console", consoleSessionId: sessionId, operatorId, environment, organizationId: resolvedTenant?.id }, undefined, { secretValues: loggerSecretsFromEnvironment(process.env) });
 log.info("console.session.started", { mode });
 
 const tenantDatabase = resolvedTenant ? createTenantDatabase(databaseURL, driver, resolvedTenant.id, { readOnly: mode === "READ ONLY" }) : undefined;

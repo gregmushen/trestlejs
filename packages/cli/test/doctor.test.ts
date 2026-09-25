@@ -6,12 +6,36 @@ import os from "node:os";
 import { loadProjectManifest } from "@trestlejs/core";
 import { describe, expect, it } from "vitest";
 
-import { runDoctor } from "../src/doctor.js";
+import { formatDoctorHuman, runDoctor } from "../src/doctor.js";
 import { encryptSecrets } from "../src/secrets.js";
 
 const templateRoot = path.resolve("packages/create/template");
 
 describe("remote provider preflight", () => {
+  it("rejects invalid Resend webhook secrets and missing preview redirects", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-email-readiness-doctor-"));
+    const key = randomBytes(32).toString("hex");
+    const configPath = path.join(root, "apps", "worker", "wrangler.jsonc");
+    const credentialsPath = path.join(root, "config", "credentials", "preview.yml.enc");
+    const vars = { EMAIL_DELIVERY_MODE: "resend", EMAIL_FROM: "Product <noreply@example.com>", EMAIL_STAGING_REDIRECT: "safe@example.com" };
+    try {
+      await mkdir(path.dirname(configPath), { recursive: true });
+      await mkdir(path.dirname(credentialsPath), { recursive: true });
+      await writeFile(configPath, JSON.stringify({ env: { preview: { vars } } }));
+      await writeFile(credentialsPath, encryptSecrets({ RESEND_API_KEY: "re_test", RESEND_WEBHOOK_SECRET: "placeholder" }, "preview", key));
+      const invalidSecret = await runDoctor(root, manifest, "preview", key);
+      expect(invalidSecret.checks).toContainEqual(expect.objectContaining({ id: "email.provider.configuration", status: "fail", evidence: expect.stringContaining("whsec_") }));
+      expect(formatDoctorHuman(invalidSecret)).toContain("Issue: RESEND_WEBHOOK_SECRET must start with whsec_");
+      await writeFile(credentialsPath, encryptSecrets({ RESEND_API_KEY: "re_test", RESEND_WEBHOOK_SECRET: "whsec_test" }, "preview", key));
+      const ready = await runDoctor(root, manifest, "preview", key);
+      expect(ready.checks).toContainEqual(expect.objectContaining({ id: "email.provider.configuration", status: "pass" }));
+      await writeFile(configPath, JSON.stringify({ env: { preview: { vars: { ...vars, EMAIL_STAGING_REDIRECT: "CHANGE_ME" } } } }));
+      const missingRedirect = await runDoctor(root, manifest, "preview", key);
+      expect(missingRedirect.checks).toContainEqual(expect.objectContaining({ id: "email.provider.configuration", status: "fail", evidence: expect.stringContaining("preview recipient redirect") }));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("declares preview Stripe keys and rejects unconfigured preview providers", async () => {
     const manifest = await loadProjectManifest(templateRoot);
     expect(manifest.secrets?.STRIPE_SECRET_KEY?.required).toContain("preview");
@@ -21,6 +45,42 @@ describe("remote provider preflight", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "billing.secret.stripe_secret_key.declared", status: "pass" }));
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "email.provider.configuration", status: "fail" }));
     expect(report.checks).toContainEqual(expect.objectContaining({ id: "billing.stripe.configuration", status: "fail" }));
+  });
+
+  it("requires every declared Stripe price and a safe return URL before reporting readiness", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-stripe-readiness-doctor-"));
+    try {
+      await mkdir(path.join(root, "apps", "worker"), { recursive: true });
+      await mkdir(path.join(root, "packages", "billing"), { recursive: true });
+      await writeFile(path.join(root, "packages", "billing", "stripe.json"), JSON.stringify({ schemaVersion: 1, currency: "usd", plans: {
+        starter: { version: 1, name: "Starter", unitAmount: 1900, interval: "month" },
+        pro: { version: 1, name: "Pro", unitAmount: 4900, interval: "month" },
+      } }));
+      const variables = { STRIPE_MODE: "test", STRIPE_PUBLISHABLE_KEY: "pk_test_example",
+        STRIPE_PRICES: JSON.stringify({ pro: "price_pro" }), BILLING_RETURN_URL: "https://example.test/settings/billing" };
+      const configPath = path.join(root, "apps", "worker", "wrangler.jsonc");
+      await writeFile(configPath, JSON.stringify({ env: { preview: { vars: variables } } }));
+      const incomplete = await runDoctor(root, manifest, "preview");
+      expect(incomplete.checks).toContainEqual(expect.objectContaining({ id: "billing.stripe.configuration", status: "fail",
+        evidence: expect.stringContaining("starter") }));
+      expect(formatDoctorHuman(incomplete)).toContain("Issue: STRIPE_PRICES is missing a valid price ID for starter");
+      await writeFile(configPath, JSON.stringify({ env: { preview: { vars: {
+        ...variables, STRIPE_PRICES: JSON.stringify({ starter: "price_starter", pro: "price_pro" }),
+      } } } }));
+      const ready = await runDoctor(root, manifest, "preview");
+      expect(ready.checks).toContainEqual(expect.objectContaining({ id: "billing.stripe.configuration", status: "pass" }));
+      expect(JSON.stringify(ready)).not.toContain("pk_test_example");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("does not print arbitrary failure evidence in human output", () => {
+    const output = formatDoctorHuman({ environment: "preview", checks: [
+      { id: "email.provider.configuration", group: "architecture", status: "fail", message: "email deployment configuration cannot be read", evidence: "whsec_private_value" },
+      { id: "configuration.secrets.valid", group: "architecture", status: "fail", message: "preview encrypted credentials cannot be read", evidence: "sk_test_private_value" },
+    ], summary: { passed: 0, warnings: 0, failed: 2 } });
+    expect(output).not.toContain("whsec_private_value");
+    expect(output).not.toContain("sk_test_private_value");
   });
 
   it("distinguishes readable but incomplete credentials from unreadable credentials", async () => {

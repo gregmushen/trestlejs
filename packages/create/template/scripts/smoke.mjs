@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import { queuesEnabled, r2Enabled, workflowsEnabled } from "./queue-config.mjs";
-import { fetchSameOrigin } from "./smoke-http.mjs";
+import { fetchSameOriginWithRetry } from "./smoke-http.mjs";
 import { assertOperationalHealth } from "./smoke-operational.mjs";
 
 const apiURL = process.env.API_URL;
@@ -34,17 +34,17 @@ const stripeWebhook = await fetch(`${apiURL}/webhooks/stripe`, { method: "POST",
 if (stripeWebhook.status !== 400) throw new Error(`Unsigned Stripe webhook was not rejected as configured: ${stripeWebhook.status}`);
 
 for (const route of ["/", "/sign-in"]) {
-  const response = await fetchSameOrigin(`${appURL}${route}`);
+  const response = await fetchSameOriginWithRetry(`${appURL}${route}`);
   if (!response.ok) throw new Error(`Web smoke failed for ${route}: ${response.status}`);
   if (!(response.headers.get("content-type") ?? "").includes("text/html")) throw new Error(`${route} did not return HTML`);
 }
 
 if (siteURL) {
   for (const route of ["/", "/features", "/pricing", "/about", "/privacy", "/terms", "/robots.txt"]) {
-    const response = await fetchSameOrigin(`${siteURL}${route}`);
+    const response = await fetchSameOriginWithRetry(`${siteURL}${route}`);
     if (!response.ok) throw new Error(`Site smoke failed for ${route}: ${response.status}`);
   }
-  const homepage = await (await fetch(siteURL)).text();
+  const homepage = await (await fetchSameOriginWithRetry(siteURL)).text();
   if (!homepage.includes(`${appURL}/sign-in`) || !homepage.includes(`${appURL}/sign-up`)) {
     throw new Error("Site authentication links do not point to APP_URL");
   }

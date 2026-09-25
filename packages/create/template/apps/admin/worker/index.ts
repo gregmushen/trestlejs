@@ -1,7 +1,7 @@
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { AccessDeniedError, applicationRoles, evaluateAccess, formatAccessExplanation, organizationRoles, permissions, platformAccess, platformRoles, publicDenial, type AccessEvaluator } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { Entitlements, featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
-import { createLogger } from "@__TRESTLE_PROJECT_NAME__/context";
+import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportableOrganizations, supportOrganizationView,
@@ -98,7 +98,7 @@ for (const [method, path] of [["POST", "/api/auth/sign-in/email"], ["POST", "/ap
 admin.use("/api/admin/*", async (context, next) => {
   const policy = adminPolicyFor(context.req.method, context.req.path);
   if (policy?.public) return await next();
-  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" });
+  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   try {
     const session = await adminDependencies.session(context.env, context.req.raw.headers);
     if (!session) return context.json({ error: "unauthorized", message: "Sign in to the platform admin" }, 401);
@@ -128,7 +128,7 @@ admin.get("/api/admin/session", async (context) => {
   const environment = context.env.APP_ENV ?? "local";
   const database = platformDatabase(context.env);
   // Display context only: authority is checked on every request, so a failed lookup shows no support banner rather than failing sign-in.
-  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" });
+  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   const [sessions, organizations, status] = await Promise.all([
     listSupportSessions(database, { operatorId: operator.id, limit: 5 }).catch((error: unknown) => { log.warn("admin.session.support_lookup_failed", { errorName: error instanceof Error ? error.name : "unknown" }); return []; }),
     supportableOrganizations(database).catch(() => []),
@@ -458,7 +458,7 @@ const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const
 
 admin.onError((error, context) => {
   if (error instanceof PlatformOperationError || error instanceof MachineAccessError || error instanceof PlatformRoleError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code as keyof typeof operationStatus] ?? 400);
-  createLogger({ correlationId: context.get("correlationId"), surface: "admin" }).error("admin.request.failed", { errorName: error.name });
+  createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);
 });
 

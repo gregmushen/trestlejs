@@ -72,6 +72,14 @@ function capture(root: string, input = "") {
 }
 
 describe("TrestleJS CLI", () => {
+  it("refuses production Stripe webhook changes before project access unless explicitly confirmed", async () => {
+    const root = await fixture();
+    const output = capture(root, "sk_live_management");
+    expect(await executeCli(["payments", "stripe", "webhook", "configure", "--env", "production",
+      "--url", "https://example.test/webhooks/stripe", "--api-key-stdin", "--apply", "--operation-id", "operation123"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("production webhook mutation requires --apply --yes");
+  });
+
   it("does not generate application routes against a pre-registry authority model", async () => {
     const root = await fixture();
     await mkdir(path.join(root, "packages", "context", "src"), { recursive: true });
@@ -153,6 +161,20 @@ describe("TrestleJS CLI", () => {
     const output = capture(root);
     expect(await executeCli(["secrets", "push", "--env", "production", "--worker-name", "fixture-worker-pr-42"], output.runtime)).toBe(1);
     expect(output.stderr()).toContain("only allowed for isolated previews");
+  });
+
+  it("requires the rendered preview config to name the exact Worker before reading secrets", async () => {
+    const root = await fixture();
+    const missing = capture(root);
+    expect(await executeCli(["secrets", "push", "--env", "preview", "--worker-name", "fixture-worker-pr-42"], missing.runtime)).toBe(1);
+    expect(missing.stderr()).toContain("both --worker-name and --worker-config");
+    const escaped = capture(root);
+    expect(await executeCli(["secrets", "push", "--env", "preview", "--worker-name", "fixture-worker-pr-42", "--worker-config", "../other.jsonc"], escaped.runtime)).toBe(1);
+    expect(escaped.stderr()).toContain("JSONC file in the Worker package");
+    await writeFile(path.join(root, "apps", "worker", ".trestle-queues.wrangler.jsonc"), JSON.stringify({ env: { preview: { name: "another-worker" } } }));
+    const mismatch = capture(root);
+    expect(await executeCli(["secrets", "push", "--env", "preview", "--worker-name", "fixture-worker-pr-42", "--worker-config", ".trestle-queues.wrangler.jsonc"], mismatch.runtime)).toBe(1);
+    expect(mismatch.stderr()).toContain("does not match the requested isolated Worker");
   });
 
   it("requires explicit confirmation before bootstrapping a remote runtime role", async () => {
@@ -392,7 +414,7 @@ export const applicationEventCatalog = defineEventCatalog([
     const validate = capture(root);
     expect(await executeCli(["plan", "validate", ".trestle/setup.json"], validate.runtime)).toBe(0);
     expect(validate.stdout()).toContain("contains no plaintext secret values");
-    await writeFile(path.join(root, ".trestle", "future.json"), `${JSON.stringify({ ...plan, minimumTrestleVersion: "0.1.0-alpha.999" }, null, 2)}\n`);
+    await writeFile(path.join(root, ".trestle", "future.json"), `${JSON.stringify({ ...plan, minimumTrestleVersion: "0.2.0" }, null, 2)}\n`);
     const future = capture(root);
     expect(await executeCli(["plan", "validate", ".trestle/future.json"], future.runtime)).toBe(1);
     expect(future.stderr()).toContain("or newer");

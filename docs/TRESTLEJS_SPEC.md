@@ -960,6 +960,7 @@ trestle payments stripe status [--env <env>]
 trestle payments stripe sync --env <env>
 trestle payments stripe doctor [--env <env>]
 trestle payments stripe webhook
+trestle payments stripe webhook configure --env <env> --url <url> --api-key-stdin
 trestle payments stripe listen
 trestle payments stripe seed
 trestle payments stripe test
@@ -968,6 +969,13 @@ trestle payments stripe test
 Remote mutation requires an explicit environment. `init` generates application-
 owned source, configuration declarations, migrations, webhook handling, local
 fixtures, tests, and UI without creating live Stripe resources.
+The remote webhook setup command takes a short-lived management key on standard
+input, previews the exact endpoint before mutation, and captures Stripe's
+signing secret at creation into TrestleJS encrypted credentials. Rotation names
+the old endpoint explicitly and disables it only after secret storage succeeds.
+A syntactically valid `whsec_` alone does not prove that the deployed Worker
+matches a remote Stripe endpoint; provider-signed delivery remains a separate
+readiness gate.
 
 ### Contract, ownership, and plans
 
