@@ -470,6 +470,77 @@ try {
     await writeFile(workflowPath, target);
     console.log("Reviewed the known Alpha 131 → 132 isolated Stripe preview webhook transition; all other source remains subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.132" && after === "0.1.0-alpha.133") {
+    // The email-budget transition intentionally changed protected deployment
+    // workflows and the generated test commands. Verify the published Alpha
+    // 132 bytes, then permit only these exact non-sending replacements.
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    const reviewWorkflow = async (relative, replacements) => {
+      const destination = path.join(project, relative);
+      const source = await readFile(destination, "utf8");
+      if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+        throw new Error(`Published Alpha 132 ${relative} differs from its recorded baseline`);
+      }
+      let reviewed = source;
+      for (const [oldText, newText] of replacements) reviewed = replaceExactlyOnce(reviewed, oldText, newText);
+      const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+      const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+      if (reviewed !== target) throw new Error(`Published Alpha 133 ${relative} differs from the reviewed email-budget transition`);
+      await writeFile(destination, target);
+    };
+    await reviewWorkflow(".github/workflows/deploy.yml", [[
+      [
+        "      - name: Verify deployed staging signup, email, organizations, and async delivery in Chromium",
+        "        run: |",
+        '          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env staging --raw)"',
+        '          echo "::add-mask::$RESEND_API_KEY"',
+        '          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"',
+        '          echo "::add-mask::$DATABASE_URL"',
+        "          pnpm test:staging",
+        "        env:",
+        '          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"',
+      ].join("\n"),
+      [
+        "      - name: Verify deployed staging site in Chromium without sending email",
+        "        run: pnpm test:staging",
+        "        env:",
+      ].join("\n"),
+    ]]);
+    await reviewWorkflow(".github/workflows/preview.yml", [
+      [[
+        "      - name: Verify deployed site and application in Chromium",
+        "        run: |",
+        '          export RESEND_API_KEY="$(pnpm exec trestle secrets get RESEND_API_KEY --env preview --raw)"',
+        '          echo "::add-mask::$RESEND_API_KEY"',
+        "          pnpm test:preview",
+        "        env:",
+        '          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"',
+      ].join("\n"), [
+        "      - name: Verify deployed site in Chromium without sending email",
+        "        run: pnpm test:preview",
+        "        env:",
+      ].join("\n")],
+      ['            echo "- Browser gate: passed"', '            echo "- Site browser gate: passed (no email sent)"'],
+    ]);
+    const relative = "package.json";
+    const packagePath = path.join(project, relative);
+    const source = JSON.parse(await readFile(packagePath, "utf8"));
+    const expected = JSON.parse(originalPackageSource);
+    if (createHash("sha256").update(originalPackageSource).digest("hex") !== baseline.files?.[relative]
+      || expected.devDependencies?.trestlejs !== before) throw new Error("Published Alpha 132 package manifest differs from its recorded baseline");
+    expected.devDependencies.trestlejs = after;
+    if (!isDeepStrictEqual(source, expected)) throw new Error("Published Alpha 132 package manifest has edits beyond the CLI version bump");
+    expected.scripts["test:preview"] = replaceExactlyOnce(expected.scripts["test:preview"], "TRESTLE_DEPLOY_ENV=preview playwright", "TRESTLE_DEPLOY_ENV=preview TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0 playwright");
+    expected.scripts["test:preview:live-email"] = "TRESTLE_BROWSER_MODE=deployed TRESTLE_DEPLOY_ENV=preview TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1 playwright test tests/browser/preview-product.spec.ts";
+    expected.scripts["test:staging"] = replaceExactlyOnce(expected.scripts["test:staging"], "TRESTLE_BROWSER_MODE=deployed playwright", "TRESTLE_BROWSER_MODE=deployed TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0 playwright");
+    expected.scripts["test:staging:live-email"] = "TRESTLE_BROWSER_MODE=deployed TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1 playwright test tests/browser/deployed-product.spec.ts";
+    expected.scripts.test = replaceExactlyOnce(expected.scripts.test, "scripts/admin-capability.test.mjs scripts/github-deployment.test.mjs", "scripts/admin-capability.test.mjs scripts/email-budget.test.mjs scripts/github-deployment.test.mjs");
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary").replaceAll("__TRESTLEJS_VERSION__", after);
+    if (!isDeepStrictEqual(expected, JSON.parse(target))) throw new Error("Published Alpha 133 package manifest differs from the reviewed non-sending commands");
+    await writeFile(packagePath, target);
+    console.log("Reviewed the known Alpha 132 → 133 email-budget workflow and command transition; application edits remain subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });

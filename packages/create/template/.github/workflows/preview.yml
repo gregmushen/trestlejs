@@ -196,7 +196,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Install deployed browser runtime
         run: pnpm exec playwright install --with-deps --only-shell chromium
-      - name: Verify deployed site in Chromium without sending email
+      - name: Create verified test account in the isolated preview database without sending email
+        run: pnpm --filter ./packages/auth exec tsx src/preview-fixture.ts
+        env:
+          TRESTLE_DEPLOY_ENV: preview
+          DATABASE_URL: "${{ steps.runtime-role.outputs.runtime_url }}"
+      - name: Verify deployed site and product in Chromium without sending email
         run: pnpm test:preview
         env:
           SITE_URL: "${{ steps.preview.outputs.site_url }}"
