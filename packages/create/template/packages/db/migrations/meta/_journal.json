@@ -232,6 +232,13 @@
       "when": 1790294400024,
       "tag": "0032_legal_jack_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790316985968,
+      "tag": "0033_jazzy_lilith",
+      "breakpoints": true
     }
   ]
 }

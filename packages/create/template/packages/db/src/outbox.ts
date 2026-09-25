@@ -1,4 +1,4 @@
-import { eventEnvelopeSchema, safeErrorCategory, type EventEnvelope, type OutboxEntry, type OutboxStore } from "@__TRESTLE_PROJECT_NAME__/events";
+import { EVENT_PROVENANCE_RETENTION_DAYS, eventEnvelopeSchema, safeErrorCategory, type EventEnvelope, type OutboxEntry, type OutboxStore } from "@__TRESTLE_PROJECT_NAME__/events";
 import { sql, type SQL } from "drizzle-orm";
 import postgres from "postgres";
 
@@ -6,6 +6,15 @@ type Row = { id: string; event_name: string; schema_version: number; occurred_at
 
 function entry(row: Row): OutboxEntry {
   return { id: row.id, message: eventEnvelopeSchema.parse({ id: row.id, name: row.event_name, schemaVersion: row.schema_version, occurredAt: row.occurred_at.toISOString(), resource: { type: row.resource_type, id: row.resource_id }, correlationId: row.correlation_id, ...(row.causation_id ? { causationId: row.causation_id } : {}), idempotencyKey: row.idempotency_key, payload: row.payload }), ...(row.organization_id ? { organizationId: row.organization_id } : {}), status: row.status, attempts: row.attempts, availableAt: row.available_at, ...(row.leased_until ? { leasedUntil: row.leased_until } : {}), ...(row.last_error ? { lastError: row.last_error } : {}) };
+}
+
+const retentionWindowMs = EVENT_PROVENANCE_RETENTION_DAYS * 86_400_000;
+
+/** Committed provenance must outlive every supported replay, so a prune may only remove rows processed before now − 30 days. */
+function assertRetentionCutoff(before: Date, now: Date): void {
+  if (!Number.isFinite(before.getTime()) || !Number.isFinite(now.getTime())) throw new Error("Invalid outbox retention cutoff");
+  const latest = new Date(now.getTime() - retentionWindowMs);
+  if (before.getTime() > latest.getTime()) throw new Error(`Outbox retention cutoff is inside the ${EVENT_PROVENANCE_RETENTION_DAYS}-day provenance window; use a cutoff at or before ${latest.toISOString()}`);
 }
 
 export function outboxApplicationConnectionString(connectionString: string): string {
@@ -53,14 +62,26 @@ export class PostgresOutboxStore implements OutboxStore {
   async fail(id: string, error: unknown, maxAttempts = 5): Promise<void> { const category = safeErrorCategory(error); const result = await this.sql`update outbox_message set attempts=attempts+1,last_error=${category},leased_until=null,status=case when attempts+1 >= ${maxAttempts} then 'dead' else 'pending' end,available_at=case when attempts+1 >= ${maxAttempts} then available_at else now()+(power(2,attempts)*interval '1 second') end where id=${id} and status='leased'`; if (result.count === 0) throw new Error(`Outbox entry ${id} is not leased`); }
   async listDead(): Promise<OutboxEntry[]> { return (await this.sql<Row[]>`select * from outbox_message where status='dead' order by available_at,id`).map(entry); }
   async redrive(id: string): Promise<OutboxEntry> { const [row] = await this.sql<Row[]>`update outbox_message set status='pending',available_at=now(),leased_until=null,last_error=null where id=${id} and status='dead' returning *`; if (!row) throw new Error(`Outbox entry ${id} is not dead-lettered`); return entry(row); }
-  async countPrunableSucceeded(before: Date): Promise<number> {
-    if (!Number.isFinite(before.getTime())) throw new Error("Invalid outbox retention cutoff");
-    const [row] = await this.sql<[{ count: string }]>`select count(*)::text as count from outbox_message where status='succeeded' and processed_at < ${before}`;
+  /**
+   * Count succeeded rows a prune at `before` would remove. Rows that in-progress
+   * work still references are excluded (see migration 0033), and `before` must be
+   * at least EVENT_PROVENANCE_RETENTION_DAYS before `now`.
+   */
+  async countPrunableSucceeded(before: Date, now: Date = new Date()): Promise<number> {
+    assertRetentionCutoff(before, now);
+    const [row] = await this.sql<[{ count: number }]>`select trestle_count_prunable_outbox_provenance(${before}) as count`;
     return Number(row?.count ?? 0);
   }
-  async pruneSucceeded(before: Date, limit = 1_000): Promise<number> {
+  /** Remove at most `limit` prunable succeeded rows, oldest first. Concurrent prunes skip each other's rows. */
+  async pruneSucceeded(before: Date, limit = 1_000, now: Date = new Date()): Promise<number> {
     if (!Number.isFinite(before.getTime()) || !Number.isInteger(limit) || limit < 1 || limit > 10_000) throw new Error("Invalid outbox retention parameters");
-    const result = await this.sql`with candidates as (select id from outbox_message where status='succeeded' and processed_at < ${before} order by processed_at,id limit ${limit} for update skip locked) delete from outbox_message using candidates where outbox_message.id=candidates.id`;
-    return result.count;
+    assertRetentionCutoff(before, now);
+    const [row] = await this.sql<[{ count: number }]>`select trestle_prune_outbox_provenance(${before}, ${limit}) as count`;
+    return Number(row?.count ?? 0);
+  }
+  /** The processed time of the oldest succeeded row still held, or null when none is. */
+  async oldestRetainedSucceeded(): Promise<Date | null> {
+    const [row] = await this.sql<[{ oldest: Date | null }]>`select min(processed_at) as oldest from outbox_message where status='succeeded'`;
+    return row?.oldest ?? null;
   }
 }

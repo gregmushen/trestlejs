@@ -1,6 +1,6 @@
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
-import { claimNativeWebhookDelivery, createSignedWebhookHeaders, createTenantDatabase, loadCurrentWebhookSigningSecret, loadNativeWebhookAttempt, resolveNativeWebhookWork, settleNativeWebhookAttempt, type Database, type NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
+import { claimNativeWebhookDelivery, createSignedWebhookHeaders, createTenantDatabase, expireNativeWebhookDelivery, loadCurrentWebhookSigningSecret, loadNativeWebhookAttempt, resolveNativeWebhookWork, settleNativeWebhookAttempt, type Database, type NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
 import type { OutboxEntry } from "@__TRESTLE_PROJECT_NAME__/events";
 
 import { sendNativeWebhook, type NativeWebhookTransportResult } from "./webhook-transport.js";
@@ -27,7 +27,14 @@ export async function runNativeWebhookWakeup(input: {
   if (!masterKey) throw new Error("Native webhook signing key is not configured");
   const tenantDatabase = input.tenantDatabase ?? ((organizationId: string) => createTenantDatabase(input.environment.DATABASE_URL, input.environment.DATABASE_DRIVER, organizationId));
   const clock = input.clock ?? { now: () => new Date() };
-  const work = await resolveNativeWebhookWork({ wakeup: input.wakeup, environment, outbox: input.outbox, tenantDatabase });
+  const work = await resolveNativeWebhookWork({ wakeup: input.wakeup, environment, outbox: input.outbox, tenantDatabase, now: clock.now() });
+  if (work.state === "expired") {
+    // Verification will refuse this event from now on, so settle the delivery
+    // rather than leave it in retry. A live lease is left to its attempt.
+    const settled = await expireNativeWebhookDelivery({ organizationId: work.organizationId, deliveryId: work.deliveryId, tenantDatabase, now: clock.now() });
+    if (settled) createLogger({ organizationId: work.organizationId }, undefined, { secretValues: loggerSecretsFromEnvironment(input.environment) }).warn("webhook.native.delivery.expired", { webhookDeliveryId: work.deliveryId, reason: "provenance_expired" });
+    return { state: settled ? "exhausted" : "ignored" };
+  }
   if (work.state !== "ready") return { state: "ignored" };
   const claim = await claimNativeWebhookDelivery({ organizationId: work.organizationId, deliveryId: work.deliveryId, tenantDatabase, clock, leaseMs: 60_000 });
   if (claim.state === "capacity") {

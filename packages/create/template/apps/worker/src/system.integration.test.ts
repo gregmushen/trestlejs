@@ -5,6 +5,7 @@ import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { NonRetryableError } from "cloudflare:workflows";
 import { TrestleWorkflow } from "./cloudflare-workflow.js";
 import { runArtifactReferenceAudit } from "./artifact-reference-audit.js";
 import { runArtifactOrphanAudit } from "./artifact-orphan-audit.js";
@@ -291,6 +292,17 @@ suite("local product path", () => {
         const [completedRetry] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, retryKey)).limit(1);
         expect(completedRetry).toMatchObject({ status: "completed", attempts: 2, lastError: null });
         expect(handlerAttempts).toBe(2);
+        // A forged Queue message that reuses the committed ID and idempotency key
+        // but carries a different payload never reaches the registered handler,
+        // is never masked as an inbox duplicate, and never creates a Workflow.
+        const forgedRetry = { ...retryEnvelope, payload: { resourceId: article.id, forged: true } };
+        const forgedDelivery: string[] = [];
+        expect(await worker.queue({ messages: [{ body: forgedRetry, ack: () => forgedDelivery.push("ack"), retry: () => forgedDelivery.push("retry") }] }, environment)).toEqual({ acknowledged: 0, retried: 1 });
+        expect(await worker.queue({ messages: [{ body: forgedRetry, ack: () => forgedDelivery.push("ack"), retry: () => forgedDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 0, retried: 1 });
+        expect(forgedDelivery).toEqual(["retry", "retry"]);
+        expect(workflowInstances.has(retryEnvelope.id)).toBe(false);
+        await expect(retryWorkflow.run({ ...retryEvent, payload: forgedRetry }, step)).rejects.toBeInstanceOf(NonRetryableError);
+        expect(handlerAttempts).toBe(2);
         const invalidDelivery: string[] = [];
         expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: 42 } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 0, retried: 1 });
         expect(invalidDelivery).toEqual(["retry"]);
@@ -386,6 +398,16 @@ suite("local product path", () => {
           expect(await replayAttempts.json()).toEqual({ attempts: [] });
           const replayInspection = await app.request(`http://localhost:8787/api/developer/webhooks/endpoints/${webhookEndpointId}/deliveries`, { headers }, webhookEnvironment);
           expect(await replayInspection.json()).toMatchObject({ deliveries: expect.arrayContaining([expect.objectContaining({ id: updateDelivery.id, activeReplayId: replayBody.replayDeliveryId, replayable: false })]) });
+          // Once the source event is past the 14-day replay window, replay is refused rather than queued for a delivery that could never run.
+          const createdMessage = messages.find((message) => message.publicEventType === "resource.article.created");
+          const createDelivery = deliveries.find((delivery) => delivery.messageId === createdMessage?.id);
+          if (!createdMessage || !createDelivery) throw new Error("Created article webhook delivery missing");
+          await database.update(webhookDelivery).set({ state: "dead", terminalReason: "system_test_failure", completedAt: new Date() }).where(eq(webhookDelivery.id, createDelivery.id));
+          await database.update(outboxMessage).set({ occurredAt: new Date(Date.now() - 15 * 86_400_000) }).where(eq(outboxMessage.id, createdMessage.sourceEventId));
+          const expiredReplay = await app.request(`http://localhost:8787/api/developer/webhooks/deliveries/${createDelivery.id}/replay`, { method: "POST", headers }, webhookEnvironment);
+          expect(expiredReplay.status).toBe(409);
+          expect(await expiredReplay.json()).toEqual({ error: "The source event is outside the 14-day replay window or no longer retained" });
+          expect(await database.select().from(webhookDelivery).where(eq(webhookDelivery.replayOfDeliveryId, createDelivery.id))).toEqual([]);
         }
         const removed = await app.request(`http://localhost:8787/api/articles/${article.id}`, { method: "DELETE", headers }, environment);
         expect(removed.status).toBe(204);

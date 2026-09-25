@@ -314,6 +314,27 @@ describe("TrestleJS CLI", () => {
     const limit = capture(root);
     expect(await executeCli(["--experimental", "queue", "prune", "--env", "staging", "--before", "2026-01-01T00:00:00Z", "--limit", "10001"], limit.runtime)).toBe(1);
     expect(limit.stderr()).toContain("--limit must be between 1 and 10000");
+    const window = capture(root);
+    expect(await executeCli(["--experimental", "queue", "prune", "--env", "staging", "--before", new Date().toISOString()], window.runtime)).toBe(1);
+    expect(window.stderr()).toContain("inside the 30-day provenance window; use a cutoff at or before");
+  });
+
+  it("runs DLQ commands as the migration role rather than the restricted runtime login", async () => {
+    const root = await fixture();
+    await initializeSecrets(root, "staging", { DATABASE_URL: "postgres://runtime@db.test/app", DATABASE_MIGRATION_URL: "postgres://migrator@db.test/app" });
+    const bin = path.join(root, "bin");
+    const log = path.join(root, "pnpm.log");
+    await mkdir(bin);
+    await writeFile(path.join(bin, "pnpm"), `#!/bin/sh\nprintf '%s %s\\n' "$DATABASE_URL" "$*" >> "${log}"\ncase "$*" in *" list"*) printf '[]' ;; esac\n`, { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+    onTestFinished(() => { process.env.PATH = previousPath; });
+    expect(await executeCli(["--experimental", "queue", "dlq", "list", "--env", "staging"], capture(root).runtime)).toBe(0);
+    expect(await executeCli(["--experimental", "queue", "dlq", "redrive", "message-1", "--env", "staging"], capture(root).runtime)).toBe(0);
+    const calls = (await readFile(log, "utf8")).trim().split("\n");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatch(/^postgres:\/\/migrator@db\.test\/app .*outbox-admin\.ts list$/u);
+    expect(calls[1]).toMatch(/^postgres:\/\/migrator@db\.test\/app .*outbox-admin\.ts redrive message-1$/u);
   });
 
   it("requires confirmation before creating recovery resources or retrying remote workflows", async () => {
@@ -533,9 +554,14 @@ export const applicationEventCatalog = defineEventCatalog([
     expect(catalogSource).not.toContain('type: "resource.article.deleted", version: 1');
     expect(await readFile(path.join(root, "packages/events/src/resources/article-webhooks.test.ts"), "utf8")).toContain("public webhook contract");
     const workerSource = await readFile(path.join(root, "apps/worker/src/index.ts"), "utf8");
-    expect(workerSource).toContain("eventConsumers.register(articleCreatedEvent, handleArticleCreated);");
-    expect(workerSource).toContain("eventConsumers.register(articleUpdatedEvent, handleArticleUpdated);");
-    expect(workerSource).toContain("eventConsumers.register(articleDeletedEvent, handleArticleDeleted);");
+    expect(workerSource).toContain('eventConsumers.register(articleCreatedEvent, handleArticleCreated, { authority: "tenant" });');
+    expect(workerSource).toContain('eventConsumers.register(articleUpdatedEvent, handleArticleUpdated, { authority: "tenant" });');
+    expect(workerSource).toContain('eventConsumers.register(articleDeletedEvent, handleArticleDeleted, { authority: "tenant" });');
+    expect(eventSource).toContain('import type { EventHandlerContext } from "../async-runtime.js";');
+    expect(eventSource).toContain("envelope: EventEnvelope, _environment: unknown, context: EventHandlerContext): Promise<void>");
+    expect(eventSource).toContain("context.log.info(");
+    expect(eventSource).toContain("organizationId: context.organizationId");
+    expect(eventSource).not.toContain("createLogger");
     const repositorySource = await readFile(path.join(root, "packages/data/src/resources/article-repository.ts"), "utf8");
     expect(repositorySource).toContain("eq(article.organizationId, this.organizationId)");
     expect(repositorySource).toContain('transaction.execute(this.events.statement("resource.article.created", { resourceId: record.id }');
@@ -563,6 +589,16 @@ export const applicationEventCatalog = defineEventCatalog([
     expect(JSON.parse(after.stdout()).data.converged).toBe(true);
     const resume = capture(root);
     expect(await executeCli(["apply", ".trestle/setup.json", "--yes"], resume.runtime)).toBe(0);
+
+    const workerPath = path.join(root, "apps/worker/src/index.ts");
+    const legacyWorker = workerSource.replace(/, \{ authority: "tenant" \}\);/gu, ");");
+    expect(legacyWorker).toContain("eventConsumers.register(articleCreatedEvent, handleArticleCreated);");
+    await writeFile(workerPath, legacyWorker);
+    expect(await executeCli(["generate", "resource", "Article", "--webhook-event", "created", "updated"], capture(root).runtime)).toBe(0);
+    const regenerated = await readFile(workerPath, "utf8");
+    expect(regenerated.match(/eventConsumers\.register\(articleCreatedEvent,/gu)).toHaveLength(1);
+    expect(regenerated.match(/eventConsumers\.register\(articleDeletedEvent,/gu)).toHaveLength(1);
+    await writeFile(workerPath, workerSource);
 
     const catalogPath = path.join(root, "packages/events/src/application-catalog.ts");
     const currentCatalog = await readFile(catalogPath, "utf8");

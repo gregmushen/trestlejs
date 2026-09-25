@@ -10,3 +10,10 @@ declare module "cloudflare:workers" {
     abstract run(event: WorkflowEvent<Params>, step: WorkflowStep): Promise<unknown>;
   }
 }
+
+declare module "cloudflare:workflows" {
+  /** Thrown from a step to end the Workflow instance in an errored state without further retries. */
+  export class NonRetryableError extends Error {
+    constructor(message: string, name?: string);
+  }
+}

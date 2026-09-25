@@ -24,6 +24,7 @@ import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
 import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, initSetupPlan, readApplyState, readSetupPlan } from "./plan.js";
+import { assertOutboxRetentionCutoff, formatOutboxRetentionSummary, type OutboxRetentionSummary } from "./outbox-retention.js";
 import { runCommand, runDevelopment } from "./processes.js";
 import { emailDeploymentIssues, inspectResendSender, validEmailAddress, type RemoteEmailEnvironment } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
@@ -565,8 +566,10 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.env === "local") throw new CliFailure("local DLQ inspection requires a running application adapter");
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      if (!values.DATABASE_URL) throw new CliFailure(`DATABASE_URL is not set for ${options.env}`);
-      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "list"], { cwd: context.root, env: { ...process.env, DATABASE_URL: values.DATABASE_URL }, stdio: "pipe" });
+      // Outbox administration needs the migration role; remotely DATABASE_URL is the restricted runtime login.
+      const connection = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
+      if (!connection) throw new CliFailure(`DATABASE_MIGRATION_URL or DATABASE_URL is not set for ${options.env}`);
+      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "list"], { cwd: context.root, env: { ...process.env, DATABASE_URL: connection }, stdio: "pipe" });
       const entries = JSON.parse(result.stdout) as unknown;
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ environment: options.env, entries }), null, 2)}\n` : `${(entries as Array<{ id: string; event: string; attempts: number }>).map((entry) => `${entry.id} ${entry.event} attempts=${entry.attempts}`).join("\n")}\n`);
     });
@@ -577,8 +580,10 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.env === "local") throw new CliFailure("local DLQ redrive requires a running application adapter");
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      if (!values.DATABASE_URL) throw new CliFailure(`DATABASE_URL is not set for ${options.env}`);
-      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "redrive", id], { cwd: context.root, env: { ...process.env, DATABASE_URL: values.DATABASE_URL }, stdio: "pipe" });
+      // Outbox administration needs the migration role; remotely DATABASE_URL is the restricted runtime login.
+      const connection = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
+      if (!connection) throw new CliFailure(`DATABASE_MIGRATION_URL or DATABASE_URL is not set for ${options.env}`);
+      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "redrive", id], { cwd: context.root, env: { ...process.env, DATABASE_URL: connection }, stdio: "pipe" });
       runtime.stdout(`Redriven ${id} in ${options.env}\n`);
       if (result.stderr) runtime.stderr(result.stderr);
     });
@@ -592,15 +597,18 @@ export function createProgram(runtime: CliRuntime): Command {
     .action(async (options: { env: ReturnType<typeof environment>; before: string; limit: string; apply?: boolean }, command: Command) => {
       if (options.env === "local") throw new CliFailure("local outbox retention requires a running application adapter");
       if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(options.before) || !Number.isFinite(new Date(options.before).getTime())) throw new CliFailure("--before must be an ISO UTC timestamp");
+      try { assertOutboxRetentionCutoff(options.before); } catch (error) { throw new CliFailure((error as Error).message); }
       const limit = Number(options.limit);
       if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) throw new CliFailure("--limit must be between 1 and 10000");
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      if (!values.DATABASE_URL) throw new CliFailure(`DATABASE_URL is not set for ${options.env}`);
+      // The retention functions run as trestle_retention and are executable only by the migration role.
+      const connection = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
+      if (!connection) throw new CliFailure(`DATABASE_MIGRATION_URL or DATABASE_URL is not set for ${options.env}`);
       const operation = options.apply ? "retention-prune" : "retention-count";
-      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", operation, options.before, String(limit)], { cwd: context.root, env: { ...process.env, DATABASE_URL: values.DATABASE_URL }, stdio: "pipe" });
-      const summary = JSON.parse(result.stdout) as { count: number };
-      runtime.stdout(`${options.apply ? "Pruned" : "Eligible"} ${summary.count} succeeded outbox record(s) in ${options.env} before ${options.before}${options.apply ? ` (limit ${limit})` : " (dry run)"}\n`);
+      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", operation, options.before, String(limit)], { cwd: context.root, env: { ...process.env, DATABASE_URL: connection }, stdio: "pipe" });
+      const summary = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}") as OutboxRetentionSummary;
+      runtime.stdout(formatOutboxRetentionSummary({ environment: options.env, before: options.before, limit, apply: Boolean(options.apply) }, summary));
     });
 
   const admin = experimental(program.command("admin").description("bootstrap and manage platform admin operators"), runtime);

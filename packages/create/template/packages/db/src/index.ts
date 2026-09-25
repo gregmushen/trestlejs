@@ -63,6 +63,7 @@ export * from "./webhook-retention.js";
 export * from "./webhook-secret-schema.js";
 export * from "./webhook-secrets.js";
 export * from "./webhook-signing.js";
+export * from "./event-provenance.js";
 export * from "./outbox.js";
 export * from "./inbox.js";
 export * from "./tenancy.js";

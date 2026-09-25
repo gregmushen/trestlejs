@@ -539,8 +539,8 @@ export function create${n.className}Api(organizationId: string) {
 }
 `);
 
-  await writeGenerated(targets[10]!, `import { createLogger } from "@${project}/context";
-import { applicationEventCatalog, type EventDefinition, type EventEnvelope } from "@${project}/events";
+  await writeGenerated(targets[10]!, `import { applicationEventCatalog, type EventDefinition, type EventEnvelope } from "@${project}/events";
+import type { EventHandlerContext } from "../async-runtime.js";
 
 export type ${n.className}CreatedPayload = { resourceId: string };
 export type ${n.className}UpdatedPayload = { resourceId: string; revision: number };
@@ -568,21 +568,20 @@ export const ${n.camel}DeletedEvent: EventDefinition<${n.className}DeletedPayloa
   },
 };
 
-// This application-owned handler records receipt. Add idempotent domain side effects here.
-export async function handle${n.className}Created(payload: ${n.className}CreatedPayload, envelope: EventEnvelope): Promise<void> {
-  createLogger({ correlationId: envelope.correlationId }).info("resource.${n.kebab}.created.consumed", {
-    resourceId: payload.resourceId,
-    eventId: envelope.id,
+// Runs only for the committed event, scoped to its tenant: use context.data for tenant reads and writes. Keep external side effects idempotent.
+export async function handle${n.className}Created(payload: ${n.className}CreatedPayload, envelope: EventEnvelope, _environment: unknown, context: EventHandlerContext): Promise<void> {
+  context.log.info("resource.${n.kebab}.created.consumed", {
+    resourceId: payload.resourceId, eventId: envelope.id, organizationId: context.organizationId,
   });
 }
-export async function handle${n.className}Updated(payload: ${n.className}UpdatedPayload, envelope: EventEnvelope): Promise<void> {
-  createLogger({ correlationId: envelope.correlationId }).info("resource.${n.kebab}.updated.consumed", {
-    resourceId: payload.resourceId, revision: payload.revision, eventId: envelope.id,
+export async function handle${n.className}Updated(payload: ${n.className}UpdatedPayload, envelope: EventEnvelope, _environment: unknown, context: EventHandlerContext): Promise<void> {
+  context.log.info("resource.${n.kebab}.updated.consumed", {
+    resourceId: payload.resourceId, revision: payload.revision, eventId: envelope.id, organizationId: context.organizationId,
   });
 }
-export async function handle${n.className}Deleted(payload: ${n.className}DeletedPayload, envelope: EventEnvelope): Promise<void> {
-  createLogger({ correlationId: envelope.correlationId }).info("resource.${n.kebab}.deleted.consumed", {
-    resourceId: payload.resourceId, revision: payload.revision, eventId: envelope.id,
+export async function handle${n.className}Deleted(payload: ${n.className}DeletedPayload, envelope: EventEnvelope, _environment: unknown, context: EventHandlerContext): Promise<void> {
+  context.log.info("resource.${n.kebab}.deleted.consumed", {
+    resourceId: payload.resourceId, revision: payload.revision, eventId: envelope.id, organizationId: context.organizationId,
   });
 }
 `);
@@ -741,16 +740,18 @@ ${relations.slice(0, 1).map((field) => relationIntegrationTest(n, field)).join("
     : `import { ${n.camel}CreatedEvent, handle${n.className}Created } from "./resources/${n.kebab}-events.js";`;
   if (!workerSource.includes(workerEventImport)) workerSource = `${workerEventImport}\n${workerSource}`;
   const workerRegistration = `app.route("/", ${n.camel}Routes);`;
-  const workerEventRegistration = emitsChangeEvents ? `eventConsumers.register(${n.camel}CreatedEvent, handle${n.className}Created);
-eventConsumers.register(${n.camel}UpdatedEvent, handle${n.className}Updated);
-eventConsumers.register(${n.camel}DeletedEvent, handle${n.className}Deleted);`
-    : `eventConsumers.register(${n.camel}CreatedEvent, handle${n.className}Created);`;
+  // Generated handlers declare tenant authority. Any existing registration of the same event,
+  // including the undeclared form earlier generators wrote, counts as already registered.
+  const workerEventRegistration = (emitsChangeEvents ? ["Created", "Updated", "Deleted"] : ["Created"])
+    .filter((kind) => !workerSource.includes(`eventConsumers.register(${n.camel}${kind}Event, `))
+    .map((kind) => `eventConsumers.register(${n.camel}${kind}Event, handle${n.className}${kind}, { authority: "tenant" });`)
+    .join("\n");
   const workerAnchor = ["\nconst consumeQueue =", "\ntype WorkerEnvironment =", "\nexport default {", "\nexport default app;"].find((candidate) => workerSource.includes(candidate));
   if (!workerAnchor) throw new Error("Worker entrypoint has no supported resource registration anchor");
   if (!workerSource.includes(workerRegistration)) {
     workerSource = workerSource.replace(workerAnchor, `\n${workerRegistration}\n${workerAnchor}`);
   }
-  if (!workerSource.includes(workerEventRegistration)) {
+  if (workerEventRegistration) {
     workerSource = workerSource.replace(workerAnchor, `\n${workerEventRegistration}\n${workerAnchor}`);
   }
   await writeFile(workerIndex, workerSource, "utf8");

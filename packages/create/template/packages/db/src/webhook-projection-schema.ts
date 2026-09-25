@@ -25,6 +25,8 @@ export const webhookMessage = pgTable("webhook_message", {
   uniqueIndex("webhook_message_id_organization_uidx").on(table.id, table.organizationId),
   uniqueIndex("webhook_message_source_projection_uidx").on(table.organizationId, table.sourceEventId, table.publicEventType, table.publicVersion),
   index("webhook_message_organization_created_idx").on(table.organizationId, table.createdAt),
+  // Outbox retention looks up projections of one committed event across every tenant.
+  index("webhook_message_source_event_idx").on(table.sourceEventId),
   check("webhook_message_version_check", sql`${table.publicVersion} > 0`),
   check("webhook_message_retention_check", sql`${table.retentionClass} IN ('standard', 'short')`),
   check("webhook_message_entitlement_check", sql`${table.entitlementDecision} IN ('not_required', 'allowed', 'denied')`),
@@ -32,6 +34,10 @@ export const webhookMessage = pgTable("webhook_message", {
   pgPolicy("webhook_message_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
   // Platform reads are limited by column grants to metadata; envelopes are never granted.
   pgPolicy("webhook_message_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
+  // Outbox retention's SECURITY DEFINER functions run as trestle_retention, a
+  // NOLOGIN role no login is a member of, with column grants limited to
+  // (id, organization_id, source_event_id).
+  pgPolicy("webhook_message_retention_select", { for: "select", to: "trestle_retention", using: sql`true` }),
 ]).enableRLS();
 
 /** One logical endpoint delivery; attempts and transport remain separate. */
@@ -65,4 +71,6 @@ export const webhookDelivery = pgTable("webhook_delivery", {
   // Platform replay uses a narrowly scoped SECURITY DEFINER function; there is
   // no direct INSERT or UPDATE permission on delivery rows.
   pgPolicy("webhook_delivery_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
+  // See webhook_message_retention_select; column grants are (message_id, organization_id, state).
+  pgPolicy("webhook_delivery_retention_select", { for: "select", to: "trestle_retention", using: sql`true` }),
 ]).enableRLS();

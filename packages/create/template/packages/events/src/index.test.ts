@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CloudflareQueuePublisher, EventRegistry, InMemoryOutbox, InMemoryQueue, LocalWorkflowScheduler, dispatchOutbox, eventEnvelopeSchema, processQueueBatch, type OutboxStore, type QueueBatchMessage } from "./index.js";
+import { CloudflareQueuePublisher, EventRegistry, InMemoryOutbox, InMemoryQueue, LocalWorkflowScheduler, PermanentEventError, dispatchOutbox, eventEnvelopeSchema, processQueueBatch, type OutboxStore, type QueueBatchMessage, type QueueSettlement } from "./index.js";
 
 const now = new Date("2026-09-21T00:00:00.000Z");
 const clock = { current: now, now() { return this.current; } };
@@ -66,6 +66,24 @@ describe("Alpha 8 asynchronous execution spine", () => {
     expect(await processQueueBatch(batch, async () => undefined, 30, (settlement) => { settlements.push(settlement); throw new Error("observer unavailable"); })).toEqual({ acknowledged: 1, retried: 1 });
     expect(states).toEqual(["ack", "retry"]);
     expect(settlements).toEqual([{ outcome: "acknowledged", event: { id: valid.id, name: valid.name, schemaVersion: valid.schemaVersion, correlationId: valid.correlationId } }, { outcome: "retried" }]);
+    expect(JSON.stringify(settlements)).not.toContain("Hello");
+  });
+  it("retries a permanent event failure into the dead-letter path and reports its reason", async () => {
+    const rejected = message("rejected-1");
+    const failed = message("failed-1");
+    const settlements: QueueSettlement[] = [];
+    const states: string[] = [];
+    const batch: QueueBatchMessage[] = [
+      { body: rejected, ack: () => states.push("unexpected"), retry: ({ delaySeconds } = {}) => states.push(`retry:${delaySeconds}`) },
+      { body: failed, ack: () => states.push("unexpected"), retry: ({ delaySeconds } = {}) => states.push(`retry:${delaySeconds}`) },
+    ];
+    const handler = async (event: { id: string }) => { throw event.id === rejected.id ? new PermanentEventError("provenance_mismatch") : new Error("database unavailable"); };
+    expect(await processQueueBatch(batch, handler, 30, (settlement) => { settlements.push(settlement); })).toEqual({ acknowledged: 0, retried: 2 });
+    expect(states).toEqual(["retry:30", "retry:30"]);
+    expect(settlements).toEqual([
+      { outcome: "retried", reason: "provenance_mismatch", event: { id: rejected.id, name: rejected.name, schemaVersion: rejected.schemaVersion, correlationId: rejected.correlationId } },
+      { outcome: "retried", event: { id: failed.id, name: failed.name, schemaVersion: failed.schemaVersion, correlationId: failed.correlationId } },
+    ]);
     expect(JSON.stringify(settlements)).not.toContain("Hello");
   });
 });

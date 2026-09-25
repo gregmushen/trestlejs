@@ -59,8 +59,8 @@ suite("Queue to committed outbound webhook projection", () => {
     const registry = new EventConsumerRegistry(catalog);
     let now = new Date();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => { throw new Error("Local webhooks must not use the network"); });
-    const consumer = createQueueConsumer(registry, inbox!, async (envelope) => {
-      await projectWebhookForEvent({ envelope, environment, outbox: outbox!, catalog, now: () => now,
+    const consumer = createQueueConsumer(registry, inbox!, outbox!, async (envelope, _environment, committed) => {
+      await projectWebhookForEvent({ envelope, environment, outbox: outbox!, ...(committed ? { committed } : {}), catalog, now: () => now,
         localScenario: { kind: "fail-times", count: 1, status: 503 } });
     });
     try {
@@ -88,8 +88,14 @@ suite("Queue to committed outbound webhook projection", () => {
       ]);
       expect(fetchSpy).not.toHaveBeenCalled();
       const forged = { ...event, payload: { articleId: "article-1", title: "Forged" } };
-      await expect(projectWebhookForEvent({ envelope: forged, environment, outbox: outbox!, catalog })).rejects.toThrow("differs from its committed");
-      expect(await consumer({ messages: [{ body: forged, ack: () => states.push("ack"), retry: () => states.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
+      await expect(projectWebhookForEvent({ envelope: forged, environment, outbox: outbox!, catalog })).rejects.toMatchObject({ name: "PermanentEventError", reason: "provenance_mismatch" });
+      // An already-verified committed row is still compared, without a second query.
+      const committed = await outbox!.findCommitted(id);
+      const unqueried = { findCommitted: async () => { throw new Error("The committed row was already loaded"); } };
+      await expect(projectWebhookForEvent({ envelope: forged, environment, outbox: unqueried, catalog, committed: committed! })).rejects.toMatchObject({ reason: "provenance_mismatch" });
+      // The forged envelope is rejected before the inbox, so it retries into the dead-letter path rather than being acknowledged as a duplicate.
+      expect(await consumer({ messages: [{ body: forged, ack: () => states.push("ack"), retry: () => states.push("retry") }] }, environment)).toEqual({ acknowledged: 0, retried: 1 });
+      expect(states.at(-1)).toBe("retry");
     } finally { fetchSpy.mockRestore(); }
   });
 
@@ -143,5 +149,33 @@ suite("Queue to committed outbound webhook projection", () => {
       { kind: "native", outcome: "retry", response_status: 503, request_body: null },
       { kind: "native", outcome: "succeeded", response_status: 204, request_body: null },
     ]);
+  });
+
+  it("settles a native delivery whose source event is past the replay window instead of leaving it to retry", async () => {
+    const organizationId = `native-expired-${crypto.randomUUID()}`;
+    const [endpoint] = await sql!<{ id: string }[]>`insert into webhook_endpoint (organization_id, environment, name, destination_url, state, provider, created_by, updated_by) values (${organizationId}, 'preview', 'Native expiry', 'https://example.com/hook', 'active', 'native', 'test-user', 'test-user') returning id`;
+    endpointIds.push(endpoint!.id);
+    await sql!`insert into webhook_subscription (organization_id, endpoint_id, public_event_type, public_version, created_by) values (${organizationId}, ${endpoint!.id}, 'article.published', 1, 'test-user')`;
+    const id = crypto.randomUUID();
+    ids.push(id);
+    const occurredAt = new Date();
+    const event = eventEnvelopeSchema.parse({ id, name: "article.published", schemaVersion: 1, occurredAt: occurredAt.toISOString(), resource: { type: "article", id: "article-3" }, correlationId: id, idempotencyKey: id, payload: { articleId: "article-3", title: "Expired" } });
+    await outbox!.append(event, { organizationId });
+    const environment = { DATABASE_URL: databaseUrl!, DATABASE_DRIVER: "postgres-js" as const, BETTER_AUTH_SECRET: "test-only-secret", APP_ENV: "preview" as const, WEBHOOK_DELIVERY_MODE: "native" as const, WEBHOOK_SECRET_KEY: masterKey };
+    const sent: unknown[] = [];
+    const tenantDatabase = (tenant: string) => createTenantDatabase(databaseUrl!, "postgres-js", tenant);
+    await projectWebhookForEvent({ envelope: event, environment, outbox: outbox!, catalog, tenantDatabase, queue: { send: async (work: unknown) => { sent.push(work); } } });
+    expect(sent).toHaveLength(1);
+    const [delivery] = await sql!<{ id: string }[]>`select id from webhook_delivery where endpoint_id=${endpoint!.id}`;
+    await sql!`update webhook_delivery set state='retry', attempt_count=2, next_attempt_at=now() where id=${delivery!.id}`;
+    const actions: string[] = [];
+    const message = { body: sent[0], ack: () => actions.push("ack"), retry: () => actions.push("retry") };
+    const send = vi.fn();
+    const later = new Date(occurredAt.getTime() + 14 * 86_400_000 + 1);
+    const run = (work: Parameters<typeof runNativeWebhookWakeup>[0]) => runNativeWebhookWakeup({ ...work, tenantDatabase, send, clock: { now: () => later } });
+    expect(await consumeNativeWebhookQueueMessages({ messages: [message], environment, outbox: outbox!, run })).toEqual({ acknowledged: 1, retried: 0 });
+    expect(actions).toEqual(["ack"]);
+    expect(send).not.toHaveBeenCalled();
+    expect((await sql!`select state, terminal_reason, next_attempt_at, completed_at = ${later} as settled_now from webhook_delivery where id=${delivery!.id}`)[0]).toEqual({ state: "exhausted", terminal_reason: "provenance_expired", next_attempt_at: null, settled_now: true });
   });
 });

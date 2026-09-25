@@ -12,7 +12,7 @@ const run = `ops${Date.now()}`;
 const organizationId = `${run}-org`;
 const correlationId = `${run}-corr`;
 const context = (reason = "customer ticket 42") => ({ actor: { type: "platform_operator" as const, id: `${run}-operator` }, reason, environment: "local", correlationId });
-const ids = { outbox: crypto.randomUUID(), live: crypto.randomUUID(), endpoint: "", dead: `${run}-dead`, concurrent: `${run}-concurrent`, purged: `${run}-purged`, succeeded: `${run}-ok` };
+const ids = { outbox: crypto.randomUUID(), live: crypto.randomUUID(), endpoint: "", dead: `${run}-dead`, concurrent: `${run}-concurrent`, purged: `${run}-purged`, succeeded: `${run}-ok`, old: `${run}-old`, orphan: `${run}-orphan` };
 
 async function asPlatform<T>(work: (transaction: postgres.TransactionSql) => Promise<T>): Promise<T> {
   return await sql!.begin(async (transaction) => {
@@ -35,9 +35,16 @@ suite("platform operations on the trestle_platform connection", () => {
     const [endpoint] = await sql!<{ id: string }[]>`insert into webhook_endpoint (organization_id, environment, name, destination_url, state, provider, created_by, updated_by)
       values (${organizationId}, 'preview', 'Ops hook', 'https://customer.example/hook', 'active', 'native', 'owner', 'owner') returning id`;
     ids.endpoint = endpoint!.id;
-    for (const [delivery, state, payloadDeleted] of [[ids.dead, "exhausted", false], [ids.concurrent, "dead", false], [ids.purged, "dead", true], [ids.succeeded, "succeeded", false]] as const) {
+    // Each message's committed outbox row is its replay provenance: `old` is
+    // outside the 14-day replay window and `orphan`'s row was pruned.
+    for (const [delivery, state, payloadDeleted, provenance] of [[ids.dead, "exhausted", false, "fresh"], [ids.concurrent, "dead", false, "fresh"], [ids.purged, "dead", true, "fresh"], [ids.succeeded, "succeeded", false, "fresh"], [ids.old, "dead", false, "old"], [ids.orphan, "dead", false, "missing"]] as const) {
+      const sourceEventId = crypto.randomUUID();
+      if (provenance !== "missing") {
+        await sql!`insert into outbox_message (id, event_name, schema_version, occurred_at, resource_type, resource_id, organization_id, correlation_id, idempotency_key, payload, status, attempts, available_at, processed_at)
+          values (${sourceEventId}, 'article.published', 1, now() - ${provenance === "old" ? "15 days" : "0 days"}::interval, 'article', 'a1', ${organizationId}, ${correlationId}, ${`${run}-${sourceEventId}`}, ${sql!.json({})}, 'succeeded', 1, now(), now())`;
+      }
       await sql!`insert into webhook_message (id, organization_id, source_event_id, public_event_type, public_version, occurred_at, resource_type, resource_id, envelope, payload_size, retention_class, entitlement_decision, status, correlation_id, payload_deleted_at)
-        values (${`${delivery}-m`}, ${organizationId}, ${crypto.randomUUID()}, 'article.published', 1, now(), 'article', 'a1', ${sql!.json({ secret: "envelope" })}, 20, 'standard', 'not_required', 'ready', ${correlationId}, ${payloadDeleted ? new Date() : null})`;
+        values (${`${delivery}-m`}, ${organizationId}, ${sourceEventId}, 'article.published', 1, now(), 'article', 'a1', ${sql!.json({ secret: "envelope" })}, 20, 'standard', 'not_required', 'ready', ${correlationId}, ${payloadDeleted ? new Date() : null})`;
       await sql!`insert into webhook_delivery (id, organization_id, message_id, endpoint_id, state, attempt_count, terminal_reason, completed_at)
         values (${delivery}, ${organizationId}, ${`${delivery}-m`}, ${ids.endpoint}, ${state}, 7, ${state === "succeeded" ? null : "retry_exhausted:http_500"}, now())`;
     }
@@ -100,6 +107,17 @@ suite("platform operations on the trestle_platform connection", () => {
     expect((await listFailedWebhookDeliveries(createPlatformDatabase(connectionString!, "postgres-js"))).find(({ id }) => id === ids.concurrent)).toMatchObject({ replayable: false, successfulReplayId: first.deliveryId, replayUnavailableReason: "resolved" });
     await expect(replayWebhookDelivery(createPlatformDatabase(connectionString!, "postgres-js"), { organizationId, deliveryId: ids.concurrent }, concurrentContext)).rejects.toThrow("already succeeded");
     expect(await sql!`select id from webhook_delivery where replay_of_delivery_id = ${ids.concurrent}`).toHaveLength(1);
+  });
+
+  it("refuses a platform replay once the source event is outside the 14-day replay window or no longer retained", async () => {
+    const platform = createPlatformDatabase(connectionString!, "postgres-js");
+    for (const deliveryId of [ids.old, ids.orphan]) {
+      const error = await replayWebhookDelivery(platform, { organizationId, deliveryId }, context()).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(PlatformOperationError);
+      expect(error).toMatchObject({ code: "conflict", message: "The source event is outside the 14-day replay window or no longer retained, so the delivery cannot be replayed" });
+    }
+    expect(await sql!`select id from webhook_delivery where replay_of_delivery_id in (${ids.old}, ${ids.orphan})`).toEqual([]);
+    expect(await sql!`select id from audit_event where name = 'platform.webhook_delivery.replayed' and summary->>'sourceDeliveryId' in (${ids.old}, ${ids.orphan})`).toEqual([]);
   });
 
   it("redrives, disables, and replays with a reason and a redacted audit record in the same transaction", async () => {

@@ -1,16 +1,21 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { recordAuditEvent } from "./audit.js";
+import { outsideReplayWindow } from "./event-provenance.js";
 import type { Database } from "./index.js";
+import { outboxMessage } from "./outbox-schema.js";
 import { webhookDelivery, webhookMessage } from "./webhook-projection-schema.js";
 import { webhookEndpoint } from "./webhook-schema.js";
 
 export type TenantWebhookReplayResult =
   | { state: "created" | "existing"; deliveryId: string }
-  | { state: "not_found" | "not_terminal" | "payload_gone" | "endpoint_inactive" | "already_succeeded" };
+  | { state: "not_found" | "not_terminal" | "payload_gone" | "endpoint_inactive" | "already_succeeded" | "provenance_expired" };
 
 /** Queue a new execution of a retained public message under forced tenant RLS.
- * The original terminal delivery and its attempts are never rewritten. */
+ * The original terminal delivery and its attempts are never rewritten.
+ * A delivery reverifies its committed source event, so a replay is refused
+ * (`provenance_expired`) once that outbox row is pruned, belongs to another
+ * tenant, or is older than the 14-day replay window. */
 export async function replayTenantWebhookDelivery(input: {
   organizationId: string;
   environment: "local" | "preview" | "staging" | "production";
@@ -36,7 +41,7 @@ export async function replayTenantWebhookDelivery(input: {
     const [source] = await transaction.select({
       state: webhookDelivery.state, attemptCount: webhookDelivery.attemptCount,
       messageId: webhookDelivery.messageId, endpointId: webhookDelivery.endpointId,
-      messageStatus: webhookMessage.status, payloadDeletedAt: webhookMessage.payloadDeletedAt,
+      sourceEventId: webhookMessage.sourceEventId, messageStatus: webhookMessage.status, payloadDeletedAt: webhookMessage.payloadDeletedAt,
       payloadPresent: sql<boolean>`${webhookMessage.envelope} IS NOT NULL`,
       endpointState: webhookEndpoint.state, endpointDeletedAt: webhookEndpoint.deletedAt,
       provider: webhookEndpoint.provider,
@@ -56,6 +61,12 @@ export async function replayTenantWebhookDelivery(input: {
     const [active] = await transaction.select({ id: webhookDelivery.id }).from(webhookDelivery)
       .where(and(eq(webhookDelivery.organizationId, input.organizationId), eq(webhookDelivery.replayOfDeliveryId, rootId), inArray(webhookDelivery.state, ["pending", "leased", "retry"]))).limit(1);
     if (active) return { state: "existing", deliveryId: active.id };
+    // FOR SHARE holds the provenance until this transaction commits; after
+    // that the new non-terminal delivery keeps it from being pruned.
+    const [provenance] = await transaction.select({ occurredAt: outboxMessage.occurredAt }).from(outboxMessage)
+      .where(and(eq(outboxMessage.id, source.sourceEventId), eq(outboxMessage.organizationId, input.organizationId)))
+      .for("share").limit(1);
+    if (!provenance || outsideReplayWindow(provenance.occurredAt, input.now)) return { state: "provenance_expired" };
     const deliveryId = `whd_replay_${crypto.randomUUID().replaceAll("-", "")}`;
     await transaction.insert(webhookDelivery).values({
       id: deliveryId, organizationId: input.organizationId, messageId: source.messageId,
