@@ -156,6 +156,12 @@ Free plan (five triggers) unless the deployment environment sets
 an existing trigger on the target Worker during redeployment; it does not
 change or remove other Workers' schedules. A full account must gain capacity
 before the cron-enabled deployment can proceed.
+Application crons declared under an environment's `triggers.crons` in
+`apps/worker/wrangler.jsonc` are kept, in order, and the framework's minute
+tick is appended only when Queues or R2 need it. Each application cron counts
+toward the capacity check. The Worker's `scheduled` handler runs framework
+maintenance only on that minute tick; add your own schedules' handling
+there, keyed on `event.cron`. Preview Workers still receive no crons.
 The automatic preview browser gate checks deployed sign-in, organization
 isolation, test-mode Checkout, and signed Stripe webhook entitlements without
 sending email. It creates a verified credential fixture directly in the

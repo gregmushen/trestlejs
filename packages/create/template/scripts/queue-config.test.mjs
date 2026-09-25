@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-import { artifactBucketName, queueNames, queuesEnabled, r2Enabled, renderQueueConfig, workflowsEnabled } from "./queue-config.mjs";
+import { artifactBucketName, FRAMEWORK_MAINTENANCE_CRON, queueNames, queuesEnabled, r2Enabled, renderQueueConfig, workflowsEnabled } from "./queue-config.mjs";
 
 const wrangler = await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8");
 
@@ -69,6 +69,44 @@ test("staging retains its cron trigger for scheduled delivery", () => {
   const rendered = JSON.parse(renderQueueConfig(wrangler, "staging", "example-worker-staging", { queues: true, r2: true, workflows: true }));
   assert.deepEqual(rendered.env.staging.triggers.crons, ["* * * * *"]);
   assert.equal(rendered.env.preview.triggers, undefined);
+});
+
+function withStagingCrons(crons) {
+  const config = JSON.parse(wrangler);
+  config.env.staging.triggers = { crons };
+  return JSON.stringify(config);
+}
+
+test("staging keeps application crons and appends the framework tick", () => {
+  const source = withStagingCrons(["0 * * * *", "30 9 * * 1"]);
+  const rendered = JSON.parse(renderQueueConfig(source, "staging", "example-worker-staging", { queues: true, r2: false, workflows: false }));
+  assert.deepEqual(rendered.env.staging.triggers.crons, ["0 * * * *", "30 9 * * 1", FRAMEWORK_MAINTENANCE_CRON]);
+  assert.deepEqual(rendered.env.production.triggers, JSON.parse(source).env.production.triggers);
+});
+
+test("the framework tick is not duplicated and application order is kept", () => {
+  const rendered = JSON.parse(renderQueueConfig(withStagingCrons(["* * * * *", "0 * * * *", "0 * * * *"]), "staging", "example-worker-staging", { queues: false, r2: true, workflows: false }));
+  assert.deepEqual(rendered.env.staging.triggers.crons, ["* * * * *", "0 * * * *"]);
+});
+
+test("application crons survive when no capability needs maintenance", () => {
+  const rendered = JSON.parse(renderQueueConfig(withStagingCrons(["0 * * * *"]), "staging", "example-worker-staging", { queues: false, r2: false, workflows: true }));
+  assert.deepEqual(rendered.env.staging.triggers.crons, ["0 * * * *"]);
+});
+
+test("rendering is idempotent", () => {
+  const once = renderQueueConfig(withStagingCrons(["0 * * * *"]), "staging", "example-worker-staging", { queues: true, r2: true, workflows: false });
+  assert.equal(renderQueueConfig(once, "staging", "example-worker-staging", { queues: true, r2: true, workflows: false }), once);
+});
+
+test("malformed cron lists are reported rather than replaced", () => {
+  assert.throws(() => renderQueueConfig(withStagingCrons("0 * * * *"), "staging", "example-worker-staging"), /triggers\.crons/u);
+  assert.throws(() => renderQueueConfig(withStagingCrons(["0 * * * *", 5]), "staging", "example-worker-staging"), /triggers\.crons/u);
+});
+
+test("the Worker gates framework maintenance on the same tick", async () => {
+  const worker = await readFile(new URL("../apps/worker/src/index.ts", import.meta.url), "utf8");
+  assert.match(worker, new RegExp(`const frameworkMaintenanceCron = "${FRAMEWORK_MAINTENANCE_CRON.replaceAll("*", "\\*")}";`, "u"));
 });
 
 test("preview can explicitly omit cron without losing Queue and Workflow bindings", () => {

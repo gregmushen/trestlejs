@@ -474,7 +474,9 @@ app.get("/api/health/operational", (context) => context.json({
   },
 }));
 
-const artifactIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+/** Matches FRAMEWORK_MAINTENANCE_CRON in scripts/queue-config.mjs, which adds it to deployed Workers. */
+const frameworkMaintenanceCron = "* * * * *";
+const artifactIdPattern =/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 // Artifacts are product resources: only application-plane authority grants them.
 // Organization roles, including Owner, never imply application actions.
@@ -582,7 +584,10 @@ export default {
       return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     } finally { await Promise.all([inbox.close(), outbox.close()]); }
   },
-  scheduled: async (_event: unknown, environment: WorkerEnvironment) => {
+  scheduled: async (event: { cron?: string } | undefined, environment: WorkerEnvironment) => {
+    // Application crons declared in wrangler.jsonc arrive with their own expression: handle them here.
+    // Framework maintenance runs only on its own tick (or a local invocation that names no cron).
+    if (event?.cron !== undefined && event.cron !== frameworkMaintenanceCron) return;
     const log = createLogger({ environment: environment.APP_ENV ?? "local" }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
     if (!environment.TRESTLE_EVENTS && !environment.TRESTLE_ARTIFACTS && environment.WEBHOOK_DELIVERY_MODE !== "local") {
       if (!environment.APP_ENV || environment.APP_ENV === "local") return;
