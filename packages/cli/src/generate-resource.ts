@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -36,9 +37,14 @@ function zodExpression(field: ResourceField): string {
   return field.required ? base : `${base}.optional()`;
 }
 
+function columnName(field: ResourceField): string {
+  return field.name.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase();
+}
+
 function columnExpression(field: ResourceField): string {
-  const column = field.name.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase();
-  const base = field.type === "integer" ? `integer("${column}")` : field.type === "boolean" ? `boolean("${column}")` : field.type === "datetime" ? `timestamp("${column}", { withTimezone: true })` : field.type === "relation" ? `uuid("${column}").references(() => ${names(field.references!.resource).camel}.id, { onDelete: "${field.references!.onDelete === "set-null" ? "set null" : field.references!.onDelete}" })` : `text("${column}")`;
+  const column = columnName(field);
+  // Relations are plain columns here; the tenant-scoped composite key is declared with the table (relationKeyExpression).
+  const base = field.type === "integer" ? `integer("${column}")` : field.type === "boolean" ? `boolean("${column}")` : field.type === "datetime" ? `timestamp("${column}", { withTimezone: true })` : field.type === "relation" ? `uuid("${column}")` : `text("${column}")`;
   return field.required ? `${base}.notNull()` : base;
 }
 
@@ -67,10 +73,94 @@ async function exists(target: string): Promise<boolean> {
   return access(target).then(() => true, () => false);
 }
 
+/** PostgreSQL truncates identifiers past 63 bytes, so long constraint names end in a stable digest instead. */
+function constraintName(value: string): string {
+  if (value.length <= 63) return value;
+  const digest = createHash("sha256").update(value).digest("hex").slice(0, 8);
+  return `${value.slice(0, 63 - digest.length - 1).replace(/_+$/u, "")}_${digest}`;
+}
+
+function tenantKeyName(resource: ResourceNames): string {
+  return constraintName(`${resource.snake}_tenant_key`);
+}
+
+function relationKeyName(resource: ResourceNames, field: ResourceField): string {
+  return constraintName(`${resource.snake}_${columnName(field)}_tenant_fk`);
+}
+
+/**
+ * A relation references the parent's (organization_id, id), so a row can only
+ * point at a parent in its own tenant. set-null is narrowed to the relation
+ * column in the migration (generateResourceMigration) so it never nulls tenant identity.
+ */
+function relationKeyExpression(resource: ResourceNames, field: ResourceField): string {
+  const related = names(field.references!.resource);
+  const action = field.references!.onDelete === "set-null" ? "set null" : field.references!.onDelete;
+  return `  foreignKey({ name: "${relationKeyName(resource, field)}", columns: [table.organizationId, table.${field.name}], foreignColumns: [${related.camel}.organizationId, ${related.camel}.id] }).onDelete("${action}"),`;
+}
+
+/** Relations may only target another generated tenant resource. Checked before any file is written. */
+async function assertRelationTargets(root: string, dbPath: string, resourceName: string, fields: readonly ResourceField[]): Promise<void> {
+  for (const field of fields.filter(({ type }) => type === "relation")) {
+    const target = field.references!.resource;
+    if (target === resourceName) throw new CliFailure(`${resourceName}.${field.name} cannot reference its own resource; self-relations are not generated yet`);
+    const related = names(target);
+    const declaration = await readFile(path.join(root, ".trestle", "resources", `${related.kebab}.json`), "utf8").then((source) => JSON.parse(source) as { tenant?: unknown }, () => undefined);
+    if (declaration?.tenant !== true || !(await exists(path.join(root, dbPath, "src", `${related.kebab}-schema.ts`)))) {
+      throw new CliFailure(`${resourceName}.${field.name} references ${target}, which is not a generated tenant resource; generate ${target} first`);
+    }
+  }
+}
+
+function withPgCoreImports(source: string, required: readonly string[]): string {
+  return source.replace(/import \{([^}]*)\} from "drizzle-orm\/pg-core";/u, (_line, imported: string) => {
+    const list = [...new Set([...imported.split(",").map((name) => name.trim()).filter(Boolean), ...required])].sort((a, b) => a.localeCompare(b));
+    return `import { ${list.join(", ")} } from "drizzle-orm/pg-core";`;
+  });
+}
+
+/** Gives a parent generated before tenant keys existed the (organization_id, id) key its children reference. */
+async function ensureTenantKey(schemaPath: string, parent: ResourceNames): Promise<boolean> {
+  const source = await readFile(schemaPath, "utf8");
+  if (source.includes(`"${tenantKeyName(parent)}"`)) return false;
+  const anchor = `  index("${parent.snake}_organization_idx").on(table.organizationId),`;
+  if (!source.includes(anchor)) throw new CliFailure(`${parent.className} schema has no tenant index anchor; add unique("${tenantKeyName(parent)}").on(table.organizationId, table.id) to it before relating to it`);
+  await writeFile(schemaPath, withPgCoreImports(source.replace(anchor, `${anchor}\n  unique("${tenantKeyName(parent)}").on(table.organizationId, table.id),`), ["unique"]), "utf8");
+  return true;
+}
+
 async function appendExport(target: string, exportLine: string): Promise<void> {
   const source = await readFile(target, "utf8");
   if (source.includes(exportLine)) return;
   await writeFile(target, `${source.trimEnd()}\n${exportLine}\n`, "utf8");
+}
+
+/** Real-PostgreSQL proof that the composite key rejects cross-tenant links and keeps tenant identity on delete. */
+function relationIntegrationTest(resource: ResourceNames, field: ResourceField): string {
+  const related = names(field.references!.resource);
+  const column = columnName(field);
+  const onDelete = field.references!.onDelete;
+  const afterParentDelete = onDelete === "set-null"
+    ? `      await sql!\`delete from ${related.snake} where id = \${parent!.id}\`;
+      expect((await sql!\`select organization_id, ${column} from ${resource.snake} where id = \${linked!.id}\`)[0]).toMatchObject({ organization_id: "org-b", ${column}: null });`
+    : onDelete === "cascade"
+      ? `      await sql!\`delete from ${related.snake} where id = \${parent!.id}\`;
+      expect(await sql!\`select id from ${resource.snake} where id = \${linked!.id}\`).toHaveLength(0);`
+      : `      await expect(sql!\`delete from ${related.snake} where id = \${parent!.id}\`).rejects.toThrow(/${relationKeyName(resource, field)}/u);`;
+  return `
+  it("keeps ${field.name} inside the row's tenant", async () => {
+    const [parent] = await sql!\`insert into ${related.snake} (organization_id, name) values ('org-b', \${\`\${prefix}parent\`}) returning id\`;
+    try {
+      await expect(sql!\`insert into ${resource.snake} (organization_id, name, ${column}) values ('org-a', \${\`\${prefix}cross\`}, \${parent!.id})\`).rejects.toThrow(/${relationKeyName(resource, field)}/u);
+      const [linked] = await sql!\`insert into ${resource.snake} (organization_id, name, ${column}) values ('org-b', \${\`\${prefix}same\`}, \${parent!.id}) returning id\`;
+      expect(linked).toBeDefined();
+${afterParentDelete}
+    } finally {
+      await sql!\`delete from ${resource.snake} where name = \${\`\${prefix}same\`}\`;
+      await sql!\`delete from ${related.snake} where id = \${parent!.id}\`;
+    }
+  });
+`;
 }
 
 export async function generateResource(root: string, manifest: ProjectManifest, resource: SetupResource): Promise<string[]> {
@@ -145,6 +235,7 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     return [];
   }
 
+  await assertRelationTargets(root, dbPath, resource.name, resource.fields);
   for (const target of targets) await mkdir(path.dirname(target), { recursive: true });
   const created: string[] = [];
   const writeGenerated = async (target: string, source: string) => {
@@ -286,8 +377,13 @@ ${resource.fields.map((field) => `        input.${field.name} !== undefined ? sq
 }
 `);
 
+  const relations = resource.fields.filter((field) => field.type === "relation");
+  for (const related of [...new Set(relations.map((field) => field.references!.resource))]) {
+    const parentSchema = path.join(root, dbPath, "src", `${names(related).kebab}-schema.ts`);
+    if (await ensureTenantKey(parentSchema, names(related))) created.push(path.relative(root, parentSchema));
+  }
   await writeGenerated(targets[4]!, `import { sql } from "drizzle-orm";
-import { boolean, index, integer, pgPolicy, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, ${relations.length ? "foreignKey, " : ""}index, integer, pgPolicy, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 ${[...new Set(resource.fields.filter((field) => field.type === "relation").map((field) => field.references!.resource))].map((related) => `import { ${names(related).camel} } from "./${names(related).kebab}-schema.js";`).join("\n")}
 
 export const ${n.camel} = pgTable("${n.snake}", {
@@ -299,7 +395,8 @@ ${resource.fields.map((field) => `  ${field.name}: ${columnExpression(field)},`)
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index("${n.snake}_organization_idx").on(table.organizationId),
-  pgPolicy("${n.snake}_tenant", {
+  unique("${tenantKeyName(n)}").on(table.organizationId, table.id),
+${relations.map((field) => `${relationKeyExpression(n, field)}\n`).join("")}  pgPolicy("${n.snake}_tenant", {
     for: "all",
     to: "trestle_app",
     using: sql\`\${table.organizationId} = current_setting('app.organization_id', true)\`,
@@ -629,7 +726,7 @@ suite("${n.className} forced tenant isolation", () => {
       expect((await transaction\`delete from ${n.snake} where organization_id = 'org-b'\`).count).toBe(0);
     });
   });
-});
+${relations.slice(0, 1).map((field) => relationIntegrationTest(n, field)).join("")}});
 `);
 
   await appendExport(path.join(root, contractsPath, "src", "index.ts"), `export * from "./resources/${n.kebab}.js";`);
@@ -697,7 +794,16 @@ export async function generateResourceMigration(root: string, manifest: ProjectM
   if (created.length !== 1) throw new CliFailure(`expected Drizzle to generate one migration, generated ${created.length}`);
   const migrationPath = path.join(migrationDirectory, created[0]!);
   let sqlSource = await readFile(migrationPath, "utf8");
+  // Drizzle adds foreign keys before unique constraints on existing tables, but a composite relation
+  // needs its parent's tenant key first. Tenant keys added this way are always on existing tables.
+  const statements = sqlSource.split("--> statement-breakpoint").map((statement) => statement.trim()).filter(Boolean);
+  const tenantKeys = statements.filter((statement) => /^ALTER TABLE "[^"]+" ADD CONSTRAINT "[^"]+" UNIQUE\("organization_id","id"\);$/u.test(statement));
+  if (tenantKeys.length) sqlSource = `${[...tenantKeys, ...statements.filter((statement) => !tenantKeys.includes(statement))].join("--> statement-breakpoint\n")}\n`;
   for (const resource of resources) {
+    for (const field of resource.fields.filter((candidate) => candidate.type === "relation" && candidate.references?.onDelete === "set-null")) {
+      // Drizzle cannot express a column list; without it SET NULL would also null organization_id.
+      sqlSource = sqlSource.replace(new RegExp(`(CONSTRAINT "${relationKeyName(names(resource.name), field)}" FOREIGN KEY [^;]*? ON DELETE) set null`, "u"), `$1 SET NULL ("${columnName(field)}")`);
+    }
     const table = names(resource.name).snake;
     sqlSource = `${sqlSource.trimEnd()}\n--> statement-breakpoint\nALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;\n--> statement-breakpoint\nREVOKE ALL ON "${table}" FROM PUBLIC;\n--> statement-breakpoint\nGRANT SELECT, INSERT, UPDATE, DELETE ON "${table}" TO trestle_app;\n`;
   }
@@ -725,15 +831,23 @@ export async function addResourceField(root: string, manifest: ProjectManifest, 
   let schema = await readFile(schemaPath, "utf8");
   const schemaAnchor = "  createdAt: timestamp";
   if (!schema.includes(schemaAnchor)) throw new CliFailure("resource schema does not contain the managed field anchor");
+  const changed: string[] = [];
   if (field.type === "relation") {
+    const dbPath = manifest.packages.db ?? "packages/db";
+    await assertRelationTargets(root, dbPath, resourceName, [field]);
     const related = names(field.references!.resource);
+    const policyAnchor = `  pgPolicy("${n.snake}_tenant", {`;
+    if (!schema.includes(policyAnchor)) throw new CliFailure("resource schema does not contain the managed tenant policy anchor");
+    const parentSchema = path.join(root, dbPath, "src", `${related.kebab}-schema.ts`);
+    if (await ensureTenantKey(parentSchema, related)) changed.push(path.relative(root, parentSchema));
     const importLine = `import { ${related.camel} } from "./${related.kebab}-schema.js";`;
     if (!schema.includes(importLine)) schema = schema.replace("\n\nexport const", `\n${importLine}\n\nexport const`);
+    schema = withPgCoreImports(schema.replace(policyAnchor, `${relationKeyExpression(n, field)}\n${policyAnchor}`), ["foreignKey"]);
   }
   schema = schema.replace(schemaAnchor, `  ${field.name}: ${columnExpression(field)},\n${schemaAnchor}`);
   await writeFile(contractsPath, contracts, "utf8");
   await writeFile(schemaPath, schema, "utf8");
   declaration.fields = [...declaration.fields, field];
   await writeFile(declarationPath, `${JSON.stringify(declaration, null, 2)}\n`, "utf8");
-  return [path.relative(root, contractsPath), path.relative(root, schemaPath), path.relative(root, declarationPath), ...await generateResourceMigration(root, manifest, [declaration])];
+  return [path.relative(root, contractsPath), path.relative(root, schemaPath), ...changed, path.relative(root, declarationPath), ...await generateResourceMigration(root, manifest, [declaration])];
 }
