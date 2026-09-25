@@ -21,6 +21,17 @@ The beta prerelease remains on the npm `next` channel, not `latest`.
 | Isolated preview | [Canary PR #14](https://github.com/gregmushen/trestlejs-canary/pull/14) was **merged**. Its [preview run](https://github.com/gregmushen/trestlejs-canary/actions/runs/36083135433) passed site and authenticated product browser tests without sending email. |
 | Hosted staging | The [post-merge staging run](https://github.com/gregmushen/trestlejs-canary/actions/runs/36083495603) deployed the site, app, and Worker and passed two non-sending browser tests. That workflow subsequently stopped in production readiness; it is not a successful production deployment. |
 
+## Beta.1 release evidence
+
+The [beta release workflow](https://github.com/gregmushen/trestlejs/actions/runs/36084890295)
+passed framework tests, PostgreSQL-backed `alpha.134` → `alpha.135`
+upgrade rehearsal, clean generated-project checks, package build, and
+publication. Public npm metadata confirms `@trestlejs/core`, `trestlejs`,
+and `create-trestlejs` at `0.1.0-beta.1` on the `next` dist-tag; `latest`
+was unchanged. The published `npx create-trestlejs@next --help` entry point
+ran successfully. This is package/release evidence, not a beta.1 hosted
+deployment or a published `alpha.135` → `beta.1` upgrade rehearsal.
+
 ## Open items
 
 | Classification | Item | Evidence boundary / next proof |
@@ -42,5 +53,3 @@ hosted Article isolation, live email, async/recovery, admin hosting, or
 sustained availability have passed. Do not promote the `next` dist-tag to
 `latest`, or describe this candidate as production-ready, until those gaps are
 resolved or explicitly accepted for a narrower release.
-
-After publication, add the beta release workflow and canary run links here.
