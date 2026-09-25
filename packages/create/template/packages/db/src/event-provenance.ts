@@ -13,11 +13,13 @@ export function outsideReplayWindow(occurredAt: Date | string, now: Date, maxAge
   return now.getTime() - committedAt > maxAgeDays * dayMs;
 }
 
-/** Stable JSON with object keys sorted, so key order never decides a match. */
+/** Stable JSON with object keys sorted by UTF-16 code unit, so key order never
+ * decides a match. Locale collation would treat distinct keys (for example
+ * one containing a soft hyphen) as equal and leave their order to chance. */
 function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) =>
     item && typeof item === "object" && !Array.isArray(item)
-      ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)))
+      ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)))
       : item);
 }
 

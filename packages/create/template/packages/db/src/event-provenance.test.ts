@@ -34,6 +34,16 @@ describe("committed event verification", () => {
     expect(await verifyCommittedEvent(store(), delivered, withinWindow)).toBe(committedEntry);
   });
 
+  it("orders payload keys by code unit, not locale, so locale-equal keys still match in any order", async () => {
+    // localeCompare ignores the soft hyphen, so it reports these two keys as equal.
+    expect("a\u00ADb".localeCompare("ab")).toBe(0);
+    const message = { ...committedMessage, payload: { "a\u00ADb": 1, ab: 2 } };
+    const entry = { ...committedEntry, message };
+    const delivered: EventEnvelope = { ...committedMessage, payload: { ab: 2, "a\u00ADb": 1 } };
+    expect(await verifyCommittedEvent(store(entry), delivered, withinWindow)).toBe(entry);
+    expect(await reason(verifyCommittedEvent(store(entry), { ...committedMessage, payload: { ab: 1, "a\u00ADb": 2 } }, withinWindow))).toBe("provenance_mismatch");
+  });
+
   it("treats an absent causation ID the same on both sides", async () => {
     const { causationId: _omitted, ...withoutCausation } = committedMessage;
     const entry = { ...committedEntry, message: withoutCausation };
