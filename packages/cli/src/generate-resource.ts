@@ -56,7 +56,7 @@ function exampleExpression(field: ResourceField): string {
   return `"${field.name === "name" ? "Example" : "Example value"}"`;
 }
 
-function names(name: string): ResourceNames {
+export function names(name: string): ResourceNames {
   if (!/^[A-Z][A-Za-z0-9]*$/u.test(name)) throw new CliFailure("resource name must be PascalCase");
   const words = name.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").split(" ").map((word) => word.toLowerCase());
   const kebab = words.join("-");
