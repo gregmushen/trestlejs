@@ -159,6 +159,7 @@ Trestle architecture can be expressed as a versioned, secret-free
 `.trestle/setup.json`. Plans separate architectural intent from mutation:
 
 ```bash
+pnpm exec trestle plan init
 pnpm exec trestle plan validate .trestle/setup.json
 pnpm exec trestle plan diff .trestle/setup.json
 pnpm exec trestle apply .trestle/setup.json --yes
@@ -243,9 +244,9 @@ webhooks update local subscription state, and authorization reads local
 entitlements rather than making live Stripe requests.
 
 For a deployed webhook, first review the exact endpoint URL using a Stripe
-management key on standard input. `status` and `doctor` cannot prove that an
-existing encrypted `whsec_` matches Stripe's endpoint: Stripe returns that
-secret only when the endpoint is created.
+management key on standard input. `doctor` cannot prove that an existing
+encrypted `whsec_` matches Stripe's endpoint: Stripe returns that secret only
+when the endpoint is created.
 
 ```bash
 trestle payments stripe webhook configure --env staging \
@@ -309,6 +310,7 @@ trestle generate email <Name>       generate a React Email template
 trestle generate resource <Name>    generate a tenant-safe vertical slice
 trestle generate resource <Name> --webhook-event created updated
                                     expose only selected public event contracts
+trestle plan init                   write a starter SetupPlan for this project
 trestle plan ...                    validate and inspect setup intent
 trestle apply <plan> --yes          apply reviewed supported mutations
 trestle resources                   inspect declared domain resources
@@ -321,7 +323,7 @@ trestle --experimental workflow status <name> <id>
 trestle --experimental backup verify ... --yes
                                     prove an isolated Neon restore and RLS
 trestle architecture check          enforce static application boundaries
-trestle upgrade plan                preview an application-preserving upgrade
+trestle upgrade plan [--check]      preview an application-preserving upgrade
 trestle upgrade apply --yes         update metadata only after source-version review
 trestle upgrade diff                inventory target-template source changes
 trestle upgrade migrations          compare journal order and SQL identities without writes

@@ -690,12 +690,10 @@ trestle secrets get NAME [--env staging] [--raw]
 trestle secrets set NAME [--env staging]
 trestle secrets unset NAME [--env staging]
 trestle secrets import FILE [--env staging]
-trestle secrets export [--env staging] --format yaml|json|dotenv
 trestle secrets list [--env staging]
 trestle secrets diff [--env staging] [--remote]
 trestle secrets check [--env staging] [--remote]
 trestle secrets push --env staging
-trestle secrets delete NAME --env staging --remote
 trestle secrets rotate NAME --env production
 trestle secrets key rotate --env production
 ```
@@ -711,10 +709,11 @@ where the platform permits it.
 
 `show` intentionally decrypts and prints the complete credentials document to
 standard output. `get NAME --raw` prints only that value for deliberate shell
-composition. `export` prints the requested plaintext representation and may
-be redirected by the operator. These commands do not mask values, emit their
-plaintext through structured logs, or write shell commands. When attached to
-an interactive terminal they print a concise warning to standard error; they
+composition. `show --format` prints the requested plaintext representation
+(YAML, JSON, or dotenv) and may be redirected by the operator. These commands
+do not mask values, emit their plaintext through structured logs, or write
+shell commands. When attached to an interactive terminal they print a concise
+warning to standard error; they
 do not require a confirmation ceremony. Operators are responsible for
 terminal scrollback, redirection targets, screen sharing, and shell capture.
 
@@ -961,20 +960,16 @@ Stripe webhook → Hono → signature + replay verification
 The v1 command namespace is deliberately provider-qualified:
 
 ``` bash
-trestle payments stripe init
-trestle payments stripe status [--env <env>]
-trestle payments stripe sync --env <env>
 trestle payments stripe doctor [--env <env>]
-trestle payments stripe webhook
 trestle payments stripe webhook configure --env <env> --url <url> --api-key-stdin
-trestle payments stripe listen
-trestle payments stripe seed
-trestle payments stripe test
+trestle --experimental payments stripe sync --env <env>
+trestle --experimental payments stripe seed
 ```
 
-Remote mutation requires an explicit environment. `init` generates application-
-owned source, configuration declarations, migrations, webhook handling, local
-fixtures, tests, and UI without creating live Stripe resources.
+Remote mutation requires an explicit environment. The generated billing
+scaffold contains application-owned source, configuration declarations,
+migrations, webhook handling, local fixtures, tests, and UI without creating
+live Stripe resources.
 The remote webhook setup command takes a short-lived management key on standard
 input, previews the exact endpoint before mutation, and captures Stripe's
 signing secret at creation into TrestleJS encrypted credentials. Rotation names
@@ -1051,16 +1046,15 @@ production credentials are not interchangeable. `STRIPE_SECRET_KEY` and
 `trestle doctor` rejects live keys in staging and test keys in production unless
 an explicit policy permits an exception.
 
-`trestle payments stripe listen` delegates local forwarding to Stripe CLI,
-targets the local Hono endpoint, and injects a temporary signing secret without
-persisting plaintext unnecessarily. `webhook`, `seed`, and `test` delegate
-provider-test behavior rather than reimplementing Stripe tooling.
+Local webhook forwarding uses the Stripe CLI directly
+(`stripe listen --forward-to localhost:8787/webhooks/stripe`) against the local
+Hono endpoint; TrestleJS does not wrap or reimplement Stripe tooling.
 
 ### Synchronization and operations
 
-`status` is read-only and reports adapter configuration, secret presence, mode,
-webhook configuration, declared plans and mapped prices, latest persisted
-webhook, and doctor status without revealing values.
+`doctor` first prints a read-only summary of adapter configuration, secret
+presence, mode, webhook configuration, declared plans and mapped prices, and
+the latest persisted webhook without revealing values, then runs its checks.
 
 `sync` converges declared products and prices with Stripe and classifies each
 change as `already correct`, `create`, `update metadata`, `archive`, `blocked`,
@@ -1134,10 +1128,10 @@ The shipped provider is Neon, and recovery creates an isolated Neon
 point-in-time branch:
 
 ``` bash
-trestle backup status --env production
-trestle backup verify --env production --to restore-test [--at <timestamp>] --yes
-trestle restore create --env production --to restore-test [--at <timestamp>] --yes
-trestle restore delete --env production --target restore-test --yes
+trestle --experimental backup status --env production
+trestle --experimental backup verify --env production --to restore-test [--at <timestamp>] --yes
+trestle --experimental restore create --env production --to restore-test [--at <timestamp>] --yes
+trestle --experimental restore delete --env production --target restore-test --yes
 ```
 
 `--at` requests a past ISO recovery point; without it, the latest point is
@@ -1521,44 +1515,69 @@ The command tree below has two parts. The shipped part mirrors
 `trestle --help` for the current release; that output and each subcommand's
 `--help` remain authoritative. The planned part is design intent only.
 
-Shipped:
+Shipped. Global options: `--cwd <path>` starts project discovery from another
+directory, and `--experimental` allows experimental commands for one
+invocation.
+
+Stable in beta:
 
 ``` text
 npx create-trestlejs my-app               generate a new project
 
 trestle project [--json]                  describe the current TrestleJS project
-trestle env list [--json]                 list declared environments
-trestle env status [--env <env>]          inspect one declared environment without contacting providers
+trestle env status [--env <env>] [--json] inspect one declared environment without contacting providers
 trestle ci validate [--json]              validate the static GitHub Actions deployment contract
 trestle architecture check [--json]       validate static application boundaries and managed guidance
-trestle upgrade plan [--json]             preview an application-preserving project upgrade
-trestle upgrade check [--json]            fail when the project needs a reviewed upgrade
+trestle upgrade plan [--json] [--check]   preview an application-preserving project upgrade; --check fails unless already compatible
 trestle upgrade apply --yes               apply the reviewed upgrade plan (metadata only)
 trestle upgrade diff [--json]             inspect target-template paths without changing application source
-trestle upgrade migrations [--check]      audit application and target migration journals without writes
+trestle upgrade migrations [--json] [--check]
+                                          audit application and target migration journals without writes
 trestle upgrade source-apply --yes        apply only pristine adjacent-alpha application source
 trestle upgrade source-finalize --yes     verify pristine source and run local checks before advancing the version
-trestle setup [--env <env>] [--resume]    review and apply a guided local SetupPlan with encrypted credentials
 trestle doctor [--env <env>] [--json]     run read-only environment and architecture checks
-trestle plan validate <file|->            validate a versioned SetupPlan
-trestle plan diff <file|->                classify SetupPlan changes against the project
-trestle plan status [file]                report recorded apply progress for a SetupPlan
+trestle plan init                         write a starter SetupPlan describing the current project
+trestle plan validate <file|-> [--json]   validate a versioned SetupPlan
+trestle plan diff <file|-> [--json]       classify SetupPlan changes against the project
+trestle plan status [file] [--json]       report recorded apply progress for a SetupPlan
 trestle apply <file> --yes                apply the supported mutations in a reviewed SetupPlan
 trestle resources [--json]                inspect declared resources
 trestle routes [--json]                   inspect declared and statically discoverable routes
 trestle resource add-field <Resource> <field> --yes
                                           add an optional field and tracked migration
-trestle secrets init|edit|show|export|get|set|unset|delete|import [--env <env>]
+trestle secrets init|edit|show|get|set|unset|import [--env <env>]
                                           manage encrypted application credentials
-trestle secrets list|check [--env <env>]  report credential status without revealing values
+trestle secrets list|check [--env <env>] [--json]
+                                          report credential status without revealing values
 trestle secrets push --env <env>          push credentials to the remote Worker
 trestle secrets key rotate [--env <env>]  rotate an environment's credentials master key
 trestle email list|show|open|clear        inspect locally captured transactional email
-trestle email status|doctor [--env <env>] report and check email delivery configuration
-trestle queue dlq list --env <env>        inspect dead-lettered outbox messages
+trestle email doctor [--env <env>]        summarize and check email delivery configuration
+trestle generate email <Name>             generate a React Email template
+trestle generate resource <Name> [--field ...] [--webhook-event ...]
+                                          generate a tenant-safe vertical slice
+trestle payments stripe doctor [--env <env>]
+                                          summarize and check Stripe credentials and mode
+trestle payments stripe webhook configure --env <env> --url <url> --api-key-stdin
+                                          configure a deployed Stripe billing webhook
+trestle logs --env <env>                  tail redacted structured Worker logs
+trestle dev [--fresh --yes]               start PostgreSQL, apply migrations, and run the local applications
+trestle db start|stop|status|migrate|console
+                                          operate the local PostgreSQL database
+trestle db seed [--scenario <name>]       seed default, demo, or tenant-isolation data
+trestle db reset --yes                    delete the project-scoped local volume
+trestle db roles bootstrap --env <env> --role <name> --yes
+                                          create a restricted remote PostgreSQL runtime role
+```
+
+Experimental in beta (requires `--experimental` or `TRESTLE_EXPERIMENTAL=1`):
+
+``` text
+trestle queue dlq list --env <env> [--json]
+                                          inspect dead-lettered outbox messages
 trestle queue dlq redrive <id> --env <env>
                                           redrive one dead-lettered outbox message
-trestle queue prune --env <env> --before <timestamp> [--apply]
+trestle queue prune --env <env> --before <timestamp> [--limit <n>] [--apply]
                                           preview or prune succeeded outbox records
 trestle admin grant|revoke <email> <role> --env <env> --reason <reason>
                                           change a platform role; recorded in audit_event
@@ -1573,31 +1592,16 @@ trestle restore create --env <env> --to <target> [--at <timestamp>] --yes
                                           create an isolated Neon point-in-time recovery branch
 trestle restore delete --env <env> --target <target> --yes
                                           delete an isolated recovery branch
-trestle generate email <Name>             generate a React Email template
-trestle generate resource <Name> [--field ...] [--webhook-event ...]
-                                          generate a tenant-safe vertical slice
-trestle payments stripe init              check the billing scaffold; creates no Stripe resources
-trestle payments stripe status|doctor [--env <env>]
-                                          report and check Stripe credentials and mode
 trestle payments stripe sync --env <env> [--apply] [--yes]
                                           plan or create missing Stripe products and prices
-trestle payments stripe listen            forward Stripe CLI webhooks to the local Worker
-trestle payments stripe webhook configure --env <env> --url <url> --api-key-stdin
-                                          configure a deployed Stripe billing webhook
 trestle payments stripe seed --organization <id> --cookie-stdin
                                           activate a local billing plan for an organization
-trestle payments stripe test              run the billing package tests
-trestle logs --env <env>                  tail redacted structured Worker logs
-trestle dev [--fresh --yes]               start PostgreSQL, apply migrations, and run the local applications
-trestle db start|stop|status|migrate|console
-                                          operate the local PostgreSQL database
-trestle db seed [--scenario <name>]       seed default, demo, or tenant-isolation data
-trestle db reset --yes                    delete the project-scoped local volume
-trestle db roles bootstrap --env <env> --role <name> --yes
-                                          create a restricted remote PostgreSQL runtime role
 trestle console (--tenant <id-or-slug> [--write] | --platform-admin) [--env <env> --yes]
                                           open an application-aware TypeScript console
 ```
+
+For local Stripe webhook forwarding, use the Stripe CLI directly:
+`stripe listen --forward-to localhost:8787/webhooks/stripe`.
 
 Planned (not implemented):
 
@@ -1618,14 +1622,14 @@ trestle events|workflows|queues|durable-objects|bindings|permissions
 Commands use `--env <env>` consistently instead of positional environment
 names. Local is the default only for commands whose semantics are inherently
 local; commands that can mutate remote infrastructure require an explicit
-environment. `trestle env list` and `trestle env status` are read-only views of
-declared environments, bindings, deployment state, and configuration health.
+environment. `trestle env status` and `trestle project --json` are read-only
+views of declared environments, bindings, deployment state, and configuration
+health.
 
-`--json`, `--verbose`, and `--no-color` are common diagnostic-output flags
-where applicable. JSON modes write only the documented payload to standard
+`--json` is the common diagnostic-output flag where applicable. JSON modes write only the documented payload to standard
 output and send human diagnostics to standard error. Plaintext secret values
-remain available only through the explicitly revealing `secrets show`, `get`,
-and `export` commands described in the secrets section; generic JSON,
+remain available only through the explicitly revealing `secrets show` and
+`get` commands described in the secrets section; generic JSON,
 diagnostic, status, inspection, and console output must redact them.
 
 Read-only commands do not make opportunistic repairs. Mutating commands show
@@ -1653,11 +1657,11 @@ authority planes and cannot be combined. `--write` requires `--tenant`. A
 non-local environment also requires `--yes`:
 
 ``` bash
-trestle console --tenant acme
-trestle console --env staging --tenant acme --yes
-trestle console --env production --tenant acme --yes
-trestle console --env production --tenant acme --write --yes
-trestle console --env production --platform-admin --yes
+trestle --experimental console --tenant acme
+trestle --experimental console --env staging --tenant acme --yes
+trestle --experimental console --env production --tenant acme --yes
+trestle --experimental console --env production --tenant acme --write --yes
+trestle --experimental console --env production --platform-admin --yes
 ```
 
 Tenant-scoped console work resolves the tenant through a non-sensitive
@@ -1713,8 +1717,8 @@ vertical slice containing:
 -   Hono routes;
 -   typed API client;
 -   TanStack query/mutation helpers;
--   TanStack Form create/update components where `--crud` includes UI;
--   Tailwind-styled accessible resource screens where `--crud` includes UI;
+-   TanStack Form create/update components where the slice includes UI;
+-   Tailwind-styled accessible resource screens where the slice includes UI;
 -   unit/integration tests;
 -   adversarial tenant-isolation tests.
 
@@ -1814,12 +1818,13 @@ trestle queues
 trestle durable-objects
 trestle bindings
 trestle permissions
-trestle env list
+trestle env status
 trestle db status
 ```
 
 Plural commands describe declared architecture. Singular operational commands
-such as `trestle workflow status <id>` and `trestle queue redrive ...` inspect or
+such as `trestle --experimental workflow status <name> [id]` and
+`trestle --experimental queue dlq redrive <id>` inspect or
 act on runtime instances. This distinction is stable across the CLI.
 
 Discovery output includes source locations and relationships where they are
@@ -1917,7 +1922,7 @@ enough to load routinely into an agent context.
 Generated content is enclosed in stable managed markers. Applications may add
 clearly separated custom guidance outside those markers. Regeneration updates
 only the managed region, preserves custom content byte-for-byte, and is
-idempotent. `trestle architecture check` and `trestle upgrade check` detect a
+idempotent. `trestle architecture check` and `trestle upgrade plan --check` detect a
 stale managed-guidance marker without rewriting anything; `trestle upgrade
 apply --yes` refreshes it.
 

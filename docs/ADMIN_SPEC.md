@@ -37,7 +37,8 @@ in the TrestleJS repository) unless they name a TrestleJS package.
   login. It ships 21 views in a Kumo shell with a command palette and
   keyboard shortcuts (§11). Most views are read-only, because
   `trestle_platform` may only observe and recover. Operator roles are managed
-  in the Platform Roles view or with `trestle admin grant|revoke|list`.
+  in the Platform Roles view or with
+  `trestle --experimental admin grant|revoke|list`.
 - **Effective Access Explorer.** The Permissions view explains a user's or
   service account's access in one organization through
   `POST /api/admin/access/explain` (§10).
@@ -49,8 +50,9 @@ in the TrestleJS repository) unless they name a TrestleJS package.
   permissions. Platform operators can revoke keys.
 - **Deployment.** Staging and production deploy the admin only when
   `capabilities.admin` is true, and a smoke check follows each deploy.
-- **Setup console.** `trestle setup` runs a loopback console for encrypted
-  credential entry, SetupPlan editing, diff, apply, and a Doctor summary.
+- **Project configuration.** `trestle plan init` writes a starter SetupPlan;
+  `trestle secrets` handles encrypted credential entry; `trestle plan diff`,
+  `trestle apply --yes`, and `trestle doctor` review, apply, and verify it.
 - Related work defined elsewhere: support sessions (see the
   [Admin Additions Specification](ADMIN_ADDITIONS_SPEC.md)), and organization
   regional defaults (`GET`/`PUT /api/tenant/regional`).
@@ -105,13 +107,13 @@ This specification defines four distinct surfaces:
 apps/site       public acquisition and documentation
 apps/app        customer product, organization, and application administration
 apps/admin      runtime platform operations (optional; capabilities.admin)
-trestle setup   local project and capability configuration
+trestle plan    local project and capability configuration (CLI)
 ```
 
 The separation is a security boundary, not a navigation preference.
 
-The setup console controls what the application is made of. The generated
-admin application controls and observes the running application. Tenant
+The SetupPlan, reviewed and applied through the CLI, controls what the
+application is made of. The generated admin application controls and observes the running application. Tenant
 administration remains in the customer application. All three use shared,
 typed capability metadata, but they do not share authority.
 
@@ -242,23 +244,22 @@ It may not:
 - silently bypass domain validation or audit behavior; or
 - acquire global authority merely by selecting a tenant.
 
-### 3.4 Trestle setup console
+### 3.4 Project configuration
 
-`pnpm exec trestle setup` starts a local, guided configuration console. It is
-the only browser surface allowed to propose changes to the SetupPlan, generated
-source, encrypted credentials, bindings, migrations, or deployment
-configuration.
-
-The setup console is a local development tool, not a deployed application. It
-binds only to `127.0.0.1`, chooses an available random port, requires a
-one-time access code, applies CSRF protection, and stops when closed.
+Project configuration is a local CLI flow, not a browser surface.
+`pnpm exec trestle plan init` writes a starter SetupPlan
+(`.trestle/setup.json`) describing the current project. Changes to the
+SetupPlan, generated source, encrypted credentials, bindings, migrations, or
+deployment configuration are proposed only through `trestle plan diff`,
+`trestle apply --yes`, and `trestle secrets`; no deployed surface may propose
+them.
 
 Generated projects must use their pinned CLI:
 
 ```bash
 npx create-trestlejs my-product            # add --admin for the platform admin
 cd my-product
-pnpm exec trestle setup
+pnpm exec trestle plan init
 pnpm exec trestle dev
 ```
 
@@ -266,18 +267,16 @@ Using `npx ...@latest` inside an existing project is not the normal path.
 
 ## 4. Guided Setup
 
-The setup console orchestrates existing deterministic primitives rather than
-introducing a second configuration model. The shipped flow is:
+Setup uses existing deterministic primitives rather than a second
+configuration model. The shipped flow is:
 
 ```text
-inspect project
-  -> load or create SetupPlan
-  -> collect encrypted credentials (presence shown per environment)
-  -> edit and validate the SetupPlan (JSON)
-  -> display plan diff
-  -> request explicit approval
-  -> apply
-  -> show a Doctor summary
+trestle plan init                 write a starter SetupPlan
+  -> trestle secrets ...          collect encrypted credentials
+  -> edit the SetupPlan (JSON); trestle plan validate
+  -> trestle plan diff            display the plan diff
+  -> trestle apply --yes          apply after explicit approval
+  -> trestle doctor --env <env>   verify
 ```
 
 **Deferred:** capability selection as a guided step, provider connection
@@ -299,19 +298,18 @@ The 12-step wizard below is **Deferred**. It remains the target outline:
 11. GitHub and Cloudflare deployment environments; and
 12. review, apply, and verification.
 
-The command is resumable and safe to rerun. These modes ship:
+Apply is safe to rerun; `trestle plan status` reports recorded progress:
 
 ```bash
-pnpm exec trestle setup
-pnpm exec trestle setup --no-open
-pnpm exec trestle setup --resume
-pnpm exec trestle setup --plan-only
-pnpm exec trestle setup --env staging
+pnpm exec trestle plan init
+pnpm exec trestle plan diff .trestle/setup.json
+pnpm exec trestle apply .trestle/setup.json --yes
+pnpm exec trestle plan status .trestle/setup.json
+pnpm exec trestle doctor --env staging
 ```
 
-`trestle setup` is the guided interface. `trestle plan`, `trestle apply`, and
-`trestle doctor` remain the reviewable planning, mutation, and verification
-engines underneath it.
+`trestle plan`, `trestle apply`, and `trestle doctor` are the reviewable
+planning, mutation, and verification engines.
 
 The platform admin can be enabled later by applying a SetupPlan with
 `capabilities.admin: true` (`pnpm exec trestle apply <plan> --yes`). This
@@ -332,9 +330,9 @@ Plaintext secret values:
 - are never returned to the browser after submission; and
 - are removed from temporary memory and files when the operation ends.
 
-The console displays only each declared secret's presence and whether the
-selected environment requires it. **Deferred:** fingerprint or prefix,
-last-updated time, and per-secret verification state.
+`trestle secrets list` and `check` display only each declared secret's
+presence and whether the selected environment requires it. **Deferred:**
+fingerprint or prefix, last-updated time, and per-secret verification state.
 
 The manifest declares where each secret is pushed: `target: worker`, `ci`, or
 `admin`. A Worker secret may add `shareWith: [admin]` to also reach the admin
@@ -368,13 +366,13 @@ The admin models all five states (`CapabilityState` in
   artifacts, and workflows as `configured`, `not_configured`, or `unknown`.
 
 The admin application assumes configured capabilities are managed through
-setup and does not collect infrastructure credentials itself.
+the SetupPlan and does not collect infrastructure credentials itself.
 
 When configuration is absent or unhealthy, admin degrades safely. An
 unconfigured capability carries a repair command:
 
 ```text
-pnpm exec trestle setup --env staging
+pnpm exec trestle doctor --env staging
 ```
 
 A missing `DATABASE_ADMIN_URL` outside local development returns
@@ -614,9 +612,9 @@ Assignments are granted and revoked with the CLI or the Platform Roles view.
 Both record each change with a required reason:
 
 ```bash
-pnpm exec trestle admin grant ops@example.com security_admin --env local --reason "first operator"
-pnpm exec trestle admin revoke ops@example.com security_admin --env local --reason "left team"
-pnpm exec trestle admin list --env local
+pnpm exec trestle --experimental admin grant ops@example.com security_admin --env local --reason "first operator"
+pnpm exec trestle --experimental admin revoke ops@example.com security_admin --env local --reason "left team"
+pnpm exec trestle --experimental admin list --env local
 ```
 
 Platform permissions are narrowly scoped. Cross-tenant reads, each recovery
@@ -771,7 +769,7 @@ their assurance rows. They then sign in with their password and enroll new
 factors, which needs only a fresh password once no factor remains. Record the
 recovery in your change log: this path writes no `audit_event`. If the
 operator should lose platform access instead, revoke their roles with
-`trestle admin revoke`, which is audited.
+`trestle --experimental admin revoke`, which is audited.
 
 ## 8. Service Accounts, Scopes, and API Keys
 
@@ -1392,11 +1390,11 @@ mechanism.
 Shipped commands:
 
 ```bash
-trestle setup [--env <env>] [--resume] [--plan-only] [--no-open]
-trestle apply <plan> --yes      # capabilities.admin: true scaffolds apps/admin
-trestle admin grant <email> <role> --env <env> --reason <reason>
-trestle admin revoke <email> <role> --env <env> --reason <reason>
-trestle admin list --env <env>
+trestle plan init                # then plan diff and apply --yes
+trestle apply <plan> --yes       # capabilities.admin: true scaffolds apps/admin
+trestle --experimental admin grant <email> <role> --env <env> --reason <reason>
+trestle --experimental admin revoke <email> <role> --env <env> --reason <reason>
+trestle --experimental admin list --env <env>
 trestle secrets push --env <env> # also pushes admin-targeted and shared secrets
 trestle ci validate              # includes the ci.deploy.admin check
 trestle upgrade diff             # considers only enabled optional capabilities
@@ -1451,7 +1449,7 @@ Tests prove:
 - unsubscribed tenants cannot use entitled features;
 - override reasons do not reach customer provenance;
 - setup never persists or logs plaintext credentials;
-- admin reports missing configuration and points to `trestle setup`;
+- admin reports missing configuration and points to `trestle doctor --env <environment>`;
 - admin actions preserve validation, audit, and RLS; and
 - a project generated with and without `--admin` builds, validates its CI, and
   deploys (dry run) as expected.
@@ -1500,8 +1498,8 @@ write actions in roadmap steps 2 to 8.
 The administration and access-control system is beta-ready when a clean
 generated application can, without manual source repair:
 
-1. run `trestle setup`, enter environment credentials, review a SetupPlan
-   diff, apply it, and pass Doctor checks (capability selection as a wizard
+1. run `trestle plan init`, enter environment credentials, review a SetupPlan
+   diff (`trestle plan diff`), apply it (`trestle apply --yes`), and pass Doctor checks (capability selection as a wizard
    step is **Deferred**);
 2. deploy public, customer, admin, and Worker surfaces with distinct origins
    and policies (implemented for staging and production; not yet verified

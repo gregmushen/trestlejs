@@ -17,6 +17,7 @@ npx create-trestlejs my-app
 Core architecture and setup commands include:
 
 ```bash
+trestle plan init
 trestle plan validate .trestle/setup.json
 trestle plan diff .trestle/setup.json
 trestle apply .trestle/setup.json --yes

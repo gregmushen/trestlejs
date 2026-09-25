@@ -53,7 +53,7 @@ Paths are relative to a generated project.
   Admin views are filtered by permission and marked "(not configured)" when
   their capability is not configured.
 - Missing admin configuration produces sanitized status and directs the
-  operator to `pnpm exec trestle setup --env <environment>`.
+  operator to `pnpm exec trestle doctor --env <environment>`.
 - Every action enforces its server-side permission and uses the normal domain,
   audit, and correlation paths. Customer actions also use the tenant context
   and forced RLS. Platform actions use the `trestle_platform` role, whose
