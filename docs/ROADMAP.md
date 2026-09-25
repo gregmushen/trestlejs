@@ -1131,6 +1131,12 @@ product browser checks without email in
 The canary does not yet declare Article, so this run does not prove deployed
 Article RLS; the generated local database suite and opt-in staging suite cover
 it separately until an Article-enabled staging deployment is exercised.
+Cloudflare Pages returned another transient HTTP 522 on a newly provisioned
+preview site in PR 14. The generated smoke checker now gives read-only Pages
+GET/HEAD requests a bounded retry on gateway/edge errors while preserving
+cross-origin redirect rejection, immediate failure for unsafe requests, and
+a final failure for persistent errors. This is propagation tolerance, not a
+substitute for a passing hosted preview browser run.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.

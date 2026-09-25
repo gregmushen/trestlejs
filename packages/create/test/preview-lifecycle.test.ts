@@ -122,6 +122,43 @@ describe("preview lifecycle", () => {
     await expect(fetchSameOrigin(`${base}/sign-in`)).rejects.toThrow("Cross-origin redirect rejected");
   });
 
+  it("retries a transient Pages 522 but preserves persistent failure", async () => {
+    let requests = 0;
+    const base = await api((_request, response) => {
+      requests += 1;
+      response.statusCode = requests === 1 ? 522 : 200;
+      response.end();
+    });
+    const { fetchSameOriginWithRetry } = await import("../template/scripts/smoke-http.mjs") as {
+      fetchSameOriginWithRetry: (url: string, options?: RequestInit, retry?: { attempts: number; delayMs: number }) => Promise<Response>;
+    };
+    expect((await fetchSameOriginWithRetry(base, {}, { attempts: 3, delayMs: 0 })).status).toBe(200);
+    expect(requests).toBe(2);
+
+    const failed = await api((_request, response) => { response.statusCode = 522; response.end(); });
+    expect((await fetchSameOriginWithRetry(failed, {}, { attempts: 2, delayMs: 0 })).status).toBe(522);
+  });
+
+  it("does not retry unsafe smoke requests or cross-origin redirects", async () => {
+    let requests = 0;
+    const base = await api((_request, response) => {
+      requests += 1;
+      response.statusCode = 522;
+      response.end();
+    });
+    const { fetchSameOriginWithRetry } = await import("../template/scripts/smoke-http.mjs") as {
+      fetchSameOriginWithRetry: (url: string, options?: RequestInit, retry?: { attempts: number; delayMs: number }) => Promise<Response>;
+    };
+    expect((await fetchSameOriginWithRetry(base, { method: "POST" }, { attempts: 3, delayMs: 0 })).status).toBe(522);
+    expect(requests).toBe(1);
+    const redirect = await api((_request, response) => {
+      response.statusCode = 302;
+      response.setHeader("location", "https://attacker.example/phish");
+      response.end();
+    });
+    await expect(fetchSameOriginWithRetry(redirect, {}, { attempts: 3, delayMs: 0 })).rejects.toThrow("Cross-origin redirect rejected");
+  });
+
   it("derives isolated, deterministic URLs and provider-safe names", async () => {
     const result = await run("preview-context.mjs", ["--project", "clearclose", "--pr", "42", "--workers-subdomain", "greg", "--format", "github"]);
     expect(result.code).toBe(0);
