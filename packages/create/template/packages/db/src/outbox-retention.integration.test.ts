@@ -13,49 +13,85 @@ const epoch = new Date("2000-03-01T00:00:00.000Z");
 const cutoff = new Date(epoch.getTime() - EVENT_PROVENANCE_RETENTION_DAYS * day);
 const aged = (days: number) => new Date(cutoff.getTime() - days * day);
 
-const pruneRole = `trestle_prune_test_${Date.now()}`;
-const prunePassword = `test-${crypto.randomUUID()}`;
+const executor = `trestle_prune_test_${Date.now()}`;
+const executorPassword = `test-${crypto.randomUUID()}`;
 const functions = ["trestle_prune_outbox_provenance(timestamp with time zone, integer)", "trestle_count_prunable_outbox_provenance(timestamp with time zone)"];
 const admin = databaseUrl ? postgres(databaseUrl, { max: 1, prepare: false }) : undefined;
-let originalOwner = "";
-let pruneUrl = "";
+let executorUrl = "";
 
 function envelope(id = crypto.randomUUID()) {
   return eventEnvelopeSchema.parse({ id, name: "article.published", schemaVersion: 1, occurredAt: new Date().toISOString(), resource: { type: "article", id }, correlationId: id, idempotencyKey: id, payload: { resourceId: id } });
 }
 
 suite("outbox retention and failure redaction", () => {
-  // Production calls the prune functions as the migration role, which owns them
-  // and, on managed Postgres, has no BYPASSRLS. The test database's migration
-  // role is a superuser: a superuser ignores forced RLS, so a prune it runs
-  // would "see" other tenants' webhook deliveries whether or not the function
-  // crosses RLS correctly. That proves nothing. Instead a fresh login without
-  // BYPASSRLS takes the owner's place: it owns the functions, holds the owner's
-  // table privileges, and gets the owner-only policies the migration creates for
-  // a non-BYPASSRLS migration role. Every prune below runs as that login.
+  // Production calls the prune functions as the migration role. The test
+  // database's migration role is a superuser, which ignores forced RLS and
+  // table privileges, so a prune it runs proves nothing about the functions.
+  // Every prune below instead runs as a fresh login without BYPASSRLS that
+  // holds only EXECUTE on the two functions: no table privileges and no
+  // policies. Whatever it can see comes from trestle_retention, the functions'
+  // owner, never from the caller.
   beforeAll(async () => {
-    const [owner] = await admin!<{ owner: string }[]>`select pg_get_userbyid(proowner) as owner from pg_proc where proname = 'trestle_prune_outbox_provenance'`;
-    originalOwner = owner?.owner ?? "";
-    await admin!.unsafe(`create role "${pruneRole}" login password '${prunePassword}' nosuperuser nocreatedb nocreaterole noinherit nobypassrls`);
-    await admin!.unsafe(`grant usage on schema public to "${pruneRole}"`);
-    await admin!.unsafe(`grant select, update, delete on outbox_message to "${pruneRole}"`);
-    await admin!.unsafe(`grant select on event_inbox, webhook_message, webhook_delivery to "${pruneRole}"`);
-    await admin!.unsafe(`create policy "webhook_message_provenance_owner_test" on webhook_message for select to "${pruneRole}" using (true)`);
-    await admin!.unsafe(`create policy "webhook_delivery_provenance_owner_test" on webhook_delivery for select to "${pruneRole}" using (true)`);
-    for (const signature of functions) await admin!.unsafe(`alter function ${signature} owner to "${pruneRole}"`);
+    await admin!.unsafe(`create role "${executor}" login password '${executorPassword}' nosuperuser nocreatedb nocreaterole noinherit nobypassrls`);
+    await admin!.unsafe(`grant usage on schema public to "${executor}"`);
+    for (const signature of functions) await admin!.unsafe(`grant execute on function ${signature} to "${executor}"`);
     const url = new URL(databaseUrl!);
-    url.username = pruneRole;
-    url.password = prunePassword;
-    pruneUrl = url.toString();
+    url.username = executor;
+    url.password = executorPassword;
+    executorUrl = url.toString();
   });
 
   afterAll(async () => {
-    if (originalOwner) for (const signature of functions) await admin!.unsafe(`alter function ${signature} owner to "${originalOwner}"`).catch(() => undefined);
-    await admin!.unsafe(`drop policy if exists "webhook_message_provenance_owner_test" on webhook_message`);
-    await admin!.unsafe(`drop policy if exists "webhook_delivery_provenance_owner_test" on webhook_delivery`);
-    await admin!.unsafe(`drop owned by "${pruneRole}"`).catch(() => undefined);
-    await admin!.unsafe(`drop role if exists "${pruneRole}"`);
+    await admin!.unsafe(`drop owned by "${executor}"`).catch(() => undefined);
+    await admin!.unsafe(`drop role if exists "${executor}"`);
     await admin!.end();
+  });
+
+  it("runs pruning with trestle_retention's access, not the caller's", async () => {
+    const owners = await admin!<{ name: string; owner: string; definer: boolean; config: string[] | null }[]>`
+      select proname as name, pg_get_userbyid(proowner) as owner, prosecdef as definer, proconfig as config
+        from pg_proc where proname in ('trestle_prune_outbox_provenance', 'trestle_count_prunable_outbox_provenance') order by proname`;
+    expect(owners).toEqual([
+      { name: "trestle_count_prunable_outbox_provenance", owner: "trestle_retention", definer: true, config: ["search_path=pg_catalog, pg_temp"] },
+      { name: "trestle_prune_outbox_provenance", owner: "trestle_retention", definer: true, config: ["search_path=pg_catalog, pg_temp"] },
+    ]);
+    const [role] = await admin!<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; members: number }[]>`
+      select rolcanlogin, rolsuper, rolbypassrls, (select count(*)::int from pg_auth_members where roleid = r.oid) as members from pg_roles r where rolname = 'trestle_retention'`;
+    // No login can assume the role: its access is reachable only through the functions.
+    expect(role).toEqual({ rolcanlogin: false, rolsuper: false, rolbypassrls: false, members: 0 });
+    for (const signature of functions) {
+      const [execute] = await admin!.unsafe<{ app: boolean; platform: boolean }[]>(`select has_function_privilege('trestle_app', '${signature}', 'EXECUTE') as app, has_function_privilege('trestle_platform', '${signature}', 'EXECUTE') as platform`);
+      expect(execute).toEqual({ app: false, platform: false });
+    }
+    const caller = postgres(executorUrl, { max: 1, prepare: false });
+    try {
+      for (const table of ["outbox_message", "event_inbox", "webhook_message", "webhook_delivery"]) {
+        await expect(caller.unsafe(`select 1 from ${table} limit 1`)).rejects.toThrow("permission denied");
+      }
+    } finally {
+      await caller.end();
+    }
+  });
+
+  it("grants trestle_retention only what pruning reads and deletes", async () => {
+    const [privileges] = await admin!<Record<string, boolean>[]>`
+      select has_column_privilege('trestle_retention', 'outbox_message', 'processed_at', 'SELECT') as outbox_select,
+             has_table_privilege('trestle_retention', 'outbox_message', 'DELETE') as outbox_delete,
+             has_column_privilege('trestle_retention', 'outbox_message', 'payload', 'SELECT') as outbox_payload,
+             has_table_privilege('trestle_retention', 'outbox_message', 'INSERT, UPDATE') as outbox_write,
+             has_column_privilege('trestle_retention', 'event_inbox', 'leased_until', 'SELECT') as inbox_select,
+             has_table_privilege('trestle_retention', 'event_inbox', 'INSERT, UPDATE, DELETE') as inbox_write,
+             has_column_privilege('trestle_retention', 'webhook_message', 'source_event_id', 'SELECT') as message_select,
+             has_column_privilege('trestle_retention', 'webhook_message', 'envelope', 'SELECT') as message_envelope,
+             has_table_privilege('trestle_retention', 'webhook_message', 'INSERT, UPDATE, DELETE') as message_write,
+             has_column_privilege('trestle_retention', 'webhook_delivery', 'state', 'SELECT') as delivery_select,
+             has_table_privilege('trestle_retention', 'webhook_delivery', 'INSERT, UPDATE, DELETE') as delivery_write`;
+    expect(privileges).toEqual({
+      outbox_select: true, outbox_delete: true, outbox_payload: false, outbox_write: false,
+      inbox_select: true, inbox_write: false,
+      message_select: true, message_envelope: false, message_write: false,
+      delivery_select: true, delivery_write: false,
+    });
   });
 
   it("retrieves tenant provenance only from the committed record", async () => {
@@ -104,7 +140,7 @@ suite("outbox retention and failure redaction", () => {
     };
     const remaining = async () => (await admin!<{ id: string }[]>`select id from outbox_message where id = any(${ids})`).map((row) => row.id);
     const asPruneRole = async <T>(work: (store: PostgresOutboxStore) => Promise<T>) => {
-      const store = new PostgresOutboxStore(pruneUrl);
+      const store = new PostgresOutboxStore(executorUrl);
       try { return await work(store); } finally { await store.close(); }
     };
     const referenceByDelivery = async (eventId: string, organizationId: string, state: "pending" | "retry" | "dead" | "succeeded" | "exhausted") => {
@@ -188,6 +224,32 @@ suite("outbox retention and failure redaction", () => {
       await asPruneRole(async (store) => { expect(await store.pruneSucceeded(cutoff, 10, epoch)).toBe(1); });
       expect(await remaining()).not.toContain(referenced.id);
       await admin!`delete from outbox_message where id=${replay.id}`;
+    });
+
+    it("never lets the runtime role or an unrelated login read another tenant's webhook rows", async () => {
+      const event = await committed(aged(4));
+      await referenceByDelivery(event.id, "org-isolation-a", "pending");
+      await referenceByDelivery(event.id, "org-isolation-b", "pending");
+      const visible = await admin!.begin(async (transaction) => {
+        await transaction`set local role trestle_app`;
+        await transaction`select set_config('app.organization_id', 'org-isolation-a', true)`;
+        const messages = await transaction<{ organization_id: string }[]>`select organization_id from webhook_message where source_event_id = ${event.id}`;
+        const deliveries = await transaction<{ organization_id: string }[]>`select d.organization_id from webhook_delivery d join webhook_message m on m.id = d.message_id where m.source_event_id = ${event.id}`;
+        return [...messages, ...deliveries].map((row) => row.organization_id);
+      });
+      expect(visible).toEqual(["org-isolation-a", "org-isolation-a"]);
+      // Only the platform admin and the retention owner hold unconditional
+      // read policies; no policy names the migration role or any login.
+      const unconditional = await admin!<{ table: string; policy: string; roles: string[] }[]>`
+        select tablename as table, policyname as policy, roles::text[] as roles from pg_policies
+         where tablename in ('webhook_message', 'webhook_delivery') and qual = 'true' order by tablename, policyname`;
+      expect(unconditional).toEqual([
+        { table: "webhook_delivery", policy: "webhook_delivery_platform_select", roles: ["trestle_platform"] },
+        { table: "webhook_delivery", policy: "webhook_delivery_retention_select", roles: ["trestle_retention"] },
+        { table: "webhook_message", policy: "webhook_message_platform_select", roles: ["trestle_platform"] },
+        { table: "webhook_message", policy: "webhook_message_retention_select", roles: ["trestle_retention"] },
+      ]);
+      await admin!`delete from outbox_message where id=${event.id}`;
     });
 
     it("reports the oldest retained succeeded record", async () => {

@@ -602,7 +602,7 @@ export function createProgram(runtime: CliRuntime): Command {
       if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) throw new CliFailure("--limit must be between 1 and 10000");
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      // The retention functions are SECURITY DEFINER and executable only by their owner, the migration role.
+      // The retention functions run as trestle_retention and are executable only by the migration role.
       const connection = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
       if (!connection) throw new CliFailure(`DATABASE_MIGRATION_URL or DATABASE_URL is not set for ${options.env}`);
       const operation = options.apply ? "retention-prune" : "retention-count";

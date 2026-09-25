@@ -1,5 +1,5 @@
 {
-  "id": "7653d49a-bac7-4793-b5b7-45d2a8b8e81f",
+  "id": "d696b968-329f-426e-989d-8ad0cd823352",
   "prevId": "9f608b63-b1fe-4301-a22d-aaec3cbf0469",
   "version": "7",
   "dialect": "postgresql",
@@ -3383,6 +3383,15 @@
             "trestle_platform"
           ],
           "using": "true"
+        },
+        "webhook_delivery_retention_select": {
+          "name": "webhook_delivery_retention_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "trestle_retention"
+          ],
+          "using": "true"
         }
       },
       "checkConstraints": {
@@ -3617,6 +3626,15 @@
           "for": "SELECT",
           "to": [
             "trestle_platform"
+          ],
+          "using": "true"
+        },
+        "webhook_message_retention_select": {
+          "name": "webhook_message_retention_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "trestle_retention"
           ],
           "using": "true"
         }

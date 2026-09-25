@@ -442,7 +442,10 @@ active inbox claim or an unfinished webhook delivery are kept. The command
 reports the age of the oldest succeeded record kept. A succeeded record has
 only been sent to the Queue; its handler may not have run yet. `queue prune`
 and `queue dlq` run as the migration role (`DATABASE_MIGRATION_URL`, falling
-back to `DATABASE_URL`).
+back to `DATABASE_URL`). Pruning calls two SECURITY DEFINER functions owned by
+`trestle_retention`, a NOLOGIN role that can read only the columns the
+retention checks need across tenants and delete outbox records; only the
+migration role may execute them, and no login is a member of the role.
 Outbox failures record only a sanitized error category, never the error
 message, so provider secrets echoed in exceptions are not persisted.
 
