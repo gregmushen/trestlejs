@@ -38,6 +38,12 @@ describe("worker routes", () => {
     await expect(worker.scheduled(undefined, environment)).resolves.toBeUndefined();
   });
 
+  it("runs framework maintenance only on the framework tick", async () => {
+    // Without bindings, maintenance throws, so resolving proves an application cron skipped it.
+    await expect(worker.scheduled({ cron: "0 * * * *" }, { ...environment, APP_ENV: "preview" })).resolves.toBeUndefined();
+    await expect(worker.scheduled({ cron: "* * * * *" }, { ...environment, APP_ENV: "preview" })).rejects.toThrow("Queue or R2 binding");
+  });
+
   it("fails enabled Workflow delivery without its binding", async () => {
     await expect(worker.queue({ messages: [] }, { ...environment, APP_ENV: "preview", TRESTLE_WORKFLOWS_ENABLED: "true" })).rejects.toThrow("TRESTLE_WORKFLOW binding");
     const health = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "preview", TRESTLE_WORKFLOWS_ENABLED: "true" });

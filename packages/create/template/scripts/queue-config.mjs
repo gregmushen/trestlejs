@@ -39,6 +39,19 @@ export function artifactBucketName(workerName) {
   return resourceName(`${workerName}-artifacts`);
 }
 
+/** The minute tick that drives outbox dispatch and artifact maintenance. apps/worker/src/index.ts gates on the same expression. */
+export const FRAMEWORK_MAINTENANCE_CRON = "* * * * *";
+
+/** Keeps the application's crons in order and appends the framework tick when a capability needs it. */
+function mergeCrons(declared, frameworkTick) {
+  if (declared !== undefined && (!Array.isArray(declared) || declared.some((cron) => typeof cron !== "string" || !cron.trim()))) {
+    throw new Error("triggers.crons must be a list of cron expressions");
+  }
+  const crons = [];
+  for (const cron of [...(declared ?? []), ...(frameworkTick ? [FRAMEWORK_MAINTENANCE_CRON] : [])]) if (!crons.includes(cron)) crons.push(cron);
+  return crons;
+}
+
 export function renderQueueConfig(source, environment, workerName, capabilities = { queues: true, r2: false, workflows: false }, options = {}) {
   if (!["preview", "staging", "production"].includes(environment)) throw new Error("Queue deployment requires preview, staging, or production");
   const config = JSON.parse(source);
@@ -54,7 +67,11 @@ export function renderQueueConfig(source, environment, workerName, capabilities 
   if (capabilities.r2) target.r2_buckets = [{ binding: "TRESTLE_ARTIFACTS", bucket_name: artifactBucketName(workerName) }];
   // Ephemeral PR Workers must not consume account-wide cron capacity.
   if (environment === "preview" || options.cron === false) delete target.triggers;
-  else if (capabilities.queues || capabilities.r2) target.triggers = { ...config.env[environment].triggers, crons: ["* * * * *"] };
+  else {
+    const declared = config.env[environment].triggers;
+    const crons = mergeCrons(declared?.crons, capabilities.queues || capabilities.r2);
+    if (crons.length) target.triggers = { ...declared, crons };
+  }
   if (capabilities.workflows) {
     target.workflows = [{ binding: "TRESTLE_WORKFLOW", name: resourceName(`${workerName}-workflow`), class_name: "TrestleWorkflow" }];
     target.vars = { ...target.vars, TRESTLE_WORKFLOWS_ENABLED: "true" };
