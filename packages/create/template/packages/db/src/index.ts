@@ -24,6 +24,7 @@ export * from "./audit-schema.js";
 export * from "./audit.js";
 export * from "./platform-schema.js";
 export * from "./platform-roles.js";
+export * from "./platform-directory.js";
 export * from "./platform-operations.js";
 export * from "./platform-commercial.js";
 export * from "./machine-access-schema.js";

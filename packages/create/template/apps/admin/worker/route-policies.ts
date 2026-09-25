@@ -1,6 +1,6 @@
 import { defineRoutePolicies, permissions, type HttpMethod, type RoutePolicy } from "@__TRESTLE_PROJECT_NAME__/authz";
 
-import { adminViews } from "../src/registry.js";
+import { adminViews } from "../src/api-registry.js";
 
 /**
  * Every admin Worker route and the authority it requires. View routes come

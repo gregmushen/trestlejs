@@ -1,17 +1,18 @@
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { AccessDeniedError, platformAccess, publicDenial, type AccessEvaluator } from "@__TRESTLE_PROJECT_NAME__/authz";
-import { featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
+import { AccessDeniedError, applicationRoles, evaluateAccess, formatAccessExplanation, organizationRoles, permissions, platformAccess, platformRoles, publicDenial, type AccessEvaluator } from "@__TRESTLE_PROJECT_NAME__/authz";
+import { Entitlements, featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportableOrganizations, supportOrganizationView,
-  listPlatformApiKeys, listPlatformWebhookEndpoints, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
+  grantPlatformRole, listPlatformAuditEvents, listPlatformEmailEvents, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
+  listPlatformApiKeys, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   type DatabaseDriver, type PlatformChangeContext,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 
-import { adminViews, type AdminCapability } from "../src/registry.js";
+import { adminViews, type AdminCapability } from "../src/api-registry.js";
 import { databaseReachable, overview, platformRolesFor } from "./data.js";
 import { adminPolicyFor } from "./route-policies.js";
 
@@ -31,6 +32,9 @@ export type AdminEnvironment = {
 };
 
 type Session = { user: { id: string; email: string; name?: string } };
+
+/** The local-only default operator seeded by `trestle dev` (packages/auth/src/local-admin.ts). */
+const localAdminEmail = "admin@trestle.local";
 type Variables = { correlationId: string; operator: Session["user"]; access: AccessEvaluator; roles: string[] };
 
 /** Replaceable in tests. */
@@ -98,6 +102,8 @@ admin.use("/api/admin/*", async (context, next) => {
   try {
     const session = await adminDependencies.session(context.env, context.req.raw.headers);
     if (!session) return context.json({ error: "unauthorized", message: "Sign in to the platform admin" }, 401);
+    // The seeded local operator (admin/admin) can never operate a deployed platform.
+    if (session.user.email === localAdminEmail && (context.env.APP_ENV ?? "local") !== "local") return context.json({ error: "forbidden", reason: "local_account", message: "The default local admin account cannot be used outside local development" }, 403);
     const roles = await adminDependencies.platformRoles(context.env, session.user.id);
     const { access, unknownRoles } = platformAccess(session.user.id, roles);
     if (unknownRoles.length) log.warn("admin.roles.unknown", { unknownRoles });
@@ -116,12 +122,32 @@ admin.use("/api/admin/*", async (context, next) => {
   }
 });
 
-admin.get("/api/admin/session", (context) => {
+admin.get("/api/admin/session", async (context) => {
   const access = context.get("access");
+  const operator = context.get("operator");
+  const environment = context.env.APP_ENV ?? "local";
+  const database = platformDatabase(context.env);
+  // Display context only: authority is checked on every request, so a failed lookup shows no support banner rather than failing sign-in.
+  const log = createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
+  const [sessions, organizations, status] = await Promise.all([
+    listSupportSessions(database, { operatorId: operator.id, limit: 5 }).catch((error: unknown) => { log.warn("admin.session.support_lookup_failed", { errorName: error instanceof Error ? error.name : "unknown" }); return []; }),
+    supportableOrganizations(database).catch(() => []),
+    adminDependencies.operationalStatus(context.env).catch(() => undefined),
+  ]);
+  const now = Date.now();
+  const open = sessions.find((session) => !session.endedAt && session.expiresAt.getTime() > now);
   return context.json({
-    operator: { id: context.get("operator").id, email: context.get("operator").email },
+    operator: { id: operator.id, email: operator.email, name: operator.name ?? operator.email },
     roles: context.get("roles"),
     permissions: access.permitted(),
+    environment,
+    capabilities: shellCapabilities(status, environment),
+    supportSession: open ? {
+      id: open.id, operatorId: open.operatorId, organizationId: open.organizationId,
+      organizationName: organizations.find((item) => item.organizationId === open.organizationId)?.organizationName ?? open.organizationId,
+      reason: open.reason, ticket: null, profile: "Read-only support",
+      startedAt: open.startedAt.toISOString(), expiresAt: open.expiresAt.toISOString(), endedAt: null, endedBy: null,
+    } : null,
     views: adminViews.map((view) => ({ id: view.id, path: view.path, label: view.label, group: view.group, capability: view.capability ?? null, allowed: access.check({ permission: view.permission }) })),
   });
 });
@@ -140,8 +166,14 @@ async function actionContext(context: AdminContext, body?: { reason?: unknown })
 const iso = (value: Date | null) => value?.toISOString() ?? null;
 
 admin.get("/api/admin/operations/outbox", async (context) => {
-  const events = await listDeadOutboxEvents(platformDatabase(context.env), { limit: Number(context.req.query("limit") ?? 50) });
-  return context.json({ dead: events.map((event) => ({ ...event, createdAt: event.createdAt.toISOString() })) });
+  const database = platformDatabase(context.env);
+  const [events, counts] = await Promise.all([listDeadOutboxEvents(database, { limit: Number(context.req.query("limit") ?? 50) }), outboxStatusCounts(database)]);
+  return context.json({ counts, dead: events.map((event) => ({ ...event, createdAt: event.createdAt.toISOString() })) });
+});
+
+admin.get("/api/admin/organizations", async (context) => {
+  const organizations = await listPlatformOrganizations(platformDatabase(context.env), { query: context.req.query("q") ?? "" });
+  return context.json({ organizations: organizations.map((item) => ({ ...item, slug: item.slug ?? "", createdAt: item.createdAt.toISOString() })) });
 });
 
 admin.post("/api/admin/operations/outbox/:id/redrive", async (context) => {
@@ -199,6 +231,116 @@ admin.post("/api/admin/commercial/subscriptions/:organizationId/overrides/:entit
   return context.json({ revoked: true, correlationId: context.get("correlationId") });
 });
 
+admin.get("/api/admin/organizations/:organizationId", async (context) => {
+  const database = platformDatabase(context.env);
+  const detail = await platformOrganizationDetail(database, context.req.param("organizationId"));
+  if (!detail) throw new PlatformOperationError("not_found", "Organization not found");
+  const regional = await organizationRegionalOverrides(database, detail.organization.id).catch(() => null);
+  return context.json({
+    organization: { ...detail.organization, slug: detail.organization.slug ?? "", createdAt: detail.organization.createdAt.toISOString() },
+    members: detail.members.map((entry) => ({ ...entry, joinedAt: entry.joinedAt.toISOString() })),
+    regional,
+  });
+});
+
+admin.get("/api/admin/users", async (context) => {
+  const users = await listPlatformUsers(platformDatabase(context.env), { query: context.req.query("q") ?? "" });
+  return context.json({ users: users.map((entry) => ({ ...entry, createdAt: entry.createdAt.toISOString() })) });
+});
+
+const auditJson = (event: Awaited<ReturnType<typeof platformAuditEvent>> & object) => ({ ...event, occurredAt: event.occurredAt.toISOString() });
+
+admin.get("/api/admin/audit", async (context) => {
+  const query = (name: string) => context.req.query(name) || undefined;
+  const result = await listPlatformAuditEvents(platformDatabase(context.env), {
+    ...(query("organizationId") ? { organizationId: query("organizationId")! } : {}), ...(query("actor") ? { actor: query("actor")! } : {}),
+    ...(query("name") ? { name: query("name")! } : {}), ...(query("correlation") ? { correlationId: query("correlation")! } : {}),
+    page: Number(query("page") ?? 1), pageSize: Number(query("pageSize") ?? 50),
+  });
+  return context.json({ ...result, events: result.events.map(auditJson) });
+});
+
+admin.get("/api/admin/audit/:id", async (context) => {
+  const event = await platformAuditEvent(platformDatabase(context.env), context.req.param("id"));
+  if (!event) throw new PlatformOperationError("not_found", "Audit event not found");
+  return context.json({ event: auditJson(event) });
+});
+
+admin.get("/api/admin/platform-roles", async (context) => {
+  const assignments = await listPlatformRoleAssignments(platformDatabase(context.env), { history: context.req.query("history") === "1" });
+  return context.json({
+    assignments: assignments.map((entry) => ({ ...entry, grantedAt: entry.grantedAt.toISOString(), revokedAt: iso(entry.revokedAt) })),
+    roles: platformRoles.list().map((role) => ({ key: role.key, name: role.name, description: role.description, permissions: role.permissions })),
+  });
+});
+
+admin.post("/api/admin/platform-roles", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { userId?: unknown; role?: unknown; reason?: unknown };
+  if (typeof body.userId !== "string" || !body.userId) throw new PlatformOperationError("invalid", "Choose a user");
+  if (typeof body.role !== "string" || !platformRoles.get(body.role)) throw new PlatformOperationError("invalid", "Choose a platform role the application defines");
+  await grantPlatformRole(platformDatabase(context.env), { userId: body.userId, role: body.role }, await actionContext(context, body));
+  return context.json({ granted: true, correlationId: context.get("correlationId") });
+});
+
+admin.post("/api/admin/platform-roles/:userId/:role/revoke", async (context) => {
+  // An operator cannot remove their own platform authority; another administrator must.
+  if (context.req.param("userId") === context.get("operator").id) throw new PlatformOperationError("invalid", "Ask another security administrator to revoke your own platform role");
+  await revokePlatformRole(platformDatabase(context.env), { userId: context.req.param("userId"), role: context.req.param("role") }, await actionContext(context));
+  return context.json({ revoked: true, correlationId: context.get("correlationId") });
+});
+
+admin.get("/api/admin/access/role-assignments", async (context) => {
+  const plane = context.req.query("plane");
+  if (plane !== "organization" && plane !== "application") throw new PlatformOperationError("invalid", "Choose the organization or application plane");
+  return context.json({ assignments: await listPlatformRoleHolders(platformDatabase(context.env), plane, context.req.query("role") || undefined) });
+});
+
+admin.get("/api/admin/service-accounts", async (context) => {
+  const accounts = await listPlatformServiceAccounts(platformDatabase(context.env), context.req.query("organizationId") || undefined);
+  return context.json({ serviceAccounts: accounts.map((account) => ({ ...account, createdAt: account.createdAt.toISOString() })) });
+});
+
+/**
+ * Explains a principal's access in one organization with the same policy the
+ * customer Worker enforces: each plane resolves only from its own assignments,
+ * and entitlements come from the plan and active overrides. It never performs
+ * the protected action.
+ */
+admin.post("/api/admin/access/explain", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { organizationId?: unknown; principal?: { type?: unknown; id?: unknown }; permission?: unknown; entitlement?: unknown };
+  const type = body.principal?.type;
+  if (typeof body.organizationId !== "string" || (type !== "user" && type !== "service_account") || typeof body.principal?.id !== "string") throw new PlatformOperationError("invalid", "Choose an organization and an identity");
+  if (body.permission !== undefined && (typeof body.permission !== "string" || !permissions.has(body.permission))) throw new PlatformOperationError("invalid", "Choose a registered permission");
+  if (body.entitlement !== undefined && (typeof body.entitlement !== "string" || !Object.hasOwn(featureDefinitions, body.entitlement))) throw new PlatformOperationError("invalid", "Choose an entitlement the application defines");
+  const database = platformDatabase(context.env);
+  const [subject, commercial] = await Promise.all([
+    platformAccessAssignments(database, body.organizationId, { type, id: body.principal.id }),
+    platformCommercialDetail(database, body.organizationId),
+  ]);
+  if (!subject) throw new PlatformOperationError("not_found", "That identity is not found in this organization");
+  const organization = organizationRoles.resolve(subject.organizationRoles);
+  const application = applicationRoles.resolve(subject.applicationRoles);
+  const now = new Date();
+  const entitlements = new Entitlements(new Set(commercial.planEntitlements), {
+    ...(commercial.subscription ? { plan: commercial.subscription.plan, planVersion: commercial.subscription.planVersion } : {}), now,
+    overrides: commercial.overrides.filter((override) => !override.removedAt).map((override) => ({ code: override.entitlement, enabled: override.enabled, reason: override.reason, authorId: override.authorId, effectiveAt: override.effectiveAt, ...(override.expiresAt ? { expiresAt: override.expiresAt } : {}) })),
+  });
+  const decision = evaluateAccess(permissions, {
+    principal: { type, id: body.principal.id, label: subject.principalName },
+    tenant: { organizationId: body.organizationId, label: subject.organizationName },
+    authority: subject.member ? { organization: organization.permissions, application: application.permissions } : {},
+    assignments: { organization: subject.organizationRoles, application: subject.applicationRoles },
+    entitlements: { get: (code) => { const resolved = entitlements.resolve(code); return { code, enabled: resolved.enabled, source: resolved.source, ...(resolved.inheritedFrom ? { inheritedFrom: resolved.inheritedFrom } : {}) }; } },
+    ...(subject.status && subject.status !== "active" ? { constraints: [{ name: "service account status", expected: "active", actual: subject.status, satisfied: false }] } : {}),
+  }, { ...(typeof body.permission === "string" ? { permission: body.permission } : {}), ...(typeof body.entitlement === "string" ? { entitlement: body.entitlement } : {}) });
+  return context.json({ decision, explanation: formatAccessExplanation(decision) });
+});
+
+admin.get("/api/admin/email", async (context) => {
+  const events = await listPlatformEmailEvents(platformDatabase(context.env), { ...(context.req.query("status") ? { status: context.req.query("status")! } : {}) });
+  return context.json({ events: events.map((event) => ({ ...event, occurredAt: event.occurredAt.toISOString(), receivedAt: event.receivedAt.toISOString() })) });
+});
+
 admin.get("/api/admin/support/sessions", async (context) => {
   const database = platformDatabase(context.env);
   const [sessions, organizations] = await Promise.all([listSupportSessions(database, { operatorId: context.get("operator").id }), supportableOrganizations(database)]);
@@ -252,6 +394,35 @@ admin.get("/api/admin/operations/artifacts", async (context) => {
   return context.json(await artifactOperations(platformDatabase(context.env), { staleBefore: new Date(Date.now() - 86_400_000) }));
 });
 
+type ShellCapabilityState = "disabled" | "declared" | "configured";
+type ReportedCapability = { configured?: unknown; enabled?: unknown; mode?: unknown };
+
+/**
+ * Capability lifecycle for the admin shell. Queues, R2, and Workflows exist only
+ * when declared in .trestle/project.yaml, and the customer Worker carries their
+ * bindings only then, so an absent binding means the capability is not
+ * declared and its views are hidden. Email and billing are always part of the
+ * application, so an unconfigured provider needs setup rather than hiding.
+ */
+export function shellCapabilities(status: unknown, environment: string) {
+  const reported = (status && typeof status === "object" ? (status as { capabilities?: Record<string, ReportedCapability> }).capabilities : undefined) ?? {};
+  const repair = `pnpm exec trestle setup --env ${environment}`;
+  const entry = (id: string, label: string, state: ShellCapabilityState, source?: ReportedCapability) => {
+    const mode = typeof source?.mode === "string" && /^[a-z0-9-]{1,32}$/u.test(source.mode) ? source.mode : undefined;
+    return { id, label, state, healthy: state !== "declared", ...(mode ? { mode } : {}), ...(state === "declared" ? { message: `${label} is not configured for ${environment}.`, repair } : {}) };
+  };
+  const always = (id: string, label: string, source: ReportedCapability | undefined) => entry(id, label, source?.configured === true ? "configured" : "declared", source);
+  const optional = (id: string, label: string, source: ReportedCapability | undefined, declared: boolean) => entry(id, label, !declared ? "disabled" : source?.configured === true ? "configured" : "declared", source);
+  return [
+    entry("admin", "Platform admin", "configured"),
+    always("email", "Email", reported.email),
+    always("payments", "Billing", reported.billing),
+    optional("queues", "Queues", reported.queues, reported.queues?.configured === true),
+    optional("r2", "Artifacts (R2)", reported.artifacts, reported.artifacts?.configured === true),
+    optional("workflows", "Workflows", reported.workflows, reported.workflows?.enabled === true),
+  ];
+}
+
 const capabilityLabels: Record<AdminCapability, string> = { database: "Database", email: "Email", billing: "Billing", queues: "Queues", artifacts: "Artifacts", workflows: "Workflows" };
 
 /** Sanitized: configured flags and modes only, never values. Unconfigured capabilities carry a setup command. */
@@ -286,7 +457,7 @@ admin.get("/api/admin/health", async (context) => {
 const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const;
 
 admin.onError((error, context) => {
-  if (error instanceof PlatformOperationError || error instanceof MachineAccessError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code]);
+  if (error instanceof PlatformOperationError || error instanceof MachineAccessError || error instanceof PlatformRoleError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code as keyof typeof operationStatus] ?? 400);
   createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);
 });
