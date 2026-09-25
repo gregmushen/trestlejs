@@ -155,6 +155,10 @@ try {
       "rejects staging and production before touching their databases",
       "signs in as a verified user without sending any email",
     ]);
+    await requireScenarios(project, "./packages/auth", ["src/staging-fixture.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "rejects preview, production, and local before touching a database",
+      "rotates a verified account without email or extra users",
+    ]);
     await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     await requireScenarios(project, "./packages/db", ["src/webhook-replay.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "creates one linked execution, signs a local attempt, and never alters the original",
@@ -224,6 +228,13 @@ try {
     });
     await run("pnpm", ["exec", "playwright", "test", "tests/browser/preview-product.spec.ts", "--list"], project, {
       TRESTLE_BROWSER_MODE: "deployed",
+      SITE_URL: "https://site.example.test",
+      APP_URL: "https://app.example.test",
+      API_URL: "https://api.example.test",
+    });
+    await run("pnpm", ["exec", "playwright", "test", "tests/browser/staging-product.spec.ts", "--list"], project, {
+      TRESTLE_BROWSER_MODE: "deployed",
+      TRESTLE_DEPLOY_ENV: "staging",
       SITE_URL: "https://site.example.test",
       APP_URL: "https://app.example.test",
       API_URL: "https://api.example.test",

@@ -199,6 +199,22 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.deploy.r2", (deploy.match(/cloudflare-r2\.mjs ensure/gu) ?? []).length >= 2 && occursInOrder(deploy, "Prepare staging Queue bindings", "Provision staging R2 bucket") && occursInOrder(deploy, "Prepare production Queue bindings", "Provision production R2 bucket"), "staging and production provision opt-in R2 buckets"));
   checks.push(check("ci.deploy.runtime-role", (deploy.match(/db:roles:bootstrap/gu) ?? []).length >= 2 && (deploy.match(/db:roles:configure/gu) ?? []).length >= 2 && (deploy.match(/db:roles:verify/gu) ?? []).length >= 2, "staging and production bootstrap, configure, and verify restricted database runtime roles"));
   const deployedProduct = await readFile(path.join(root, "tests/browser/deployed-product.spec.ts"), "utf8").catch(() => "");
+  const stagingProduct = await readFile(path.join(root, "tests/browser/staging-product.spec.ts"), "utf8").catch(() => "");
+  const stagingFixture = await readFile(path.join(root, "packages/auth/src/staging-fixture.ts"), "utf8").catch(() => "");
+  checks.push(check("ci.deploy.staging-no-email-product",
+    projectPackage?.scripts?.["test:staging"]?.includes("staging-product.spec.ts") === true
+    && projectPackage?.scripts?.["test:staging"]?.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0") === true
+    && stagingDeploy.includes("pnpm --filter ./packages/auth exec tsx src/staging-fixture.ts")
+    && stagingDeploy.includes("pnpm test:staging")
+    && occursInOrder(stagingDeploy, "Rotate the staging browser fixture without sending email", "pnpm test:staging")
+    && stagingProduct.includes('process.env.TRESTLE_DEPLOY_ENV !== "staging"')
+    && stagingProduct.includes("TRESTLE_STAGING_FIXTURE_EMAIL")
+    && stagingProduct.includes("relforcerowsecurity")
+    && stagingFixture.includes('input.environment !== "staging"')
+    && stagingFixture.includes("emailVerified: true")
+    && !stagingProduct.includes("RESEND_API_KEY")
+    && !stagingFixture.includes("RESEND_API_KEY"),
+  "automatic staging browser gate signs in and checks tenant RLS without sending email"));
   checks.push(check("ci.deploy.staging-article-rls",
     stagingDeploy.includes("pnpm test:staging")
     && projectPackage?.scripts?.["test:staging:live-email"]?.includes("deployed-product.spec.ts") === true

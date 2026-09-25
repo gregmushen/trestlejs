@@ -97,6 +97,13 @@ jobs:
         env:
           TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           DATABASE_RUNTIME_ROLE: "${{ vars.DATABASE_RUNTIME_ROLE }}"
+      - name: Rotate the staging browser fixture without sending email
+        run: |
+          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"
+          pnpm --filter ./packages/auth exec tsx src/staging-fixture.ts
+        env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
+          TRESTLE_DEPLOY_ENV: staging
       - name: Configure and verify the staging platform admin database role
         if: steps.admin.outputs.enabled == 'true'
         run: |
@@ -186,9 +193,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
       - name: Install deployed browser runtime
         run: pnpm exec playwright install --with-deps --only-shell chromium
-      - name: Verify deployed staging site in Chromium without sending email
-        run: pnpm test:staging
+      - name: Verify deployed staging site and product in Chromium without sending email
+        run: |
+          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"
+          pnpm test:staging
         env:
+          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"
           SITE_URL: "${{ vars.SITE_URL }}"
           APP_URL: "${{ vars.APP_URL }}"
           API_URL: "${{ vars.API_URL }}"

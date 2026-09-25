@@ -8,7 +8,7 @@ const scripts = JSON.parse(read("../package.json")).scripts;
 test("automatic deployed browser gates cannot enable the live-email suites", () => {
   for (const [environment, workflow, productSpec] of [
     ["preview", "../.github/workflows/preview.yml", "preview-product.spec.ts"],
-    ["staging", "../.github/workflows/deploy.yml", "deployed-product.spec.ts"],
+    ["staging", "../.github/workflows/deploy.yml", "staging-product.spec.ts"],
   ]) {
     const command = scripts[`test:${environment}`];
     assert.match(command, /site-handoff\.spec\.ts/u);
@@ -42,6 +42,21 @@ test("automatic preview product verification has a non-sending fixture and canno
   assert.match(product, /throw new Error\("Preview product verification requires a verified preview fixture/u);
   assert.doesNotMatch(product, /RESEND_API_KEY|waitForStagingVerificationLink|\.skip\([^)]*TRESTLE_ALLOW_LIVE_EMAIL_TESTS/u);
   assert.match(fixture, /input\.environment !== "preview"/u);
+  assert.match(fixture, /emailVerified: true/u);
+  assert.doesNotMatch(fixture, /createEmailService|RESEND_API_KEY/u);
+});
+
+test("automatic staging product verification uses a guarded fixture and no email adapter", () => {
+  const workflow = read("../.github/workflows/deploy.yml");
+  const product = read("../tests/browser/staging-product.spec.ts");
+  const fixture = read("../packages/auth/src/staging-fixture.ts");
+  assert.match(workflow, /Rotate the staging browser fixture without sending email/u);
+  assert.ok(workflow.indexOf("Rotate the staging browser fixture") < workflow.indexOf("pnpm test:staging"));
+  assert.match(product, /TRESTLE_STAGING_FIXTURE_EMAIL/u);
+  assert.match(product, /TRESTLE_DEPLOY_ENV !== "staging"/u);
+  assert.match(product, /throw new Error\("Staging product verification requires a staging fixture/u);
+  assert.doesNotMatch(product, /RESEND_API_KEY|waitForStagingVerificationLink/u);
+  assert.match(fixture, /input\.environment !== "staging"/u);
   assert.match(fixture, /emailVerified: true/u);
   assert.doesNotMatch(fixture, /createEmailService|RESEND_API_KEY/u);
 });
