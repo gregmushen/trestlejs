@@ -7,30 +7,24 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: npm-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Verify the release
+    uses: ./.github/workflows/ci.yml
+
   publish:
-    name: Build, verify, and publish
+    name: Build and publish
+    needs: verify
     runs-on: ubuntu-latest
     environment: npm
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_DB: trestle_generated
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports: [5432:5432]
-        options: >-
-          --health-cmd "pg_isready -U postgres -d trestle_generated"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 20
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Check out the release
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -55,25 +49,18 @@ jobs:
         shell: bash
         run: pnpm release:check -- "${GITHUB_REF_NAME#v}"
 
-      - name: Build and test
-        run: pnpm check
-
-      - name: Rehearse a published adjacent-version upgrade
-        run: pnpm check:upgrade
-        env:
-          TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-
-      - name: Install browser test runtime
-        run: npx --yes playwright@1.63.0 install --with-deps --only-shell chromium
-
-      - name: Exercise a clean generated project
-        run: pnpm check:generated
-        env:
-          DEBUG: pw:webserver
-          TRESTLE_GENERATED_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_generated
+      - name: Build packages
+        run: pnpm build
 
       - name: Build publishable tarballs
         run: pnpm release:pack
+
+      - name: Confirm every tarball contains its build output
+        shell: bash
+        run: |
+          for f in release/*.tgz; do
+            tar -tzf "$f" | grep -q "package/dist/" || { echo "missing dist in $f"; exit 1; }
+          done
 
       - name: Select npm distribution tag
         id: distribution
