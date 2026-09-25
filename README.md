@@ -30,26 +30,30 @@ Browser
 truth and tenant isolation.
 
 > [!IMPORTANT]
-> TrestleJS is currently a public alpha. The generated vertical slice works
-> end to end, but APIs and project structure may still change before v1.
+> TrestleJS `0.1.0-beta.1` is an opt-in beta candidate, **not a
+> production-readiness claim**. Local, preview, and staging paths have
+> evidence, while production deployment and several hosted capabilities
+> remain unverified. Read the [testing ledger](docs/BETA_CANDIDATE_TESTING_LEDGER.md)
+> before evaluating it. APIs and project structure may still change before v1.
 
 [Quick start](#quick-start) · [What you get](#what-you-get) ·
 [Resource generation](#generate-a-tenant-safe-resource) ·
 [Setup plans](#plans-humans-and-agents-can-review) ·
 [CLI](#cli-at-a-glance) · [Architecture specification](docs/TRESTLEJS_SPEC.md)
-· [Roadmap](docs/ROADMAP.md)
+· [Roadmap](docs/ROADMAP.md) · [Beta testing ledger](docs/BETA_CANDIDATE_TESTING_LEDGER.md)
 
 ## Quick start
 
 You need Node.js 22+, pnpm 10+, and Docker Desktop for local PostgreSQL.
 
 ```bash
-npx create-trestlejs my-app
+npx create-trestlejs@next my-app
 cd my-app
 pnpm dev
 ```
 
-That one command starts the complete local system:
+The `next` tag opts into the prerelease; the unqualified npm `latest` tag is
+not the beta candidate. `pnpm dev` starts the complete local system:
 
 | Surface | Local address |
 | --- | --- |

@@ -10,12 +10,15 @@ import { isDeepStrictEqual } from "node:util";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const current = JSON.parse(await readFile(path.join(root, "packages/cli/package.json"), "utf8")).version;
 const match = /^0\.1\.0-alpha\.(\d+)$/u.exec(current);
-if (!match || Number(match[1]) < 3) throw new Error("Adjacent upgrade rehearsal requires an alpha release with two published predecessors");
+const betaCandidate = current === "0.1.0-beta.1";
+if ((!match || Number(match[1]) < 3) && !betaCandidate) {
+  throw new Error("Adjacent upgrade rehearsal requires two published predecessors or the first beta candidate");
+}
 
 // During a release candidate's CI, the candidate is not yet on npm. Rehearse
 // the two latest published versions through their real create and upgrade CLIs.
-const before = `0.1.0-alpha.${Number(match[1]) - 2}`;
-const after = `0.1.0-alpha.${Number(match[1]) - 1}`;
+const before = betaCandidate ? "0.1.0-alpha.134" : `0.1.0-alpha.${Number(match[1]) - 2}`;
+const after = betaCandidate ? "0.1.0-alpha.135" : `0.1.0-alpha.${Number(match[1]) - 1}`;
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "trestle-adjacent-upgrade-"));
 const project = path.join(temporaryRoot, "upgrade-canary");
 let maintenance;
@@ -581,6 +584,67 @@ try {
     if (!isDeepStrictEqual(expected, JSON.parse(packageTarget))) throw new Error("Published Alpha 134 package manifest differs from the reviewed live-email command transition");
     await writeFile(packagePath, packageTarget);
     console.log("Reviewed the known Alpha 133 → 134 preview fixture workflow and command transition; application edits remain subject to source-apply review.");
+  }
+  if (before === "0.1.0-alpha.134" && after === "0.1.0-alpha.135") {
+    // Protected deployment source requires an exact published transition review.
+    // Do not treat a changed application workflow as framework-owned.
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    const relative = ".github/workflows/deploy.yml";
+    const workflowPath = path.join(project, relative);
+    const source = await readFile(workflowPath, "utf8");
+    if (createHash("sha256").update(source).digest("hex") !== baseline.files?.[relative]) {
+      throw new Error("Published Alpha 134 deployment workflow differs from its recorded baseline");
+    }
+    let reviewed = replaceExactlyOnce(source,
+      "      - name: Configure and verify the staging platform admin database role\n",
+      [
+        "      - name: Rotate the staging browser fixture without sending email",
+        "        run: |",
+        '          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"',
+        "          pnpm --filter ./packages/auth exec tsx src/staging-fixture.ts",
+        "        env:",
+        '          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"',
+        "          TRESTLE_DEPLOY_ENV: staging",
+        "      - name: Configure and verify the staging platform admin database role",
+        "",
+      ].join("\n"));
+    reviewed = replaceExactlyOnce(reviewed,
+      "      - name: Verify deployed staging site in Chromium without sending email\n        run: pnpm test:staging\n        env:\n",
+      [
+        "      - name: Verify deployed staging site and product in Chromium without sending email",
+        "        run: |",
+        '          export DATABASE_URL="$(pnpm exec trestle secrets get DATABASE_URL --env staging --raw)"',
+        "          pnpm test:staging",
+        "        env:",
+        '          TRESTLE_MASTER_KEY: "${{ secrets.TRESTLE_MASTER_KEY }}"',
+        "",
+      ].join("\n"));
+    const template = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", relative), "utf8");
+    const target = template.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewed !== target) throw new Error("Published Alpha 135 deployment workflow differs from the narrowly reviewed staging fixture transition");
+    await writeFile(workflowPath, target);
+
+    const packageRelative = "package.json";
+    const packagePath = path.join(project, packageRelative);
+    const packageSource = JSON.parse(await readFile(packagePath, "utf8"));
+    const expected = JSON.parse(originalPackageSource);
+    if (createHash("sha256").update(originalPackageSource).digest("hex") !== baseline.files?.[packageRelative]
+      || expected.devDependencies?.trestlejs !== before) throw new Error("Published Alpha 134 package manifest differs from its recorded baseline");
+    expected.devDependencies.trestlejs = after;
+    if (!isDeepStrictEqual(packageSource, expected)) {
+      throw new Error("Published Alpha 134 package manifest has edits beyond the CLI version bump");
+    }
+    expected.scripts["test:staging"] = replaceExactlyOnce(expected.scripts["test:staging"],
+      "TRESTLE_BROWSER_MODE=deployed TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0 playwright test tests/browser/site-handoff.spec.ts tests/browser/deployed-product.spec.ts",
+      "TRESTLE_BROWSER_MODE=deployed TRESTLE_DEPLOY_ENV=staging TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0 playwright test tests/browser/site-handoff.spec.ts tests/browser/staging-product.spec.ts");
+    expected.scripts.test = replaceExactlyOnce(expected.scripts.test,
+      "scripts/serve-site.test.mjs scripts/smoke-operational.test.mjs",
+      "scripts/serve-site.test.mjs scripts/smoke-http.test.mjs scripts/smoke-operational.test.mjs");
+    const packageTemplate = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", packageRelative), "utf8");
+    const packageTarget = packageTemplate.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary").replaceAll("__TRESTLEJS_VERSION__", after);
+    if (!isDeepStrictEqual(expected, JSON.parse(packageTarget))) throw new Error("Published Alpha 135 package manifest differs from the reviewed staging commands");
+    await writeFile(packagePath, packageTarget);
+    console.log("Reviewed the known Alpha 134 → 135 staging fixture workflow and command transition; application edits remain subject to source-apply review.");
   }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {

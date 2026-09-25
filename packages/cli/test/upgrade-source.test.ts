@@ -77,15 +77,21 @@ describe("optional capability source inventory", () => {
   });
 });
 
-describe("adjacent-alpha source apply", () => {
+const previousRelease = TRESTLEJS_VERSION === "0.1.0-beta.1"
+  ? "0.1.0-alpha.135"
+  : `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 1}`;
+const nonAdjacentRelease = TRESTLEJS_VERSION === "0.1.0-beta.1"
+  ? "0.1.0-alpha.134"
+  : `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 2}`;
+
+describe("adjacent-release source apply", () => {
   async function fixture() {
     const parent = await mkdtemp(path.join(os.tmpdir(), "trestle-source-apply-"));
     const root = path.join(parent, "sample-app");
     const template = path.join(parent, "template");
-    const alpha = Number(TRESTLEJS_VERSION.split(".").at(-1));
     await mkdir(path.join(root, ".trestle"), { recursive: true });
     await mkdir(path.join(template, ".trestle"), { recursive: true });
-    const oldMarker = JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}` });
+    const oldMarker = JSON.stringify({ schemaVersion: 1, templateVersion: previousRelease });
     const packageSource = JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } });
     await writeFile(path.join(root, ".trestle", "framework.json"), oldMarker);
     await writeFile(path.join(template, ".trestle", "framework.json"), JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION }));
@@ -96,7 +102,7 @@ describe("adjacent-alpha source apply", () => {
     await writeFile(path.join(template, "added.txt"), "added\n");
     await writeFile(path.join(root, "changed.txt"), "old sample-app\n");
     await writeFile(path.join(root, "custom.txt"), "my application data\n");
-    await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}`, files: { ".trestle/framework.json": hash(oldMarker), "package.json": hash(packageSource), "changed.txt": hash("old sample-app\n") } }));
+    await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: previousRelease, files: { ".trestle/framework.json": hash(oldMarker), "package.json": hash(packageSource), "changed.txt": hash("old sample-app\n") } }));
     return { parent, root, template };
   }
 
@@ -173,7 +179,7 @@ describe("adjacent-alpha source apply", () => {
   it("applies a changed generated package manifest after only the required CLI version bump", async () => {
     const { parent, root, template } = await fixture();
     try {
-      const previousVersion = `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 1}`;
+      const previousVersion = previousRelease;
       const oldPackage = `${JSON.stringify({ name: "sample-app", scripts: { test: "node old.test.mjs" }, devDependencies: { trestlejs: previousVersion } }, null, 2)}\n`;
       const upgradedDependency = oldPackage.replace(previousVersion, TRESTLEJS_VERSION);
       const newPackage = `${JSON.stringify({ name: "sample-app", scripts: { test: "node new.test.mjs" }, devDependencies: { trestlejs: TRESTLEJS_VERSION } }, null, 2)}\n`;
@@ -193,7 +199,7 @@ describe("adjacent-alpha source apply", () => {
   it("uses a hash-verified package baseline when pnpm reformats the dependency bump", async () => {
     const { parent, root, template } = await fixture();
     try {
-      const previousVersion = `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 1}`;
+      const previousVersion = previousRelease;
       const oldPackage = `${JSON.stringify({ name: "sample-app", scripts: { test: "node old.test.mjs" }, devDependencies: { trestlejs: previousVersion, foo: "1" } }, null, 2)}\n`;
       const target = `${JSON.stringify({ name: "sample-app", scripts: { test: "node new.test.mjs" }, devDependencies: { trestlejs: TRESTLEJS_VERSION, foo: "1" } }, null, 2)}\n`;
       const baselinePath = path.join(root, ".trestle", "template-baseline.json");
@@ -215,7 +221,7 @@ describe("adjacent-alpha source apply", () => {
   it("still rejects an application package edit combined with a CLI version bump", async () => {
     const { parent, root, template } = await fixture();
     try {
-      const previousVersion = `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 1}`;
+      const previousVersion = previousRelease;
       const oldPackage = JSON.stringify({ scripts: { test: "node old.test.mjs" }, devDependencies: { trestlejs: previousVersion } });
       const baselinePath = path.join(root, ".trestle", "template-baseline.json");
       const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
@@ -293,12 +299,11 @@ describe("adjacent-alpha source apply", () => {
     try {
       await rm(path.join(root, ".trestle", "template-baseline.json"));
       await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("matching baseline");
-      const alpha = Number(TRESTLEJS_VERSION.split(".").at(-1));
-      await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ templateVersion: `0.1.0-alpha.${alpha - 2}` }));
-      await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 2}`, files: { "changed.txt": hash("old sample-app\n") } }));
-      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("immediately preceding alpha");
-      await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ templateVersion: `0.1.0-alpha.${alpha - 1}` }));
-      await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: `0.1.0-alpha.${alpha - 1}`, files: { "changed.txt": hash("old sample-app\n") } }));
+      await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ templateVersion: nonAdjacentRelease }));
+      await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: nonAdjacentRelease, files: { "changed.txt": hash("old sample-app\n") } }));
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("immediately preceding release");
+      await writeFile(path.join(root, ".trestle", "framework.json"), JSON.stringify({ templateVersion: previousRelease }));
+      await writeFile(path.join(root, ".trestle", "template-baseline.json"), JSON.stringify({ schemaVersion: 1, templateVersion: previousRelease, files: { "changed.txt": hash("old sample-app\n") } }));
       await writeFile(path.join(root, "pnpm-lock.yaml"), "importers: {}\n");
       await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("pnpm-lock.yaml");
     } finally { await rm(parent, { recursive: true, force: true }); }

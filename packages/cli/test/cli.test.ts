@@ -414,7 +414,7 @@ export const applicationEventCatalog = defineEventCatalog([
     const validate = capture(root);
     expect(await executeCli(["plan", "validate", ".trestle/setup.json"], validate.runtime)).toBe(0);
     expect(validate.stdout()).toContain("contains no plaintext secret values");
-    await writeFile(path.join(root, ".trestle", "future.json"), `${JSON.stringify({ ...plan, minimumTrestleVersion: "0.1.0-alpha.999" }, null, 2)}\n`);
+    await writeFile(path.join(root, ".trestle", "future.json"), `${JSON.stringify({ ...plan, minimumTrestleVersion: "0.2.0" }, null, 2)}\n`);
     const future = capture(root);
     expect(await executeCli(["plan", "validate", ".trestle/future.json"], future.runtime)).toBe(1);
     expect(future.stderr()).toContain("or newer");

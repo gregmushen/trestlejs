@@ -95,7 +95,8 @@ function protectedSourcePath(relative: string): boolean {
     || relative.endsWith("/wrangler.jsonc") || relative === "wrangler.jsonc";
 }
 
-function adjacentAlpha(from: string | null, to: string): boolean {
+function adjacentRelease(from: string | null, to: string): boolean {
+  if (from === "0.1.0-alpha.135" && to === "0.1.0-beta.1") return true;
   const before = /^0\.1\.0-alpha\.(\d+)$/u.exec(from ?? "");
   const after = /^0\.1\.0-alpha\.(\d+)$/u.exec(to);
   return Boolean(before && after && Number(after![1]) === Number(before![1]) + 1);
@@ -213,13 +214,13 @@ export async function planSourceDiff(root: string, projectName: string, template
   return { sourceTemplateVersion: framework?.templateVersion ?? null, targetTemplateVersion: TRESTLEJS_VERSION, baselineTrusted, entries, summary };
 }
 
-/** Applies only pristine files from the immediately preceding alpha. This is
+/** Applies only pristine files from the immediately preceding release. This is
  * intentionally not certification: framework metadata stays at its old source
  * version until migrations, generated tests, and provider wiring are reviewed. */
 export async function applySourceUpgrade(root: string, projectName: string, templateRoot = defaultTemplateRoot): Promise<readonly string[]> {
   const report = await planSourceDiff(root, projectName, templateRoot);
-  if (!report.baselineTrusted || !adjacentAlpha(report.sourceTemplateVersion, report.targetTemplateVersion)) {
-    throw new Error("Source apply requires a matching baseline from the immediately preceding alpha; use upgrade diff for manual review");
+  if (!report.baselineTrusted || !adjacentRelease(report.sourceTemplateVersion, report.targetTemplateVersion)) {
+    throw new Error("Source apply requires a matching baseline from the immediately preceding release; use upgrade diff for manual review");
   }
   const upgrade = await planUpgrade(root);
   if (upgrade.operations.find(({ id }) => id === "cli-version")?.classification !== "already-correct") {
@@ -268,8 +269,8 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
 
 async function assertSourceReadyToFinalize(root: string, projectName: string, templateRoot: string): Promise<void> {
   const report = await planSourceDiff(root, projectName, templateRoot);
-  if (!report.baselineTrusted || !adjacentAlpha(report.sourceTemplateVersion, report.targetTemplateVersion)) {
-    throw new Error("Source finalization requires a matching baseline from the immediately preceding alpha");
+  if (!report.baselineTrusted || !adjacentRelease(report.sourceTemplateVersion, report.targetTemplateVersion)) {
+    throw new Error("Source finalization requires a matching baseline from the immediately preceding release");
   }
   const upgrade = await planUpgrade(root);
   if (upgrade.operations.find(({ id }) => id === "cli-version")?.classification !== "already-correct") {
