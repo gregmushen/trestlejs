@@ -1124,7 +1124,13 @@ automatic authenticated product gate without Resend. It reuses one verified
 `example.test` account, checks tenant switching and cross-tenant denial, and
 checks forced Article RLS through the restricted database role when Article
 is declared. The fixture refuses non-staging environments. Live verification
-email remains a separate opt-in gate and is not run by ordinary deploys.
+email remains a separate opt-in gate and is not run by ordinary deploys. The
+canary's manually triggered staging deployment passed the site and authenticated
+product browser checks without email in
+[run 36080565129](https://github.com/gregmushen/trestlejs-canary/actions/runs/36080565129).
+The canary does not yet declare Article, so this run does not prove deployed
+Article RLS; the generated local database suite and opt-in staging suite cover
+it separately until an Article-enabled staging deployment is exercised.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.
