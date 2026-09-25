@@ -53,9 +53,9 @@ export class TrestleWorkflow extends WorkflowEntrypoint<AuthEnvironment, EventEn
         await consumeWorkflowEvent({
           registry: eventConsumers, inbox, outbox, envelope, environment: this.env, workflowId: event.instanceId,
           log: createLogger({ correlationId: envelope.correlationId }, undefined, { secretValues: loggerSecretsFromEnvironment(this.env) }),
-          postCommit: async (message, environment, committed) => {
+          postCommit: async (message, environment, committed, context) => {
             const queue = (environment as AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBinding<NativeWebhookWakeup> }).TRESTLE_EVENTS;
-            await projectWebhookForEvent({ envelope: message, environment, outbox, ...(committed ? { committed } : {}), ...(queue ? { queue } : {}) });
+            await projectWebhookForEvent({ envelope: message, environment, outbox, ...(committed ? { committed } : {}), ...(context ? { now: () => context.clock.now() } : {}), ...(queue ? { queue } : {}) });
           },
         });
       } finally {

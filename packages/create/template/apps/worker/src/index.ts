@@ -33,6 +33,7 @@ export const app = new Hono<{ Bindings: AuthEnvironment; Variables: AppVariables
 /** Background handlers run only on verified committed events. `{ authority: "tenant" }` handlers get a lazily opened tenant database. */
 export const eventConsumers = new EventConsumerRegistry<AuthEnvironment, Database>(applicationEventCatalog, {
   tenantData: (environment, organizationId) => createTenantDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER, organizationId),
+  closeTenantData: async (data) => { await data.$client.end(); },
   hasEntitlement: hasCurrentEntitlement,
 });
 
@@ -582,15 +583,15 @@ export default {
       // Verify before creating the instance, so a forged message never claims its stable ID.
       const outbox = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
       try {
-        const events = await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW, outbox, observeEvent)({ messages: eventMessages });
+        const events = await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW, outbox, observeEvent)({ messages: eventMessages }, environment);
         return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
       } finally { await outbox.close(); }
     }
     const inbox = new PostgresEventInbox(environment.DATABASE_URL, { assumeApplicationRole: true });
     const outbox = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
     try {
-      const events = await createQueueConsumer(eventConsumers, inbox, outbox, async (envelope, currentEnvironment, committed) => {
-        await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox, ...(committed ? { committed } : {}), ...(environment.TRESTLE_EVENTS ? { queue: environment.TRESTLE_EVENTS } : {}) });
+      const events = await createQueueConsumer(eventConsumers, inbox, outbox, async (envelope, currentEnvironment, committed, context) => {
+        await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox, ...(committed ? { committed } : {}), ...(context ? { now: () => context.clock.now() } : {}), ...(environment.TRESTLE_EVENTS ? { queue: environment.TRESTLE_EVENTS } : {}) });
       }, observeEvent)({ messages: eventMessages }, environment);
       return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     } finally { await Promise.all([inbox.close(), outbox.close()]); }

@@ -127,8 +127,8 @@ describe("Worker Queue consumer", () => {
     const acknowledgements: string[] = [];
     const batch = { messages: [{ body: event, ack: () => acknowledgements.push("ack"), retry: () => acknowledgements.push("retry") }] };
     const consumer = createWorkflowQueueConsumer(registry, binding, store);
-    expect(await consumer(batch)).toEqual({ acknowledged: 1, retried: 0 });
-    expect(await consumer(batch)).toEqual({ acknowledged: 1, retried: 0 });
+    expect(await consumer(batch, {})).toEqual({ acknowledged: 1, retried: 0 });
+    expect(await consumer(batch, {})).toEqual({ acknowledged: 1, retried: 0 });
     expect(workflows.list()).toHaveLength(1);
     expect(workflows.list()[0]?.id).toBe(event.id);
     expect(await workflows.runDue(async (queued) => await handleEventWithInbox(registry, inbox, store, queued, {}), { retryDelayMs: 1_000 })).toBe(0);
@@ -146,14 +146,14 @@ describe("Worker Queue consumer", () => {
     const store = committedStore();
     const states: string[] = [];
     const consumer = createWorkflowQueueConsumer(registry, { create: async () => { throw new Error("provider unavailable"); }, get: async () => { throw new Error("not found"); } }, store);
-    expect(await consumer({ messages: [message(store.commit(envelope()), states)] })).toEqual({ acknowledged: 0, retried: 1 });
+    expect(await consumer({ messages: [message(store.commit(envelope()), states)] }, {})).toEqual({ acknowledged: 0, retried: 1 });
     expect(states).toEqual(["retry"]);
   });
 });
 
 describe("Verified handler authority", () => {
   it("gives an undeclared handler the committed event, organization, logger, and clock, but no database", async () => {
-    const clock = { now: () => new Date() };
+    const clock = { now: () => new Date("2026-09-22T00:01:00Z") };
     const tenantCalls: string[] = [];
     const registry = new EventConsumerRegistry<{ marker: string }, { tenant: string }>(undefined, { clock, logger: silent(), tenantData: (_environment, organizationId) => { tenantCalls.push(organizationId); return { tenant: organizationId }; } });
     const contexts: EventHandlerContext<{ tenant: string }>[] = [];
@@ -321,7 +321,7 @@ describe("Verified handler authority", () => {
   });
 
   it("verifies before Workflow creation and creates the instance from the committed event", async () => {
-    const registry = new EventConsumerRegistry(undefined, { logger: silent() });
+    const registry = new EventConsumerRegistry(undefined, { clock: { now: () => new Date("2026-09-22T00:01:00Z") }, logger: silent() });
     registry.register(definition, async () => undefined);
     const store = committedStore();
     const created: EventEnvelope[] = [];
@@ -331,13 +331,65 @@ describe("Verified handler authority", () => {
     const states: string[] = [];
     const consumer = createWorkflowQueueConsumer(registry, binding, store, (settlement) => settlements.push(settlement));
     // A forged message must never take the stable instance ID first.
-    expect(await consumer({ messages: [message({ ...committed, payload: { title: "Forged" } }, states)] })).toEqual({ acknowledged: 0, retried: 1 });
+    expect(await consumer({ messages: [message({ ...committed, payload: { title: "Forged" } }, states)] }, {})).toEqual({ acknowledged: 0, retried: 1 });
     expect(created).toEqual([]);
     expect(settlements[0]?.reason).toBe("provenance_mismatch");
-    expect(await consumer({ messages: [message({ ...committed, occurredAt: "2026-09-22T00:00:00.000Z" }, states)] })).toEqual({ acknowledged: 1, retried: 0 });
+    expect(await consumer({ messages: [message({ ...committed, occurredAt: "2026-09-22T00:00:00.000Z" }, states)] }, {})).toEqual({ acknowledged: 1, retried: 0 });
     expect(created).toHaveLength(1);
     expect(created[0]).toBe(committed);
     expect(states).toEqual(["retry", "ack"]);
+  });
+
+  it("gives post-commit work the registry clock, so projection judges age by the same clock", async () => {
+    const clock = { now: () => new Date("2026-01-02T00:00:00Z") };
+    const registry = new EventConsumerRegistry(undefined, { clock, logger: silent() });
+    registry.register(definition, async () => undefined);
+    const store = committedStore();
+    const clocks: unknown[] = [];
+    await handleEventWithInbox(registry, new InMemoryEventInbox(), store, store.commit(envelope({ occurredAt: "2026-01-01T00:00:00Z" })), {}, async (_event, _environment, _committed, context) => { clocks.push(context?.clock); });
+    expect(clocks).toEqual([clock]);
+  });
+
+  it("sends a Workflow event that authorization would reject to the dead-letter path without creating an instance", async () => {
+    const clock = { now: () => new Date("2026-09-22T00:01:00Z") };
+    const registry = new EventConsumerRegistry(undefined, { clock, logger: silent() });
+    registry.register(definition, async () => undefined);
+    const store = committedStore();
+    const created: string[] = [];
+    const binding = { create: async ({ id }: { id: string }) => { created.push(id); return { id }; }, get: async () => null };
+    const settlements: QueueSettlement[] = [];
+    const states: string[] = [];
+    const tenantless = store.commit(envelope({ occurredAt: "2026-09-22T00:00:00Z" }), null);
+    const consumer = createWorkflowQueueConsumer(registry, binding, store, (settlement) => settlements.push(settlement));
+    expect(await consumer({ messages: [message(tenantless, states)] }, {})).toEqual({ acknowledged: 0, retried: 1 });
+    expect(created).toEqual([]);
+    expect(states).toEqual(["retry"]);
+    expect(settlements[0]?.reason).toBe("tenant_provenance_missing");
+  });
+
+  it("closes tenant data after the handler completes or fails, only if the handler opened it", async () => {
+    const opened: Array<{ organizationId: string; closed: number }> = [];
+    const registry = new EventConsumerRegistry<unknown, { organizationId: string; closed: number }>(undefined, {
+      logger: silent(),
+      tenantData: (_environment, organizationId) => { const data = { organizationId, closed: 0 }; opened.push(data); return data; },
+      closeTenantData: async (data) => { data.closed += 1; },
+    });
+    let mode: "skip" | "read" | "fail" = "skip";
+    registry.register(definition, async (_payload, _event, _environment, context) => {
+      if (mode === "skip") return;
+      expect(context.data?.closed).toBe(0);
+      if (mode === "fail") throw new Error("handler failed");
+    }, { authority: "tenant" });
+    const store = committedStore();
+    const inbox = new InMemoryEventInbox();
+    await handleEventWithInbox(registry, inbox, store, store.commit(envelope(), "org-a"), {});
+    expect(opened).toEqual([]);
+    mode = "read";
+    await handleEventWithInbox(registry, inbox, store, store.commit(envelope(), "org-a"), {});
+    expect(opened).toEqual([{ organizationId: "org-a", closed: 1 }]);
+    mode = "fail";
+    await expect(handleEventWithInbox(registry, inbox, store, store.commit(envelope(), "org-b"), {})).rejects.toThrow("handler failed");
+    expect(opened).toEqual([{ organizationId: "org-a", closed: 1 }, { organizationId: "org-b", closed: 1 }]);
   });
 
   it("rejects a committed event older than the replay window", async () => {

@@ -28,11 +28,14 @@ export type EventHandlerContext<Data = unknown> = Readonly<{
 export type EventHandler<T = unknown, Environment = unknown, Data = unknown> =
   (payload: T, envelope: EventEnvelope, environment: Environment, context: EventHandlerContext<Data>) => Promise<void>;
 export type EventRegistration = { authority?: "tenant" | "system"; requires?: { entitlement: string } };
-/** Post-commit work (webhook projection) receives the verified committed row so it need not query again. */
-export type PostCommitEffect<Environment> = (envelope: EventEnvelope, environment: Environment, committed?: OutboxEntry) => Promise<void>;
+/** Post-commit work (webhook projection) receives the verified committed row so it need not query again,
+ * and the registry clock, so every age decision for one execution uses the same clock. */
+export type PostCommitEffect<Environment> = (envelope: EventEnvelope, environment: Environment, committed?: OutboxEntry, context?: { clock: { now(): Date } }) => Promise<void>;
 export type EventConsumerDependencies<Environment, Data> = {
   /** Opens tenant-scoped data for `{ authority: "tenant" }` handlers. */
   tenantData?: (environment: Environment, organizationId: string) => Data;
+  /** Closes tenant data a handler opened, once the handler completes or fails. */
+  closeTenantData?: (data: Data) => Promise<void>;
   /** Reads the tenant's current entitlements for `{ requires: { entitlement } }` registrations. */
   hasEntitlement?: (environment: Environment, organizationId: string, entitlement: string) => Promise<boolean>;
   clock?: { now(): Date };
@@ -46,6 +49,7 @@ const systemClock = { now: () => new Date() };
 export class EventConsumerRegistry<Environment = unknown, Data = unknown> {
   private readonly definitions = new EventRegistry();
   private readonly handlers = new Map<string, Registered<Environment, Data>>();
+  private readonly openedData = new WeakMap<object, () => Data | undefined>();
   readonly clock: { now(): Date };
   constructor(private readonly catalog?: EventCatalog, private readonly dependencies: EventConsumerDependencies<Environment, Data> = {}) {
     this.clock = dependencies.clock ?? systemClock;
@@ -102,8 +106,19 @@ export class EventConsumerRegistry<Environment = unknown, Data = unknown> {
       const tenantData = this.dependencies.tenantData!;
       let data: { value: Data } | undefined;
       Object.defineProperty(context, "data", { enumerable: false, get: () => (data ??= { value: tenantData(environment, organizationId!) }).value });
+      this.openedData.set(context, () => data?.value);
     }
     return Object.freeze(context);
+  }
+
+  /** Close the context's tenant data if the handler opened it. A close
+   * failure is logged, never thrown: the event's outcome is already decided. */
+  async release(context: EventHandlerContext<Data>): Promise<void> {
+    const opened = this.openedData.get(context)?.();
+    this.openedData.delete(context);
+    if (opened === undefined || !this.dependencies.closeTenantData) return;
+    try { await this.dependencies.closeTenantData(opened); }
+    catch { context.log.warn("event.tenant_data.close_failed", { eventId: context.event.id }); }
   }
 
   /**
@@ -144,17 +159,21 @@ export async function handleEventWithInbox<Environment, Data = unknown>(registry
   const committed = await registry.verify(outbox, envelope);
   const context = await registry.authorize(committed, environment);
   const event = committed.message;
-  const claim = await inbox.claim(event);
-  if (claim.state === "completed") return;
-  if (claim.state === "busy") throw new Error("Inbox event is already being processed");
   try {
-    if (postCommit) await postCommit(event, environment, committed);
-    if (await registry.entitled(committed, environment)) await registry.handle(event, environment, context);
-    else context.log.warn("event.handler.skipped", { eventId: event.id, eventName: event.name, reason: "not_entitled" });
-    await inbox.complete(event.idempotencyKey, claim.token);
-  } catch (error) {
-    await inbox.release(event.idempotencyKey, claim.token, error);
-    throw error;
+    const claim = await inbox.claim(event);
+    if (claim.state === "completed") return;
+    if (claim.state === "busy") throw new Error("Inbox event is already being processed");
+    try {
+      if (postCommit) await postCommit(event, environment, committed, { clock: registry.clock });
+      if (await registry.entitled(committed, environment)) await registry.handle(event, environment, context);
+      else context.log.warn("event.handler.skipped", { eventId: event.id, eventName: event.name, reason: "not_entitled" });
+      await inbox.complete(event.idempotencyKey, claim.token);
+    } catch (error) {
+      await inbox.release(event.idempotencyKey, claim.token, error);
+      throw error;
+    }
+  } finally {
+    await registry.release(context);
   }
 }
 
@@ -165,14 +184,18 @@ export function createQueueConsumer<Environment, Data = unknown>(registry: Event
 
 /**
  * Hand a verified Queue event to one Workflow instance per event ID.
- * Verification happens before `create`, so a forged message can never claim
- * the stable instance ID, and the instance starts from the committed event.
+ * Verification and authorization (tenant provenance) happen before `create`,
+ * so a forged message can never claim the stable instance ID, an event the
+ * Workflow would reject goes to the dead-letter path instead of starting an
+ * instance, and the instance starts from the committed event.
  */
 export function createWorkflowQueueConsumer<Environment, Data = unknown>(registry: EventConsumerRegistry<Environment, Data>, binding: CloudflareWorkflowBinding, outbox: CommittedEventStore, observe?: (settlement: QueueSettlement) => void) {
-  return async (batch: QueueBatch): Promise<{ acknowledged: number; retried: number }> =>
+  return async (batch: QueueBatch, environment: Environment): Promise<{ acknowledged: number; retried: number }> =>
     await processQueueBatch(batch.messages, async (envelope) => {
       registry.validate(envelope);
       const committed = await registry.verify(outbox, envelope);
+      // Tenant data is opened lazily, so authorizing here never opens a connection.
+      await registry.authorize(committed, environment);
       try {
         await binding.create({ id: committed.id, params: committed.message });
       } catch (error) {

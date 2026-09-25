@@ -34,7 +34,7 @@ function recordingLogger() {
 async function createInstance(registry: EventConsumerRegistry, store: ReturnType<typeof committedStore>, event: EventEnvelope) {
   const instances = new Map<string, EventEnvelope>();
   const binding = { create: async ({ id, params }: { id: string; params: EventEnvelope }) => { instances.set(id, params); return { id }; }, get: async (id: string) => instances.get(id) ?? null };
-  expect(await createWorkflowQueueConsumer(registry, binding, store)({ messages: [{ body: event, ack: () => undefined, retry: () => undefined }] })).toEqual({ acknowledged: 1, retried: 0 });
+  expect(await createWorkflowQueueConsumer(registry, binding, store)({ messages: [{ body: event, ack: () => undefined, retry: () => undefined }] }, {})).toEqual({ acknowledged: 1, retried: 0 });
   return instances.get(event.id)!;
 }
 
