@@ -54,19 +54,25 @@ describe("Workflow step execution", () => {
     expect(records).toEqual([expect.objectContaining({ level: "warn", event: "workflow.event.rejected", fields: expect.objectContaining({ workflowId: event.id, reason: "provenance_mismatch" }) })]);
   });
 
-  it("fails non-retryably when the required entitlement is revoked after creation", async () => {
+  it("completes without running the handler when the required entitlement is revoked after creation", async () => {
     let entitled = true;
-    const registry = new EventConsumerRegistry(undefined, { logger: recordingLogger().logger, hasEntitlement: async () => entitled });
+    const handlerLog = recordingLogger();
+    const registry = new EventConsumerRegistry(undefined, { logger: handlerLog.logger, hasEntitlement: async () => entitled });
     let handled = 0;
     registry.register(definition, async () => { handled += 1; }, { requires: { entitlement: "workflows.advanced" } });
     const store = committedStore();
     const event = store.commit(envelope(new Date()));
     const params = await createInstance(registry, store, event);
     entitled = false;
+    const inbox = new InMemoryEventInbox();
+    const projected: string[] = [];
     const { records, log } = recordingLogger();
-    await expect(consumeWorkflowEvent({ registry, inbox: new InMemoryEventInbox(), outbox: store, envelope: params, environment: {}, workflowId: event.id, log })).rejects.toBeInstanceOf(NonRetryableError);
+    await consumeWorkflowEvent({ registry, inbox, outbox: store, envelope: params, environment: {}, workflowId: event.id, log, postCommit: async (message) => { projected.push(message.id); } });
     expect(handled).toBe(0);
-    expect(records[0]).toMatchObject({ event: "workflow.event.rejected", fields: { reason: "not_entitled" } });
+    expect(projected).toEqual([event.id]);
+    expect((await inbox.claim(event)).state).toBe("completed");
+    expect(records[0]).toMatchObject({ event: "workflow.event.completed" });
+    expect(handlerLog.records).toContainEqual(expect.objectContaining({ level: "warn", event: "event.handler.skipped", fields: expect.objectContaining({ eventId: event.id, reason: "not_entitled" }) }));
   });
 
   it("keeps a committed-store outage retryable", async () => {

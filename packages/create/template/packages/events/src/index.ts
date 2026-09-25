@@ -16,7 +16,7 @@ export const EVENT_REPLAY_WINDOW_DAYS = 14;
 /** Committed provenance is kept at least this long; pruning refuses newer cutoffs. */
 export const EVENT_PROVENANCE_RETENTION_DAYS = 30;
 
-export type PermanentEventReason = "provenance_missing" | "provenance_mismatch" | "provenance_expired" | "tenant_provenance_missing" | "not_entitled";
+export type PermanentEventReason = "provenance_missing" | "provenance_mismatch" | "provenance_expired" | "tenant_provenance_missing";
 /** A message that must never reach its handler. It is logged with its reason and follows the existing dead-letter path; it is never acknowledged as handled. */
 export class PermanentEventError extends Error {
   constructor(readonly reason: PermanentEventReason) { super(`Permanent event failure: ${reason}`); this.name = "PermanentEventError"; }

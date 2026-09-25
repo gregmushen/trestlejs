@@ -82,8 +82,8 @@ export class EventConsumerRegistry<Environment = unknown, Data = unknown> {
 
   /**
    * Resolve the declared authority for a verified committed event, checking
-   * organization provenance and the tenant's current entitlement. Missing
-   * provenance never widens access: it is a permanent rejection.
+   * organization provenance. Missing provenance never widens access: it is a
+   * permanent rejection. Entitlement is checked separately by `entitled`.
    */
   async authorize(committed: OutboxEntry, environment: Environment): Promise<EventHandlerContext<Data>> {
     const event = committed.message;
@@ -91,7 +91,6 @@ export class EventConsumerRegistry<Environment = unknown, Data = unknown> {
     const authority = registered?.authority ?? "verified";
     const organizationId = committed.organizationId;
     if ((authority !== "system" || registered?.requires) && !organizationId) throw new PermanentEventError("tenant_provenance_missing");
-    if (registered?.requires && !await this.dependencies.hasEntitlement!(environment, organizationId!, registered.requires.entitlement)) throw new PermanentEventError("not_entitled");
     const fields = { correlationId: event.correlationId, ...(event.causationId ? { causationId: event.causationId } : {}), eventId: event.id, eventName: event.name, ...(authority !== "system" && organizationId ? { organizationId } : {}) };
     const log = this.dependencies.logger?.(fields, environment)
       ?? createLogger(fields, undefined, { secretValues: loggerSecretsFromEnvironment((environment ?? {}) as object) });
@@ -105,6 +104,16 @@ export class EventConsumerRegistry<Environment = unknown, Data = unknown> {
       Object.defineProperty(context, "data", { enumerable: false, get: () => (data ??= { value: tenantData(environment, organizationId!) }).value });
     }
     return Object.freeze(context);
+  }
+
+  /**
+   * Whether the tenant currently holds the handler's required entitlement,
+   * read from current state on every call. Only meaningful after `authorize`,
+   * which guarantees organization provenance for such registrations.
+   */
+  async entitled(committed: OutboxEntry, environment: Environment): Promise<boolean> {
+    const requires = this.handlers.get(`${committed.message.name}@${committed.message.schemaVersion}`)?.requires;
+    return !requires || await this.dependencies.hasEntitlement!(environment, committed.organizationId!, requires.entitlement);
   }
 
   async handle(envelope: EventEnvelope, environment: Environment, context: EventHandlerContext<Data>): Promise<void> {
@@ -126,6 +135,9 @@ export type CloudflareWorkflowBinding = {
  * that row, and only then claimed and handled. Everything after verification
  * sees the committed envelope. A `PermanentEventError` before the claim leaves
  * no inbox row; the caller routes it to the dead-letter path.
+ *
+ * A handler whose required entitlement the tenant currently lacks is skipped,
+ * not rejected: post-commit work still runs and the inbox claim completes.
  */
 export async function handleEventWithInbox<Environment, Data = unknown>(registry: EventConsumerRegistry<Environment, Data>, inbox: EventInboxStore, outbox: CommittedEventStore, envelope: EventEnvelope, environment: Environment, postCommit?: PostCommitEffect<Environment>): Promise<void> {
   registry.validate(envelope);
@@ -137,7 +149,8 @@ export async function handleEventWithInbox<Environment, Data = unknown>(registry
   if (claim.state === "busy") throw new Error("Inbox event is already being processed");
   try {
     if (postCommit) await postCommit(event, environment, committed);
-    await registry.handle(event, environment, context);
+    if (await registry.entitled(committed, environment)) await registry.handle(event, environment, context);
+    else context.log.warn("event.handler.skipped", { eventId: event.id, eventName: event.name, reason: "not_entitled" });
     await inbox.complete(event.idempotencyKey, claim.token);
   } catch (error) {
     await inbox.release(event.idempotencyKey, claim.token, error);

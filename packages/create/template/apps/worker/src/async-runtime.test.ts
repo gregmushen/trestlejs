@@ -195,20 +195,35 @@ describe("Verified handler authority", () => {
     expect(() => new EventConsumerRegistry().register(definition, async () => undefined, { requires: { entitlement: "article.basic" } })).toThrow("entitlement");
   });
 
-  it("checks the current entitlement at handling time and never invokes an unentitled handler", async () => {
+  it("checks the current entitlement at handling time and skips only an unentitled handler", async () => {
     let entitled = false;
     const checks: string[] = [];
-    const registry = new EventConsumerRegistry(undefined, { logger: silent(), hasEntitlement: async (_environment, organizationId, entitlement) => { checks.push(`${organizationId}:${entitlement}`); return entitled; } });
+    const { records, logger } = recordingLogger();
+    const registry = new EventConsumerRegistry(undefined, { logger, hasEntitlement: async (_environment, organizationId, entitlement) => { checks.push(`${organizationId}:${entitlement}`); return entitled; } });
     let handled = 0;
     registry.register(definition, async () => { handled += 1; }, { requires: { entitlement: "workflows.advanced" } });
     const store = committedStore();
-    const { inbox, claims } = trackingInbox();
-    const event = store.commit(envelope(), "org-paid");
-    await expect(handleEventWithInbox(registry, inbox, store, event, {})).rejects.toMatchObject({ name: "PermanentEventError", reason: "not_entitled" });
+    const { inbox, claims, releases } = trackingInbox();
+    const projected: string[] = [];
+    const postCommit = async (event: EventEnvelope) => { projected.push(event.id); };
+    const states: string[] = [];
+    const settlements: QueueSettlement[] = [];
+    const consumer = createQueueConsumer(registry, inbox, store, postCommit, (settlement) => settlements.push(settlement));
+    const unentitled = store.commit(envelope(), "org-paid");
+    expect(await consumer({ messages: [message(unentitled, states)] }, {})).toEqual({ acknowledged: 1, retried: 0 });
+    expect(states).toEqual(["ack"]);
+    expect(settlements[0]?.reason).toBeUndefined();
     expect(handled).toBe(0);
-    expect(claims).toEqual([]);
+    expect(projected).toEqual([unentitled.id]);
+    expect(claims).toEqual([unentitled.idempotencyKey]);
+    expect(releases).toEqual([]);
+    expect((await inbox.claim(unentitled)).state).toBe("completed");
+    const skipped = records.filter((record) => record.event === "event.handler.skipped");
+    expect(skipped).toEqual([expect.objectContaining({ level: "warn", fields: expect.objectContaining({ eventId: unentitled.id, eventName: unentitled.name, reason: "not_entitled" }) })]);
+    expect(skipped[0]?.fields).not.toHaveProperty("payload");
     entitled = true;
-    await handleEventWithInbox(registry, inbox, store, event, {});
+    const later = store.commit(envelope(), "org-paid");
+    await handleEventWithInbox(registry, inbox, store, later, {});
     expect(handled).toBe(1);
     expect(checks).toEqual(["org-paid:workflows.advanced", "org-paid:workflows.advanced"]);
   });

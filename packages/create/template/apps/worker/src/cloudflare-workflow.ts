@@ -12,7 +12,8 @@ import { projectWebhookForEvent } from "./webhook-runtime.js";
 /**
  * One execution of the Workflow step. Every execution, including retries and
  * resumption, reloads provenance, rechecks the replay window, and rechecks
- * current entitlements; nothing is cached across executions.
+ * current entitlements; nothing is cached across executions. A handler the
+ * tenant is no longer entitled to is skipped and the step completes.
  *
  * A `PermanentEventError` ends the instance with Cloudflare's
  * `NonRetryableError`, so it is reported as errored and never as completed.
