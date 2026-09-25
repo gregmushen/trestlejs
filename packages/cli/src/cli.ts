@@ -96,7 +96,6 @@ export function createProgram(runtime: CliRuntime): Command {
     .description("Build and operate conventional TrestleJS applications")
     .version(TRESTLEJS_VERSION)
     .option("--cwd <path>", "start project discovery from this directory")
-    .option("--no-color", "disable color output")
     .showSuggestionAfterError()
     .showHelpAfterError()
     .exitOverride()
