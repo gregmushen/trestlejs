@@ -132,7 +132,7 @@ try {
   }
   for (const resource of ["author", "article"]) {
     if (!workerEntry.includes(`app.route("/", ${resource}Routes);`) || ["Created", "Updated", "Deleted"].some((kind) =>
-      !workerEntry.includes(`eventConsumers.register(${resource}${kind}Event, handle${resource[0].toUpperCase()}${resource.slice(1)}${kind});`))) {
+      !workerEntry.includes(`eventConsumers.register(${resource}${kind}Event, handle${resource[0].toUpperCase()}${resource.slice(1)}${kind}, { authority: "tenant" });`))) {
       throw new Error(`Generated ${resource} Worker route or event handler was not registered`);
     }
   }
