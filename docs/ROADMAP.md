@@ -1218,9 +1218,9 @@ The largest gaps between Alpha 6 and the current v1 specification are:
 - secure remote operational tooling and application console behavior;
 - richer resources, generated typed clients, and authorization policies;
 - foundational locale, time-zone, civil-date, exact-money, and currency
-  semantics; optional translation is separate product scope. The supplied
-  locale/time/money document is an overview and the full normative draft is
-  still needed before these contracts can be marked implemented;
+  semantics; optional translation is separate product scope. The full
+  normative draft is still needed before these contracts can be marked
+  implemented (see [Regional Settings](REGIONAL_SETTINGS_SPEC.md) §4);
 - framework upgrade/sync tooling and compatibility guarantees;
 - deployed evidence for the optional admin, admin-view and admin-resource
   generation, and the deferred admin scope listed under Alpha 12;
@@ -1295,6 +1295,20 @@ keep compute awake, or require an always-on server. Work is triggered by
 events. The only timers left are due-time alarms, set when work exists, and
 infrequent safety sweeps. Heavy or long work goes to Cloudflare Workflows or
 Containers, not a server on another cloud.
+
+### Hardening (before the selected items)
+
+The [Platform Hardening Specification](PLATFORM_HARDENING_SPEC.md) lists open
+safety work on existing mechanisms. In order:
+
+1. **P3:** keep application crons when adding the framework tick.
+2. **P1:** tenant-safe composite foreign keys for generated relationships.
+3. **P5 with P2:** a declared provenance window, and committed-event
+   verification for every private Queue and Workflow handler.
+4. **P4 gaps:** durable reconciliation requests and local-adapter parity.
+
+The due-time scheduler (Selected item 1) must merge its maintenance crons
+with application crons using P3's rules.
 
 ### Selected (in order)
 
@@ -1440,8 +1454,9 @@ Containers, not a server on another cloud.
   - reconciliation records.
 - **Support sessions:** revocation by another operator, a banner that persists
   across views, and access profiles.
-- **Regional settings:** user preferences, i18n language configuration in the
-  manifest, and the setup-wizard steps.
+- **Regional settings:** user preferences, the customer and user pages, the
+  preview, change warnings, and effective-settings debugging, as listed in
+  [Regional Settings](REGIONAL_SETTINGS_SPEC.md) §2.
 - **Domain events for administrative mutations.** Today they produce audit rows
   only.
 - **Customer webhook management:** edit, delete, test event, and secret

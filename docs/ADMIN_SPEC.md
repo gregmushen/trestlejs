@@ -82,7 +82,8 @@ the admin items below.
 - Typed extension points for detail panels, resource actions, and table
   extensions (§11.1).
 - Customer UI for application roles, service accounts, audit, and regional
-  settings. The APIs exist (§3.2, §12).
+  settings. The APIs exist (§3.2, §12). Regional settings' remaining work is
+  in the [Regional Settings Specification](REGIONAL_SETTINGS_SPEC.md).
 - Session revocation and user suspension (roadmap step 2).
 - Domain events and outbox records for administrative mutations. Audit rows
   are written, events are not (§13).
