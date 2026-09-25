@@ -59,7 +59,9 @@ jobs:
         shell: bash
         run: |
           for f in release/*.tgz; do
-            tar -tzf "$f" | grep -q "package/dist/" || { echo "missing dist in $f"; exit 1; }
+            # Consume the full archive listing: grep -q closes the pipe early
+            # and makes tar fail with SIGPIPE under bash's pipefail setting.
+            tar -tzf "$f" | awk '/^package\/dist\// { found = 1 } END { exit !found }' || { echo "missing dist in $f"; exit 1; }
           done
 
       - name: Select npm distribution tag

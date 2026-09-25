@@ -19,7 +19,7 @@ release.
 | Alpha 10 | Recovery, operational tooling, deterministic data, and safe remote access | Partly shipped: `backup`, `restore`, `console`, Queue/DLQ and Workflow operations, seed scenarios, and `dev --fresh` shipped; deployed recovery evidence remains |
 | Alpha 11 | Resource evolution and framework upgrade lifecycle | Partly shipped: `resource add-field`, `upgrade` (including `source-*`), and `architecture check` shipped; generated typed API clients and codemods remain |
 | Alpha 12 | Optional admin, enforcement, full-system hardening, and beta preparation | Admin and access control shipped (see [ADMIN_SPEC.md](ADMIN_SPEC.md)); deployed admin evidence and beta hardening remain |
-| Beta candidate | Published prerelease with an explicit evidence ledger; production and several hosted paths remain open | `0.1.0-beta.1` shipped on npm `next`; `0.1.0-beta.2` adds a supported existing-project admin enablement path and SetupPlan self-validation. Hosted admin evidence remains open in the [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md) |
+| Beta candidate | Published prerelease with an explicit evidence ledger; production and several hosted paths remain open | `0.1.0-beta.1` shipped on npm `next`. The `beta.2` tag passed verification but its publish job failed before npm upload; `beta.3` carries the supported existing-project admin enablement path and SetupPlan self-validation. Hosted admin evidence remains open in the [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md) |
 | Beta completion | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
 | v1 | Supported end-to-end product-development and deployment path with documented compatibility guarantees | Planned |
 
