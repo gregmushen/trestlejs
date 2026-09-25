@@ -541,6 +541,47 @@ try {
     await writeFile(packagePath, target);
     console.log("Reviewed the known Alpha 132 → 133 email-budget workflow and command transition; application edits remain subject to source-apply review.");
   }
+  if (before === "0.1.0-alpha.133" && after === "0.1.0-alpha.134") {
+    // The non-sending preview fixture changes a protected workflow and the
+    // live-email test command. Authorize only the exact published transition.
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    const workflowRelative = ".github/workflows/preview.yml";
+    const workflowPath = path.join(project, workflowRelative);
+    const workflowSource = await readFile(workflowPath, "utf8");
+    if (createHash("sha256").update(workflowSource).digest("hex") !== baseline.files?.[workflowRelative]) {
+      throw new Error("Published Alpha 133 preview workflow differs from its recorded baseline");
+    }
+    const previousStep = "      - name: Verify deployed site in Chromium without sending email\n";
+    const fixtureStep = [
+      "      - name: Create verified test account in the isolated preview database without sending email",
+      "        run: pnpm --filter ./packages/auth exec tsx src/preview-fixture.ts",
+      "        env:",
+      "          TRESTLE_DEPLOY_ENV: preview",
+      '          DATABASE_URL: "${{ steps.runtime-role.outputs.runtime_url }}"',
+      "      - name: Verify deployed site and product in Chromium without sending email",
+      "",
+    ].join("\n");
+    const reviewedWorkflow = replaceExactlyOnce(workflowSource, previousStep, fixtureStep);
+    const workflowTemplate = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", workflowRelative), "utf8");
+    const workflowTarget = workflowTemplate.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary");
+    if (reviewedWorkflow !== workflowTarget) throw new Error("Published Alpha 134 preview workflow differs from the reviewed non-sending fixture transition");
+    await writeFile(workflowPath, workflowTarget);
+
+    const packageRelative = "package.json";
+    const packagePath = path.join(project, packageRelative);
+    const packageSource = JSON.parse(await readFile(packagePath, "utf8"));
+    const expected = JSON.parse(originalPackageSource);
+    if (createHash("sha256").update(originalPackageSource).digest("hex") !== baseline.files?.[packageRelative]
+      || expected.devDependencies?.trestlejs !== before) throw new Error("Published Alpha 133 package manifest differs from its recorded baseline");
+    expected.devDependencies.trestlejs = after;
+    if (!isDeepStrictEqual(packageSource, expected)) throw new Error("Published Alpha 133 package manifest has edits beyond the CLI version bump");
+    expected.scripts["test:preview:live-email"] = replaceExactlyOnce(expected.scripts["test:preview:live-email"], "tests/browser/preview-product.spec.ts", "tests/browser/preview-email.spec.ts");
+    const packageTemplate = await readFile(path.join(project, "node_modules", "trestlejs", "dist", "template", packageRelative), "utf8");
+    const packageTarget = packageTemplate.replaceAll("__TRESTLE_PROJECT_NAME__", "upgrade-canary").replaceAll("__TRESTLEJS_VERSION__", after);
+    if (!isDeepStrictEqual(expected, JSON.parse(packageTarget))) throw new Error("Published Alpha 134 package manifest differs from the reviewed live-email command transition");
+    await writeFile(packagePath, packageTarget);
+    console.log("Reviewed the known Alpha 133 → 134 preview fixture workflow and command transition; application edits remain subject to source-apply review.");
+  }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-apply", "--yes"], project);
   if (databaseUrl) {
     await run("pnpm", ["db:migrate"], project, { DATABASE_URL: databaseUrl });
