@@ -43,7 +43,10 @@ deploy workflows run the read-only `pnpm test:deployed` against their actual
 HTTPS URLs. Preview and staging deploys run site-handoff browser checks.
 Preview also signs in with a unique verified test account created directly in
 its isolated database, then exercises tenant isolation, test Checkout, and
-webhook-projected entitlements without sending email. The separate, explicit
+webhook-projected entitlements without sending email. Staging rotates a dedicated
+verified fixture account and automatically checks sign-in, tenant switching,
+cross-tenant denial, and forced Article RLS when Article is declared. This
+staging check does not send email. The separate, explicit
 `pnpm test:staging:live-email` gate signs up with a unique
 `example.test` address, locates only that account's redirected verification
 message through Resend's sent-email API, verifies the link without printing

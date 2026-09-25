@@ -1108,8 +1108,35 @@ an email adapter, and its code refuses staging or production. The separate
 `test:preview:live-email` suite sends one verification message only when
 explicitly selected; automatic preview remains non-sending. This recovers
 deployed auth/billing evidence but does not certify Resend delivery, staging
-Article RLS, or production readiness. The first hosted preview run still
-needs to prove this new gate.
+Article RLS, or production readiness. The isolated canary preview browser
+passed sign-in, test Checkout, and webhook-projected entitlements without
+sending email in [run 36078627876](https://github.com/gregmushen/trestlejs-canary/actions/runs/36078627876),
+attempt 2. Attempt 1 encountered a transient Cloudflare Pages HTTP 522; the
+app, site, and API returned HTTP 200 immediately afterward. The canary's
+main-branch staging deployment then passed its non-sending site browser gate
+in [run 36079291608](https://github.com/gregmushen/trestlejs-canary/actions/runs/36079291608).
+Production stopped before provisioning at read-only doctor checks: the
+production Resend webhook secret/sender and live Stripe publishable key,
+three price mappings, and return URL are not configured. This run is not
+production deployment evidence.
+Alpha 135 adds a dedicated, password-rotating staging fixture to restore an
+automatic authenticated product gate without Resend. It reuses one verified
+`example.test` account, checks tenant switching and cross-tenant denial, and
+checks forced Article RLS through the restricted database role when Article
+is declared. The fixture refuses non-staging environments. Live verification
+email remains a separate opt-in gate and is not run by ordinary deploys. The
+canary's manually triggered staging deployment passed the site and authenticated
+product browser checks without email in
+[run 36080565129](https://github.com/gregmushen/trestlejs-canary/actions/runs/36080565129).
+The canary does not yet declare Article, so this run does not prove deployed
+Article RLS; the generated local database suite and opt-in staging suite cover
+it separately until an Article-enabled staging deployment is exercised.
+Cloudflare Pages returned another transient HTTP 522 on a newly provisioned
+preview site in PR 14. The generated smoke checker now gives read-only Pages
+GET/HEAD requests a bounded retry on gateway/edge errors while preserving
+cross-origin redirect rejection, immediate failure for unsafe requests, and
+a final failure for persistent errors. This is propagation tolerance, not a
+substitute for a passing hosted preview browser run.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.
