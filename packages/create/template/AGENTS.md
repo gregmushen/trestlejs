@@ -41,4 +41,5 @@ intentional human editing and `trestle secrets list` for non-revealing status.
 
 ## Application-specific guidance
 
-Add local guidance here. `trestle project sync` preserves this section.
+Add local guidance here. `trestle upgrade` never overwrites an edited
+AGENTS.md; it stops and asks you to review the template change instead.

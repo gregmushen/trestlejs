@@ -20,7 +20,7 @@ Core architecture and setup commands include:
 trestle plan validate .trestle/setup.json
 trestle plan diff .trestle/setup.json
 trestle apply .trestle/setup.json --yes
-trestle generate resource Article --tenant --crud
+trestle generate resource Article
 trestle resources --json
 trestle routes --json
 trestle doctor
