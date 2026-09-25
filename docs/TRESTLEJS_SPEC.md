@@ -1,7 +1,7 @@
 # TrestleJS Specification
 
-**Status:** Draft v0.2 — conceptual architecture frozen pending the first
-vertical slice\
+**Status:** Living architecture specification. Shipped behavior is authoritative
+in `trestle --help` and the code; [ROADMAP](ROADMAP.md) tracks what is planned.\
 **Purpose:** An opinionated, Rails-inspired TypeScript stack for
 durable, multi-tenant applications on Cloudflare.
 
@@ -213,17 +213,20 @@ HTTP requests receive an `ApiContext`; background execution receives a
 domain/application services.
 
 ``` ts
-type ExecutionContext = {
+type ExecutionContext<Data, Services, Access extends AccessControl = AccessControl> = Readonly<{
   principal: Principal
   tenant: TenantIdentity
   permissions: Permissions
+  entitlements: Entitlements
+  access: Access
   correlation: CorrelationContext
-  data: TenantData
+  data: Data
   log: Logger
+  metrics: Metrics
   clock: Clock
   features: Features
   services: Services
-}
+}>
 ```
 
 `Principal`, `TenantIdentity`, and `Permissions` are immutable values created
@@ -422,23 +425,25 @@ public DTOs and never database row types.
 ``` text
 TrestleJS-app/
   apps/
-    web/              # React + TanStack Router/Query/Form + Tailwind CSS
-    admin/            # optional generated administrative application
+    app/              # React + TanStack Router/Query/Form + Tailwind CSS
+    site/             # Astro marketing site
+    admin/            # optional platform admin (`capabilities.admin`)
     worker/           # Hono + Better Auth + Cloudflare bindings
   packages/
     contracts/        # Zod schemas/public types
     auth/             # Better Auth configuration
     authz/            # roles/permissions/policies
+    billing/          # plans, entitlements, and Stripe catalog
     context/          # Api/System/ExecutionContext
     domain/           # pure business logic
     data/             # repositories + withTenant
     db/               # Drizzle schema/RLS/migrations
     events/           # envelopes/events/outbox
     integrations/     # provider-neutral external service interfaces/adapters
-    api-client/       # typed frontend client
-  tooling/
-    cli/
-    eslint-plugin/
+    theme/            # shared CSS tokens and typography
+  .agents/
+    skills/
+      trestle-setup/  # agent setup skill
   .github/
     workflows/
       ci.yml
@@ -446,13 +451,17 @@ TrestleJS-app/
       deploy.yml
       secrets.yml
       diagnose.yml
-      backup-verify.yml # optional scheduled/manual isolated restore verification
+      providers.yml     # protected real-provider verification
+      backup-verify.yml # scheduled/manual isolated restore verification
   .trestle/
     project.yaml       # versioned architecture manifest; never secrets
+    framework.json     # recorded template and guidance versions
+    recovery.json      # declared backup and restore policy
+  scripts/             # provider preflight, smoke, and recovery scripts
   seed/                # deterministic default and named scenarios
-  AGENTS.md             # generated conventions + preserved custom guidance
-  templates/
   tests/
+    browser/           # Playwright end-to-end tests
+  AGENTS.md            # generated conventions + preserved custom guidance
 ```
 
 Dependency directions are explicit and enforceable. Raw database
@@ -583,12 +592,9 @@ external side effects.
 
 Structured logging is the default.
 
-The separate **TrestleJS Standardized Logging Specification** is normative for
-the `Logger` API, execution-context integration, event vocabulary, context
-propagation, redaction, provider adapters, static enforcement, testing, and
-the `trestle logs` CLI. Application packages do not use `console` directly.
-CLI commands whose explicit purpose is to reveal credentials are a narrow
-exception and do not pass their output through the application logger.
+Application packages do not use `console` directly. CLI commands whose
+explicit purpose is to reveal credentials are a narrow exception and do not
+pass their output through the application logger.
 
 Sensitive values, credentials, session tokens, cookies, authorization
 headers, and configured personal data fields are redacted at the logging
@@ -1124,16 +1130,18 @@ The secret-free project/environment configuration declares the provider,
 schedule, retention, recovery-point and recovery-time objectives, isolated
 restore target policy, and R2 recovery/reference-verification policy.
 
+The shipped provider is Neon, and recovery creates an isolated Neon
+point-in-time branch:
+
 ``` bash
 trestle backup status --env production
-trestle backup verify --env production --to restore-test [--at <timestamp>]
-trestle restore --source production --to restore-test [--at <timestamp>]
+trestle backup verify --env production --to restore-test [--at <timestamp>] --yes
+trestle restore create --env production --to restore-test [--at <timestamp>] --yes
+trestle restore delete --env production --target restore-test --yes
 ```
 
-`--at` requests a provider-supported point in time; `--backup <provider-id>`
-may select an immutable provider backup instead. The selectors are mutually
-exclusive. Without either, verification uses the latest eligible completed
-backup and reports the exact resolved recovery point before confirmation.
+`--at` requests a past ISO recovery point; without it, the latest point is
+used.
 
 `backup status` is read-only. It reports the configured provider and policy,
 retention and schedule where discoverable, latest successful provider backup,
@@ -1141,7 +1149,7 @@ last successful isolated restore verification, age against the declared
 recovery-point objective, and any unverifiable fields. Provider status is
 evidence of a backup operation, not proof that the application can recover.
 
-`restore` resolves an immutable snapshot or recovery point, prints the source,
+`restore create` resolves the recovery point, prints the source,
 target, provider account/project, database, timestamp, expected destructive
 effects on the target, and verification plan, then requires confirmation. The
 target must be an explicitly declared isolated restore environment or a newly
@@ -1158,21 +1166,10 @@ non-production target requires its exact resolved identity and separate
 destructive confirmation. A normal backup-verification workflow never mutates
 the source environment.
 
-`backup verify` orchestrates a restore of the selected recovery point into the
-isolated target and runs, at minimum:
-
-1.  database reachability and basic catalog consistency;
-2.  migration history and schema compatibility with the selected application
-    revision;
-3.  Better Auth identity, session, organization, and membership integrity;
-4.  existence and privileges of migration, application, resolver, and platform
-    roles, including application-role `NOBYPASSRLS`;
-5.  enabled and forced RLS plus expected tenant policies;
-6.  adversarial cross-tenant SELECT, INSERT, UPDATE, and DELETE tests using the
-    real application role;
-7.  application-defined domain integrity checks; and
-8.  integrity of PostgreSQL metadata references to R2 objects without assuming
-    the database backup contains object bytes.
+`backup verify` restores the selected recovery point into the isolated target,
+checks it, and cleans it up. `trestle backup verify --help` lists the exact
+options for the installed release, and the verification report names each
+check it ran.
 
 R2 object recovery, retention, and versioning are provider-specific but must
 have an explicit generated runbook when the application stores durable
@@ -1507,72 +1504,115 @@ workflow upgrades, adjacent-version migration compatibility, secret leakage
 and environment isolation, R2 key tampering, organization deletion, and
 backup restoration.
 
+Evidence rules:
+
+-   Missing, skipped, or blocked evidence is reported as such, never as a pass.
+-   Evidence names the exact commit, package version, and environment it covers.
+-   Results from local substitutes and from real providers are labelled
+    separately; one never stands in for the other.
+-   Every escaped defect gains a permanent regression test at the lowest layer
+    that would have caught it.
+
 ## 31. CLI and Rails-Style Generators
 
 The CLI is central to TrestleJS's developer experience. Its top-level command
 surface is deliberately small; related lifecycle operations live under nouns.
-The canonical command tree is:
+The command tree below has two parts. The shipped part mirrors
+`trestle --help` for the current release; that output and each subcommand's
+`--help` remain authoritative. The planned part is design intent only.
 
-``` bash
-npx create-trestlejs my-app
+Shipped:
 
-trestle dev [--fresh] [--tunnel]
-trestle console [--env <env>] [--tenant <id-or-slug>] [--write]
-               [--platform-admin]
-trestle test [--watch] [--suite <name>]
-trestle doctor [--env <env>] [--json]
-trestle inspect
-trestle generate <kind> <name> [options]
-trestle admin install
-trestle apply [plan]
-trestle deploy --env <env>
-trestle logs --env <env>
-trestle restore --source <env> --to <isolated-env> [--at <timestamp>]
+``` text
+npx create-trestlejs my-app               generate a new project
 
-trestle db start|stop|status|migrate|seed|console|reset
-trestle backup status --env <env>
-trestle backup verify --env <env> --to <isolated-env>
-trestle secrets init|edit|show|get|set|unset|import|export
-trestle secrets list|diff|check|push|delete|rotate
-trestle secrets key rotate
-trestle workflow list|trigger|status|retry
-trestle queue list|publish|dlq|redrive
-trestle plan validate|diff|status
-trestle ci generate|validate
-trestle env list|status
-trestle project [upgrade|sync]
-trestle routes|resources|events|workflows|queues|durable-objects
-trestle bindings|permissions
+trestle project [--json]                  describe the current TrestleJS project
+trestle env list [--json]                 list declared environments
+trestle env status [--env <env>]          inspect one declared environment without contacting providers
+trestle ci validate [--json]              validate the static GitHub Actions deployment contract
+trestle architecture check [--json]       validate static application boundaries and managed guidance
+trestle upgrade plan [--json]             preview an application-preserving project upgrade
+trestle upgrade check [--json]            fail when the project needs a reviewed upgrade
+trestle upgrade apply --yes               apply the reviewed upgrade plan (metadata only)
+trestle upgrade diff [--json]             inspect target-template paths without changing application source
+trestle upgrade migrations [--check]      audit application and target migration journals without writes
+trestle upgrade source-apply --yes        apply only pristine adjacent-alpha application source
+trestle upgrade source-finalize --yes     verify pristine source and run local checks before advancing the version
+trestle setup [--env <env>] [--resume]    review and apply a guided local SetupPlan with encrypted credentials
+trestle doctor [--env <env>] [--json]     run read-only environment and architecture checks
+trestle plan validate <file|->            validate a versioned SetupPlan
+trestle plan diff <file|->                classify SetupPlan changes against the project
+trestle plan status [file]                report recorded apply progress for a SetupPlan
+trestle apply <file> --yes                apply the supported mutations in a reviewed SetupPlan
+trestle resources [--json]                inspect declared resources
+trestle routes [--json]                   inspect declared and statically discoverable routes
+trestle resource add-field <Resource> <field> --yes
+                                          add an optional field and tracked migration
+trestle secrets init|edit|show|export|get|set|unset|delete|import [--env <env>]
+                                          manage encrypted application credentials
+trestle secrets list|check [--env <env>]  report credential status without revealing values
+trestle secrets push --env <env>          push credentials to the remote Worker
+trestle secrets key rotate [--env <env>]  rotate an environment's credentials master key
+trestle email list|show|open|clear        inspect locally captured transactional email
+trestle email status|doctor [--env <env>] report and check email delivery configuration
+trestle queue dlq list --env <env>        inspect dead-lettered outbox messages
+trestle queue dlq redrive <id> --env <env>
+                                          redrive one dead-lettered outbox message
+trestle queue prune --env <env> --before <timestamp> [--apply]
+                                          preview or prune succeeded outbox records
+trestle admin grant|revoke <email> <role> --env <env> --reason <reason>
+                                          change a platform role; recorded in audit_event
+trestle admin list --env <env>            list active platform-role assignments
+trestle workflow list <name>              list Cloudflare Workflow instances
+trestle workflow status <name> [id]       inspect a Workflow instance (default: latest)
+trestle workflow retry <name> <id> --yes  retry a Workflow instance
+trestle backup status --env <env>         inspect declared provider recovery capability
+trestle backup verify --env <env> --to <target> --yes
+                                          prove an isolated Neon restore and verify it
+trestle restore create --env <env> --to <target> [--at <timestamp>] --yes
+                                          create an isolated Neon point-in-time recovery branch
+trestle restore delete --env <env> --target <target> --yes
+                                          delete an isolated recovery branch
+trestle generate email <Name>             generate a React Email template
+trestle generate resource <Name> [--field ...] [--webhook-event ...]
+                                          generate a tenant-safe vertical slice
+trestle payments stripe init              check the billing scaffold; creates no Stripe resources
+trestle payments stripe status|doctor [--env <env>]
+                                          report and check Stripe credentials and mode
+trestle payments stripe sync --env <env> [--apply] [--yes]
+                                          plan or create missing Stripe products and prices
+trestle payments stripe listen            forward Stripe CLI webhooks to the local Worker
+trestle payments stripe webhook configure --env <env> --url <url> --api-key-stdin
+                                          configure a deployed Stripe billing webhook
+trestle payments stripe seed --organization <id> --cookie-stdin
+                                          activate a local billing plan for an organization
+trestle payments stripe test              run the billing package tests
+trestle logs --env <env>                  tail redacted structured Worker logs
+trestle dev [--fresh --yes]               start PostgreSQL, apply migrations, and run the local applications
+trestle db start|stop|status|migrate|console
+                                          operate the local PostgreSQL database
+trestle db seed [--scenario <name>]       seed default, demo, or tenant-isolation data
+trestle db reset --yes                    delete the project-scoped local volume
+trestle db roles bootstrap --env <env> --role <name> --yes
+                                          create a restricted remote PostgreSQL runtime role
+trestle console (--tenant <id-or-slug> [--write] | --platform-admin) [--env <env> --yes]
+                                          open an application-aware TypeScript console
 ```
 
-Representative invocations are:
+Planned (not implemented):
 
-``` bash
-trestle generate resource Article --tenant --crud
-trestle generate workflow GenerateIssue
-trestle generate queue ProcessSubmission
-trestle generate event ArticleGenerated
-trestle generate durable-object Issue
+``` text
+trestle test [--watch] [--suite <name>]
+trestle inspect
+trestle deploy --env <env>
 trestle admin install
-trestle generate admin-resource Article
-trestle workflow trigger GenerateIssue
-trestle workflow status <id>
-trestle workflow retry <id>
-trestle queue publish ProcessSubmission --file message.json
-trestle queue dlq ProcessSubmission
-trestle queue redrive ProcessSubmission --message <id>
-trestle db migrate
+trestle dev --tunnel
+trestle generate workflow|queue|event|durable-object|admin-resource <Name>
+trestle secrets diff|rotate
+trestle workflow trigger <name>
+trestle queue list|publish
 trestle ci generate
-trestle ci validate
-trestle plan validate .trestle/setup.json  # or stdin with -
-trestle plan diff .trestle/setup.json      # or stdin with -
-trestle plan status .trestle/setup.json
-trestle apply .trestle/setup.json
-trestle backup status --env production
-trestle backup verify --env production --to restore-test
-trestle restore --source production --to restore-test
-trestle deploy --env staging
-trestle deploy --env production
+trestle events|workflows|queues|durable-objects|bindings|permissions
 ```
 
 Commands use `--env <env>` consistently instead of positional environment
@@ -1607,15 +1647,17 @@ transaction helpers, and provider adapters used by the application. It
 supports top-level `await` and exposes discoverable helpers rather than
 requiring developers to reconstruct application wiring by hand.
 
-The local environment is the default. A tenant may be selected at startup:
+The local environment is the default. Every session requires either
+`--tenant <id-or-slug>` or `--platform-admin`; the two select different
+authority planes and cannot be combined. `--write` requires `--tenant`. A
+non-local environment also requires `--yes`:
 
 ``` bash
-trestle console
 trestle console --tenant acme
-trestle console --env staging --tenant acme
-trestle console --env production --tenant acme
-trestle console --env production --tenant acme --write
-trestle console --env production --platform-admin
+trestle console --env staging --tenant acme --yes
+trestle console --env production --tenant acme --yes
+trestle console --env production --tenant acme --write --yes
+trestle console --env production --platform-admin --yes
 ```
 
 Tenant-scoped console work resolves the tenant through a non-sensitive
@@ -1659,7 +1701,7 @@ declared authenticated provider clients remotely where practical; unavailable
 or semantically unsafe operations fail with an explanation instead of silently
 falling back to a different implementation.
 
-`trestle generate resource Article --tenant --crud` should generate a
+`trestle generate resource Article` should generate a
 vertical slice containing:
 
 -   Drizzle table;
@@ -1741,14 +1783,14 @@ environments: [local, preview, staging, production]
 
 All TrestleJS commands validate the manifest before depending on it. An unknown
 future schema version fails explicitly rather than receiving a best-effort
-interpretation. `trestle project upgrade` may perform a mechanical manifest
-migration after showing its diff; migrations requiring architectural judgment
-remain explicit application work.
-
-`trestle project sync --check` verifies derived registries and managed guidance
-without writing. `trestle project sync` displays the pending diff and then
-regenerates those artifacts deterministically while preserving declared custom
-regions. It never infers or writes secret values.
+interpretation. `trestle upgrade plan` previews and `trestle upgrade apply --yes`
+performs a mechanical metadata migration after review; migrations requiring
+architectural judgment remain explicit application work. `trestle upgrade
+check` verifies project metadata and managed guidance without writing.
+Template source changes go through `trestle upgrade diff`, `trestle upgrade
+migrations`, `trestle upgrade source-apply`, and `trestle upgrade
+source-finalize`, which stop for manual review instead of overwriting edited
+files. None of these commands infers or writes secret values.
 
 Important application concepts may declare compact resource metadata adjacent
 to their generated source. From those declarations and statically discoverable
@@ -1875,9 +1917,9 @@ enough to load routinely into an agent context.
 Generated content is enclosed in stable managed markers. Applications may add
 clearly separated custom guidance outside those markers. Regeneration updates
 only the managed region, preserves custom content byte-for-byte, and is
-idempotent. `trestle doctor` detects stale generated guidance and reports
-`trestle project sync --check` or `trestle project sync` as appropriate; the
-read-only doctor never rewrites the file itself.
+idempotent. `trestle architecture check` and `trestle upgrade check` detect a
+stale managed-guidance marker without rewriting anything; `trestle upgrade
+apply --yes` refreshes it.
 
 ### Deterministic architecture verification
 
@@ -2163,8 +2205,8 @@ v1 should include:
     operational runbooks.
 23. Scheduled job and inbound webhook templates with idempotency and
     resource-derived tenancy.
-24. Provider-neutral outbound email adapter and local capture sink for auth
-    flows.
+24. Provider-neutral outbound email adapter, local capture sink for auth
+    flows, React Email templates, and Resend delivery (shipped).
 25. Generated GitHub Actions for CI, trusted previews, staged Cloudflare
     Worker and Pages deployment, protected secret operations, diagnostics,
     and post-deploy smoke tests.
@@ -2191,6 +2233,8 @@ v1 should include:
 34. Optional admin application installation and admin-resource generation with
     tenant-bound application semantics, narrow platform capabilities, and
     auditable operational views/actions.
+35. Payments: provider-neutral `BillingService`, local deterministic billing,
+    Stripe Checkout/Portal/webhooks adapter (shipped).
 
 ## 38. Deferred Functionality and Architecture Freeze
 
@@ -2240,7 +2284,7 @@ slice:
 npx create-trestlejs hello
 cd hello
 trestle dev
-trestle generate resource Article --tenant --crud
+trestle generate resource Article
 ```
 
 That slice must prove one coherent path through React resource UI, TanStack

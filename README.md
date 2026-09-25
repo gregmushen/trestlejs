@@ -119,7 +119,7 @@ Trestle generators write ordinary source code into your application. There is
 no hidden CRUD runtime to learn or fight.
 
 ```bash
-pnpm exec trestle generate resource Article --tenant --crud
+pnpm exec trestle generate resource Article
 pnpm exec trestle db migrate
 pnpm check
 ```
@@ -166,9 +166,11 @@ pnpm exec trestle plan status .trestle/setup.json
 ```
 
 Plan output classifies work as `already correct`, `create`, `update`, `delete`,
-`blocked`, or `unknown`. Apply is explicit, resumable, and convergent for the
-operations supported by the installed CLI. Paid external resources and
-destructive operations require explicit declarations and approval.
+`blocked`, or `unknown`. Apply is explicit, resumable, and convergent. It
+performs only the mutations the installed CLI supports: generating declared
+resources and enabling the platform admin. Anything else in a plan, including
+deletions and external provider resources, is reported and blocked rather than
+attempted.
 
 Every generated project also contains
 `.agents/skills/trestle-setup/SKILL.md`. A compatible coding agent uses the
@@ -324,10 +326,10 @@ trestle upgrade source-finalize --yes  run local checks and certify source parit
 trestle resource add-field ...      add an optional field and tracked migration
 ```
 
-Run `pnpm exec trestle --help` and the relevant subcommand help for the exact
-surface in your installed release. The architecture specification describes
-the v1 target as well as shipped behavior; it is not a claim that every future
-command is already implemented.
+This is a representative subset. `pnpm exec trestle --help` and each
+subcommand's `--help` are authoritative for your installed release. The
+architecture specification describes the v1 target as well as shipped
+behavior; it is not a claim that every future command is already implemented.
 
 Updating the CLI with pnpm updates the package and lockfile, but a project
 whose `.trestle/framework.json` records an older template version remains a

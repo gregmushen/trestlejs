@@ -13,13 +13,13 @@ release.
 | --- | --- | --- |
 | Alpha 1–5 | Reproducible starter, local runtime, auth, Southwind site, setup skill, encrypted credentials, email and billing boundaries, SetupPlan, and initial resource generation | Shipped |
 | Alpha 6 | A trustworthy tenant-owned CRUD slice from browser to forced PostgreSQL RLS, plus safe plan/apply repair | Shipped |
-| Alpha 7 | Production deployment evidence through GitHub, Cloudflare, and Neon | Next |
-| Alpha 8 | Asynchronous execution spine: outbox, Queues, Workflows, DLQ, schedules, and R2 | Core shipped; provider wiring remaining |
-| Alpha 9 | Production integrations and end-to-end observability | Planned |
-| Alpha 10 | Recovery, operational tooling, deterministic data, and safe remote access | Planned |
-| Alpha 11 | Resource evolution and framework upgrade lifecycle | Planned |
+| Alpha 7 | Production deployment evidence through GitHub, Cloudflare, and Neon | Partly shipped: generated GitHub Actions deploy isolated previews and staging; production promotion evidence remains |
+| Alpha 8 | Asynchronous execution spine: outbox, Queues, Workflows, DLQ, schedules, and R2 | Partly shipped: core and Cloudflare binding wiring shipped; deployed end-to-end async evidence remains |
+| Alpha 9 | Production integrations and end-to-end observability | Partly shipped: `trestle logs`, Resend, Stripe, and local-capture outbound webhooks shipped; remote webhook delivery and production provider evidence remain |
+| Alpha 10 | Recovery, operational tooling, deterministic data, and safe remote access | Partly shipped: `backup`, `restore`, `console`, Queue/DLQ and Workflow operations, seed scenarios, and `dev --fresh` shipped; deployed recovery evidence remains |
+| Alpha 11 | Resource evolution and framework upgrade lifecycle | Partly shipped: `resource add-field`, `upgrade` (including `source-*`), and `architecture check` shipped; generated typed API clients and codemods remain |
 | Alpha 12 | Optional admin, enforcement, full-system hardening, and beta preparation | Admin and access control shipped (see [ADMIN_SPEC.md](ADMIN_SPEC.md)); deployed admin evidence and beta hardening remain |
-| Beta candidate | Published prerelease with an explicit evidence ledger; production and several hosted paths remain open | In progress (see [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md)) |
+| Beta candidate | Published prerelease with an explicit evidence ledger; production and several hosted paths remain open | Shipped as `0.1.0-beta.1` on the npm `next` tag; open items in the [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md) |
 | Beta completion | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
 | v1 | Supported end-to-end product-development and deployment path with documented compatibility guarantees | Planned |
 
@@ -104,7 +104,7 @@ unit tests alone.
 
 ## Alpha 6: trustworthy vertical slice
 
-Alpha 6 makes `trestle generate resource <Name> --tenant --crud` a complete,
+Alpha 6 makes `trestle generate resource <Name>` a complete,
 testable path rather than a collection of adjacent files.
 
 - Requests resolve an `ExecutionContext` containing the authenticated
