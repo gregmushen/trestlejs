@@ -107,11 +107,17 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   const preview = sources.get("preview.yml") ?? "";
   const projectPackage = await readFile(path.join(root, "package.json"), "utf8").then((source) => JSON.parse(source) as { scripts?: Record<string, string> }).catch(() => null);
   const previewBrowser = await readFile(path.join(root, "tests/browser/preview-product.spec.ts"), "utf8").catch(() => "");
+  const previewEmail = await readFile(path.join(root, "tests/browser/preview-email.spec.ts"), "utf8").catch(() => "");
+  const previewFixture = await readFile(path.join(root, "packages/auth/src/preview-fixture.ts"), "utf8").catch(() => "");
   checks.push(check("ci.browser.preview-only-billing", preview.includes("pnpm test:preview")
     && projectPackage?.scripts?.["test:preview"]?.includes("preview-product.spec.ts") === true
     && projectPackage?.scripts?.["test:deployed"]?.includes("preview-product.spec.ts") === false
-    && previewBrowser.includes('process.env.TRESTLE_DEPLOY_ENV !== "preview"'),
-  "test Checkout is restricted to preview; production smoke cannot run the preview billing test"));
+    && previewBrowser.includes('process.env.TRESTLE_DEPLOY_ENV !== "preview"')
+    && preview.includes("Create verified test account in the isolated preview database without sending email")
+    && preview.includes("steps.runtime-role.outputs.runtime_url")
+    && previewBrowser.includes("TRESTLE_PREVIEW_FIXTURE_EMAIL")
+    && previewFixture.includes('input.environment !== "preview"'),
+  "test Checkout runs automatically on an isolated preview account without email; production smoke cannot run it"));
   checks.push(check(
     "ci.preview.trusted-only",
     preview.includes("github.event.pull_request.head.repo.full_name == github.repository"),
@@ -128,7 +134,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     && preview.includes('VITE_API_ORIGIN="${{ steps.preview.outputs.app_url }}"'), "preview app routes authenticated API calls through its own Pages origin"));
   checks.push(check("ci.preview.cleanup", preview.includes("types: [opened, synchronize, reopened, closed]") && preview.includes("cloudflare-worker.mjs delete") && preview.includes("cloudflare-pages.mjs delete"), "closed pull requests clean up isolated Cloudflare resources"));
   checks.push(check("ci.preview.dynamic-smoke", preview.includes("steps.preview.outputs.api_url") && preview.includes("steps.preview.outputs.app_url") && preview.includes("steps.preview.outputs.site_url"), "preview smoke tests use derived per-PR URLs"));
-  checks.push(check("ci.preview.operational-smoke", preview.includes("TRESTLE_DEPLOY_ENV: preview"), "preview smoke verifies the Worker operational environment"));
+  checks.push(check("ci.preview.operational-smoke", /- run: node scripts\/smoke\.mjs\n\s*env:\n\s*TRESTLE_DEPLOY_ENV: preview\b/u.test(preview), "preview smoke verifies the Worker operational environment"));
   checks.push(check("ci.preview.async-resources-verified", occursInOrder(preview, "node scripts/smoke.mjs", "cloudflare-queues.mjs verify")
     && occursInOrder(preview, "cloudflare-queues.mjs verify", "cloudflare-r2.mjs verify")
     && preview.includes('CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"'), "preview verifies exact Queue and R2 resources after HTTP smoke"));
@@ -206,7 +212,9 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
     ["preview", "staging"].every((environment) =>
       projectPackage?.scripts?.[`test:${environment}`]?.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0") === true
       && projectPackage?.scripts?.[`test:${environment}:live-email`]?.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1") === true)
-    && previewBrowser.includes('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"')
+    && projectPackage?.scripts?.["test:preview:live-email"]?.includes("preview-email.spec.ts") === true
+    && previewEmail.includes('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"')
+    && !previewBrowser.includes("RESEND_API_KEY")
     && deployedProduct.includes('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"')
     && !preview.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1")
     && !stagingDeploy.includes("TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1")

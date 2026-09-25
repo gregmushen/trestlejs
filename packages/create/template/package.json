@@ -16,7 +16,7 @@
     "test:browser": "playwright test",
     "test:deployed": "TRESTLE_BROWSER_MODE=deployed playwright test tests/browser/site-handoff.spec.ts",
     "test:preview": "TRESTLE_BROWSER_MODE=deployed TRESTLE_DEPLOY_ENV=preview TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0 playwright test tests/browser/site-handoff.spec.ts tests/browser/preview-product.spec.ts",
-    "test:preview:live-email": "TRESTLE_BROWSER_MODE=deployed TRESTLE_DEPLOY_ENV=preview TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1 playwright test tests/browser/preview-product.spec.ts",
+    "test:preview:live-email": "TRESTLE_BROWSER_MODE=deployed TRESTLE_DEPLOY_ENV=preview TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1 playwright test tests/browser/preview-email.spec.ts",
     "test:staging": "TRESTLE_BROWSER_MODE=deployed TRESTLE_ALLOW_LIVE_EMAIL_TESTS=0 playwright test tests/browser/site-handoff.spec.ts tests/browser/deployed-product.spec.ts",
     "test:staging:live-email": "TRESTLE_BROWSER_MODE=deployed TRESTLE_ALLOW_LIVE_EMAIL_TESTS=1 playwright test tests/browser/deployed-product.spec.ts",
     "test": "node --test scripts/admin-capability.test.mjs scripts/email-budget.test.mjs scripts/github-deployment.test.mjs scripts/provider-preflight.test.mjs scripts/cloudflare-cron-preflight.test.mjs scripts/queue-config.test.mjs scripts/cloudflare-queues.test.mjs scripts/cloudflare-r2.test.mjs scripts/stripe-preview.test.mjs scripts/serve-site.test.mjs scripts/smoke-operational.test.mjs && vitest run scripts/recovery-evidence.test.ts scripts/staging-email.test.ts scripts/staging-async.test.ts && pnpm -r test",

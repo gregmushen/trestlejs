@@ -158,7 +158,7 @@ describe("generated CI deployment contract", () => {
     expect(await checkStatus()).toBe("fail");
     await writeFile(packagePath, original);
 
-    const previewSpec = path.join(root, "tests", "browser", "preview-product.spec.ts");
+    const previewSpec = path.join(root, "tests", "browser", "preview-email.spec.ts");
     const spec = await readFile(previewSpec, "utf8");
     await writeFile(previewSpec, spec.replace('process.env.TRESTLE_ALLOW_LIVE_EMAIL_TESTS !== "1"', "false"));
     expect(await checkStatus()).toBe("fail");

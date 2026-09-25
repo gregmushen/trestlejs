@@ -1098,6 +1098,18 @@ means an automatic green preview/staging browser check is not evidence of
 live verification-email delivery, billing webhook entitlements, or forced
 Article RLS. Those deployed product gates remain required before beta and
 must be run deliberately with bounded provider usage.
+Alpha 134 restores the isolated preview product gate without using Resend.
+After migration and deployment, the preview workflow creates a unique,
+email-verified credential account directly in that preview's restricted Neon
+database. The deployed browser signs in through the real application, checks
+tenant switching and Checkout idempotency, completes Stripe test Checkout,
+and waits for webhook-projected entitlements. The account fixture never calls
+an email adapter, and its code refuses staging or production. The separate
+`test:preview:live-email` suite sends one verification message only when
+explicitly selected; automatic preview remains non-sending. This recovers
+deployed auth/billing evidence but does not certify Resend delivery, staging
+Article RLS, or production readiness. The first hosted preview run still
+needs to prove this new gate.
 The published Alpha 129 → 130 upgrade rehearsal now also reviews the exact
 protected preview-cleanup command against the recorded baseline before applying
 the source upgrade; the two-tenant database and RLS rehearsal passes.
