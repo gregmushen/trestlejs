@@ -97,6 +97,9 @@ function protectedSourcePath(relative: string): boolean {
 
 function adjacentRelease(from: string | null, to: string): boolean {
   if (from === "0.1.0-alpha.135" && to === "0.1.0-beta.1") return true;
+  const beforeBeta = /^0\.1\.0-beta\.(\d+)$/u.exec(from ?? "");
+  const afterBeta = /^0\.1\.0-beta\.(\d+)$/u.exec(to);
+  if (beforeBeta && afterBeta) return Number(afterBeta[1]) === Number(beforeBeta[1]) + 1;
   const before = /^0\.1\.0-alpha\.(\d+)$/u.exec(from ?? "");
   const after = /^0\.1\.0-alpha\.(\d+)$/u.exec(to);
   return Boolean(before && after && Number(after![1]) === Number(before![1]) + 1);

@@ -19,6 +19,7 @@ import { localEnvironment } from "./local.js";
 import { buildLogTailArguments, tailSemanticLogs } from "./logs.js";
 import { clearLocalEmail, formatEmail, formatEmailList, getLocalEmail, listLocalEmail, openLocalEmail } from "./email.js";
 import { generateEmail } from "./generate-email.js";
+import { generateAdminModule } from "./generate-admin-module.js";
 import { addResourceField, generateResource, generateResourceMigration, parseResourceField } from "./generate-resource.js";
 import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
@@ -780,6 +781,14 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const generate = program.command("generate").description("generate application-owned source");
+  generate.command("admin-module")
+    .argument("<name>", "kebab-case module name, for example crop-editorial")
+    .requiredOption("--permission <permission>", "existing platform permission that guards this view")
+    .action(async (name: string, options: { permission: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const files = await generateAdminModule(context.root, context.manifest, name, options.permission);
+      runtime.stdout(`Generated admin module ${name}\n${files.map((file) => `  ${file}`).join("\n")}\nAdd domain API routes to the admin Worker with platform authorization, step-up, and audit before enabling actions.\n`);
+    });
   generate.command("email")
     .argument("<name>")
     .action(async (name: string, _options: object, command: Command) => {

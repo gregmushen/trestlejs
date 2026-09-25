@@ -28,7 +28,9 @@ export const setupPlanSchema = z.object({
   schemaVersion: z.literal(1),
   minimumTrestleVersion: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u),
   project: z.object({ name: z.string().min(1) }).strict(),
-  apps: z.object({ site: z.boolean(), app: z.boolean(), worker: z.boolean() }).strict(),
+  // Optional for plans created before the admin application was part of SetupPlan.
+  // When omitted, capabilities.admin remains the source of the desired state.
+  apps: z.object({ site: z.boolean(), app: z.boolean(), worker: z.boolean(), admin: z.boolean().optional() }).strict(),
   tenancy: z.object({
     model: z.literal("organization"),
     enforcement: z.literal("postgres-rls"),
@@ -48,8 +50,8 @@ export const setupPlanSchema = z.object({
   environments: z.array(environmentNameSchema).min(1),
   secrets: z.array(z.object({
     name: z.string().regex(/^[A-Z][A-Z0-9_]*$/u),
-    target: z.enum(["worker", "ci"]),
-    required: z.array(environmentNameSchema).min(1),
+    target: z.enum(["worker", "ci", "admin"]),
+    required: z.array(environmentNameSchema),
   }).strict()).default([]),
   resources: z.array(setupResourceSchema).default([]),
   // Accepted only when empty, so schemaVersion 1 plans written by earlier releases still parse.
@@ -58,6 +60,9 @@ export const setupPlanSchema = z.object({
   // Accepted for schemaVersion 1 compatibility; ignored by plan/apply.
   verification: z.object({ commands: z.array(z.string().min(1)).default([]) }).strict().optional(),
 }).strict().superRefine((plan, context) => {
+  if (plan.apps.admin !== undefined && plan.apps.admin !== plan.capabilities.admin) {
+    context.addIssue({ code: "custom", path: ["apps", "admin"], message: "apps.admin and capabilities.admin must agree" });
+  }
   const uniqueEnvironments = new Set(plan.environments);
   if (uniqueEnvironments.size !== plan.environments.length) {
     context.addIssue({ code: "custom", path: ["environments"], message: "environments must not contain duplicates" });

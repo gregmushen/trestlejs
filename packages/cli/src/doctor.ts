@@ -113,6 +113,27 @@ export async function runDoctor(
 
   checks.push(await pathCheck(root, "package", "trestle-setup skill", path.join(".agents", "skills", "trestle-setup", "SKILL.md")));
 
+  if (manifest.capabilities.admin) {
+    const adminPath = manifest.apps.admin ?? "apps/admin";
+    const required = ["package.json", "wrangler.jsonc", "src/main.tsx", "src/views.ts", "src/api-registry.ts", "src/registry.ts", "worker/index.ts"];
+    const missing = await missingFiles(root, required.map((relative) => path.join(adminPath, relative)));
+    checks.push({
+      id: "admin.scaffold.complete",
+      group: "architecture",
+      status: missing.length ? "fail" : "pass",
+      message: missing.length ? "platform admin source is incomplete" : "platform admin source is present (deployment not verified)",
+      ...(missing.length ? { evidence: missing.join(", "), remediation: "Restore the missing admin source files from the reviewed template; do not overwrite application-owned modules" } : {}),
+    });
+    const declared = manifest.secrets?.DATABASE_ADMIN_URL?.target === "admin";
+    checks.push({
+      id: "admin.database.secret.declared",
+      group: "architecture",
+      status: declared ? "pass" : "fail",
+      message: declared ? "separate platform database credential is declared" : "DATABASE_ADMIN_URL must target the admin Worker",
+      ...(!declared ? { remediation: "Declare DATABASE_ADMIN_URL with target: admin in .trestle/project.yaml" } : {}),
+    });
+  }
+
   try {
     await access(path.join(root, ".github", "workflows"));
     const ci = await validateCi(root);

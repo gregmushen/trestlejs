@@ -139,10 +139,12 @@ export async function diffSetupPlan(root: string, manifest: ProjectManifest, pla
   const items: PlanDiffItem[] = [];
   const compare = (id: string, actual: unknown, expected: unknown, summary: string) => items.push({ id, classification: JSON.stringify(actual) === JSON.stringify(expected) ? "already correct" : "update", summary });
   compare("project.name", manifest.project.name, plan.project.name, `project name is ${plan.project.name}`);
-  for (const [name, expected] of Object.entries(plan.apps)) {
+  for (const [name, expected] of Object.entries(plan.apps).filter(([name]) => name !== "admin")) {
     const present = Boolean(manifest.apps[name]);
     items.push({ id: `apps.${name}`, classification: present === expected ? "already correct" : expected ? "blocked" : "delete", summary: `${name} application ${expected ? "enabled" : "disabled"}` });
   }
+  const expectedAdmin = plan.apps.admin ?? plan.capabilities.admin;
+  items.push({ id: "apps.admin", classification: Boolean(manifest.apps.admin) === expectedAdmin ? "already correct" : expectedAdmin ? "create" : "delete", summary: `admin application ${expectedAdmin ? "enabled" : "disabled"}` });
   compare("tenancy", manifest.tenancy, plan.tenancy, "organization tenancy uses forced PostgreSQL RLS");
   compare("database", { engine: manifest.database.engine, provider: manifest.database.defaultProvider }, plan.database, `${plan.database.provider} ${plan.database.engine} database`);
   const { admin: currentAdmin, ...currentCapabilities } = manifest.capabilities;
@@ -182,7 +184,7 @@ type ApplyState = { schemaVersion: 1; planHash: string; updatedAt: string; opera
 export async function applySetupPlan(root: string, manifest: ProjectManifest, plan: SetupPlan, input: string): Promise<ApplyState> {
   const diff = await diffSetupPlan(root, manifest, plan, input);
   const operations: ApplyState["operations"] = [];
-  const unsafe = diff.items.filter((item) => !["already correct", "create"].includes(item.classification) || (item.classification === "create" && !item.id.startsWith("resources.") && item.id !== "capabilities.admin"));
+  const unsafe = diff.items.filter((item) => !["already correct", "create"].includes(item.classification) || (item.classification === "create" && !item.id.startsWith("resources.") && item.id !== "capabilities.admin" && item.id !== "apps.admin"));
   if (unsafe.length) {
     for (const item of unsafe) operations.push({ id: item.id, status: "blocked", reason: `${item.classification}: ${item.summary}` });
     const state = { schemaVersion: 1 as const, planHash: diff.planHash, updatedAt: new Date().toISOString(), operations };
@@ -192,6 +194,7 @@ export async function applySetupPlan(root: string, manifest: ProjectManifest, pl
   if (diff.items.some(({ id, classification }) => id === "capabilities.admin" && classification === "create")) {
     const files = await enableAdminCapability(root, manifest.project.name).catch((error: unknown) => { throw new CliFailure(error instanceof Error ? error.message : String(error)); });
     operations.push({ id: "capabilities.admin", status: "completed", files: [...files] });
+    operations.push({ id: "apps.admin", status: "completed" });
   }
   const migrations = new Map<string, SetupPlan["resources"][number]>();
   for (const resource of plan.resources) {
@@ -234,7 +237,7 @@ function setupPlanFromManifest(manifest: ProjectManifest): SetupPlan {
     schemaVersion: 1,
     minimumTrestleVersion: TRESTLEJS_VERSION,
     project: manifest.project,
-    apps: { site: Boolean(manifest.apps.site), app: Boolean(manifest.apps.app), worker: Boolean(manifest.apps.worker) },
+    apps: { site: Boolean(manifest.apps.site), app: Boolean(manifest.apps.app), worker: Boolean(manifest.apps.worker), admin: Boolean(manifest.apps.admin) },
     tenancy: manifest.tenancy,
     database: { engine: manifest.database.engine, provider: manifest.database.defaultProvider },
     capabilities: manifest.capabilities,

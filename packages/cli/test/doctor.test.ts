@@ -12,6 +12,18 @@ import { encryptSecrets } from "../src/secrets.js";
 const templateRoot = path.resolve("packages/create/template");
 
 describe("remote provider preflight", () => {
+  it("checks the enabled admin shell and separate platform credential without claiming a hosted deployment", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const enabled = { ...manifest, apps: { ...manifest.apps, admin: "apps/admin" }, capabilities: { ...manifest.capabilities, admin: true } };
+    const present = await runDoctor(templateRoot, enabled, "local");
+    expect(present.checks).toContainEqual(expect.objectContaining({ id: "admin.scaffold.complete", status: "pass", message: expect.stringContaining("deployment not verified") }));
+    expect(present.checks).toContainEqual(expect.objectContaining({ id: "admin.database.secret.declared", status: "pass" }));
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-admin-doctor-"));
+    try {
+      const missing = await runDoctor(root, enabled, "local");
+      expect(missing.checks).toContainEqual(expect.objectContaining({ id: "admin.scaffold.complete", status: "fail" }));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   it("rejects invalid Resend webhook secrets and missing preview redirects", async () => {
     const manifest = await loadProjectManifest(templateRoot);
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-email-readiness-doctor-"));

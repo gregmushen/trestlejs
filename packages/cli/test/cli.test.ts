@@ -142,9 +142,17 @@ describe("TrestleJS CLI", () => {
 
   it("writes a converged starter plan once", async () => {
     const root = await fixture();
+    const manifestPath = path.join(root, ".trestle", "project.yaml");
+    await writeFile(manifestPath, `${await readFile(manifestPath, "utf8")}secrets:\n  DATABASE_ADMIN_URL:\n    target: admin\n    required: [staging, production]\n  ARTIFACT_SIGNING_SECRET:\n    target: worker\n    required: []\n`);
     const init = capture(root);
     expect(await executeCli(["plan", "init"], init.runtime)).toBe(0);
     expect(init.stdout()).toContain(".trestle/setup.json");
+    const plan = JSON.parse(await readFile(path.join(root, ".trestle", "setup.json"), "utf8"));
+    expect(plan.apps.admin).toBe(false);
+    expect(plan.secrets).toContainEqual({ name: "DATABASE_ADMIN_URL", target: "admin", required: ["staging", "production"] });
+    expect(plan.secrets).toContainEqual({ name: "ARTIFACT_SIGNING_SECRET", target: "worker", required: [] });
+    const validate = capture(root);
+    expect(await executeCli(["plan", "validate", ".trestle/setup.json"], validate.runtime), validate.stderr()).toBe(0);
     const diff = capture(root);
     expect(await executeCli(["plan", "diff", ".trestle/setup.json"], diff.runtime)).toBe(0);
     expect(diff.stdout()).toContain("Plan converged.");

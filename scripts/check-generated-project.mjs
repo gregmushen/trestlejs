@@ -332,30 +332,35 @@ try {
   applyManifest.devDependencies.trestlejs = `file:${cliArchive}`;
   await writeFile(applyManifestPath, `${JSON.stringify(applyManifest, null, 2)}\n`);
   await run("pnpm", ["install"], applyProject);
-  const described = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "project", "--json"], { cwd: applyProject, encoding: "utf8" })).data.manifest;
-  const { version: trestleVersion } = JSON.parse(await readFile(path.join(root, "packages", "cli", "package.json"), "utf8"));
-  const setupPlan = {
-    schemaVersion: 1,
-    minimumTrestleVersion: trestleVersion,
-    project: { name: described.project.name },
-    apps: { site: Boolean(described.apps.site), app: Boolean(described.apps.app), worker: Boolean(described.apps.worker) },
-    tenancy: described.tenancy,
-    database: { engine: described.database.engine, provider: described.database.defaultProvider },
-    capabilities: { ...described.capabilities, admin: true },
-    integrations: { email: Boolean(described.packages.integrations), billing: Boolean(described.packages.billing) },
-    environments: described.environments,
-    secrets: [],
-    resources: [],
-  };
-  await writeFile(path.join(applyProject, ".trestle", "setup.json"), `${JSON.stringify(setupPlan, null, 2)}\n`);
+  const cli = path.join(root, "packages/cli/dist/bin.js");
+  await run(process.execPath, [cli, "plan", "init"], applyProject);
+  const setupPath = path.join(applyProject, ".trestle", "setup.json");
+  const setupPlan = JSON.parse(await readFile(setupPath, "utf8"));
+  if (setupPlan.apps.admin !== false
+    || !setupPlan.secrets.some((secret) => secret.name === "DATABASE_ADMIN_URL" && secret.target === "admin")
+    || !setupPlan.secrets.some((secret) => secret.required.length === 0)) {
+    throw new Error("plan init omitted the admin declaration or optional secret requirements");
+  }
+  await run(process.execPath, [cli, "plan", "validate", ".trestle/setup.json"], applyProject);
+  setupPlan.apps.admin = true;
+  setupPlan.capabilities.admin = true;
+  await writeFile(setupPath, `${JSON.stringify(setupPlan, null, 2)}\n`);
+  const adminPlanDiff = JSON.parse(execFileSync(process.execPath, [cli, "plan", "diff", ".trestle/setup.json", "--json"], { cwd: applyProject, encoding: "utf8" })).data.items;
+  for (const id of ["apps.admin", "capabilities.admin"]) {
+    if (!adminPlanDiff.some((item) => item.id === id && item.classification === "create")) throw new Error(`SetupPlan did not propose ${id}`);
+  }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "apply", ".trestle/setup.json", "--yes"], applyProject);
   await run("pnpm", ["install", "--frozen-lockfile"], applyProject);
+  const converged = JSON.parse(execFileSync(process.execPath, [cli, "plan", "diff", ".trestle/setup.json", "--json"], { cwd: applyProject, encoding: "utf8" })).data;
+  if (!converged.converged) throw new Error("Enabled admin SetupPlan did not converge after apply");
   const appliedDiff = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "diff", "--json"], { cwd: applyProject, encoding: "utf8" }));
   const appliedAdminFiles = appliedDiff.data.entries.filter((entry) => entry.path.startsWith("apps/admin/"));
   if (!appliedDiff.data.baselineTrusted || appliedAdminFiles.length === 0 || appliedDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
     throw new Error("trestle apply did not scaffold the platform admin exactly as the bundled template");
   }
   if (adminStatus(applyProject) !== "enabled=true") throw new Error("trestle apply did not enable capabilities.admin");
+  await run(process.execPath, [cli, "generate", "admin-module", "crop-editorial", "--permission", "platform.operations.read"], applyProject);
+  await run("pnpm", ["--filter", "./apps/admin", "check:views"], applyProject);
   await run("pnpm", ["--filter", "./apps/admin", "build"], applyProject);
   console.log(`Generated release canary passed at ${project}`);
 } finally {

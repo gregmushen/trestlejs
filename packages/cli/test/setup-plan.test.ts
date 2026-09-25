@@ -26,6 +26,19 @@ describe("SetupPlan", () => {
     expect(parseSetupPlan(JSON.stringify(legacy)).resources[0]?.name).toBe("Article");
   });
 
+  it("accepts an admin application, admin-targeted secrets, and optional empty requirements", () => {
+    const input = { ...validPlan,
+      apps: { ...validPlan.apps, admin: true },
+      capabilities: { ...validPlan.capabilities, admin: true },
+      secrets: [
+        { name: "DATABASE_ADMIN_URL", target: "admin", required: ["staging", "production"] },
+        { name: "ARTIFACT_SIGNING_SECRET", target: "worker", required: [] },
+      ],
+    };
+    expect(parseSetupPlan(JSON.stringify(input))).toMatchObject({ apps: { admin: true }, secrets: input.secrets });
+    expect(() => parseSetupPlan(JSON.stringify({ ...input, capabilities: { ...input.capabilities, admin: false } }))).toThrow(SetupPlanError);
+  });
+
   it("rejects intents that trestle apply can never perform", () => {
     const external = { ...validPlan, externalResources: [{ name: "database", environment: "production" }] };
     expect(() => parseSetupPlan(JSON.stringify(external))).toThrow(SetupPlanError);
