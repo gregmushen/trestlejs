@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { TRESTLEJS_VERSION } from "../src/core.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 
 import { executeCli, initializeSecrets } from "../src/index.js";
 
@@ -203,6 +203,12 @@ describe("TrestleJS CLI", () => {
   });
 
   it("requires an explicit opt-in for experimental commands", async () => {
+    const shellOptIn = process.env.TRESTLE_EXPERIMENTAL;
+    delete process.env.TRESTLE_EXPERIMENTAL;
+    onTestFinished(() => {
+      if (shellOptIn === undefined) delete process.env.TRESTLE_EXPERIMENTAL;
+      else process.env.TRESTLE_EXPERIMENTAL = shellOptIn;
+    });
     const root = await fixture();
     const blocked = capture(root);
     expect(await executeCli(["workflow", "retry", "publish", "instance-1", "--env", "production"], blocked.runtime)).toBe(1);
