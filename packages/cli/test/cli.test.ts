@@ -515,5 +515,13 @@ export const applicationEventCatalog = defineEventCatalog([
     const repaired = capture(root);
     expect(await executeCli(["plan", "diff", ".trestle/setup.json", "--json"], repaired.runtime)).toBe(0);
     expect(JSON.parse(repaired.stdout()).data.converged).toBe(true);
+
+    const orphan = capture(root);
+    expect(await executeCli(["generate", "resource", "Comment", "--field", "ghostId:relation?:Ghost:set-null"], orphan.runtime)).toBe(1);
+    expect(orphan.stderr()).toContain("not a generated tenant resource");
+    await expect(readFile(path.join(root, ".trestle/resources/comment.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await executeCli(["generate", "resource", "Comment", "--field", "articleId:relation?:Article:cascade"], capture(root).runtime)).toBe(0);
+    expect(await readFile(path.join(root, "packages/db/src/comment-schema.ts"), "utf8")).toContain('foreignKey({ name: "comment_article_id_tenant_fk", columns: [table.organizationId, table.articleId], foreignColumns: [article.organizationId, article.id] }).onDelete("cascade")');
+    expect(await readFile(path.join(root, "packages/db/src/article-schema.ts"), "utf8")).toContain('unique("article_tenant_key").on(table.organizationId, table.id)');
   });
 });
