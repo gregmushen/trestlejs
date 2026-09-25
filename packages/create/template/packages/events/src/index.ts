@@ -175,16 +175,22 @@ export class InMemoryEventInbox implements EventInboxStore {
 }
 
 export type QueueBatchMessage = { body: unknown; ack(): void; retry(options?: { delaySeconds?: number }): void };
-export type QueueSettlement = Readonly<{ outcome: "acknowledged" | "retried"; event?: Readonly<Pick<EventEnvelope, "id" | "name" | "schemaVersion" | "correlationId" | "causationId">> }>;
+/** `reason` is set when the handler threw a PermanentEventError. The message is still retried, so Cloudflare dead-letters it after max_retries; it is never acknowledged as handled. */
+export type QueueSettlement = Readonly<{ outcome: "acknowledged" | "retried"; reason?: PermanentEventReason; event?: Readonly<Pick<EventEnvelope, "id" | "name" | "schemaVersion" | "correlationId" | "causationId">> }>;
 export async function processQueueBatch(messages: QueueBatchMessage[], handler: (message: EventEnvelope) => Promise<void>, retryDelaySeconds = 30, observe?: (settlement: QueueSettlement) => void): Promise<{ acknowledged: number; retried: number }> {
   let acknowledged = 0; let retried = 0;
   for (const item of messages) {
     let envelope: EventEnvelope | undefined;
     let outcome: QueueSettlement["outcome"];
+    let reason: PermanentEventReason | undefined;
     try { envelope = eventEnvelopeSchema.parse(item.body); await handler(envelope); item.ack(); acknowledged += 1; outcome = "acknowledged"; }
-    catch { item.retry({ delaySeconds: retryDelaySeconds }); retried += 1; outcome = "retried"; }
+    catch (error) {
+      // A permanent failure is retried like any other, so it reaches the dead-letter queue.
+      item.retry({ delaySeconds: retryDelaySeconds }); retried += 1; outcome = "retried";
+      if (error instanceof PermanentEventError) reason = error.reason;
+    }
     // Diagnostics cannot change Queue acknowledgment, retry, or tenant authority.
-    try { observe?.({ outcome, ...(envelope ? { event: { id: envelope.id, name: envelope.name, schemaVersion: envelope.schemaVersion, correlationId: envelope.correlationId, ...(envelope.causationId ? { causationId: envelope.causationId } : {}) } } : {}) }); } catch { /* Best effort. */ }
+    try { observe?.({ outcome, ...(reason ? { reason } : {}), ...(envelope ? { event: { id: envelope.id, name: envelope.name, schemaVersion: envelope.schemaVersion, correlationId: envelope.correlationId, ...(envelope.causationId ? { causationId: envelope.causationId } : {}) } } : {}) }); } catch { /* Best effort. */ }
   }
   return { acknowledged, retried };
 }

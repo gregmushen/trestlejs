@@ -552,10 +552,12 @@ type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBin
 export default {
   fetch: app.fetch.bind(app),
   queue: async (batch: QueueBatch, environment: WorkerEnvironment) => {
-    const observeEvent = ({ outcome, event }: QueueSettlement) => {
+    const observeEvent = ({ outcome, reason, event }: QueueSettlement) => {
       const log = createLogger({ environment: environment.APP_ENV ?? "local", ...(event ? { correlationId: event.correlationId, ...(event.causationId ? { causationId: event.causationId } : {}) } : {}) }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
       const fields = event ? { eventId: event.id, eventName: event.name, schemaVersion: event.schemaVersion } : { validated: false };
       if (outcome === "acknowledged") log.info("queue.event.acknowledged", fields);
+      // Rejected messages still retry into the dead-letter queue; the reason never includes the payload.
+      else if (reason) log.warn("queue.event.rejected", { ...fields, reason });
       else log.warn("queue.event.retried", fields);
     };
     if (environment.TRESTLE_WORKFLOWS_ENABLED === "true" && !environment.TRESTLE_WORKFLOW) {

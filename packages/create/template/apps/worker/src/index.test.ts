@@ -19,7 +19,7 @@ vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
 }));
 
 import worker, { app } from "./index.js";
-import { eventEnvelopeSchema } from "@__TRESTLE_PROJECT_NAME__/events";
+import { PermanentEventError, eventEnvelopeSchema } from "@__TRESTLE_PROJECT_NAME__/events";
 
 const environment = {
   DATABASE_URL: "postgres://unused",
@@ -69,6 +69,26 @@ describe("worker routes", () => {
     const records = output.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ event: "queue.event.acknowledged", correlationId: "corr-queue", causationId: "cause-queue", eventId: event.id })]));
     expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ event: "queue.event.retried", validated: false })]));
+    expect(output.join("\n")).not.toContain(rawSecret);
+  });
+
+  it("logs a permanent event rejection with its reason, retries it, and never logs the payload", async () => {
+    const rawSecret = "forged-queue-payload-secret";
+    const event = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "billing.checkout.completed", schemaVersion: 1,
+      occurredAt: new Date().toISOString(), resource: { type: "organization", id: "org-1" }, correlationId: "corr-rejected",
+      idempotencyKey: "checkout:org-rejected", payload: { organizationId: "org-1", currentSubscription: false, extra: rawSecret } });
+    const output: string[] = [];
+    const states: string[] = [];
+    const original = console.log;
+    console.log = (...items: unknown[]) => { output.push(items.map(String).join(" ")); };
+    try {
+      expect(await worker.queue({ messages: [
+        { body: event, ack: () => states.push("unexpected"), retry: () => states.push("retry") },
+      ] }, { ...environment, TRESTLE_WORKFLOWS_ENABLED: "true", TRESTLE_WORKFLOW: { create: async () => { throw new PermanentEventError("provenance_mismatch"); }, get: async () => null } })).toEqual({ acknowledged: 0, retried: 1 });
+    } finally { console.log = original; }
+    expect(states).toEqual(["retry"]);
+    const records = output.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toEqual([expect.objectContaining({ level: "warn", event: "queue.event.rejected", correlationId: "corr-rejected", eventId: event.id, eventName: event.name, reason: "provenance_mismatch" })]);
     expect(output.join("\n")).not.toContain(rawSecret);
   });
 
