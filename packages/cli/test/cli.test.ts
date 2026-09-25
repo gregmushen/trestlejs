@@ -319,6 +319,24 @@ describe("TrestleJS CLI", () => {
     expect(window.stderr()).toContain("inside the 30-day provenance window; use a cutoff at or before");
   });
 
+  it("runs DLQ commands as the migration role rather than the restricted runtime login", async () => {
+    const root = await fixture();
+    await initializeSecrets(root, "staging", { DATABASE_URL: "postgres://runtime@db.test/app", DATABASE_MIGRATION_URL: "postgres://migrator@db.test/app" });
+    const bin = path.join(root, "bin");
+    const log = path.join(root, "pnpm.log");
+    await mkdir(bin);
+    await writeFile(path.join(bin, "pnpm"), `#!/bin/sh\nprintf '%s %s\\n' "$DATABASE_URL" "$*" >> "${log}"\ncase "$*" in *" list"*) printf '[]' ;; esac\n`, { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+    onTestFinished(() => { process.env.PATH = previousPath; });
+    expect(await executeCli(["--experimental", "queue", "dlq", "list", "--env", "staging"], capture(root).runtime)).toBe(0);
+    expect(await executeCli(["--experimental", "queue", "dlq", "redrive", "message-1", "--env", "staging"], capture(root).runtime)).toBe(0);
+    const calls = (await readFile(log, "utf8")).trim().split("\n");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatch(/^postgres:\/\/migrator@db\.test\/app .*outbox-admin\.ts list$/u);
+    expect(calls[1]).toMatch(/^postgres:\/\/migrator@db\.test\/app .*outbox-admin\.ts redrive message-1$/u);
+  });
+
   it("requires confirmation before creating recovery resources or retrying remote workflows", async () => {
     const root = await fixture();
     const backup = capture(root);

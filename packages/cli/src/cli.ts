@@ -566,8 +566,10 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.env === "local") throw new CliFailure("local DLQ inspection requires a running application adapter");
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      if (!values.DATABASE_URL) throw new CliFailure(`DATABASE_URL is not set for ${options.env}`);
-      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "list"], { cwd: context.root, env: { ...process.env, DATABASE_URL: values.DATABASE_URL }, stdio: "pipe" });
+      // Outbox administration needs the migration role; remotely DATABASE_URL is the restricted runtime login.
+      const connection = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
+      if (!connection) throw new CliFailure(`DATABASE_MIGRATION_URL or DATABASE_URL is not set for ${options.env}`);
+      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "list"], { cwd: context.root, env: { ...process.env, DATABASE_URL: connection }, stdio: "pipe" });
       const entries = JSON.parse(result.stdout) as unknown;
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ environment: options.env, entries }), null, 2)}\n` : `${(entries as Array<{ id: string; event: string; attempts: number }>).map((entry) => `${entry.id} ${entry.event} attempts=${entry.attempts}`).join("\n")}\n`);
     });
@@ -578,8 +580,10 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.env === "local") throw new CliFailure("local DLQ redrive requires a running application adapter");
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-      if (!values.DATABASE_URL) throw new CliFailure(`DATABASE_URL is not set for ${options.env}`);
-      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "redrive", id], { cwd: context.root, env: { ...process.env, DATABASE_URL: values.DATABASE_URL }, stdio: "pipe" });
+      // Outbox administration needs the migration role; remotely DATABASE_URL is the restricted runtime login.
+      const connection = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
+      if (!connection) throw new CliFailure(`DATABASE_MIGRATION_URL or DATABASE_URL is not set for ${options.env}`);
+      const result = await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/db`, "exec", "tsx", "scripts/outbox-admin.ts", "redrive", id], { cwd: context.root, env: { ...process.env, DATABASE_URL: connection }, stdio: "pipe" });
       runtime.stdout(`Redriven ${id} in ${options.env}\n`);
       if (result.stderr) runtime.stderr(result.stderr);
     });
