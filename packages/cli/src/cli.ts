@@ -90,12 +90,25 @@ function reveal(values: Record<string, string>, format: "yaml" | "json" | "doten
   return formatSecretDocument(values);
 }
 
+/** Beta freezes only proven commands; the rest run only with an explicit, per-invocation opt-in. */
+function experimental(command: Command, runtime: CliRuntime): Command {
+  command.description(`[experimental] ${command.description()}`);
+  command.hook("preAction", (_hooked, actionCommand) => {
+    if (actionCommand.optsWithGlobals<{ experimental?: boolean }>().experimental === true || runtimeValue(runtime, "TRESTLE_EXPERIMENTAL") === "1") return;
+    const names: string[] = [];
+    for (let current: Command | null = command; current?.parent; current = current.parent) names.unshift(current.name());
+    throw new CliFailure(`${names.join(" ")} is experimental in beta and may change; rerun with --experimental or set TRESTLE_EXPERIMENTAL=1`);
+  });
+  return command;
+}
+
 export function createProgram(runtime: CliRuntime): Command {
   const program = new Command()
     .name("trestle")
     .description("Build and operate conventional TrestleJS applications")
     .version(TRESTLEJS_VERSION)
     .option("--cwd <path>", "start project discovery from this directory")
+    .option("--experimental", "allow experimental beta commands for this invocation")
     .showSuggestionAfterError()
     .showHelpAfterError()
     .exitOverride()
@@ -536,7 +549,7 @@ export function createProgram(runtime: CliRuntime): Command {
       if (problems.length) throw new CliFailure("email doctor found failures");
     });
 
-  const queue = program.command("queue").description("operate asynchronous delivery queues");
+  const queue = experimental(program.command("queue").description("operate asynchronous delivery queues"), runtime);
   const dlq = queue.command("dlq").description("inspect dead-lettered outbox messages");
   dlq.command("list")
     .requiredOption("--env <environment>", "remote environment", environment)
@@ -583,7 +596,7 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(`${options.apply ? "Pruned" : "Eligible"} ${summary.count} succeeded outbox record(s) in ${options.env} before ${options.before}${options.apply ? ` (limit ${limit})` : " (dry run)"}\n`);
     });
 
-  const admin = program.command("admin").description("bootstrap and manage platform admin operators");
+  const admin = experimental(program.command("admin").description("bootstrap and manage platform admin operators"), runtime);
   const platformAdmin = async (command: Command, env: ReturnType<typeof environment>, args: string[]) => {
     const context = await projectContext(command, runtime);
     if (!context.manifest.capabilities.admin) throw new CliFailure("The platform admin is not enabled; set capabilities.admin in .trestle/setup.json and run trestle apply first");
@@ -614,7 +627,7 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(grants.length ? `${grants.map((grant) => `${grant.userId}\t${grant.role}\t${grant.grantedBy}`).join("\n")}\n` : "No platform-role assignments\n");
     });
 
-  const workflow = program.command("workflow").description("inspect and retry Cloudflare Workflow instances");
+  const workflow = experimental(program.command("workflow").description("inspect and retry Cloudflare Workflow instances"), runtime);
   workflow.command("list")
     .argument("<name>", "workflow name")
     .option("--env <environment>", "target environment", environment, "local")
@@ -643,7 +656,7 @@ export function createProgram(runtime: CliRuntime): Command {
       await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", ...workflowArguments("retry", name, id, options.env)], { cwd: context.root, env: process.env });
     });
 
-  const backup = program.command("backup").description("inspect and verify declared provider recovery capability");
+  const backup = experimental(program.command("backup").description("inspect and verify declared provider recovery capability"), runtime);
   backup.command("status")
     .requiredOption("--env <environment>", "protected environment", environment)
     .option("--json", "emit versioned structured output")
@@ -715,7 +728,7 @@ export function createProgram(runtime: CliRuntime): Command {
       if (evidence.status !== "passed") throw new CliFailure("recovery verification failed, remained unverifiable, exceeded RTO, or isolated cleanup was incomplete");
     });
 
-  const restore = program.command("restore").description("create an isolated Neon point-in-time recovery branch");
+  const restore = experimental(program.command("restore").description("create an isolated Neon point-in-time recovery branch"), runtime);
   restore.command("create")
     .requiredOption("--env <environment>", "source environment", environment)
     .requiredOption("--to <target>", "declared isolated restore target")
@@ -805,7 +818,7 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Stripe ${options.env} credentials and mode agree\n! Remote webhook signing-secret match requires endpoint setup and provider delivery evidence\n`);
       if (problems.length) throw new CliFailure("Stripe doctor found failures");
     });
-  stripe.command("sync")
+  experimental(stripe.command("sync").description("reconcile the Stripe product and price catalog"), runtime)
     .requiredOption("--env <environment>", "remote environment", environment)
     .option("--apply", "create missing products/prices after reviewing the plan")
     .option("--yes", "confirm production provider mutation")
@@ -854,7 +867,7 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.apply && report.createdEndpointId) return;
       if (options.apply) throw new CliFailure("Stripe webhook setup did not apply");
     });
-  stripe.command("seed")
+  experimental(stripe.command("seed").description("activate a local billing plan for an organization"), runtime)
     .requiredOption("--organization <id>", "local organization ID")
     .option("--plan <plan>", "plan to activate", "pro")
     .option("--api-url <url>", "local Worker URL", "http://localhost:8787")
@@ -999,8 +1012,7 @@ export function createProgram(runtime: CliRuntime): Command {
     await runCommand("docker", ["compose", "down", "--volumes"], { cwd: context.root, env: composeEnvironment });
   });
 
-  program.command("console")
-    .description("open an application-aware TypeScript console")
+  experimental(program.command("console").description("open an application-aware TypeScript console"), runtime)
     .option("--env <environment>", "console environment", environment, "local")
     .option("--tenant <tenant>", "tenant id or slug")
     .option("--write", "allow application writes")

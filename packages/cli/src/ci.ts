@@ -266,6 +266,7 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
   checks.push(check("ci.backup.scheduled", backup.includes("schedule:") && backup.includes("workflow_dispatch:"), "backup restore verification is scheduled and manually runnable"));
   checks.push(check("ci.backup.protected", backup.includes("environment: production") && backup.includes("cancel-in-progress: false"), "backup restore verification uses the protected production environment and cannot overlap"));
   checks.push(check("ci.backup.isolated", backup.includes("backup verify --env production --to restore-test --yes") && backup.includes("NEON_PROJECT_ID") && backup.includes("DATABASE_RUNTIME_ROLE"), "backup verification restores to the declared isolated target with migration and runtime role checks"));
+  checks.push(check("ci.backup.experimental-opt-in", backup.includes('TRESTLE_EXPERIMENTAL: "1"'), "backup verification opts in to the experimental backup command"));
   checks.push(check("ci.backup.r2", backup.includes("CLOUDFLARE_ACCOUNT_ID") && backup.includes("TRESTLE_MASTER_KEY"), "protected backup verification can resolve R2 recovery credentials and account identity"));
   checks.push(check("ci.backup.evidence", backup.includes("recovery-evidence.json") && backup.includes("GITHUB_STEP_SUMMARY"), "backup verification records non-secret recovery evidence"));
 

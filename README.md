@@ -231,7 +231,7 @@ uses Stripe test mode; production uses live mode.
 
 ```bash
 pnpm exec trestle payments stripe doctor
-pnpm exec trestle payments stripe sync --env staging
+pnpm exec trestle --experimental payments stripe sync --env staging
 ```
 
 Use the Stripe CLI directly for local webhook forwarding:
@@ -299,7 +299,8 @@ for the reasoning behind those decisions.
 trestle dev                         boot the complete local application
 trestle dev --fresh --yes           reset only declared local state and reseed
 trestle doctor [--env <env>]        verify project and environment health
-trestle console --tenant <slug>     open the audited tenant-safe TS console
+trestle --experimental console --tenant <slug>
+                                    open the audited tenant-safe TS console
 trestle db ...                      operate local PostgreSQL
 trestle secrets ...                 manage encrypted credentials
 trestle email ...                   inspect local transactional email
@@ -313,9 +314,12 @@ trestle apply <plan> --yes          apply reviewed supported mutations
 trestle resources                   inspect declared domain resources
 trestle routes                      inspect API routes and auth posture
 trestle logs --env <env>            tail safe semantic Worker events
-trestle queue dlq list --env <env>  inspect dead-lettered outbox delivery
-trestle workflow status <name> <id> inspect a Cloudflare Workflow instance
-trestle backup verify ... --yes     prove an isolated Neon restore and RLS
+trestle --experimental queue dlq list --env <env>
+                                    inspect dead-lettered outbox delivery
+trestle --experimental workflow status <name> <id>
+                                    inspect a Cloudflare Workflow instance
+trestle --experimental backup verify ... --yes
+                                    prove an isolated Neon restore and RLS
 trestle architecture check          enforce static application boundaries
 trestle upgrade plan                preview an application-preserving upgrade
 trestle upgrade apply --yes         update metadata only after source-version review
@@ -325,6 +329,11 @@ trestle upgrade source-apply --yes  apply pristine adjacent-alpha source only
 trestle upgrade source-finalize --yes  run local checks and certify source parity
 trestle resource add-field ...      add an optional field and tracked migration
 ```
+
+Commands labelled `[experimental]` in `--help` (`queue`, `workflow`, `backup`,
+`restore`, `console`, `admin`, `payments stripe sync` and `payments stripe
+seed`) may change during beta and refuse to run unless the invocation passes
+`--experimental` or the environment sets `TRESTLE_EXPERIMENTAL=1`.
 
 This is a representative subset. `pnpm exec trestle --help` and each
 subcommand's `--help` are authoritative for your installed release. The

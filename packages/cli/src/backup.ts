@@ -16,7 +16,7 @@ export function recoveryEvidencePassed(report: unknown, cleanup: unknown, rtoMet
 }
 
 export function recoveryStatusLabel(latest: unknown): string {
-  if (!latest) return "not yet — run trestle backup verify";
+  if (!latest) return "not yet — run trestle --experimental backup verify";
   if (!latest || typeof latest !== "object") return "not verified — invalid evidence";
   const value = latest as { cleanup?: unknown; rtoMet?: unknown };
   return recoveryEvidencePassed(latest, value.cleanup, value.rtoMet) ? "passed" : "not verified — last attempt failed or incomplete";

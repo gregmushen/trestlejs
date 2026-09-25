@@ -25,6 +25,17 @@ describe("generated CI deployment contract", () => {
     expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.deploy.cron-capacity-preflight", status: "fail" }));
   });
 
+  it("requires scheduled backup verification to opt in to the experimental backup command", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
+    temporaryDirectories.push(root);
+    await cp(path.join(templateRoot, ".github"), path.join(root, ".github"), { recursive: true });
+    const workflowPath = path.join(root, ".github", "workflows", "backup-verify.yml");
+    const source = await readFile(workflowPath, "utf8");
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.backup.experimental-opt-in", status: "pass" }));
+    await writeFile(workflowPath, source.replace('TRESTLE_EXPERIMENTAL: "1"', ""));
+    expect((await validateCi(root)).checks).toContainEqual(expect.objectContaining({ id: "ci.backup.experimental-opt-in", status: "fail" }));
+  });
+
   it("requires isolated preview Workers to omit cron triggers", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "trestle-ci-"));
     temporaryDirectories.push(root);

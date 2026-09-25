@@ -366,12 +366,16 @@ Compose volumes and Wrangler local state before migrating and reseeding. Use
 fixtures. Tests can use the fixed, advanceable clock exported by the context
 package without sleeping.
 
+The console, queue, Workflow, backup, restore and platform admin commands are
+experimental during beta: they run only when the invocation passes
+`--experimental` or the environment sets `TRESTLE_EXPERIMENTAL=1`.
+
 The application console is tenant-bound and read-only by default:
 
 ```bash
-pnpm exec trestle console --tenant <slug>
-pnpm exec trestle console --tenant <slug> --write
-pnpm exec trestle console --platform-admin
+pnpm exec trestle --experimental console --tenant <slug>
+pnpm exec trestle --experimental console --tenant <slug> --write
+pnpm exec trestle --experimental console --platform-admin
 ```
 
 Tenant and platform access are separate authority planes. The console exposes
@@ -381,13 +385,13 @@ audit events, and requires explicit confirmation for remote environments.
 Queue and Cloudflare Workflow operations are similarly explicit:
 
 ```bash
-pnpm exec trestle queue dlq list --env staging
-pnpm exec trestle queue dlq redrive <id> --env staging
-pnpm exec trestle queue prune --env staging --before 2026-01-01T00:00:00Z
-pnpm exec trestle queue prune --env staging --before 2026-01-01T00:00:00Z --limit 1000 --apply
-pnpm exec trestle workflow list <name> --env staging
-pnpm exec trestle workflow status <name> <instance-id> --env staging
-pnpm exec trestle workflow retry <name> <instance-id> --env staging --yes
+pnpm exec trestle --experimental queue dlq list --env staging
+pnpm exec trestle --experimental queue dlq redrive <id> --env staging
+pnpm exec trestle --experimental queue prune --env staging --before 2026-01-01T00:00:00Z
+pnpm exec trestle --experimental queue prune --env staging --before 2026-01-01T00:00:00Z --limit 1000 --apply
+pnpm exec trestle --experimental workflow list <name> --env staging
+pnpm exec trestle --experimental workflow status <name> <instance-id> --env staging
+pnpm exec trestle --experimental workflow retry <name> <instance-id> --env staging --yes
 ```
 
 `queue prune` reports eligible records unless `--apply` is passed. It removes
@@ -404,10 +408,10 @@ then verifies every ready artifact against the declared R2 bucket, writes
 non-secret evidence, and deletes the drill branch:
 
 ```bash
-pnpm exec trestle backup status --env production
-pnpm exec trestle backup verify --env production --to restore-test --yes
-pnpm exec trestle restore create --env production --to restore-test --at <iso-time> --yes
-pnpm exec trestle restore delete --env production --target restore-test --yes
+pnpm exec trestle --experimental backup status --env production
+pnpm exec trestle --experimental backup verify --env production --to restore-test --yes
+pnpm exec trestle --experimental restore create --env production --to restore-test --at <iso-time> --yes
+pnpm exec trestle --experimental restore delete --env production --target restore-test --yes
 ```
 
 The generated weekly `backup-verify.yml` workflow runs the same protected drill

@@ -59,7 +59,7 @@ The API Keys view lists key metadata across organizations (`platform.machine_acc
 Bootstrap the first operator after they sign up in the customer app:
 
 ```bash
-pnpm exec trestle admin grant ops@example.com security_admin --env local --reason "first operator"
+pnpm exec trestle --experimental admin grant ops@example.com security_admin --env local --reason "first operator"
 ```
 
 Local development:
