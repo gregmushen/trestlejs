@@ -19,7 +19,8 @@ release.
 | Alpha 10 | Recovery, operational tooling, deterministic data, and safe remote access | Planned |
 | Alpha 11 | Resource evolution and framework upgrade lifecycle | Planned |
 | Alpha 12 | Optional admin, enforcement, full-system hardening, and beta preparation | Admin and access control shipped (see [ADMIN_SPEC.md](ADMIN_SPEC.md)); deployed admin evidence and beta hardening remain |
-| Beta | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
+| Beta candidate | Published prerelease with an explicit evidence ledger; production and several hosted paths remain open | In progress (see [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md)) |
+| Beta completion | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
 | v1 | Supported end-to-end product-development and deployment path with documented compatibility guarantees | Planned |
 
 ## Today’s push: Alpha 7/8 → Beta candidate
@@ -76,10 +77,12 @@ beta is complete before the evidence gates pass.
 - [ ] Add operational checks for deployment identity, bindings, migration
   state, runtime role, queue/DLQ state, and provider mode.
 
-### Beta-candidate exit criteria
+### Full beta completion criteria
 
-We can call the result a **beta candidate** only when a clean generated
-project can complete the following without manual source repair:
+We can call the result **production-validated beta** only when a clean generated
+project can complete the following without manual source repair. An earlier
+beta candidate may be published with an explicit [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md)
+that labels unverified paths and does not imply production readiness:
 
 ```text
 create project
