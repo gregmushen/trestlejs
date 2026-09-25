@@ -232,6 +232,13 @@
       "when": 1790294400024,
       "tag": "0032_legal_jack_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790315597470,
+      "tag": "0033_flawless_nehzno",
+      "breakpoints": true
     }
   ]
 }

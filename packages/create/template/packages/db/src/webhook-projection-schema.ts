@@ -25,6 +25,8 @@ export const webhookMessage = pgTable("webhook_message", {
   uniqueIndex("webhook_message_id_organization_uidx").on(table.id, table.organizationId),
   uniqueIndex("webhook_message_source_projection_uidx").on(table.organizationId, table.sourceEventId, table.publicEventType, table.publicVersion),
   index("webhook_message_organization_created_idx").on(table.organizationId, table.createdAt),
+  // Outbox retention looks up projections of one committed event across every tenant.
+  index("webhook_message_source_event_idx").on(table.sourceEventId),
   check("webhook_message_version_check", sql`${table.publicVersion} > 0`),
   check("webhook_message_retention_check", sql`${table.retentionClass} IN ('standard', 'short')`),
   check("webhook_message_entitlement_check", sql`${table.entitlementDecision} IN ('not_required', 'allowed', 'denied')`),

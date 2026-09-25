@@ -397,6 +397,10 @@ pnpm exec trestle --experimental workflow retry <name> <instance-id> --env stagi
 `queue prune` reports eligible records unless `--apply` is passed. It removes
 only succeeded outbox records processed before the explicit UTC cutoff, in
 bounded batches; pending, leased, and dead-lettered records are never pruned.
+The cutoff must be at least 30 days old, and records still referenced by an
+active inbox claim or an unfinished webhook delivery are kept. The command runs
+as the migration role (`DATABASE_MIGRATION_URL`, falling back to
+`DATABASE_URL`) and reports the age of the oldest succeeded record kept.
 Outbox failures record only a sanitized error category, never the error
 message, so provider secrets echoed in exceptions are not persisted.
 

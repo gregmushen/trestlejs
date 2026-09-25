@@ -314,6 +314,9 @@ describe("TrestleJS CLI", () => {
     const limit = capture(root);
     expect(await executeCli(["--experimental", "queue", "prune", "--env", "staging", "--before", "2026-01-01T00:00:00Z", "--limit", "10001"], limit.runtime)).toBe(1);
     expect(limit.stderr()).toContain("--limit must be between 1 and 10000");
+    const window = capture(root);
+    expect(await executeCli(["--experimental", "queue", "prune", "--env", "staging", "--before", new Date().toISOString()], window.runtime)).toBe(1);
+    expect(window.stderr()).toContain("inside the 30-day provenance window; use a cutoff at or before");
   });
 
   it("requires confirmation before creating recovery resources or retrying remote workflows", async () => {

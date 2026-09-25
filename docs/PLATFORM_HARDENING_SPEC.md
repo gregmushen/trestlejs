@@ -132,6 +132,8 @@ Remaining:
 
 ## 6. P5: Provenance lifetime and replay
 
+**Status.** The window is declared and enforced. Supported delivery and replay last 14 days (`EVENT_REPLAY_WINDOW_DAYS`) and committed provenance is kept for 30 (`EVENT_PROVENANCE_RETENTION_DAYS`). `pruneSucceeded` and `countPrunableSucceeded` refuse a cutoff newer than now − 30 days, with the latest allowed cutoff in the error. Pruning goes through migration-created SECURITY DEFINER functions (`trestle_prune_outbox_provenance`, `trestle_count_prunable_outbox_provenance`), owned and run by the migration role. They see every tenant's rows despite forced RLS and skip any row still referenced by an inbox claim active within the replay window or by a non-terminal webhook delivery. `trestle queue prune` reports the count and the age of the oldest succeeded row kept. A missing or expired row surfaces as P2's `provenance_missing` rejection.
+
 **Problem.** `trestle queue prune --before <cutoff> [--apply]` deletes succeeded outbox rows older than a cutoff the operator chooses (`pruneSucceeded`, `packages/db/src/outbox.ts`). A row is marked succeeded when it's published, which can happen before downstream work finishes. Pruning can therefore delete the provenance P2 needs to authenticate a delayed message, retry, dead-letter replay or Workflow.
 
 **Required contract**
