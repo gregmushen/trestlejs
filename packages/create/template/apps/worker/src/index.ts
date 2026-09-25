@@ -269,6 +269,7 @@ app.post("/api/developer/webhooks/deliveries/:id/replay", requireExecutionContex
   if (result.state === "payload_gone") return context.json({ error: "The event payload is no longer retained" }, 409);
   if (result.state === "endpoint_inactive") return context.json({ error: "The endpoint must be active" }, 409);
   if (result.state === "already_succeeded") return context.json({ error: "A replay has already succeeded" }, 409);
+  if (result.state === "provenance_expired") return context.json({ error: "The source event is outside the 14-day replay window or no longer retained" }, 409);
   if (!("deliveryId" in result)) throw new Error("Unexpected webhook replay result");
   execution.log.info("webhooks.delivery.replay_queued", { sourceDeliveryId: deliveryId, replayDeliveryId: result.deliveryId, created: result.state === "created" });
   return context.json({ state: "queued", replayDeliveryId: result.deliveryId, created: result.state === "created" }, result.state === "created" ? 202 : 200);

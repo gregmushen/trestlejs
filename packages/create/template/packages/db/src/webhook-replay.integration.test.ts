@@ -18,17 +18,27 @@ const secret = `whsec_${btoa("local-customer-replay-signing-secret")}`;
 const endpoints: string[] = [];
 const messages: string[] = [];
 const deliveries: string[] = [];
+const sourceEvents: string[] = [];
+const day = 86_400_000;
 
-async function fixture(suffix: string, options: { organizationId?: string; expired?: boolean; endpointState?: "active" | "disabled"; deliveryState?: "dead" | "succeeded" } = {}) {
+async function fixture(suffix: string, options: { organizationId?: string; expired?: boolean; endpointState?: "active" | "disabled"; deliveryState?: "dead" | "succeeded"; provenance?: "fresh" | "boundary" | "old" | "missing" } = {}) {
   const organizationId = options.organizationId ?? `${run}-${suffix}`;
   const [endpoint] = await sql!<{ id: string }[]>`insert into webhook_endpoint (organization_id, environment, name, destination_url, state, provider, created_by, updated_by)
     values (${organizationId}, 'local', 'Replay test', 'https://example.test/hook?private=secret', ${options.endpointState ?? "active"}, 'local', 'owner', 'owner') returning id`;
   const messageId = `whm_${crypto.randomUUID().replaceAll("-", "").repeat(2)}`;
   const deliveryId = `whd_${crypto.randomUUID().replaceAll("-", "").repeat(2)}`;
   const envelope = { id: messageId, type: "article.published", version: 1, occurredAt: now.toISOString(), organizationId, resource: { type: "article", id: suffix }, data: { private: "never-inspect-this-payload" } };
-  endpoints.push(endpoint!.id); messages.push(messageId); deliveries.push(deliveryId);
+  const sourceEventId = crypto.randomUUID();
+  endpoints.push(endpoint!.id); messages.push(messageId); deliveries.push(deliveryId); sourceEvents.push(sourceEventId);
+  // The committed outbox row is the provenance a replayed delivery verifies against.
+  const provenance = options.provenance ?? "fresh";
+  if (provenance !== "missing") {
+    const occurredAt = new Date(now.getTime() - (provenance === "old" ? 14 * day + 60_000 : provenance === "boundary" ? 14 * day : 0));
+    await sql!`insert into outbox_message (id, event_name, schema_version, occurred_at, resource_type, resource_id, organization_id, correlation_id, idempotency_key, payload, status, attempts, available_at, processed_at)
+      values (${sourceEventId}, 'article.published', 1, ${occurredAt}, 'article', ${suffix}, ${organizationId}, ${run}, ${sourceEventId}, ${sql!.json({})}, 'succeeded', 1, ${occurredAt}, ${occurredAt})`;
+  }
   await sql!`insert into webhook_message (id, organization_id, source_event_id, public_event_type, public_version, occurred_at, resource_type, resource_id, envelope, payload_size, retention_class, entitlement_decision, status, correlation_id, payload_deleted_at)
-    values (${messageId}, ${organizationId}, ${crypto.randomUUID()}, 'article.published', 1, ${now}, 'article', ${suffix}, ${options.expired ? null : sql!.json(envelope)}, ${JSON.stringify(envelope).length}, 'standard', 'not_required', 'ready', ${run}, ${options.expired ? now : null})`;
+    values (${messageId}, ${organizationId}, ${sourceEventId}, 'article.published', 1, ${now}, 'article', ${suffix}, ${options.expired ? null : sql!.json(envelope)}, ${JSON.stringify(envelope).length}, 'standard', 'not_required', 'ready', ${run}, ${options.expired ? now : null})`;
   await sql!`insert into webhook_delivery (id, organization_id, message_id, endpoint_id, state, attempt_count, terminal_reason, completed_at)
     values (${deliveryId}, ${organizationId}, ${messageId}, ${endpoint!.id}, ${options.deliveryState ?? "dead"}, 2, ${options.deliveryState === "succeeded" ? null : "http_500"}, ${now})`;
   for (const attemptNumber of [1, 2]) await sql!`insert into webhook_attempt (id, organization_id, delivery_id, attempt_number, kind, attempted_at, completed_at, request_headers, response_status, result_category, outcome, duration_ms)
@@ -48,6 +58,7 @@ suite("customer webhook replay under forced tenant RLS", () => {
     if (deliveries.length) await sql!`delete from webhook_delivery where id = any(${deliveries})`;
     if (messages.length) await sql!`delete from webhook_message where id = any(${messages})`;
     if (endpoints.length) await sql!`delete from webhook_endpoint where id = any(${endpoints})`;
+    if (sourceEvents.length) await sql!`delete from outbox_message where id = any(${sourceEvents})`;
     await sql!.end();
   });
 
@@ -95,5 +106,21 @@ suite("customer webhook replay under forced tenant RLS", () => {
     expect(await replayTenantWebhookDelivery(request(expired))).toEqual({ state: "payload_gone" });
     expect(await replayTenantWebhookDelivery(request(inactive))).toEqual({ state: "endpoint_inactive" });
     expect((await sql!`select id from webhook_delivery where replay_of_delivery_id in (${succeeded.deliveryId}, ${expired.deliveryId}, ${inactive.deliveryId})`)).toEqual([]);
+  });
+
+  it("refuses a replay once the source event is outside the 14-day replay window or no longer retained", async () => {
+    const old = await fixture("old-provenance", { provenance: "old" });
+    const missing = await fixture("missing-provenance", { provenance: "missing" });
+    const boundary = await fixture("boundary-provenance", { provenance: "boundary" });
+    expect(await replayTenantWebhookDelivery(request(old))).toEqual({ state: "provenance_expired" });
+    expect(await replayTenantWebhookDelivery(request(missing))).toEqual({ state: "provenance_expired" });
+    // Exactly 14 days old is still inside the window.
+    expect(await replayTenantWebhookDelivery(request(boundary))).toMatchObject({ state: "created" });
+    // Provenance of another tenant never counts as this delivery's provenance.
+    const foreign = await fixture("foreign-provenance");
+    await sql!`update outbox_message set organization_id = ${`${run}-someone-else`} where id = (select source_event_id::text from webhook_message where id = ${foreign.messageId})`;
+    expect(await replayTenantWebhookDelivery(request(foreign))).toEqual({ state: "provenance_expired" });
+    expect((await sql!`select id from webhook_delivery where replay_of_delivery_id in (${old.deliveryId}, ${missing.deliveryId}, ${foreign.deliveryId})`)).toEqual([]);
+    expect((await sql!`select id from audit_event where correlation_id = ${run} and summary->>'sourceDeliveryId' in (${old.deliveryId}, ${missing.deliveryId}, ${foreign.deliveryId})`)).toEqual([]);
   });
 });

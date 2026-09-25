@@ -4,6 +4,15 @@ export type CommittedEventStore = { findCommitted(id: string): Promise<OutboxEnt
 
 const dayMs = 24 * 60 * 60 * 1_000;
 
+/** Whether a committed event is older than the replay window at `now`.
+ * Exactly `maxAgeDays` old is still inside it. */
+export function outsideReplayWindow(occurredAt: Date | string, now: Date, maxAgeDays = EVENT_REPLAY_WINDOW_DAYS): boolean {
+  if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) throw new Error("Invalid event replay window");
+  const committedAt = occurredAt instanceof Date ? occurredAt.getTime() : Date.parse(occurredAt);
+  if (!Number.isFinite(committedAt) || !Number.isFinite(now.getTime())) throw new Error("Invalid event replay window time");
+  return now.getTime() - committedAt > maxAgeDays * dayMs;
+}
+
 /** Stable JSON with object keys sorted, so key order never decides a match. */
 function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) =>
@@ -42,7 +51,6 @@ export async function verifyCommittedEvent(store: CommittedEventStore, delivered
   const committed = await store.findCommitted(delivered.id);
   if (!committed) throw new PermanentEventError("provenance_missing");
   if (committed.id !== delivered.id || !sameEvent(committed.message, delivered)) throw new PermanentEventError("provenance_mismatch");
-  const now = (options.now ?? new Date()).getTime();
-  if (now - Date.parse(committed.message.occurredAt) > maxAgeDays * dayMs) throw new PermanentEventError("provenance_expired");
+  if (outsideReplayWindow(committed.message.occurredAt, options.now ?? new Date(), maxAgeDays)) throw new PermanentEventError("provenance_expired");
   return committed;
 }

@@ -6,7 +6,8 @@ import { z } from "zod";
 import { createTenantDatabase } from "./index.js";
 import { PostgresOutboxStore } from "./outbox.js";
 import { projectCommittedWebhook } from "./webhook-projection.js";
-import { parseNativeWebhookWakeup, resolveNativeWebhookWork } from "./webhook-work.js";
+import { dueNativeWebhookWakeups } from "./webhook-recovery.js";
+import { expireNativeWebhookDelivery, expireUnprovenNativeWebhookDeliveries, parseNativeWebhookWakeup, resolveNativeWebhookWork } from "./webhook-work.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -41,10 +42,13 @@ const entitledCatalog = defineEventCatalog([defineEvent({
   },
 })]);
 
+const committedAt = new Date("2026-09-22T18:30:00.000Z");
+const day = 86_400_000;
+
 async function commit(name: string, organizationId?: string): Promise<string> {
   const id = crypto.randomUUID();
   eventIds.push(id);
-  await outbox!.append(eventEnvelopeSchema.parse({ id, name, schemaVersion: 1, occurredAt: "2026-09-22T18:30:00.000Z", resource: { type: "article", id: "article-1" }, correlationId: `correlation-${id}`, idempotencyKey: id, payload: { articleId: "article-1", title: "Hello" } }), organizationId ? { organizationId } : {});
+  await outbox!.append(eventEnvelopeSchema.parse({ id, name, schemaVersion: 1, occurredAt: committedAt.toISOString(), resource: { type: "article", id: "article-1" }, correlationId: `correlation-${id}`, idempotencyKey: id, payload: { articleId: "article-1", title: "Hello" } }), organizationId ? { organizationId } : {});
   return id;
 }
 
@@ -146,7 +150,7 @@ suite("committed outbound webhook projection", () => {
     const [firstDelivery] = await sql!<{ id: string }[]>`select d.id from webhook_delivery d join webhook_message m on m.id=d.message_id where m.source_event_id=${firstEvent}`;
     const [secondDelivery] = await sql!<{ id: string }[]>`select d.id from webhook_delivery d join webhook_message m on m.id=d.message_id where m.source_event_id=${secondEvent}`;
     const wakeup = { sourceEventId: firstEvent, deliveryId: firstDelivery!.id };
-    const resolve = (work: unknown, environment: "preview" | "staging" = "preview") => resolveNativeWebhookWork({ wakeup: work, environment, outbox: outbox!, tenantDatabase });
+    const resolve = (work: unknown, environment: "preview" | "staging" = "preview") => resolveNativeWebhookWork({ wakeup: work, environment, outbox: outbox!, tenantDatabase, now: committedAt });
     expect(parseNativeWebhookWakeup(wakeup)).toEqual(wakeup);
     expect(await resolve(wakeup)).toEqual({ state: "ready", organizationId: "work-org-a", deliveryId: firstDelivery!.id });
     expect(await resolve(wakeup)).toEqual({ state: "ready", organizationId: "work-org-a", deliveryId: firstDelivery!.id });
@@ -159,5 +163,68 @@ suite("committed outbound webhook projection", () => {
     expect(await resolve(wakeup)).toEqual({ state: "inactive" });
     expect(() => parseNativeWebhookWakeup({ ...wakeup, organizationId: "work-org-b" })).toThrow("Invalid native webhook wake-up");
     expect(() => parseNativeWebhookWakeup({ ...wakeup, deliveryId: "whd_not_an_id" })).toThrow("Invalid native webhook wake-up");
+  });
+
+  describe("native work whose provenance is gone", () => {
+    const subscribed = new Set<string>();
+    const nativeDelivery = async (organizationId: string) => {
+      if (!subscribed.has(organizationId)) await nativeEndpoint(organizationId);
+      subscribed.add(organizationId);
+      const eventId = await commit("article.published", organizationId);
+      await projectCommittedWebhook({ eventId, environment: "preview", catalog, outbox: outbox!, tenantDatabase, now: () => committedAt });
+      const [delivery] = await sql!<{ id: string }[]>`select d.id from webhook_delivery d join webhook_message m on m.id=d.message_id where m.source_event_id=${eventId}`;
+      return { eventId, deliveryId: delivery!.id };
+    };
+    const nativeEndpoint = async (organizationId: string) => {
+      const [endpoint] = await sql!<{ id: string }[]>`insert into webhook_endpoint (organization_id, environment, name, destination_url, state, provider, created_by, updated_by) values (${organizationId}, 'preview', ${crypto.randomUUID()}, 'https://example.test/hook', 'active', 'native', 'test-user', 'test-user') returning id`;
+      endpointIds.push(endpoint!.id);
+      await sql!`insert into webhook_subscription (organization_id, endpoint_id, public_event_type, public_version, created_by) values (${organizationId}, ${endpoint!.id}, 'article.published', 1, 'test-user')`;
+    };
+    const state = async (deliveryId: string) => (await sql!`select state, terminal_reason, completed_at is not null as completed, next_attempt_at, lease_token from webhook_delivery where id=${deliveryId}`)[0];
+    const exhausted = { state: "exhausted", terminal_reason: "provenance_expired", completed: true, next_attempt_at: null, lease_token: null };
+
+    it("accepts replay delivery IDs in wake-ups", () => {
+      const wakeup = { sourceEventId: crypto.randomUUID(), deliveryId: `whd_replay_${crypto.randomUUID().replaceAll("-", "")}` };
+      expect(parseNativeWebhookWakeup(wakeup)).toEqual(wakeup);
+    });
+
+    it("resolves work past the 14-day replay window as expired and settles the delivery as exhausted", async () => {
+      const organizationId = `expired-work-${crypto.randomUUID()}`;
+      const { eventId, deliveryId } = await nativeDelivery(organizationId);
+      const wakeup = { sourceEventId: eventId, deliveryId };
+      const boundary = new Date(committedAt.getTime() + 14 * day);
+      expect(await resolveNativeWebhookWork({ wakeup, environment: "preview", outbox: outbox!, tenantDatabase, now: boundary })).toEqual({ state: "ready", organizationId, deliveryId });
+      const later = new Date(boundary.getTime() + 1);
+      expect(await resolveNativeWebhookWork({ wakeup, environment: "preview", outbox: outbox!, tenantDatabase, now: later })).toEqual({ state: "expired", organizationId, deliveryId });
+      // A delivery still inside a live lease is left to its current attempt.
+      await sql!`update webhook_delivery set state='leased', lease_token=${crypto.randomUUID()}, leased_until=${new Date(later.getTime() + 60_000)} where id=${deliveryId}`;
+      expect(await expireNativeWebhookDelivery({ organizationId, deliveryId, tenantDatabase, now: later })).toBe(false);
+      await sql!`update webhook_delivery set state='retry', lease_token=null, leased_until=null, next_attempt_at=${later} where id=${deliveryId}`;
+      expect(await expireNativeWebhookDelivery({ organizationId, deliveryId, tenantDatabase, now: later })).toBe(true);
+      expect(await state(deliveryId)).toEqual(exhausted);
+      expect(await expireNativeWebhookDelivery({ organizationId, deliveryId, tenantDatabase, now: later })).toBe(false);
+      // Another tenant's context cannot settle it.
+      await sql!`update webhook_delivery set state='retry', terminal_reason=null, completed_at=null where id=${deliveryId}`;
+      expect(await expireNativeWebhookDelivery({ organizationId: `${organizationId}-other`, deliveryId, tenantDatabase, now: later })).toBe(false);
+      expect(await state(deliveryId)).toMatchObject({ state: "retry" });
+    });
+
+    it("settles due deliveries whose source event was pruned or aged out, so recovery stops waking them", async () => {
+      const organizationId = `unproven-work-${crypto.randomUUID()}`;
+      const pruned = await nativeDelivery(organizationId);
+      const aged = await nativeDelivery(organizationId);
+      const fresh = await nativeDelivery(organizationId);
+      const now = new Date(committedAt.getTime() + 60_000);
+      await sql!`delete from outbox_message where id=${pruned.eventId}`;
+      await sql!`update outbox_message set occurred_at=${new Date(now.getTime() - 14 * day - 1)} where id=${aged.eventId}`;
+      // Another tenant's matching deliveries are out of reach.
+      expect(await expireUnprovenNativeWebhookDeliveries({ organizationId: `${organizationId}-other`, environment: "preview", tenantDatabase, now })).toBe(0);
+      expect(await expireUnprovenNativeWebhookDeliveries({ organizationId, environment: "preview", tenantDatabase, now })).toBe(2);
+      expect(await state(pruned.deliveryId)).toEqual(exhausted);
+      expect(await state(aged.deliveryId)).toEqual(exhausted);
+      expect(await state(fresh.deliveryId)).toMatchObject({ state: "pending", terminal_reason: null });
+      expect(await dueNativeWebhookWakeups({ organizationId, environment: "preview", tenantDatabase, now })).toEqual([{ sourceEventId: fresh.eventId, deliveryId: fresh.deliveryId }]);
+      expect(await expireUnprovenNativeWebhookDeliveries({ organizationId, environment: "preview", tenantDatabase, now })).toBe(0);
+    });
   });
 });

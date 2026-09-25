@@ -157,6 +157,7 @@ export async function replayWebhookDelivery(database: Database, input: Readonly<
     if (row.result === "payload_gone") throw new PlatformOperationError("conflict", "The event payload is no longer retained, so the delivery cannot be replayed");
     if (row.result === "endpoint_inactive") throw new PlatformOperationError("conflict", "The webhook endpoint must be active before replay");
     if (row.result === "already_succeeded") throw new PlatformOperationError("conflict", "A replay of this delivery has already succeeded");
+    if (row.result === "provenance_expired") throw new PlatformOperationError("conflict", "The source event is outside the 14-day replay window or no longer retained, so the delivery cannot be replayed");
     if (row.result !== "created" && row.result !== "existing") throw new Error("Unexpected webhook replay result");
     const replayId = String(row.delivery_id);
     // The database function atomically writes the mandatory audit row. A

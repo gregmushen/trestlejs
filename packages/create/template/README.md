@@ -329,6 +329,13 @@ The endpoint detail screen can replace its complete public-event subscription
 set. Changes are validated against the current event catalog and plan
 entitlements and affect future events only; previously created deliveries
 retain their committed identity and status.
+A failed delivery can be replayed by the organization or the platform admin
+only while its source event is at most 14 days old and its committed outbox
+record is still retained; otherwise the replay is refused with a conflict
+error. A native delivery whose source event passes the 14-day window, or whose
+outbox record is gone, is settled as `exhausted` with the terminal reason
+`provenance_expired` (by its Queue consumer, or by the recovery cron) instead
+of waiting in retry.
 If `capabilities.workflows` is enabled, the deployment config binds the
 application-owned `TrestleWorkflow` class. Queue delivery starts a Workflow
 using the event ID as its stable instance ID; a repeated Queue delivery
