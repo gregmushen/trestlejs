@@ -5,7 +5,7 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, planEntitlements, plans } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
-import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
+import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, createTenantDatabase, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, retrieveCurrentStripeSubscription, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -21,16 +21,20 @@ import { auditTenantAction } from "./audit.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
 import { createBillingService, stripeConfigurationReady } from "./services.js";
-import { projectWebhookForEvent } from "./webhook-runtime.js";
+import { hasCurrentEntitlement, projectWebhookForEvent } from "./webhook-runtime.js";
 import { maintainWebhookPayloads } from "./webhook-retention.js";
 import { maintainReadyArtifacts } from "./artifact-retention.js";
 import { maintainNativeWebhookDeliveries } from "./webhook-recovery.js";
 import { consumeNativeWebhookQueueMessages, looksLikeNativeWebhookWakeup } from "./webhook-native-queue.js";
-import type { NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
+import type { Database, NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
 import { z } from "zod";
 
 export const app = new Hono<{ Bindings: AuthEnvironment; Variables: AppVariables }>();
-export const eventConsumers = new EventConsumerRegistry<AuthEnvironment>(applicationEventCatalog);
+/** Background handlers run only on verified committed events. `{ authority: "tenant" }` handlers get a lazily opened tenant database. */
+export const eventConsumers = new EventConsumerRegistry<AuthEnvironment, Database>(applicationEventCatalog, {
+  tenantData: (environment, organizationId) => createTenantDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER, organizationId),
+  hasEntitlement: hasCurrentEntitlement,
+});
 
 app.use("*", async (context, next) => {
   const supplied = context.req.header("x-correlation-id");
@@ -574,14 +578,18 @@ export default {
     if (eventMessages.length === 0) return native;
     if (environment.TRESTLE_WORKFLOWS_ENABLED === "true") {
       if (!environment.TRESTLE_WORKFLOW) throw new Error("Enabled Workflows require the TRESTLE_WORKFLOW binding");
-      const events = await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW, observeEvent)({ messages: eventMessages });
-      return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
+      // Verify before creating the instance, so a forged message never claims its stable ID.
+      const outbox = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
+      try {
+        const events = await createWorkflowQueueConsumer(eventConsumers, environment.TRESTLE_WORKFLOW, outbox, observeEvent)({ messages: eventMessages });
+        return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
+      } finally { await outbox.close(); }
     }
     const inbox = new PostgresEventInbox(environment.DATABASE_URL, { assumeApplicationRole: true });
     const outbox = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
     try {
-      const events = await createQueueConsumer(eventConsumers, inbox, async (envelope, currentEnvironment) => {
-        await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox, ...(environment.TRESTLE_EVENTS ? { queue: environment.TRESTLE_EVENTS } : {}) });
+      const events = await createQueueConsumer(eventConsumers, inbox, outbox, async (envelope, currentEnvironment, committed) => {
+        await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox, ...(committed ? { committed } : {}), ...(environment.TRESTLE_EVENTS ? { queue: environment.TRESTLE_EVENTS } : {}) });
       }, observeEvent)({ messages: eventMessages }, environment);
       return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     } finally { await Promise.all([inbox.close(), outbox.close()]); }

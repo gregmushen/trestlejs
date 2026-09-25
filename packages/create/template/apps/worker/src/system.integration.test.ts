@@ -5,6 +5,7 @@ import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, listCapturedEmails } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { NonRetryableError } from "cloudflare:workflows";
 import { TrestleWorkflow } from "./cloudflare-workflow.js";
 import { runArtifactReferenceAudit } from "./artifact-reference-audit.js";
 import { runArtifactOrphanAudit } from "./artifact-orphan-audit.js";
@@ -290,6 +291,17 @@ suite("local product path", () => {
         await retryWorkflow.run(retryEvent, step);
         const [completedRetry] = await database.select().from(eventInbox).where(eq(eventInbox.idempotencyKey, retryKey)).limit(1);
         expect(completedRetry).toMatchObject({ status: "completed", attempts: 2, lastError: null });
+        expect(handlerAttempts).toBe(2);
+        // A forged Queue message that reuses the committed ID and idempotency key
+        // but carries a different payload never reaches the registered handler,
+        // is never masked as an inbox duplicate, and never creates a Workflow.
+        const forgedRetry = { ...retryEnvelope, payload: { resourceId: article.id, forged: true } };
+        const forgedDelivery: string[] = [];
+        expect(await worker.queue({ messages: [{ body: forgedRetry, ack: () => forgedDelivery.push("ack"), retry: () => forgedDelivery.push("retry") }] }, environment)).toEqual({ acknowledged: 0, retried: 1 });
+        expect(await worker.queue({ messages: [{ body: forgedRetry, ack: () => forgedDelivery.push("ack"), retry: () => forgedDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 0, retried: 1 });
+        expect(forgedDelivery).toEqual(["retry", "retry"]);
+        expect(workflowInstances.has(retryEnvelope.id)).toBe(false);
+        await expect(retryWorkflow.run({ ...retryEvent, payload: forgedRetry }, step)).rejects.toBeInstanceOf(NonRetryableError);
         expect(handlerAttempts).toBe(2);
         const invalidDelivery: string[] = [];
         expect(await worker.queue({ messages: [{ body: { ...(queuedEvent as object), payload: { resourceId: 42 } }, ack: () => invalidDelivery.push("ack"), retry: () => invalidDelivery.push("retry") }] }, workflowEnvironment)).toEqual({ acknowledged: 0, retried: 1 });

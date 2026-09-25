@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const state = vi.hoisted(() => ({ authenticated: false }));
+const state = vi.hoisted(() => ({ authenticated: false, committed: new Map<string, { id: string; message: unknown; organizationId?: string }>() }));
 
 vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
   createAuth: () => ({
@@ -18,8 +18,17 @@ vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
   }),
 }));
 
+// Queue and Workflow delivery reload the committed outbox row; these tests supply it without a database.
+vi.mock("@__TRESTLE_PROJECT_NAME__/db", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@__TRESTLE_PROJECT_NAME__/db")>(),
+  PostgresOutboxStore: class {
+    async findCommitted(id: string) { return state.committed.get(id) ?? null; }
+    async close() {}
+  },
+}));
+
 import worker, { app } from "./index.js";
-import { PermanentEventError, eventEnvelopeSchema } from "@__TRESTLE_PROJECT_NAME__/events";
+import { eventEnvelopeSchema } from "@__TRESTLE_PROJECT_NAME__/events";
 
 const environment = {
   DATABASE_URL: "postgres://unused",
@@ -55,6 +64,7 @@ describe("worker routes", () => {
     const event = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "billing.checkout.completed", schemaVersion: 1,
       occurredAt: new Date().toISOString(), resource: { type: "organization", id: "org-1" }, correlationId: "corr-queue", causationId: "cause-queue",
       idempotencyKey: "checkout:org-1", payload: { organizationId: "org-1", currentSubscription: false, extra: rawSecret } });
+    state.committed.set(event.id, { id: event.id, message: event, organizationId: "org-1" });
     const output: string[] = [];
     const states: string[] = [];
     const original = console.log;
@@ -77,6 +87,9 @@ describe("worker routes", () => {
     const event = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "billing.checkout.completed", schemaVersion: 1,
       occurredAt: new Date().toISOString(), resource: { type: "organization", id: "org-1" }, correlationId: "corr-rejected",
       idempotencyKey: "checkout:org-rejected", payload: { organizationId: "org-1", currentSubscription: false, extra: rawSecret } });
+    // The committed row differs from the delivered message, so it is rejected before any Workflow instance exists.
+    state.committed.set(event.id, { id: event.id, message: { ...event, payload: { organizationId: "org-1", currentSubscription: false } }, organizationId: "org-1" });
+    const created: string[] = [];
     const output: string[] = [];
     const states: string[] = [];
     const original = console.log;
@@ -84,9 +97,10 @@ describe("worker routes", () => {
     try {
       expect(await worker.queue({ messages: [
         { body: event, ack: () => states.push("unexpected"), retry: () => states.push("retry") },
-      ] }, { ...environment, TRESTLE_WORKFLOWS_ENABLED: "true", TRESTLE_WORKFLOW: { create: async () => { throw new PermanentEventError("provenance_mismatch"); }, get: async () => null } })).toEqual({ acknowledged: 0, retried: 1 });
+      ] }, { ...environment, TRESTLE_WORKFLOWS_ENABLED: "true", TRESTLE_WORKFLOW: { create: async ({ id }: { id: string }) => { created.push(id); return { id }; }, get: async () => null } })).toEqual({ acknowledged: 0, retried: 1 });
     } finally { console.log = original; }
     expect(states).toEqual(["retry"]);
+    expect(created).toEqual([]);
     const records = output.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(records).toEqual([expect.objectContaining({ level: "warn", event: "queue.event.rejected", correlationId: "corr-rejected", eventId: event.id, eventName: event.name, reason: "provenance_mismatch" })]);
     expect(output.join("\n")).not.toContain(rawSecret);

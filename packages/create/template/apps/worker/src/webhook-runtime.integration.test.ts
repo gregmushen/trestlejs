@@ -59,8 +59,8 @@ suite("Queue to committed outbound webhook projection", () => {
     const registry = new EventConsumerRegistry(catalog);
     let now = new Date();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => { throw new Error("Local webhooks must not use the network"); });
-    const consumer = createQueueConsumer(registry, inbox!, async (envelope) => {
-      await projectWebhookForEvent({ envelope, environment, outbox: outbox!, catalog, now: () => now,
+    const consumer = createQueueConsumer(registry, inbox!, outbox!, async (envelope, _environment, committed) => {
+      await projectWebhookForEvent({ envelope, environment, outbox: outbox!, ...(committed ? { committed } : {}), catalog, now: () => now,
         localScenario: { kind: "fail-times", count: 1, status: 503 } });
     });
     try {
@@ -93,7 +93,9 @@ suite("Queue to committed outbound webhook projection", () => {
       const committed = await outbox!.findCommitted(id);
       const unqueried = { findCommitted: async () => { throw new Error("The committed row was already loaded"); } };
       await expect(projectWebhookForEvent({ envelope: forged, environment, outbox: unqueried, catalog, committed: committed! })).rejects.toMatchObject({ reason: "provenance_mismatch" });
-      expect(await consumer({ messages: [{ body: forged, ack: () => states.push("ack"), retry: () => states.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
+      // The forged envelope is rejected before the inbox, so it retries into the dead-letter path rather than being acknowledged as a duplicate.
+      expect(await consumer({ messages: [{ body: forged, ack: () => states.push("ack"), retry: () => states.push("retry") }] }, environment)).toEqual({ acknowledged: 0, retried: 1 });
+      expect(states.at(-1)).toBe("retry");
     } finally { fetchSpy.mockRestore(); }
   });
 

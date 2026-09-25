@@ -7,6 +7,13 @@ import { and, eq, isNull } from "drizzle-orm";
 
 type Catalog = ReturnType<typeof defineEventCatalog>;
 
+/** The tenant's current entitlement from the billing projection, read at handling time. */
+export async function hasCurrentEntitlement(environment: AuthEnvironment, organizationId: string, entitlement: string,
+  billing = new PostgresBillingProjectionRepository(environment.DATABASE_URL, environment.DATABASE_DRIVER)): Promise<boolean> {
+  const subscription = await billing.get(organizationId);
+  return subscription?.entitlements.includes(entitlement) ?? false;
+}
+
 /** Queue and Workflow envelopes carry an ID, not tenant authority. Reload and
  * verify the committed row before a tenant-scoped projection is attempted.
  * A caller that already verified the envelope may pass `committed` to skip the
@@ -43,10 +50,7 @@ export async function projectWebhookForEvent(input: {
     catalog,
     outbox: { findCommitted: async (id) => id === actual.id ? committed : null },
     tenantDatabase,
-    hasEntitlement: input.hasEntitlement ?? (async (organizationId, entitlement) => {
-      const subscription = await billing.get(organizationId);
-      return subscription?.entitlements.includes(entitlement) ?? false;
-    }),
+    hasEntitlement: input.hasEntitlement ?? (async (organizationId, entitlement) => await hasCurrentEntitlement(input.environment, organizationId, entitlement, billing)),
     ...(input.now ? { now: input.now } : {}),
   });
   if (result.state === "ready" && result.deliveries > 0) {
