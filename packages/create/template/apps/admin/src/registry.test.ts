@@ -60,9 +60,9 @@ describe("admin view registry", () => {
     expect(items(["platform.organizations.read", "platform.machine_access.read", "platform.operations.read"], { apiKeys: { state: "deployed" }, email: { state: "declared", message: "Email delivery is not configured for staging." } }))
       .toEqual([["contracts", "enabled"], ["keys", "enabled"], ["mail", "unconfigured"]]);
     const unconfigured = visibleNavigation(registry, { permissions: new Set(["platform.operations.read"]), capabilityStates: { email: { state: "declared" } }, environment: "staging" }).groups[0]!.items[0]!.availability;
-    expect(unconfigured).toEqual({ kind: "unconfigured", message: "email is not configured for staging.", repair: "pnpm exec trestle setup --env staging" });
+    expect(unconfigured).toEqual({ kind: "unconfigured", message: "email is not configured for staging.", repair: "pnpm exec trestle doctor --env staging" });
     expect(items(["platform.operations.read"], { email: { state: "disabled" } })).toEqual([]);
-    expect(repairCommand("local")).toBe("pnpm exec trestle setup");
+    expect(repairCommand("local")).toBe("pnpm exec trestle doctor");
   });
 
   it("derives breadcrumbs from the registry", () => {

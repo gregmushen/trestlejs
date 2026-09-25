@@ -107,15 +107,17 @@ describe("TrestleJS CLI", () => {
     await expect(readFile(path.join(root, ".trestle/resources/article.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("previews setup without creating or changing a plan", async () => {
+  it("writes a converged starter plan once", async () => {
     const root = await fixture();
-    const output = capture(root);
-    expect(await executeCli(["setup", "--plan-only"], output.runtime)).toBe(0);
-    expect(output.stdout()).toContain("Plan converged.");
-    await expect(readFile(path.join(root, ".trestle", "setup.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    const resume = capture(root);
-    expect(await executeCli(["setup", "--resume", "--plan-only"], resume.runtime)).toBe(1);
-    expect(resume.stderr()).toContain("No saved SetupPlan");
+    const init = capture(root);
+    expect(await executeCli(["plan", "init"], init.runtime)).toBe(0);
+    expect(init.stdout()).toContain(".trestle/setup.json");
+    const diff = capture(root);
+    expect(await executeCli(["plan", "diff", ".trestle/setup.json"], diff.runtime)).toBe(0);
+    expect(diff.stdout()).toContain("Plan converged.");
+    const again = capture(root);
+    expect(await executeCli(["plan", "init"], again.runtime)).toBe(1);
+    expect(again.stderr()).toContain("already exists");
   });
 
   it("emits a versioned project description", async () => {

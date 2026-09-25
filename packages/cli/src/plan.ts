@@ -239,3 +239,28 @@ export async function readApplyState(root: string): Promise<ApplyState | undefin
 export function formatPlanJson(data: unknown): string {
   return `${JSON.stringify(structuredOutput(data), null, 2)}\n`;
 }
+
+export function setupPlanFromManifest(manifest: ProjectManifest): SetupPlan {
+  return parseSetupPlan(JSON.stringify({
+    schemaVersion: 1,
+    minimumTrestleVersion: TRESTLEJS_VERSION,
+    project: manifest.project,
+    apps: { site: Boolean(manifest.apps.site), app: Boolean(manifest.apps.app), worker: Boolean(manifest.apps.worker) },
+    tenancy: manifest.tenancy,
+    database: { engine: manifest.database.engine, provider: manifest.database.defaultProvider },
+    capabilities: manifest.capabilities,
+    integrations: { email: Boolean(manifest.packages.integrations), billing: Boolean(manifest.packages.billing) },
+    environments: manifest.environments,
+    secrets: Object.entries(manifest.secrets ?? {}).map(([name, declaration]) => ({ name, target: declaration.target, required: declaration.required })),
+    resources: [],
+  }));
+}
+
+/** Writes .trestle/setup.json describing the current project; never overwrites an existing plan. */
+export async function initSetupPlan(root: string, manifest: ProjectManifest): Promise<string> {
+  const file = path.join(root, ".trestle", "setup.json");
+  if (await access(file).then(() => true, () => false)) throw new CliFailure(".trestle/setup.json already exists; edit it, or delete it to start over");
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(setupPlanFromManifest(manifest), null, 2)}\n`, "utf8");
+  return path.relative(root, file);
+}

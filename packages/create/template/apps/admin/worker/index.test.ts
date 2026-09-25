@@ -213,7 +213,7 @@ describe("platform admin Worker", () => {
 
     // Without APP_ENV the admin never falls back to the application's database login.
     adminDependencies.session = async () => ({ user: { id: state.userId, email: `${state.userId}@example.test` }, session: { id: "session-1" } });
-    expect(await call("GET", "/api/admin/session", {}, unset)).toMatchObject({ status: 503, body: { error: "not_configured", repair: "pnpm exec trestle setup --env production" } });
+    expect(await call("GET", "/api/admin/session", {}, unset)).toMatchObject({ status: 503, body: { error: "not_configured", repair: "pnpm exec trestle doctor --env production" } });
   });
 
   it("checks assurance on every admin request and fails closed", async () => {
@@ -349,9 +349,9 @@ describe("platform admin Worker", () => {
 
   it("gives sanitized setup guidance for unconfigured capabilities", async () => {
     const guidance = capabilityGuidance({ capabilities: { email: { configured: false, mode: "resend", apiKey: "re_secret" }, queues: { configured: true } } }, "staging");
-    expect(guidance.find((capability) => capability.id === "email")).toEqual({ id: "email", label: "Email", state: "not_configured", mode: "resend", repair: "pnpm exec trestle setup --env staging" });
+    expect(guidance.find((capability) => capability.id === "email")).toEqual({ id: "email", label: "Email", state: "not_configured", mode: "resend", repair: "pnpm exec trestle doctor --env staging" });
     expect(guidance.find((capability) => capability.id === "queues")).toEqual({ id: "queues", label: "Queues", state: "configured" });
-    expect(guidance.find((capability) => capability.id === "workflows")).toMatchObject({ state: "unknown", repair: "pnpm exec trestle setup --env staging" });
+    expect(guidance.find((capability) => capability.id === "workflows")).toMatchObject({ state: "unknown", repair: "pnpm exec trestle doctor --env staging" });
     expect(JSON.stringify(guidance)).not.toContain("re_secret");
     expect(capabilityGuidance({ capabilities: { email: { configured: false, mode: "<script>" } } }, "local").find((capability) => capability.id === "email")).not.toHaveProperty("mode");
   });
