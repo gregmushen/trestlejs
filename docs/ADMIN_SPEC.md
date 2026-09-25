@@ -10,6 +10,10 @@ and API keys.
 
 ## Implementation status
 
+For the supported new- and existing-project enablement path, see
+[Enable Admin](ENABLE_ADMIN.md). A generated admin-module is a view shell,
+not a global-resource or editorial-workflow generator.
+
 Paths below are relative to a generated project (`packages/create/template`
 in the TrestleJS repository) unless they name a TrestleJS package.
 

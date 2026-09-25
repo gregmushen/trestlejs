@@ -1,4 +1,5 @@
 import { permissions } from "@__TRESTLE_PROJECT_NAME__/authz";
+import { applicationAdminViews } from "./application-views";
 
 /**
  * The admin view registry: the single source for each view's sidebar entry,
@@ -140,6 +141,7 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
   { id: "artifacts", path: "/operations/artifacts", label: "Artifacts", group: "Operations", permission: "platform.operations.read", capability: "artifacts", api: [{ method: "GET", path: "/api/admin/operations/artifacts" }] },
   // The operator's own factors go through Better Auth on the admin origin, not the admin API.
   { id: "account-security", path: "/account/security", label: "Account Security", group: "System", permission: "platform.overview.read", api: [] },
+  ...applicationAdminViews,
 ]);
 
 /** Admin actions exempt from fresh step-up, as `METHOD /path` keys; the Worker still applies the minimum sign-in level. */

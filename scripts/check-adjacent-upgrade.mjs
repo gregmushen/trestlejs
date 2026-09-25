@@ -10,15 +10,15 @@ import { isDeepStrictEqual } from "node:util";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const current = JSON.parse(await readFile(path.join(root, "packages/cli/package.json"), "utf8")).version;
 const match = /^0\.1\.0-alpha\.(\d+)$/u.exec(current);
-const betaCandidate = current === "0.1.0-beta.1";
+const betaCandidate = current === "0.1.0-beta.1" || current === "0.1.0-beta.2";
 if ((!match || Number(match[1]) < 3) && !betaCandidate) {
-  throw new Error("Adjacent upgrade rehearsal requires two published predecessors or the first beta candidate");
+  throw new Error("Adjacent upgrade rehearsal requires two published predecessors or a supported beta candidate");
 }
 
 // During a release candidate's CI, the candidate is not yet on npm. Rehearse
 // the two latest published versions through their real create and upgrade CLIs.
-const before = betaCandidate ? "0.1.0-alpha.134" : `0.1.0-alpha.${Number(match[1]) - 2}`;
-const after = betaCandidate ? "0.1.0-alpha.135" : `0.1.0-alpha.${Number(match[1]) - 1}`;
+const before = current === "0.1.0-beta.2" ? "0.1.0-alpha.135" : betaCandidate ? "0.1.0-alpha.134" : `0.1.0-alpha.${Number(match[1]) - 2}`;
+const after = current === "0.1.0-beta.2" ? "0.1.0-beta.1" : betaCandidate ? "0.1.0-alpha.135" : `0.1.0-alpha.${Number(match[1]) - 1}`;
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "trestle-adjacent-upgrade-"));
 const project = path.join(temporaryRoot, "upgrade-canary");
 let maintenance;

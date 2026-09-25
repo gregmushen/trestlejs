@@ -79,10 +79,14 @@ describe("optional capability source inventory", () => {
 
 const previousRelease = TRESTLEJS_VERSION === "0.1.0-beta.1"
   ? "0.1.0-alpha.135"
-  : `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 1}`;
+  : TRESTLEJS_VERSION === "0.1.0-beta.2"
+    ? "0.1.0-beta.1"
+    : `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 1}`;
 const nonAdjacentRelease = TRESTLEJS_VERSION === "0.1.0-beta.1"
   ? "0.1.0-alpha.134"
-  : `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 2}`;
+  : TRESTLEJS_VERSION === "0.1.0-beta.2"
+    ? "0.1.0-alpha.135"
+    : `0.1.0-alpha.${Number(TRESTLEJS_VERSION.split(".").at(-1)) - 2}`;
 
 describe("adjacent-release source apply", () => {
   async function fixture() {
