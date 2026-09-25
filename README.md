@@ -30,7 +30,7 @@ Browser
 truth and tenant isolation.
 
 > [!IMPORTANT]
-> TrestleJS `0.1.0-beta.2` is an opt-in beta candidate, **not a
+> TrestleJS `0.1.0-beta.3` is an opt-in beta candidate, **not a
 > production-readiness claim**. Local, preview, and staging paths have
 > evidence, while production deployment and several hosted capabilities
 > remain unverified. Read the [testing ledger](docs/BETA_CANDIDATE_TESTING_LEDGER.md)
