@@ -471,7 +471,7 @@ custom skill guidance:
 
 ```bash
 pnpm exec trestle upgrade plan
-pnpm exec trestle upgrade check
+pnpm exec trestle upgrade plan --check
 pnpm exec trestle upgrade apply --yes
 pnpm exec trestle architecture check
 ```

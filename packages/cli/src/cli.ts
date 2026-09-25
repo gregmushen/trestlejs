@@ -134,20 +134,6 @@ export function createProgram(runtime: CliRuntime): Command {
 
   const env = program.command("env").description("inspect declared environments");
   env
-    .command("list")
-    .description("list declared environments")
-    .option("--json", "emit versioned structured output")
-    .action(async (options: { json?: boolean }, command: Command) => {
-      const context = await projectContext(command, runtime);
-      if (options.json) {
-        runtime.stdout(
-          `${JSON.stringify(structuredOutput({ environments: context.manifest.environments }), null, 2)}\n`,
-        );
-        return;
-      }
-      runtime.stdout(`${context.manifest.environments.join("\n")}\n`);
-    });
-  env
     .command("status")
     .description("inspect one declared environment without contacting providers")
     .option("--env <environment>", "environment to inspect", environment, "local")
@@ -221,12 +207,17 @@ export function createProgram(runtime: CliRuntime): Command {
     });
   upgrade.command("plan")
     .option("--json", "emit versioned structured output")
-    .action(async (options: { json?: boolean }, command: Command) => {
+    .option("--check", "exit non-zero unless the project is already compatible")
+    .action(async (options: { json?: boolean; check?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
       const report = await planUpgrade(context.root);
-      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatUpgradePlan(report));
+      const compatible = report.operations.every(({ classification }) => classification === "already-correct");
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(options.check ? { compatible, ...report } : report), null, 2)}\n` : options.check && compatible ? `✓ Project metadata, managed guidance, and CLI are compatible with ${report.targetVersion}\n` : formatUpgradePlan(report));
+      if (options.check && !compatible) throw new CliFailure("project requires a reviewed upgrade");
     });
-  upgrade.command("check")
+  // Hidden alias for `upgrade plan --check`, kept only until scripts/check-adjacent-upgrade.mjs
+  // runs a previously published CLI that ships --check; see "Not in this plan" in the subtraction-3 plan.
+  upgrade.command("check", { hidden: true })
     .option("--json", "emit versioned structured output")
     .action(async (options: { json?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
@@ -372,20 +363,18 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(`Updated ${options.env} credentials\n`);
     });
 
-  for (const name of ["show", "export"] as const) {
-    secrets
-      .command(name)
-      .option("--env <environment>", "credentials environment", environment, "local")
-      .option("--format <format>", "yaml, json, or dotenv", "yaml")
-      .action(async (options: { env: ReturnType<typeof environment>; format: string }, command: Command) => {
-        if (!(["yaml", "json", "dotenv"] as const).includes(options.format as "yaml" | "json" | "dotenv")) {
-          throw new InvalidArgumentError("format must be yaml, json, or dotenv");
-        }
-        const context = await projectContext(command, runtime);
-        if (runtime.isTTY?.()) runtime.stderr("Warning: printing plaintext credentials to the terminal\n");
-        runtime.stdout(reveal(await readSecrets(context.root, options.env, selectedMasterKey(runtime)), options.format as "yaml" | "json" | "dotenv"));
-      });
-  }
+  secrets
+    .command("show")
+    .option("--env <environment>", "credentials environment", environment, "local")
+    .option("--format <format>", "yaml, json, or dotenv", "yaml")
+    .action(async (options: { env: ReturnType<typeof environment>; format: string }, command: Command) => {
+      if (!(["yaml", "json", "dotenv"] as const).includes(options.format as "yaml" | "json" | "dotenv")) {
+        throw new InvalidArgumentError("format must be yaml, json, or dotenv");
+      }
+      const context = await projectContext(command, runtime);
+      if (runtime.isTTY?.()) runtime.stderr("Warning: printing plaintext credentials to the terminal\n");
+      runtime.stdout(reveal(await readSecrets(context.root, options.env, selectedMasterKey(runtime)), options.format as "yaml" | "json" | "dotenv"));
+    });
 
   secrets
     .command("get")
@@ -471,21 +460,19 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(`Set ${name} for ${options.env}\n`);
     });
 
-  for (const name of ["unset", "delete"] as const) {
-    secrets
-      .command(name)
-      .argument("<secret>")
-      .option("--env <environment>", "credentials environment", environment, "local")
-      .action(async (secret: string, options: { env: ReturnType<typeof environment> }, command: Command) => {
-        const context = await projectContext(command, runtime);
-        const declaration = context.manifest.secrets?.[secret];
-        if (declaration?.required.includes(options.env)) throw new CliFailure(`${secret} is required for ${options.env}; update the manifest before removing it`);
-        const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
-        delete values[secret];
-        await writeSecrets(context.root, options.env, values, selectedMasterKey(runtime));
-        runtime.stdout(`Removed ${secret} from ${options.env}\n`);
-      });
-  }
+  secrets
+    .command("unset")
+    .argument("<secret>")
+    .option("--env <environment>", "credentials environment", environment, "local")
+    .action(async (secret: string, options: { env: ReturnType<typeof environment> }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const declaration = context.manifest.secrets?.[secret];
+      if (declaration?.required.includes(options.env)) throw new CliFailure(`${secret} is required for ${options.env}; update the manifest before removing it`);
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      delete values[secret];
+      await writeSecrets(context.root, options.env, values, selectedMasterKey(runtime));
+      runtime.stdout(`Removed ${secret} from ${options.env}\n`);
+    });
 
   const key = secrets.command("key").description("manage credentials master keys");
   key.command("rotate")
@@ -806,12 +793,6 @@ export function createProgram(runtime: CliRuntime): Command {
 
   const payments = program.command("payments").description("manage application payments integrations");
   const stripe = payments.command("stripe").description("operate the Stripe golden-path adapter");
-  stripe.command("init").action(async (_options: object, command: Command) => {
-    const context = await projectContext(command, runtime);
-    const required = ["packages/integrations/src/payments/index.ts", "packages/billing/src/index.ts", "packages/db/src/billing-schema.ts", "apps/worker/src/index.ts"];
-    for (const file of required) await readFile(path.join(context.root, file), "utf8").catch(() => { throw new CliFailure(`billing scaffold is incomplete: ${file} is missing`); });
-    runtime.stdout("Stripe billing\n✓ BillingService contract\n✓ Stripe adapter\n✓ Local billing adapter\n✓ subscription and entitlement projections\n✓ webhook endpoint and replay protection\n✓ Stripe configuration\nNo live Stripe resources created.\n");
-  });
   stripe.command("status")
     .option("--env <environment>", "billing environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
@@ -863,8 +844,7 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout([`Stripe sync plan (${options.env})`, ...report.items.map((item) => `${item.classification.padEnd(16)} ${item.plan}@${catalog.plans[item.plan]?.version ?? "?"}${item.reason ? ` — ${item.reason}` : ""}`), ...(Object.keys(report.prices).length ? [`STRIPE_PRICES=${JSON.stringify(report.prices)}`] : []), options.apply ? "Provider reconciliation complete." : "Review only; rerun with --apply to create missing resources.", ""].join("\n"));
       if (report.items.some((item) => item.classification === "blocked")) throw new CliFailure("Stripe sync found blocked immutable drift");
     });
-  stripe.command("listen").action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("stripe", ["listen", "--forward-to", "localhost:8787/webhooks/stripe"], { cwd: context.root, env: process.env }); });
-  const stripeWebhook = stripe.command("webhook").description("test or configure a Stripe billing webhook");
+  const stripeWebhook = stripe.command("webhook").description("configure a Stripe billing webhook");
   stripeWebhook.command("configure")
     .requiredOption("--env <environment>", "remote environment", environment)
     .requiredOption("--url <url>", "exact deployed /webhooks/stripe URL")
@@ -897,7 +877,6 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.apply && report.createdEndpointId) return;
       if (options.apply) throw new CliFailure("Stripe webhook setup did not apply");
     });
-  stripeWebhook.action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("stripe", ["trigger", "customer.subscription.updated"], { cwd: context.root, env: process.env }); });
   stripe.command("seed")
     .requiredOption("--organization <id>", "local organization ID")
     .option("--plan <plan>", "plan to activate", "pro")
@@ -911,7 +890,6 @@ export function createProgram(runtime: CliRuntime): Command {
       if (!response.ok) throw new CliFailure(`local billing seed failed with HTTP ${response.status}`);
       runtime.stdout(`${JSON.stringify(await response.json(), null, 2)}\n`);
     });
-  stripe.command("test").action(async (_options: object, command: Command) => { const context = await projectContext(command, runtime); await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/billing`, "test"], { cwd: context.root, env: process.env }); });
 
   program.command("logs")
     .description("tail redacted structured Worker logs")

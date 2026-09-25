@@ -234,9 +234,11 @@ uses Stripe test mode; production uses live mode.
 pnpm exec trestle payments stripe status
 pnpm exec trestle payments stripe doctor
 pnpm exec trestle payments stripe sync --env staging
-pnpm exec trestle payments stripe listen
-pnpm exec trestle payments stripe test
 ```
+
+Use the Stripe CLI directly for local webhook forwarding:
+`stripe listen --forward-to localhost:8787/webhooks/stripe`. Run the billing
+package's own tests with `pnpm --filter <project>/billing test`.
 
 Application code depends on `BillingService`, never Stripe SDK types. Verified
 webhooks update local subscription state, and authorization reads local
