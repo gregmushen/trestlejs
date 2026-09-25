@@ -11,7 +11,18 @@ export const eventEnvelopeSchema = z.object({
 export type EventEnvelope = z.infer<typeof eventEnvelopeSchema>;
 export type EventDefinition<T = unknown> = { name: string; schemaVersion: number; parse: (payload: unknown) => T };
 
-const safeErrorNames = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "AbortError", "TimeoutError"]);
+/** Longest supported gap between commit and consumption: Queue retries, DLQ replay, and Workflow retries all complete inside it. */
+export const EVENT_REPLAY_WINDOW_DAYS = 14;
+/** Committed provenance is kept at least this long; pruning refuses newer cutoffs. */
+export const EVENT_PROVENANCE_RETENTION_DAYS = 30;
+
+export type PermanentEventReason = "provenance_missing" | "provenance_mismatch" | "provenance_expired" | "tenant_provenance_missing" | "not_entitled";
+/** A message that must never reach its handler. It is logged with its reason and follows the existing dead-letter path; it is never acknowledged as handled. */
+export class PermanentEventError extends Error {
+  constructor(readonly reason: PermanentEventReason) { super(`Permanent event failure: ${reason}`); this.name = "PermanentEventError"; }
+}
+
+const safeErrorNames = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "AbortError", "TimeoutError", "PermanentEventError"]);
 export function safeErrorCategory(error: unknown): string {
   return error instanceof Error && safeErrorNames.has(error.name) ? error.name : "Error";
 }

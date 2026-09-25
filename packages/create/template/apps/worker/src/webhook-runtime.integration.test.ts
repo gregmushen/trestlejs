@@ -88,7 +88,11 @@ suite("Queue to committed outbound webhook projection", () => {
       ]);
       expect(fetchSpy).not.toHaveBeenCalled();
       const forged = { ...event, payload: { articleId: "article-1", title: "Forged" } };
-      await expect(projectWebhookForEvent({ envelope: forged, environment, outbox: outbox!, catalog })).rejects.toThrow("differs from its committed");
+      await expect(projectWebhookForEvent({ envelope: forged, environment, outbox: outbox!, catalog })).rejects.toMatchObject({ name: "PermanentEventError", reason: "provenance_mismatch" });
+      // An already-verified committed row is still compared, without a second query.
+      const committed = await outbox!.findCommitted(id);
+      const unqueried = { findCommitted: async () => { throw new Error("The committed row was already loaded"); } };
+      await expect(projectWebhookForEvent({ envelope: forged, environment, outbox: unqueried, catalog, committed: committed! })).rejects.toMatchObject({ reason: "provenance_mismatch" });
       expect(await consumer({ messages: [{ body: forged, ack: () => states.push("ack"), retry: () => states.push("retry") }] }, environment)).toEqual({ acknowledged: 1, retried: 0 });
     } finally { fetchSpy.mockRestore(); }
   });
