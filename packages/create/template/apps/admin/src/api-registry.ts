@@ -21,8 +21,12 @@ export type AdminView = Readonly<{
   permission: string;
   /** A capability the view depends on; the sidebar shows setup guidance while it is not configured. */
   capability?: AdminCapability;
-  /** Admin Worker routes the view calls. Each is enforced with the view's permission, or an action's own platform permission. */
-  api: ReadonlyArray<Readonly<{ method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; path: string; permission?: string }>>;
+  /**
+   * Admin Worker routes the view calls. Each is enforced with the view's permission, or an action's own platform permission.
+   * `stepUp: false` exempts a non-GET route from fresh step-up (a read over POST, or a change that only reduces privilege);
+   * the minimum sign-in level still applies.
+   */
+  api: ReadonlyArray<Readonly<{ method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; path: string; permission?: string; stepUp?: false }>>;
 }>;
 
 export class AdminViewError extends Error {
@@ -42,6 +46,7 @@ export function defineAdminViews<const Views extends readonly AdminView[]>(views
   const ids = new Set<string>();
   const paths = new Set<string>();
   const routes = new Map<string, string>();
+  const stepUp = new Map<string, boolean>();
   for (const view of views) {
     if (!/^[a-z][a-z0-9-]*$/u.test(view.id) || ids.has(view.id)) throw new AdminViewError(`Admin view ${view.id} needs a unique kebab-case id`);
     if (!view.path.startsWith("/") || paths.has(view.path)) throw new AdminViewError(`Admin view ${view.id} needs a unique path`);
@@ -56,6 +61,10 @@ export function defineAdminViews<const Views extends readonly AdminView[]>(views
       // Two views may share a route only when it requires the same permission.
       if (owner && owner !== required) throw new AdminViewError(`Route ${key} is claimed by views with different permissions`);
       routes.set(key, required);
+      const fresh = route.stepUp !== false;
+      if (!fresh && route.method === "GET") throw new AdminViewError(`Route ${key} is a read; only actions declare stepUp: false`);
+      if (stepUp.has(key) && stepUp.get(key) !== fresh) throw new AdminViewError(`Route ${key} is declared with different step-up requirements`);
+      stepUp.set(key, fresh);
     }
     ids.add(view.id);
     paths.add(view.path);
@@ -96,7 +105,8 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "GET", path: "/api/admin/access/role-assignments" },
   ] },
   { id: "permissions", path: "/access/permissions", label: "Permissions", group: "Access", permission: "platform.roles.read", api: [
-    { method: "POST", path: "/api/admin/access/explain", permission: "platform.roles.read" },
+    // A read over POST: explaining access changes nothing.
+    { method: "POST", path: "/api/admin/access/explain", permission: "platform.roles.read", stepUp: false },
   ] },
   { id: "service-accounts", path: "/access/service-accounts", label: "Service Accounts", group: "Access", permission: "platform.machine_access.read", api: [
     { method: "GET", path: "/api/admin/service-accounts" },
@@ -114,7 +124,8 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "GET", path: "/api/admin/support/sessions" },
     { method: "POST", path: "/api/admin/support/sessions", permission: "platform.support_sessions.use" },
     { method: "GET", path: "/api/admin/support/sessions/:id/organization" },
-    { method: "POST", path: "/api/admin/support/sessions/:id/end", permission: "platform.support_sessions.use" },
+    // Ending a support session only gives up access.
+    { method: "POST", path: "/api/admin/support/sessions/:id/end", permission: "platform.support_sessions.use", stepUp: false },
   ] },
   { id: "subscriptions", path: "/commercial/subscriptions", label: "Subscriptions", group: "Commercial", permission: "platform.subscriptions.read", capability: "billing", api: [
     { method: "GET", path: "/api/admin/commercial/subscriptions" },
@@ -127,4 +138,9 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "POST", path: "/api/admin/security/api-keys/:organizationId/:keyId/revoke", permission: "platform.api_keys.revoke" },
   ] },
   { id: "artifacts", path: "/operations/artifacts", label: "Artifacts", group: "Operations", permission: "platform.operations.read", capability: "artifacts", api: [{ method: "GET", path: "/api/admin/operations/artifacts" }] },
+  // The operator's own factors go through Better Auth on the admin origin, not the admin API.
+  { id: "account-security", path: "/account/security", label: "Account Security", group: "System", permission: "platform.overview.read", api: [] },
 ]);
+
+/** Admin actions exempt from fresh step-up, as `METHOD /path` keys; the Worker still applies the minimum sign-in level. */
+export const stepUpExemptRoutes: ReadonlySet<string> = new Set(adminViews.flatMap((view) => view.api.filter((route) => route.stepUp === false).map((route) => `${route.method} ${route.path}`)));

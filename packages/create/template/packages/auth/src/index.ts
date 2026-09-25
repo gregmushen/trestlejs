@@ -1,11 +1,12 @@
-import { memberDefaultApplicationRoles, organizationCreatorApplicationRoles } from "@__TRESTLE_PROJECT_NAME__/authz";
+import { assuranceForEndpoint, memberDefaultApplicationRoles, organizationCreatorApplicationRoles, securityEventForEndpoint } from "@__TRESTLE_PROJECT_NAME__/authz";
 import { createLogger, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
-import { createDatabase, createTenantDatabase, grantApplicationRoles, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createDatabase, createTenantDatabase, grantApplicationRoles, recordAssurance, sessionAssurance, type Database, type DatabaseDriver } from "@__TRESTLE_PROJECT_NAME__/db";
 import * as schema from "@__TRESTLE_PROJECT_NAME__/db";
 import { createEmailService, invitationTemplate, resetPasswordTemplate, verifyEmailTemplate, type R2BucketBinding } from "@__TRESTLE_PROJECT_NAME__/integrations";
-import { betterAuth } from "better-auth";
-import { eq } from "drizzle-orm";
+import { betterAuth, type BetterAuthPlugin } from "better-auth";
+import { eq, sql } from "drizzle-orm";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createAuthMiddleware } from "better-auth/api";
 import { organization } from "better-auth/plugins";
 
 export interface AuthEnvironment {
@@ -34,7 +35,15 @@ export interface AuthEnvironment {
   ARTIFACT_READY_RETENTION_DAYS?: string;
 }
 
-export function createAuth(environment: AuthEnvironment, correlationId?: string) {
+/**
+ * `plugins` adds Better Auth plugins for one surface. The platform admin passes its sign-in factors
+ * (TOTP, backup codes, passkeys; apps/admin/worker/factors.ts), so the customer Worker never bundles them.
+ * `correlationId` tags authentication failures logged for this request.
+ */
+export type AuthOptions = Readonly<{ plugins?: readonly BetterAuthPlugin[]; correlationId?: string | undefined }>;
+
+export function createAuth(environment: AuthEnvironment, options: AuthOptions = {}) {
+  const { correlationId } = options;
   const baseURL = environment.BETTER_AUTH_URL ?? "http://localhost:42069";
   const webOrigin = environment.WEB_ORIGIN ?? baseURL;
   const email = createEmailService({
@@ -79,6 +88,39 @@ export function createAuth(environment: AuthEnvironment, correlationId?: string)
         template: verifyEmailTemplate({ verificationUrl: url }),
       }, { idempotencyKey: `auth-verification:${await fingerprint(url)}` }); },
     },
+    hooks: {
+      // Audit account-security changes.
+      after: createAuthMiddleware(async (context) => {
+        const event = securityEventForEndpoint(context.path);
+        if (!event) return;
+        const actor = context.context.session?.user.id ?? context.context.newSession?.user.id;
+        // A failed endpoint leaves its APIError here (better-auth api/dispatch.mjs); a successful one leaves
+        // its JSON body, whose own `status` field (for example `{ status: true }`) is not an HTTP status.
+        const succeeded = !(context.context.returned instanceof Error);
+        if (actor && succeeded) await recordSecurityEvent(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), environment, event, actor);
+      }),
+    },
+    databaseHooks: {
+      session: {
+        create: {
+          // Outside a database transaction this runs as soon as the session row is written, so when
+          // Better Auth rotates a session (two-factor enable, enrollment, disable) the prior session
+          // and its assurance row still exist; inside one (passkey registration with createSession)
+          // Better Auth defers it until the transaction commits.
+          after: async (created, context) => {
+            await recordSessionAssurance(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), environment, created, context?.context.session?.session ?? null, context?.path ?? "");
+          },
+        },
+      },
+      user: {
+        update: {
+          // Enrollment completes when the first code verifies; sign-in challenges never update the user.
+          after: async (user, context) => {
+            if (context?.path?.startsWith("/two-factor/verify-") && (user as { twoFactorEnabled?: boolean }).twoFactorEnabled) await recordSecurityEvent(createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER), environment, "security.two_factor.enabled", user.id);
+          },
+        },
+      },
+    },
     plugins: [organization({
       sendInvitationEmail: async ({ email: address, id, organization: invitedOrganization }) => { await email.send({
         to: address,
@@ -101,8 +143,46 @@ export function createAuth(environment: AuthEnvironment, correlationId?: string)
           await grantMembershipRoles(environment, joined.id, user.id, memberDefaultApplicationRoles, "policy:member_default");
         },
       },
-    })],
+    }),
+    ...(options.plugins ?? [])],
   });
+}
+
+/**
+ * Records how a new session was authenticated. Only a session created without a
+ * prior one gets the level its endpoint proves: a sign-in, or a step-up, whose
+ * two-factor challenge expires the old session cookie (better-auth two-factor
+ * sign-in hook) and whose passkey verification reads no session. A session that
+ * replaces an authenticated one (two-factor enrollment or disable, which need
+ * only the password) inherits the prior session's evidence and its time, so
+ * enrolling an authenticator never upgrades or refreshes a password-only session.
+ * When the prior session has no evidence, the new one gets none either.
+ */
+async function recordSessionAssurance(database: Database, environment: AuthEnvironment, created: Readonly<{ id: string; userId: string }>, prior: Readonly<{ id: string; userId: string }> | null, path: string): Promise<void> {
+  try {
+    if (prior) {
+      const carried = prior.userId === created.userId && prior.id !== created.id ? await sessionAssurance(database, prior.id) : null;
+      // Fail closed: with nothing to carry, the new session stays "missing" until the person verifies again.
+      if (carried) await recordAssurance(database, { sessionId: created.id, userId: created.userId, level: carried.level, method: carried.method, verifiedAt: carried.verifiedAt });
+      return;
+    }
+    const evidence = assuranceForEndpoint(path);
+    await recordAssurance(database, { sessionId: created.id, userId: created.userId, level: evidence.level, method: evidence.method });
+  } catch (error) {
+    // Fail closed: the session stays usable for ordinary work, but with no assurance row
+    // every step-up check reports "missing" and asks the person to verify again.
+    createLogger({ surface: "auth" }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) }).error("auth.assurance.record_failed", { errorName: error instanceof Error ? error.name : "unknown" });
+  }
+}
+
+/** Records an organization-less security.* event through the SECURITY DEFINER function (migration 0032). */
+async function recordSecurityEvent(database: Database, environment: AuthEnvironment, name: string, userId: string): Promise<void> {
+  // The credential change is already committed when this runs, so a failed audit write is logged, not thrown.
+  try {
+    await database.execute(sql`select trestle_record_security_event(${name}, ${userId}, ${`auth:${crypto.randomUUID()}`}, ${environment.APP_ENV ?? "local"})`);
+  } catch (error) {
+    createLogger({ surface: "auth" }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) }).error("security.audit.record_failed", { event: name, errorName: error instanceof Error ? error.name : "unknown" });
+  }
 }
 
 /** Expected authentication denials are not infrastructure failures. */

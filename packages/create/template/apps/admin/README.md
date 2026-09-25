@@ -2,23 +2,25 @@
 
 The optional platform admin for operating this application. It exists only when `capabilities.admin` is true. Generate it with `create-trestlejs --admin`, or add it later with a SetupPlan that sets `capabilities.admin: true` and `pnpm exec trestle apply <plan> --yes`. The project must be on the installed CLI's template version. Disabling the admin is a manual change; `trestle apply` never removes it.
 
-- **Separate origin and sign-in.** The SPA (`src/`) and API Worker (`worker/`) deploy separately from the customer app. Operators sign in with their normal account on the admin origin. The admin exposes only sign-in, session, and sign-out, so it has no sign-up.
+- **Separate origin and sign-in.** The SPA (`src/`) and API Worker (`worker/`) deploy separately from the customer app. Operators sign in with their normal account on the admin origin, with a password plus TOTP or with a passkey. The admin exposes only sign-in, session, sign-out, and the operator's own two-factor and passkey endpoints, so it has no sign-up.
+- **Sign in with your factor.** Once an operator has TOTP or a passkey, every admin API request (reads included) and every operator-only auth route (the operator's own factor endpoints) needs a session that signed in with one (a passkey counts). A password-only session, including a customer-app session replayed here, gets 428 `step_up_required` with `scope: "session"` and the sign-in screen. Operators without a factor are unaffected. Until an operator enrolls a factor, their password alone can enroll one; enroll factors before granting deployed platform roles.
+- **Step-up for every change.** Each platform action needs fresh evidence (15 minutes): a password locally, a second factor when deployed, and a passkey to manage platform roles. Changing a factor needs the strongest factor the account already has. Otherwise the Worker answers 428 `step_up_required` and the UI asks the operator to re-authenticate, then retries after each successful verification. A passkey is offered at every level; an operator with a passkey but no TOTP is not offered a password, which would drop their session below the sign-in level. Routes marked `stepUp: false` in `src/api-registry.ts` (explaining access, ending a support session) skip the freshness check but not the sign-in level. An unset `APP_ENV` counts as production. Stepping up leaves the previous session alive until it expires. Operators manage their own factors in the Account security view; recovering an operator who lost every factor is a database action (see `docs/ADMIN_SPEC.md` §7.6 in the Trestle repository).
 - **Platform authority only.** A request needs an active platform role (`packages/authz/src/role-definitions.ts`). Tenant membership or ownership grants nothing here, and platform roles grant nothing inside a tenant.
 - **Its own database login.** Outside local development the Worker reads through `DATABASE_ADMIN_URL`, a distinct login granted only `trestle_platform` (`pnpm --filter ./packages/db db:platform:configure`).
-- **Central view registry.** `src/registry.ts` declares each view's sidebar entry, required platform permission, dependent capability, and API routes. The Worker derives its route policies from it, and a drift test keeps views, routes, and permissions aligned. To add a view:
+- **File-discovered views.** Each view is a folder in `src/views/<id>/` with an `admin-view.ts` descriptor (navigation, required platform permission, capability, commands and hotkeys) and a lazily loaded component. The SPA discovers descriptors with `import.meta.glob`, and `pnpm --filter ./apps/admin check:views` validates them during the build.
+- **Server view registry.** `src/api-registry.ts` lists each view's required permission and the admin routes it calls. The Worker derives its route policies from it. Tests keep it in step with the descriptors, the Worker's routes, and the command permissions. To add a view:
 
-1. add an entry to `src/registry.ts`;
-2. add a component in `src/views/`;
-3. map the view's ID to that component in `viewComponents` (`src/main.tsx`);
-4. add the Worker handlers for the view's API routes in `worker/index.ts`.
+1. add `src/views/<id>/admin-view.ts` and its component (`view.tsx`);
+2. add the view and its routes to `src/api-registry.ts`;
+3. add the Worker handlers for those routes in `worker/index.ts`.
 
-The route-drift test fails until the registry, handlers, and policies agree.
+The build and the drift tests fail until the descriptors, registry, handlers, and policies agree.
 
 ## Operations
 
 The Operations views work on the application's own subsystems, not copies of them:
 
-- **Async events:** dead-lettered outbox events. Redrive returns one to delivery (`platform.outbox.redrive`).
+- **Async Operations:** dead-lettered outbox events. Redrive returns one to delivery (`platform.outbox.redrive`).
 - **Webhooks:** endpoint state and dead or exhausted deliveries across organizations. An operator can disable an endpoint or replay a delivery whose payload is still retained (`platform.webhooks.manage`).
 - **Artifacts:** upload lifecycle totals and stale pending uploads.
 
@@ -52,7 +54,7 @@ Organizations create service accounts and mint, rotate, and revoke scoped API ke
 
 A key's scopes are application permissions that admit API keys, and never exceed its account's roles. Tokens are shown once and stored only as SHA-256 verifiers. A key works only in the environment that minted it.
 
-The Machine access view lists key metadata across organizations (`platform.machine_access.read`). A security administrator can revoke a compromised key (`platform.api_keys.revoke`), and the revocation is audited on the owning organization.
+The API Keys view lists key metadata across organizations (`platform.machine_access.read`). A security administrator can revoke a compromised key (`platform.api_keys.revoke`), and the revocation is audited on the owning organization.
 
 Bootstrap the first operator after they sign up in the customer app:
 

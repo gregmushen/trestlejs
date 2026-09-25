@@ -24,16 +24,23 @@ in the TrestleJS repository) unless they name a TrestleJS package.
   `AUTHORITY_MODEL_VERSION` is 3.
 - **Central route policies.** Customer Worker routes are declared in
   `packages/authz/src/routes.ts` and enforced by `requireExecutionContext`
-  before handlers run. Admin Worker routes are derived from the admin view
-  registry. Drift tests fail when a route and its policy disagree.
+  before handlers run. Admin Worker routes are derived from the server view
+  registry (`apps/admin/src/api-registry.ts`). Drift tests fail when a route
+  and its policy disagree.
 - **Persisted audit.** `audit_event` stores redacted summaries, correlation
   IDs, and an optional `support_session_id`. Tenants read their own history
   through `GET /api/tenant/audit`.
 - **Optional platform admin.** `capabilities.admin` plus `apps.admin` create a
-  separate-origin SPA and admin Worker with sign-in only. It connects through
-  its own `trestle_platform` database login. Views: Overview, Health, Async
-  events, Webhooks, Artifacts, Subscriptions, Machine access, and Support
-  sessions. Operator roles are managed with `trestle admin grant|revoke|list`.
+  separate-origin SPA and admin Worker. Operators sign in with a password,
+  TOTP, or a passkey, and every platform change requires fresh step-up
+  assurance (§7.6). It connects through its own `trestle_platform` database
+  login. It ships 21 views in a Kumo shell with a command palette and
+  keyboard shortcuts (§11). Most views are read-only, because
+  `trestle_platform` may only observe and recover. Operator roles are managed
+  in the Platform Roles view or with `trestle admin grant|revoke|list`.
+- **Effective Access Explorer.** The Permissions view explains a user's or
+  service account's access in one organization through
+  `POST /api/admin/access/explain` (§10).
 - **Commercial controls.** Audited entitlement override grant and revoke, with
   tombstones. The customer-facing provenance does not show override reasons or
   authors.
@@ -50,35 +57,40 @@ in the TrestleJS repository) unless they name a TrestleJS package.
 
 ### Deferred
 
-- The step-by-step setup wizard, provider connection tests, and the formal
-  capability lifecycle states (§4, §5).
+Steps 2 to 8 of the
+[admin roadmap](superpowers/plans/2026-09-23-admin-roadmap.md) plan most of
+the admin items below.
+
+- The step-by-step setup wizard, provider connection tests, and the
+  `deployed` and `verified` capability states (§4, §5).
 - Organization permissions for member invitation, removal, and role
   assignment, and a Billing administrator organization role (§7.2).
-- Custom and resource-scoped application roles (§7.3).
-- Step-up authentication for sensitive platform actions (§7.5, §15).
+- Custom and resource-scoped application roles (§7.3; roadmap step 6).
+- An admin UI for recovering another operator's lost factors; recovery is a
+  database action today (§7.6).
 - Scope profiles, per-key rate limits, network (CIDR) restrictions, last-used
   and usage history, a service-account suspension API, and customer UI for
   machine access (§8).
 - Typed privilege values, stored plan versions and lifecycle transitions,
   admin plan editing, scheduled subscription changes and migrations,
-  allowances, quotas, usage, reconciliation records, entitlement simulation
-  and comparison, and Lago or OpenMeter adapters (§9).
-- An Effective Access Explorer route or UI. The explanation exists only as a
-  library function (§10).
-- Admin views for Organizations, Users, Plans, Entitlements, roles,
-  Permissions, Email, and Audit; global search, breadcrumbs, and a
-  tenant-context indicator (§11).
-- Application-owned admin views discovered through a file convention (§11.1).
+  allowances, quotas, usage, reconciliation records, entitlement simulation,
+  and Lago or OpenMeter adapters (§9; roadmap step 5).
+- Admin write actions on people and access: changing members' organization
+  and application roles, and revoking other operators' support sessions (§11;
+  roadmap step 2). Runtime settings and provider secrets in the admin
+  (roadmap step 3), and read-write support sessions (roadmap step 4).
+- Typed extension points for detail panels, resource actions, and table
+  extensions (§11.1).
 - Customer UI for application roles, service accounts, audit, and regional
   settings. The APIs exist (§3.2, §12).
-- Session revocation and user suspension.
+- Session revocation and user suspension (roadmap step 2).
 - Domain events and outbox records for administrative mutations. Audit rows
   are written, events are not (§13).
 - Most proposed CLI commands (§16).
 - Deployed evidence. The admin deploy steps have not yet run against isolated
   staging resources (§17, §19).
 - Identity and SSO (SAML/OIDC connections, domain verification, enforced
-  sign-in). Only a specification exists.
+  sign-in). Only a specification exists (roadmap step 8).
 
 ## 1. Purpose
 
@@ -181,10 +193,11 @@ policy, session cookies, and deployment configuration. It shares packages with
 the customer application but is not bundled into it.
 
 The admin origin exposes only `POST /api/auth/sign-in/email`,
-`POST /api/auth/sign-out`, and `GET /api/auth/get-session`. It has no sign-up.
-Every other admin route requires a signed-in user with at least one active
-platform role and the route's platform permission. Tenant membership or
-ownership grants nothing there.
+`POST /api/auth/sign-out`, `GET /api/auth/get-session`, and the operator's own
+two-factor and passkey endpoints (§7.6). It has no sign-up and no
+organization endpoints. Every other admin route requires a signed-in user with
+at least one active platform role and the route's platform permission. Tenant
+membership or ownership grants nothing there.
 
 Outside local development the admin Worker reads through `DATABASE_ADMIN_URL`,
 a distinct login granted only the `trestle_platform` database role. That role
@@ -195,20 +208,27 @@ transitions listed below.
 The platform admin application may:
 
 - inspect sanitized runtime and capability health (Health view);
-- list organizations with their plan and status (Subscriptions view);
+- search organizations and users, and read organization members, user
+  memberships, plans, subscriptions, and effective entitlements;
+- read the audit history across organizations, filtered by organization,
+  actor, event name, or correlation ID (Audit view);
+- read the role and permission catalogs, who holds each organization and
+  application role, service accounts, and API-key metadata, and explain a
+  principal's effective access (§10);
 - start an audited, read-only support session in one organization (see the
   Additions specification);
 - execute narrow, application-backed platform actions: redrive a dead outbox
   event, disable a webhook endpoint, replay a dead or exhausted webhook
-  delivery, grant or revoke an entitlement override, and revoke an API key;
+  delivery, grant or revoke an entitlement override, revoke an API key, and
+  grant or revoke a platform role;
 - inspect and recover asynchronous operations (dead outbox events, failed
-  webhook deliveries, artifact lifecycle totals); and
+  webhook deliveries, artifact lifecycle totals, email delivery status); and
 - revoke compromised API keys.
 
-**Deferred:** search for users, jobs, and correlation records; managing plans,
-roles, and other runtime domain configuration in the UI (platform roles are
-managed with the CLI); provider reconciliation; revoking user sessions or
-suspending service accounts.
+**Deferred:** search for jobs; managing plans, organization and application
+roles, and other runtime domain configuration in the UI; provider
+reconciliation; revoking user sessions, suspending users, or suspending
+service accounts (roadmap steps 2, 3, and 5).
 
 It may not:
 
@@ -329,16 +349,22 @@ The target lifecycle for every optional capability is:
 disabled -> declared -> configured -> deployed -> verified
 ```
 
-**Deferred:** these states are not modeled or reported. What ships is
-narrower:
+The admin models all five states (`CapabilityState` in
+`apps/admin/src/registry.ts`) but reports only the first three.
+**Deferred:** reporting `deployed` and `verified`. What ships:
 
 - The manifest declares each capability as a boolean (`r2`, `queues`,
   `workflows`, `durableObjects`, `admin`).
 - The customer Worker's `GET /api/health/operational` reports each
   capability's configured flag and mode.
-- The admin Health view shows each capability (database, email, billing,
-  queues, artifacts, workflows) as `configured`, `not_configured`, or
-  `unknown`, with its mode. It never shows values.
+- `GET /api/admin/session` projects them for the admin shell. Email and
+  payments are always part of the application, so they are `configured` or
+  `declared` (not configured, with a repair command). Queues, R2, and
+  Workflows are `configured` when the customer Worker reports them, and
+  `disabled` otherwise. The Health view shows this projection with each mode.
+  It never shows values.
+- `GET /api/admin/health` also reports database, email, billing, queues,
+  artifacts, and workflows as `configured`, `not_configured`, or `unknown`.
 
 The admin application assumes configured capabilities are managed through
 setup and does not collect infrastructure credentials itself.
@@ -351,10 +377,12 @@ pnpm exec trestle setup --env staging
 ```
 
 A missing `DATABASE_ADMIN_URL` outside local development returns
-`503 not_configured` with the same command. A view whose capability is not
-configured stays in the sidebar, marked "(not configured)".
-**Deferred:** hiding or disabling individual actions based on capability
-state.
+`503 not_configured` with the same command. A view whose capability is
+`declared` stays in the sidebar, disabled, with a "Setup" badge and the repair
+command; opening its route shows the same guidance. A view whose capability is
+`disabled` is hidden. Commands inherit their view's capability or declare
+their own, and the command palette offers only commands whose capability is
+configured.
 
 ## 6. Principals and Contexts
 
@@ -421,7 +449,7 @@ User
   keys.
 - **Platform authority** governs operation of the SaaS across tenants:
   support sessions, async and webhook recovery, entitlement overrides, API-key
-  revocation, and audit reads.
+  revocation, platform-role management, and cross-tenant reads such as audit.
 
 An organization owner is not automatically an application administrator. An
 application administrator is not a platform administrator. Even the term
@@ -482,14 +510,16 @@ The shipped registry:
 
 | Plane | Permissions |
 | --- | --- |
-| Organization | `organization.read`, `organization.members.read`, `organization.audit.read`, `organization.billing.read`, `organization.billing.manage`, `organization.webhooks.read`, `organization.webhooks.manage`, `organization.webhooks.deliveries.read`, `organization.settings.manage` |
+| Organization | `organization.read`, `organization.members.read`, `organization.audit.read`, `organization.billing.read`, `organization.billing.manage`, `organization.webhooks.read`, `organization.webhooks.manage`, `organization.webhooks.deliveries.read`, `organization.webhooks.replay`, `organization.settings.manage` |
 | Application | `resource.read`, `resource.write` (both admit API keys), `application.roles.read`, `application.roles.assign`, `application.service_accounts.read`, `application.service_accounts.manage` |
-| Platform | `platform.overview.read`, `platform.organizations.read`, `platform.audit.read`, `platform.roles.read`, `platform.roles.manage`, `platform.operations.read`, `platform.outbox.redrive`, `platform.webhooks.manage`, `platform.subscriptions.read`, `platform.entitlements.manage`, `platform.machine_access.read`, `platform.api_keys.revoke`, `platform.support_sessions.use` |
+| Platform | `platform.overview.read`, `platform.organizations.read`, `platform.users.read`, `platform.audit.read`, `platform.roles.read`, `platform.roles.manage`, `platform.operations.read`, `platform.outbox.redrive`, `platform.webhooks.manage`, `platform.subscriptions.read`, `platform.entitlements.manage`, `platform.machine_access.read`, `platform.api_keys.revoke`, `platform.support_sessions.use` |
 
 New permission meaning enters the system through reviewed source. Runtime admin
-cannot invent a permission that application code does not recognize.
-**Deferred:** runtime documentation, grouping, or deprecation of registered
-permissions in admin.
+cannot invent a permission that application code does not recognize. The
+admin Permissions view (`platform.roles.read`) documents the registry
+read-only: each permission's plane, principals, entitlement, deprecation
+state, the roles that grant it, and the routes that enforce it. Deprecation stays a source
+change (`deprecated`); the roadmap keeps permissions code-defined.
 
 Route policies declare each route's audience (`public`, `session`, `tenant`,
 or `platform`), required permission, optional entitlement, and allowed
@@ -497,9 +527,10 @@ principal types. `defineRoutePolicies` rejects a policy that names an
 unregistered permission, or that mixes a platform permission with a
 non-platform audience. Customer routes without an explicit policy default to
 `resource.read` for `GET` and `resource.write` otherwise. API keys act only on
-routes whose permission admits `api_key`. **Deferred:** machine-readable
-inspection of where each permission is enforced. `trestle routes` does not
-report permissions.
+routes whose permission admits `api_key`. The Permissions view lists where
+each permission is enforced, from the customer route policies and the admin
+server registry. **Deferred:** machine-readable inspection of the same;
+`trestle routes` does not report permissions.
 
 ### 7.2 Organization roles
 
@@ -541,8 +572,12 @@ Assignments are tenant-scoped. `PUT /api/tenant/users/:userId/application-roles`
 replaces a member's roles in one transaction and audits the change. It rejects
 unknown roles, non-members, and removing the organization's last `app_admin`.
 
-**Deferred:** custom application roles defined at runtime. The role catalog
-contains an unused `withCustomRoles` hook, but no storage or route exists.
+The admin's Organization Roles and Application Roles views show these
+catalogs and who holds each role across organizations, read-only.
+
+**Deferred:** custom application roles defined at runtime (roadmap step 6).
+The role catalog contains an unused `withCustomRoles` hook, but no storage or
+route exists.
 Also deferred: constraining assignments to declared resources, and
 entitlement-gated custom roles.
 
@@ -562,15 +597,20 @@ Platform roles are distinct from organization roles, application roles, and
 database privileges. They grant no authority inside any tenant. The shipped
 defaults:
 
-- `platform_operator` (Platform operator): overview, organizations, audit,
-  and operations reads; outbox redrive; webhook management; support sessions
+- `platform_operator` (Platform operator): overview, organizations, users,
+  audit, and operations reads; outbox redrive; webhook management; support
+  sessions
 - `commercial_admin` (Commercial administrator): overview, organizations, and
   subscription reads; entitlement overrides
-- `security_admin` (Security administrator): overview and audit reads;
-  platform roles; machine-access reads; API-key revocation
+- `security_admin` (Security administrator): overview, users, and audit
+  reads; platform-role reads and management; machine-access reads; API-key
+  revocation
 
-Assignments are granted and revoked only with the CLI, which records each
-change with a required reason:
+Only `security_admin` holds `platform.roles.read`, so only security
+administrators see the role and permission views.
+
+Assignments are granted and revoked with the CLI or the Platform Roles view.
+Both record each change with a required reason:
 
 ```bash
 pnpm exec trestle admin grant ops@example.com security_admin --env local --reason "first operator"
@@ -581,8 +621,156 @@ pnpm exec trestle admin list --env local
 Platform permissions are narrowly scoped. Cross-tenant reads, each recovery
 action, override management, key revocation, and support-session use are
 separate permissions. Every platform action requires a reason, must come from
-the admin origin, and writes `audit_event` in the same transaction.
-**Deferred:** step-up authentication, and an admin view for platform roles.
+the admin origin, writes `audit_event` in the same transaction, and requires
+fresh step-up assurance (§7.6).
+
+The Platform Roles view (`/access/platform-roles`, `platform.roles.read`)
+lists assignments and their history with granter, reason, and time, plus
+each role's permissions. Granting (`POST /api/admin/platform-roles`) and
+revoking (`POST /api/admin/platform-roles/:userId/:role/revoke`) require
+`platform.roles.manage`, which needs a passkey step-up when deployed. An
+operator cannot revoke their own role; another security administrator must.
+
+### 7.6 Operator authentication and step-up
+
+**Session assurance.** Each admin session records how it was authenticated in
+`authentication_assurance` (one row per session: `level`, `method`,
+`verified_at`). The level comes from the endpoint that created the session: a
+password sign-in is `password`; completing a two-factor challenge (TOTP or a
+backup code) is `mfa`; a passkey sign-in is `phishing_resistant`. A session
+that replaces an existing one (Better Auth rotates the session when a factor is
+enrolled or disabled) carries the prior session's level and `verified_at`, so
+enrolling a factor never upgrades or refreshes evidence. When there is nothing
+to carry, the new session has no row, and every check reports `missing` until
+the operator verifies again. A failed write also leaves the session without a
+row (fail closed). Rows cascade with their session.
+
+**Minimum sign-in level.** Every `/api/admin/*` request, including reads and
+`GET /api/admin/session`, and every operator-only auth route (the factor
+endpoints below, except sign-in challenges without a session), in every
+environment, checks how the session was signed in. When the operator has any enrolled factor (TOTP or a passkey), the
+session must prove at least `mfa` (a passkey counts); how long ago does not
+matter. A session with no assurance row counts as below it. Otherwise the
+Worker answers 428 with `scope: "session"` (below) and the shell shows the
+sign-in screen: "This account has a second factor. Sign in with it or with a
+passkey." This refuses a password-only session for an operator with a
+factor, including a customer-app session replayed on the admin: both
+surfaces share the Better Auth secret and session table, and the customer app
+has no factor challenge. Operators without a factor are not affected, so
+they can sign in to enroll one; once the first factor is enrolled, that
+password session is refused too and the operator signs in again with it. The factor lookup is skipped when the session
+already proves `mfa` or better.
+
+**Requirement.** Every non-GET admin API route with a platform permission
+checks the session's evidence before it runs. The environment comes from
+`APP_ENV`, and an unset `APP_ENV` is treated as production (fail closed). A
+route the view registry marks `stepUp: false` skips this freshness check; the
+minimum sign-in level still applies. Two routes use it: `POST
+/api/admin/access/explain` (a read over POST) and `POST
+/api/admin/support/sessions/:id/end` (it only gives up access).
+
+| Environment | Permission | Required level | Freshness |
+| --- | --- | --- | --- |
+| `local` | any | `password` | 15 minutes |
+| deployed (`preview`, `staging`, `production`, or unset) | any | `mfa` | 15 minutes |
+| deployed | `platform.roles.manage` | `phishing_resistant` | 15 minutes |
+
+A higher level satisfies a lower one. `GET /api/admin/session` reports
+`assurance` (`{ level, method, verifiedAt }` or `null`),
+`factors` (`{ totp, passkeys }`, the operator's enrolled factors), and
+`stepUpRequiredAfter` (when the evidence stops being fresh for ordinary
+actions, or `null` when none is recorded or the recorded level is below what
+actions need in this environment, for example a password session when
+deployed).
+
+**The 428 response.** A request whose evidence is missing, stale, or too weak
+is refused before it touches data:
+
+```json
+{ "error": "step_up_required", "required": "mfa", "maxAgeMinutes": 15,
+  "reason": "missing" | "stale" | "insufficient_level",
+  "message": "Re-authenticate with a second factor to perform this action" }
+```
+
+A session below the minimum sign-in level gets the same error with a scope,
+and the UI sends the operator to sign in again rather than to a step-up
+dialog:
+
+```json
+{ "error": "step_up_required", "required": "mfa", "scope": "session",
+  "reason": "missing" | "insufficient_level",
+  "message": "Sign in with your second factor or passkey" }
+```
+
+The admin UI answers a 428 with a re-authentication dialog that offers only
+the paths that reach `required`: a passkey at every level, and a password
+(followed by a code when the account has TOTP) for `mfa` and `password`. An
+operator with a passkey but no TOTP is not offered a password, because that
+sign-in would prove only a password and fall below the minimum sign-in
+level. A confirmed action
+retries after each successful verification; a factor change (below) retries
+once and then reports the second 428. The new session must belong to the
+operator who opened the dialog; another account's session is signed out and
+nothing is retried. The UI never sends `trustDevice`, so a later step-up
+always asks for the second factor again. Known follow-up: stepping up creates
+a new session and leaves the previous one alive until it expires.
+
+**Factor management.** The admin origin proxies the operator's own factor
+endpoints: two-factor enable, disable, verify-totp, verify-backup-code, and
+generate-backup-codes, and passkey list, register, authenticate, and delete.
+Sign-in challenges stay open (verify-totp and verify-backup-code without a
+session, and passkey authentication); every other factor endpoint, and the
+two code endpoints when a session is present, requires a platform operator.
+The factor plugins live in the admin (`apps/admin/worker/factors.ts`), so the
+customer Worker never bundles them. Enabling, disabling, or regenerating
+backup codes, and registering or deleting a passkey, require fresh evidence
+(15 minutes) at the strongest factor the account already has: a passkey
+requires `phishing_resistant`, TOTP requires `mfa`, and an account with no
+factor requires a fresh `password`. A phished TOTP code therefore cannot
+remove a passkey, and a stolen password cannot replace an enrolled factor.
+Until an operator enrolls a factor, their password alone can enroll one;
+enroll factors before granting deployed platform roles.
+Refusals:
+
+- 401 `unauthorized`: no session.
+- 403 `forbidden` with `reason: "no_platform_roles"`: the account holds no
+  platform role.
+- 403 `forbidden` with `reason: "local_account"`: the seeded local operator
+  (`admin@trestle.local`) outside `APP_ENV=local`.
+- 428 `step_up_required`, as above.
+
+Factor changes write organization-less `security.*` audit events
+(`security.two_factor.enabled`, `security.passkey.added`, and so on) without
+credential material.
+
+**Account security view.** Every operator (`platform.overview.read`) has an
+Account security view at `/account/security`: this session's assurance and
+freshness, TOTP enrollment (the setup key and backup codes appear once),
+backup-code regeneration, and passkey registration and removal. Removing the
+last passkey asks for confirmation. The sign-in screen offers a passkey.
+
+**Operator recovery.** There is no self-service recovery and no admin UI for
+resetting another operator's factors (**Gap**). An operator who has lost
+every passkey, or their authenticator and backup codes, is recovered with a
+database action on the migration (owner) connection, after verifying the
+person out of band:
+
+```sql
+-- Replace the email; run on DATABASE_MIGRATION_URL.
+begin;
+delete from passkey where user_id = (select id from "user" where email = 'ops@example.com');
+delete from two_factor where user_id = (select id from "user" where email = 'ops@example.com');
+update "user" set two_factor_enabled = false where email = 'ops@example.com';
+delete from session where user_id = (select id from "user" where email = 'ops@example.com');
+commit;
+```
+
+Deleting the sessions signs the operator out everywhere; the cascade removes
+their assurance rows. They then sign in with their password and enroll new
+factors, which needs only a fresh password once no factor remains. Record the
+recovery in your change log: this path writes no `audit_event`. If the
+operator should lose platform access instead, revoke their roles with
+`trestle admin revoke`, which is audited.
 
 ## 8. Service Accounts, Scopes, and API Keys
 
@@ -659,12 +847,15 @@ a replacement with the same scopes. The old key keeps working for an overlap
 of 0 to 168 hours (default 24), and rotation never extends its expiry.
 Revocation requires a reason. Neither customer nor platform admin can recover
 an existing secret. Platform operators with `platform.api_keys.revoke` can
-revoke any key from the Machine access view. The revocation is audited on the
-owning organization.
+revoke any key from the API Keys view. The revocation is audited on the
+owning organization. The Service Accounts view (`platform.machine_access.read`)
+lists accounts across organizations with their status, application roles,
+resolved permissions, and keys, read-only.
 
 **Deferred:** per-key rate-limit policies, network restrictions, last-used
-tracking, safe usage history and metering, and suspending a service account
-(the `status` column exists; no route changes it).
+tracking, safe usage history and metering (the admin's usage panels are always
+empty), and suspending a service account (the `status` column exists; no route
+changes it; roadmap step 2).
 
 Example presentation:
 
@@ -699,9 +890,13 @@ Plans are defined in source. Each plan carries a `version` number and a
 `lifecycle` type (`draft`, `active`, `grandfathered`, `retired`), and lists its
 entitlements. The subscription projection records `plan` and `planVersion`.
 
+The admin Plans view shows this source catalog read-only: each plan's
+version, lifecycle, and entitlements, the feature catalog with privileges, and
+a feature-by-plan comparison.
+
 **Deferred:** stored plan versions, enforced immutability and lifecycle
 transitions, admin plan editing, and explicit or scheduled subscription
-migration between versions.
+migration between versions (roadmap step 5).
 
 ### 9.3 Subscription projection
 
@@ -802,120 +997,241 @@ Entitlement             workflows.advanced    enabled by pro@1
 Decision                ALLOWED
 ```
 
-**Deferred:** an Effective Access Explorer route or admin view. The
-explanation is available only in code and tests. `GET /api/tenant/access`
-returns the caller's own assignments and permissions, not a decision
-explanation.
+The admin Permissions view hosts the Effective Access Explorer. An operator
+with `platform.roles.read` chooses an organization, a user or service account
+in it, and a registered permission, and
+`POST /api/admin/access/explain` returns the `AccessDecision` and its table.
+The route also accepts an entitlement. It evaluates the same role catalogs,
+plan entitlements, and active overrides the customer Worker uses, resolving
+each plane only from its own assignments. A service account that is not
+active appears as a failed constraint. It never performs the protected
+action, and it explains organization and application authority only.
+
+`GET /api/tenant/access` returns the caller's own assignments and
+permissions, not a decision explanation.
 
 ## 11. Administrative Information Architecture
 
-The generated platform admin application has a persistent left sidebar. It
-shows the operator's email, the view groups the operator may see, and a
-sign-out control. Views whose capability is not configured are marked
-"(not configured)". The sidebar is built from `GET /api/admin/session`, which
-lists each view and whether the operator is allowed to see it.
+The generated platform admin application is a Kumo shell
+(`apps/admin/src/main.tsx`, `src/shell/`). It has:
 
-**Deferred:** a collapsible sidebar and small-screen drawer, environment and
-tenant-context indicators in the shell, global search, and breadcrumbs.
+- a left sidebar built from the view registry, grouped and ordered, that
+  collapses to icons (`[`, remembered per browser) and becomes a drawer on
+  small screens;
+- a top bar with breadcrumbs, the command palette trigger, an environment
+  badge, and an operator menu (roles, theme, shortcuts, sign-out);
+- a persistent warning strip in production and staging, and a support-session
+  banner naming the organization, reason, and time left while a support
+  session is open, which is the shell's tenant-context indicator;
+- a command palette (`Mod+K`, or `/` to search) that runs view commands and
+  searches organizations and users by name, email, or slug; and
+- keyboard shortcuts: `g` sequences to open views, and view or selection
+  commands such as `r` to redrive or revoke. Destructive commands only open a
+  confirmation.
+
+Every platform action opens a confirmation that previews its scope and
+requires a reason (ending your own support session needs none), then passes
+the step-up check (§7.6). Filters, the selected row, and the active tab live
+in the URL, so a copied link reopens the same view.
 
 The shipped sidebar:
 
 ```text
-Platform
+Overview
   Overview
-  Health
 
-Operations
-  Async events
-  Webhooks
-  Artifacts
-
-Support
-  Support sessions
+Customers
+  Organizations
+  Users
+  Support Sessions
+  Support Workspace
 
 Commercial
+  Plans
   Subscriptions
+  Entitlements
 
-Security
-  Machine access
+Access
+  Organization Roles
+  Application Roles
+  Platform Roles
+  Permissions
+  Service Accounts
+  API Keys
+
+Integrations
+  Webhooks
+
+Communications
+  Email Delivery
+
+Operations
+  Async Operations
+  Artifacts
+  Audit
+
+System
+  Health
+  Account Security
 ```
 
-The shipped views:
+The shipped views, with their paths, permissions, and capabilities:
 
-- **Overview** (`platform.overview.read`): organization, user, and operator
-  counts. The 10 most recent audit events appear only to operators who also
-  hold `platform.audit.read`.
-- **Health** (`platform.overview.read`): environment, platform database
-  reachability and whether a distinct admin login is configured, customer
-  Worker reachability, and sanitized capability status with setup commands.
-- **Async events** (`platform.operations.read`; capability `queues`):
-  dead-lettered outbox events. Redrive requires `platform.outbox.redrive`.
-- **Webhooks** (`platform.operations.read`): endpoints across organizations,
-  and dead or exhausted deliveries. Disabling an endpoint or replaying a
-  delivery whose payload is still retained requires
-  `platform.webhooks.manage`.
-- **Artifacts** (`platform.operations.read`; capability `artifacts`): counts
-  and bytes per upload state, and stale pending uploads.
-- **Support sessions** (`platform.support_sessions.use`): see the Additions
-  specification.
-- **Subscriptions** (`platform.subscriptions.read`; capability `billing`):
-  each organization's plan, status, and period end, and in detail its plan
-  entitlements and overrides with internal reasons and authors. Granting or
-  revoking an override requires `platform.entitlements.manage`. An override
-  needs an existing subscription; for an organization without one, a grant is
-  refused rather than silently having no effect.
-- **Machine access** (`platform.machine_access.read`): API-key metadata
-  across organizations (prefix, service account, organization, scopes,
-  environment, status). Revoking requires `platform.api_keys.revoke`.
+- **Overview** (`/`, `platform.overview.read`): what needs attention (dead
+  letters, failed webhook deliveries, unconfigured capabilities), each linked
+  to its view; organization and user counts; email and payment modes; and
+  overview cards contributed by views (Capability health, Dead letters).
+- **Organizations** (`/organizations`, `platform.organizations.read`): search
+  by name or slug; detail with members, their organization roles, and
+  regional settings. Starting a support session from a row requires
+  `platform.support_sessions.use`.
+- **Users** (`/users`, `platform.users.read`): search by name or email;
+  verification, organization memberships, and active platform roles.
+  Read-only.
+- **Support Sessions** (`/support/sessions`) and **Support Workspace**
+  (`/support/workspace`), both `platform.support_sessions.use`: the operator's
+  own sessions (start and end) and the read-only organization view inside an
+  open session. See the Additions specification.
+- **Plans** (`/commercial/plans`, `platform.subscriptions.read`; capability
+  `payments`): the source plan and feature catalog (§9.2). It calls no admin
+  route.
+- **Subscriptions** (`/commercial/subscriptions`,
+  `platform.subscriptions.read`; capability `payments`): each organization's
+  plan, status, and period end, and in detail its plan entitlements and
+  overrides with internal reasons and authors. Granting or revoking an
+  override requires `platform.entitlements.manage`. An override needs an
+  existing subscription; for an organization without one, a grant is refused
+  rather than silently having no effect.
+- **Entitlements** (`/commercial/entitlements`, `platform.subscriptions.read`;
+  capability `payments`): one organization's effective entitlements and their
+  source (plan, override, or not included). Overrides are changed in
+  Subscriptions.
+- **Organization Roles** and **Application Roles**
+  (`/access/organization-roles`, `/access/application-roles`,
+  `platform.roles.read`): the role catalogs and who holds each role, including
+  service accounts for application roles, and the application-role
+  assignments in one organization. Read-only.
+- **Platform Roles** (`/access/platform-roles`, `platform.roles.read`):
+  assignments and history; grant and revoke require `platform.roles.manage`
+  (§7.5).
+- **Permissions** (`/access/permissions`, `platform.roles.read`): the
+  permission registry and route enforcement (§7.1), and the Effective Access
+  Explorer (§10).
+- **Service Accounts** (`/access/service-accounts`,
+  `platform.machine_access.read`): accounts across organizations with status,
+  application roles, resolved permissions, and keys. Read-only.
+- **API Keys** (`/access/api-keys`, `platform.machine_access.read`): API-key
+  metadata across organizations (prefix, service account, organization,
+  scopes, environment, status, lineage). Revoking requires
+  `platform.api_keys.revoke`.
+- **Webhooks** (`/integrations/webhooks`, `platform.operations.read`):
+  endpoints across organizations, and dead or exhausted deliveries. Disabling
+  an endpoint or replaying a delivery whose payload is still retained requires
+  `platform.webhooks.manage`. Destinations, secrets, and payloads are never
+  shown.
+- **Email Delivery** (`/communications/email`, `platform.operations.read`;
+  capability `email`): provider delivery-status events grouped by provider
+  message, filterable by status. Recipients, templates, and bodies are not
+  recorded.
+- **Async Operations** (`/operations/async`, `platform.operations.read`;
+  capability `queues`): outbox counts and dead-lettered events. Redrive
+  requires `platform.outbox.redrive`.
+- **Artifacts** (`/operations/artifacts`, `platform.operations.read`;
+  capability `r2`): counts and bytes per upload state, and stale pending
+  uploads.
+- **Audit** (`/operations/audit`, `platform.audit.read`): audit history
+  across organizations and platform actions, newest first, paginated, and
+  filterable by organization, actor ID, event name, or correlation ID. Detail
+  shows the redacted summary and links to the event's support session.
+- **Health** (`/system/health`, `platform.overview.read`): platform database
+  reachability, whether a distinct admin login is configured, customer Worker
+  reachability, and the capability projection with setup commands (§5).
+- **Account Security** (`/account/security`, `platform.overview.read`): the
+  operator's own session assurance, TOTP, backup codes, and passkeys (§7.6).
 
-**Deferred** views: Organizations (search, memberships), Users (verification,
-suspension, session revocation), Plans (catalog and comparison matrix),
-Entitlements (usage, quotas, simulation), Organization roles, Application
-roles, Platform roles, Permissions (registry and enforcement discovery),
-Service accounts (as distinct from key metadata), Email, and Audit (a
-dedicated, filterable audit view; `platform.audit.read` is registered but no
-route uses it yet).
+The views contain UI for further actions: creating webhooks, rotating and
+re-scoping API keys, creating and suspending service accounts, editing
+roles, permissions, and member role assignments, and revoking another
+operator's support session. The admin Worker has no routes for them. The
+controls stay hidden, because they check permissions that are not registered
+or are switched off in the view. They are **Deferred** to roadmap steps 2, 4,
+and 6.
 
-Views appear for every enabled admin and are filtered by permission.
-**Deferred:** hiding views whose capability is not declared.
+**Deferred:** usage, quotas, and simulation in Entitlements (§9.6), and user
+suspension and session revocation in Users (roadmap step 2).
+
+Views appear for every enabled admin and are filtered by permission and
+capability state (§5).
 
 ### 11.1 Admin views
 
 The default admin application is a starting point, not a closed
-Trestle-owned dashboard. `apps/admin/src/registry.ts` is the single view
-registry. Each entry declares:
+Trestle-owned dashboard. Each view is a folder under `apps/admin/src/views/`
+with a descriptor, `admin-view.ts`, and a lazily loaded component. The SPA
+discovers descriptors with `import.meta.glob("./views/*/admin-view.ts")`
+(`src/views.ts`), so the SPA keeps no hand-maintained list of views or
+components:
 
 ```ts
-{
-  id: "machine-access",
-  path: "/security/machine-access",
-  label: "Machine access",
-  group: "Security",
+export default defineAdminView({
+  id: "api-keys",
+  path: "/access/api-keys",
+  navigation: { label: "API Keys", group: "Access", order: 60, icon: KeyIcon },
   permission: "platform.machine_access.read",
-  capability: undefined, // optional: database | email | billing | queues | artifacts | workflows
-  api: [
-    { method: "GET", path: "/api/admin/security/api-keys" },
-    { method: "POST", path: "/api/admin/security/api-keys/:organizationId/:keyId/revoke", permission: "platform.api_keys.revoke" },
+  capability: undefined, // optional, e.g. email | payments | queues | r2 | workflows
+  entitlement: undefined, // optional feature code
+  overviewCard: undefined, // optional { title, order, component }
+  component: () => import("./view"),
+  commands: [
+    { id: "api-keys.open", label: "Go to API Keys", hotkey: "g k" },
+    { id: "api-keys.revoke", label: "Revoke the selected API key", hotkey: "r", kind: "action", scope: "selection",
+      requires: "an unrevoked API key", destructive: true, permission: "platform.api_keys.revoke" },
   ],
-}
+});
+```
+
+`buildAdminRegistry` (`src/registry.ts`) reports every problem at once:
+invalid or duplicate IDs and paths, unknown navigation groups, non-platform
+or unregistered permissions, entitlements that are not defined features,
+unknown capabilities, missing icons or components, a view without a navigate
+command, invalid command scopes, and hotkey conflicts. Sidebar order comes
+from the group order and each view's `order`. Applications add groups in
+`src/navigation.ts`.
+
+The admin Worker's authority comes from a separate server registry,
+`src/api-registry.ts`. Each entry names the view's ID, path, permission,
+capability, and the admin routes it calls:
+
+```ts
+{ id: "api-keys", path: "/access/api-keys", label: "API Keys", group: "Access", permission: "platform.machine_access.read", api: [
+  { method: "GET", path: "/api/admin/security/api-keys" },
+  { method: "POST", path: "/api/admin/security/api-keys/:organizationId/:keyId/revoke", permission: "platform.api_keys.revoke" },
+] }
 ```
 
 `defineAdminViews` fails for duplicate IDs or paths, non-platform or
 unregistered permissions, API routes outside `/api/admin/`, non-`GET` routes
 without their own platform permission, and one route claimed by views with
-different permissions. The admin Worker derives its route policies from the
-registry, and a drift test keeps views, routes, and permissions aligned.
+different permissions. The admin Worker derives its route policies from this
+registry. Tests require both registries to list the same views with the same
+paths and permissions, every command permission to be enforced on some admin
+route, and every route to have a policy.
 
-To add a view today, add a registry entry, a component in `src/views/`, its
-entry in the `viewComponents` map in `src/main.tsx`, and the handlers in
-`worker/index.ts`. Upgrades treat edited generated files as application-owned
-and do not overwrite them.
+`pnpm --filter ./apps/admin check:views` runs during the admin build. It
+loads every descriptor and its components, and checks that each view command
+has a `useAdminCommands` handler, that destructive commands register only a
+confirmation, and that views use Kumo tokens rather than raw colors. With
+`--json` it prints the registry (groups, views, commands, hotkeys) for
+machine-readable inspection.
 
-**Deferred:** descriptor files discovered at build time (`admin-view.ts` with
-`defineAdminView` and lazy components), entitlement gating on views,
-navigation ordering, overview cards, typed extension points for detail panels,
-resource actions, and table extensions, and admin views in machine-readable
-inspection.
+To add a view, add `src/views/<id>/admin-view.ts` and its component, an entry
+in `src/api-registry.ts`, and the handlers in `worker/index.ts`. Upgrades
+treat edited generated files as application-owned and do not overwrite them.
+
+A descriptor's `entitlement` is validated against the feature catalog but
+does not yet affect visibility. **Deferred:** typed extension points for
+detail panels, resource actions, and table extensions, and admin views in
+`trestle` inspection commands.
 
 Registering a view grants no backend authority. Every API operation enforces
 its own server-side platform permission. Hiding a navigation item is usability
@@ -1060,8 +1376,13 @@ mechanism.
 16. Destructive and bulk actions preview scope, use idempotency where
     applicable, and report partial failure. **Deferred:** the admin has no
     bulk actions yet.
-17. Sensitive platform actions require an explicit reason and come from the
-    admin origin. **Deferred:** step-up authentication.
+17. Sensitive platform actions require an explicit reason, come from the
+    admin origin, and require fresh step-up assurance: a password locally,
+    MFA when deployed, and a passkey to manage platform roles (§7.6). Factor
+    changes require the account's strongest enrolled factor. An unset
+    `APP_ENV` is treated as production. An operator with a second factor or
+    passkey reaches no admin route, reads included, with a session that did
+    not sign in with one.
 18. All inbound provider webhooks require signature verification and idempotent
     processing before updating authoritative projections.
 
@@ -1090,9 +1411,10 @@ and `trestle admin doctor`.
 
 Exact commands ship only when present in installed `trestle --help`.
 
-Machine-readable inspection today covers resources and routes.
-**Deferred:** permissions with their planes, role definitions and
-assignments, route enforcement, feature definitions, plans, and admin views.
+Machine-readable inspection today covers resources and routes, and
+`pnpm --filter ./apps/admin check:views --json` prints the admin view
+registry. **Deferred:** permissions with their planes, role definitions and
+assignments, route enforcement, feature definitions, and plans.
 
 Generated source remains application-owned. Applying a SetupPlan may restore
 missing scaffold registrations but does not overwrite customized domain or UI
@@ -1121,7 +1443,10 @@ Tests prove:
 - API-key scopes only reduce service-account authority;
 - expired, revoked, rotated, or wrong-environment keys fail closed;
 - route metadata and enforcement do not drift, for the customer and admin
-  Workers;
+  Workers, and the admin's UI and server view registries agree;
+- a dropped-in admin view is discovered and placed in the sidebar, and
+  invalid descriptors, unhandled commands, and destructive commands that skip
+  confirmation fail the admin build;
 - unsubscribed tenants cannot use entitled features;
 - override reasons do not reach customer provenance;
 - setup never persists or logs plaintext credentials;
@@ -1131,8 +1456,7 @@ Tests prove:
   deploys (dry run) as expected.
 
 **Deferred:** plan-version explanation tests, Lago adapter normalization,
-dropped-in admin-view discovery tests, cross-environment cache tests, and
-deployed-system evidence for the admin.
+cross-environment cache tests, and deployed-system evidence for the admin.
 
 ## 18. Delivery Sequence
 
@@ -1150,19 +1474,25 @@ The subsystem shipped in these slices (see `docs/ADMIN_INTEGRATION_PLAN.md`):
 6. Commercial controls (overrides), then machine access (service accounts and
    API keys).
 7. Support sessions and organization regional settings.
+8. The Kumo admin UI on the admin Worker: file-discovered views, the command
+   palette, and the directory, audit, access-catalog, and plan views (§11);
+   then operator account security and step-up (§7.6). The
+   [admin roadmap](superpowers/plans/2026-09-23-admin-roadmap.md) plans the
+   write actions that follow.
 
-8. Generated canary: with a database, `pnpm check:generated` requires named
+9. Generated canary: with a database, `pnpm check:generated` requires named
    scenarios to pass. It covers the admin disabled and enabled, `trestle
    apply` parity, platform sign-in, cross-plane denial, support-session entry
-   and exit, and a scoped API key before and after revocation.
+   and exit, step-up for platform actions and factor changes, session
+   assurance recording, and a scoped API key before and after revocation.
 
 **Pending:** the first deployed run of the admin staging path. It needs an
 admin-enabled staging project with isolated resources, listed in
 `docs/ADMIN_INTEGRATION_PLAN.md`.
 
-**Deferred:** the setup wizard, identity and SSO, the plan catalog and
-versioning, allowances and usage, Lago and OpenMeter adapters, and the
-Effective Access Explorer.
+**Deferred:** the setup wizard, identity and SSO, stored plans and
+versioning, allowances and usage, Lago and OpenMeter adapters, and the admin
+write actions in roadmap steps 2 to 8.
 
 ## 19. Acceptance Criteria
 
@@ -1180,7 +1510,7 @@ generated application can, without manual source repair:
 4. define registered permissions in all three authority planes, assign their
    respective roles, and prove authority does not flow between planes
    (shipped); explain effective human access through a route or view
-   (**Deferred**);
+   (shipped: the admin Effective Access Explorer);
 5. define features and typed privileges, activate a versioned plan, subscribe
    a tenant, apply an audited override, and explain effective entitlements
    (audited overrides and provenance ship; typed privileges and plan
@@ -1198,5 +1528,5 @@ generated application can, without manual source repair:
     correlated audit evidence (shipped for the operations listed in §14);
 11. add an application-owned admin view, see it in the left sidebar, enforce
     its registered permission on the server, and retain it through a later
-    SetupPlan apply (shipped through the registry; file-convention discovery
-    is **Deferred**).
+    SetupPlan apply (shipped: `admin-view.ts` discovery plus a server
+    registry entry).

@@ -14,10 +14,12 @@ const owner = `${run}-owner`;
 const environment: AdminEnvironment = { DATABASE_URL: connectionString ?? "", DATABASE_DRIVER: "postgres-js", BETTER_AUTH_SECRET: "test-secret-at-least-32-characters", APP_ENV: "local" };
 let signedIn = operator;
 const realSession = adminDependencies.session;
+const realAssurance = adminDependencies.assurance;
 
 suite("platform admin Worker against PostgreSQL", () => {
   beforeAll(async () => {
-    adminDependencies.session = async () => ({ user: { id: signedIn, email: `${signedIn}@example.test` } });
+    adminDependencies.session = async () => ({ user: { id: signedIn, email: `${signedIn}@example.test` }, session: { id: `${signedIn}-session` } });
+    adminDependencies.assurance = async () => ({ sessionId: `${signedIn}-session`, userId: signedIn, level: "password", method: "password", verifiedAt: new Date() });
     adminDependencies.operationalStatus = async () => ({ capabilities: { database: { configured: true } } });
     for (const id of [operator, owner]) await sql!`insert into "user" (id, name, email, email_verified, created_at, updated_at) values (${id}, ${id}, ${`${id}@example.test`}, true, now(), now())`;
     await sql!`insert into organization (id, name, slug, created_at) values (${`${run}-org`}, 'Acme', ${`${run}-org`}, now())`;
@@ -103,6 +105,7 @@ suite("platform admin Worker against PostgreSQL", () => {
 
   it("signs a real account in on the admin origin and requires a platform role", async () => {
     adminDependencies.session = realSession;
+    adminDependencies.assurance = realAssurance;
     const email = `${run}-signin@example.test`;
     const password = `correct-horse-${run}`;
     await createAuth({ ...environment, EMAIL_DELIVERY_MODE: "local" }).api.signUpEmail({ body: { name: "Signin", email, password } });
@@ -117,7 +120,14 @@ suite("platform admin Worker against PostgreSQL", () => {
     await grantPlatformRole(createDatabase(connectionString!, "postgres-js"), { userId: String(account!.id), role: "security_admin" }, { actor: { type: "system", id: "test" }, reason: "admin sign-in test", environment: "local", correlationId: `${run}-corr` });
     const allowed = await admin.request("/api/admin/session", { headers: { cookie: cookie! } }, environment);
     expect(allowed.status).toBe(200);
-    await expect(allowed.json()).resolves.toMatchObject({ roles: ["security_admin"], operator: { email } });
+    // The sign-in recorded its own evidence, which the session reports for step-up.
+    await expect(allowed.json()).resolves.toMatchObject({ roles: ["security_admin"], operator: { email }, assurance: { level: "password", method: "password" } });
+    // A fresh password starts the first enrollment; once a passkey exists, this password session is below the minimum sign-in level.
+    const enable = () => admin.request("/api/auth/two-factor/enable", { method: "POST", headers: { cookie: cookie!, "content-type": "application/json", origin: "http://localhost:42070" }, body: JSON.stringify({ password }) }, environment);
+    expect((await enable()).status).toBe(200);
+    await sql!`insert into passkey (id, user_id, public_key, credential_id, counter, device_type, backed_up) values (${`${run}-pk`}, ${String(account!.id)}, 'key', ${`${run}-cred`}, 0, 'singleDevice', false)`;
+    await expect((await enable()).json()).resolves.toMatchObject({ error: "step_up_required", required: "mfa", scope: "session" });
+    expect((await admin.request("/api/admin/session", { headers: { cookie: cookie! } }, environment)).status).toBe(428);
     expect((await admin.request("/api/auth/sign-up/email", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x", email: `${run}-new@example.test`, password }) }, environment)).status).toBe(404);
   });
 });

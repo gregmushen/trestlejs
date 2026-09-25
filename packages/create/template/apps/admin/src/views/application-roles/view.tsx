@@ -16,7 +16,7 @@ export default function ApplicationRolesView() {
   const organizationId = search.organization ?? scope;
   const assignments = useAdminQuery(["application-role-assignments", organizationId], () => api.applicationRoleAssignments(organizationId), { enabled: Boolean(organizationId) });
   return <RoleManager plane="application" title="Application roles" createRequests={createRequests}
-    description="Product-domain roles. Catalog roles here are available to every organization; organizations can also define their own. Assignments apply per organization to users and service accounts.">
+    description="Product-domain roles, defined in reviewed source (packages/authz) and available to every organization. Assignments apply per organization to users and service accounts.">
     <AdminSection title="Assignments in one organization">
       <div className="mb-4 max-w-md"><OrganizationPicker value={organizationId} onChange={(id) => update({ organization: id || undefined })} /></div>
       {!organizationId ? <AdminEmpty title="Choose an organization" /> : <AdminQueryState query={assignments} isEmpty={(data) => data.assignments.length === 0} empty="No application-role assignments in this organization.">{(data) => <AdminDataTable caption="Application role assignments" primary={false} rows={data.assignments} rowKey={(row) => `${row.userId}:${row.role}`} columns={[

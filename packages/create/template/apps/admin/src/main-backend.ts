@@ -22,6 +22,10 @@ type WireSession = {
   environment: AdminSession["environment"];
   capabilities: CapabilityStatus[];
   supportSession: { id: string; operatorId: string; organizationId: string; organizationName: string; reason: string; startedAt: string; expiresAt: string } | null;
+  assurance: { level: "password" | "mfa" | "phishing_resistant"; method: string; verifiedAt: string } | null;
+  /** Null when the session has no recorded assurance. */
+  stepUpRequiredAfter: string | null;
+  factors: { totp: boolean; passkeys: number };
 };
 type WireOverview = { organizations: number; users: number; operators: number; recentAudit: Array<{ name: string; occurredAt: string; actorType: string; organizationId: string | null; outcome: string; correlationId: string }> };
 type WireHealth = { environment: string; platformDatabase: { reachable: boolean; distinctLogin: boolean }; application: { reachable: boolean } };
@@ -82,9 +86,10 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
       roles: wire.roles,
       permissions: wire.permissions,
       environment: wire.environment,
-      // The Worker does not require step-up yet; the UI treats every session as fresh.
-      stepUpRequiredAfter: new Date(Date.now() + 15 * 60_000).toISOString(),
-      assurance: null,
+      // Null (no recorded evidence) means step-up is needed; the Worker enforces freshness on every change.
+      stepUpRequiredAfter: wire.stepUpRequiredAfter,
+      assurance: wire.assurance,
+      factors: wire.factors,
       supportSession: wire.supportSession ? { ...wire.supportSession, ticket: null, profile: supportProfile.name, permissions: supportPermissions, endedAt: null, endReason: null, endedBy: null, revocationReason: null } : null,
     };
   };

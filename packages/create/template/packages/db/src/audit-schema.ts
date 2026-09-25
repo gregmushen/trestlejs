@@ -7,6 +7,11 @@ import { check, index, jsonb, pgPolicy, pgTable, text, timestamp, uuid } from "d
  * and read its own organization's rows. Summaries are redacted before
  * insertion (see recordAuditEvent) and never hold secrets or message bodies.
  * Platform rows (organization_id null) are invisible to tenants.
+ *
+ * Organization-less account-security events (e.g. security.two_factor.enabled)
+ * are written through the hand-written `trestle_record_security_event`
+ * SECURITY DEFINER function appended to migration 0032, not through the
+ * policies below; only the runtime login may execute it.
  */
 export const auditEvent = pgTable("audit_event", {
   id: uuid("id").defaultRandom().primaryKey(),

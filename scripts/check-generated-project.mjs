@@ -295,6 +295,34 @@ try {
       "requires platform sign-in and a platform role; tenant authority grants nothing",
       "enters and exits a support session over HTTP; tenant reads require the open session",
       "redrives a dead outbox event over HTTP and audits it with the request's correlation ID",
+      // Step-up: fresh assurance for platform actions, factor changes gated at the strongest enrolled factor, operators only, and fail-closed environments.
+      "requires fresh assurance for platform actions and reports it in the session",
+      ...["POST /api/auth/two-factor/enable", "POST /api/auth/two-factor/disable", "POST /api/auth/two-factor/generate-backup-codes", "GET /api/auth/passkey/generate-register-options", "POST /api/auth/passkey/verify-registration", "POST /api/auth/passkey/delete-passkey"]
+        .map((route) => `requires fresh evidence at the strongest enrolled factor for ${route}`),
+      "serves factor endpoints only to platform operators, and leaves sign-in challenges open",
+      "refuses the seeded local admin's factor changes outside local development",
+      "treats an unset APP_ENV as deployed for the local account and the platform connection",
+      "checks assurance on every admin request and fails closed",
+      // Minimum sign-in level: an operator with a factor must have signed in with it, on every admin request.
+      "requires a second-factor sign-in for every admin request once the operator has a factor",
+      "refuses a password session for a passkey-only operator",
+      "applies the minimum sign-in level to operator-only factor routes, but not to sign-in challenges or a first enrollment",
+      "reports the operator's enrolled factors in the session through the shared auth database handle",
+      "lets a factorless operator in with a password session so they can enroll a factor",
+      "skips freshness for stepUp: false routes but keeps the minimum sign-in level",
+      "reports step-up as due when the session is below the environment's action level",
+      "gives Better Auth the admin's fail-closed environment, so security events are never labelled local by default",
+    ]);
+    // Session assurance is recorded by the endpoint that proves it, never upgraded by enrollment, and stored behind the platform role.
+    await requireScenarios(adminProject, "./packages/auth", ["src/index.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "records password assurance for a password sign-in without a second factor",
+      "leaves a rotated session without assurance when its prior session had none",
+      "keeps an enrollment session at its prior assurance, then records MFA only for a second-factor sign-in",
+      "upgrades a signed-in operator who steps up with an enrolled second factor",
+    ]);
+    await requireScenarios(adminProject, "./packages/db", ["src/assurance.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "records, upgrades, and cascades how a session was authenticated",
+      "keeps the tenant role from writing account-security events",
     ]);
   }
   const adminStatus = (projectRoot) => execFileSync(process.execPath, ["scripts/admin-capability.mjs", "status"], { cwd: projectRoot, encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: "" } }).trim();

@@ -438,7 +438,7 @@ app.post("/api/dev/billing", requireExecutionContext, async (context) => {
 });
 
 app.on(["GET", "POST"], "/api/auth/*", (context) =>
-  createAuth(context.env, context.get("correlationId")).handler(context.req.raw),
+  createAuth(context.env, { correlationId: context.get("correlationId") }).handler(context.req.raw),
 );
 
 app.route("/", accessRoutes);
@@ -446,7 +446,7 @@ app.route("/", machineAccessRoutes);
 app.route("/", regionalRoutes);
 
 app.get("/api/me", async (context) => {
-  const session = await createAuth(context.env, context.get("correlationId")).api.getSession({ headers: context.req.raw.headers });
+  const session = await createAuth(context.env, { correlationId: context.get("correlationId") }).api.getSession({ headers: context.req.raw.headers });
   if (!session) return context.json({ error: "Unauthorized" }, 401);
 
   return context.json({ user: session.user, session: session.session });

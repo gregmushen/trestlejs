@@ -1,5 +1,5 @@
-import { activePlatformRoles, auditEvent, organization, platformRoleAssignment, user, type Database } from "@__TRESTLE_PROJECT_NAME__/db";
-import { count, countDistinct, desc, isNull, sql } from "drizzle-orm";
+import { activePlatformRoles, auditEvent, organization, passkey, platformRoleAssignment, user, type Database } from "@__TRESTLE_PROJECT_NAME__/db";
+import { count, countDistinct, desc, eq, isNull, sql } from "drizzle-orm";
 
 /**
  * Platform reads for the admin, always on the trestle_platform connection.
@@ -28,4 +28,21 @@ export async function overview(database: Database, options: Readonly<{ includeAu
 
 export async function databaseReachable(database: Database): Promise<boolean> {
   try { await database.execute(sql`select 1`); return true; } catch { return false; }
+}
+
+/** What the person has enrolled, for the shell (which step-up paths to offer). Reads Better Auth's tables on the auth connection. */
+export async function enrolledFactors(database: Database, userId: string): Promise<{ totp: boolean; passkeys: number }> {
+  const [[credentials], [person]] = await Promise.all([
+    database.select({ total: count() }).from(passkey).where(eq(passkey.userId, userId)),
+    database.select({ twoFactorEnabled: user.twoFactorEnabled }).from(user).where(eq(user.id, userId)).limit(1),
+  ]);
+  return { totp: Boolean(person?.twoFactorEnabled), passkeys: Number(credentials?.total ?? 0) };
+}
+
+/** The strongest factor the person has enrolled: a passkey, then two-factor. Reads Better Auth's tables, so it runs on the auth connection. */
+export async function strongestEnrolledFactor(database: Database, userId: string): Promise<"phishing_resistant" | "mfa" | null> {
+  const [credential] = await database.select({ id: passkey.id }).from(passkey).where(eq(passkey.userId, userId)).limit(1);
+  if (credential) return "phishing_resistant";
+  const [person] = await database.select({ twoFactorEnabled: user.twoFactorEnabled }).from(user).where(eq(user.id, userId)).limit(1);
+  return person?.twoFactorEnabled ? "mfa" : null;
 }

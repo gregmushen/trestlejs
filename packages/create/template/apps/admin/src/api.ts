@@ -3,6 +3,7 @@ import type { EffectiveEntitlement, Feature, PlanVersion, PlanVersionState, Priv
 import { z } from "zod";
 
 import { mainBackend } from "./main-backend";
+import { assuranceLevelOf } from "./step-up";
 import type { CapabilityId, CapabilityState, Environment } from "./registry";
 
 /** The admin API has its own origin when deployed; in local development Vite proxies /api to it. */
@@ -67,11 +68,17 @@ export type AdminSession = {
   roles: string[];
   permissions: string[];
   environment: Environment;
-  stepUpRequiredAfter: string;
+  /** When this session's evidence stops being fresh; null means none is recorded, so the next sensitive action asks for step-up. */
+  stepUpRequiredAfter: string | null;
   supportSession?: SupportSession | null;
-  /** How this session was authenticated; sensitive actions require a level and freshness from it. */
-  assurance?: { level: "password" | "mfa" | "phishing_resistant"; method: string; verifiedAt: string } | null;
+  /** How this session was authenticated; sensitive actions require a level and freshness from it. Null when nothing is recorded. */
+  assurance: { level: "password" | "mfa" | "phishing_resistant"; method: string; verifiedAt: string } | null;
+  /** The operator's enrolled factors, so step-up offers only paths that keep them signed in. */
+  factors: { totp: boolean; passkeys: number };
 };
+/** True when the next sensitive action will ask the operator to re-authenticate (no evidence, or evidence past its window). */
+export const stepUpDue = (session: Pick<AdminSession, "stepUpRequiredAfter">, now = Date.now()): boolean =>
+  session.stepUpRequiredAfter === null || Date.parse(session.stepUpRequiredAfter) <= now;
 export type SupportProfile = { key: string; name: string; description: string; organization: string[]; application: string[] };
 export type SupportPermissionPreview = { code: string; plane: "organization" | "application"; description: string; allowed: boolean; reason: string };
 export type SupportSessionSummary = SupportSession & { operator: Operator; activity: number };
@@ -220,7 +227,7 @@ export type { EffectiveEntitlement, Feature, PlanVersionState, QuotaState };
 
 /* Errors */
 
-const errorEnvelope = z.object({ error: z.string(), reason: z.string().optional(), message: z.string().optional(), required: z.enum(["password", "mfa", "phishing_resistant"]).optional() }).passthrough();
+const errorEnvelope = z.object({ error: z.string(), reason: z.string().optional(), message: z.string().optional(), required: z.string().optional(), scope: z.string().optional() }).passthrough();
 
 export class AdminApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly reason?: string) {
@@ -234,6 +241,24 @@ export class StepUpRequired extends AdminApiError {
     this.name = "StepUpRequired";
   }
 }
+/**
+ * The session is below the admin's minimum sign-in level: the account has a second factor or passkey
+ * but the session proves only a password. Signing in again (with the factor) is the only way on.
+ */
+export class SignInRequired extends AdminApiError {
+  constructor(message = "This account has a second factor. Sign in with it or with a passkey.") {
+    super(428, "sign_in_required", message);
+    this.name = "SignInRequired";
+  }
+}
+
+const signInListeners = new Set<() => void>();
+/** Called whenever an admin API call other than the session read meets SignInRequired, so the shell can re-read the session; returns an unsubscribe. */
+export function onSignInRequired(listener: () => void): () => void {
+  signInListeners.add(listener);
+  return () => { signInListeners.delete(listener); };
+}
+
 export class PermissionDenied extends AdminApiError {
   constructor(reason?: string) {
     super(403, "forbidden", "Your platform role does not permit this action. Ask a security administrator for the required platform permission.", reason);
@@ -250,7 +275,8 @@ export class Unauthenticated extends AdminApiError {
 export async function toApiError(response: Response): Promise<AdminApiError> {
   const parsed = errorEnvelope.safeParse(await response.json().catch(() => null));
   const body = parsed.success ? parsed.data : undefined;
-  if (response.status === 428 || body?.error === "step_up_required") return new StepUpRequired(body?.message, body?.required ?? "password");
+  if ((response.status === 428 || body?.error === "step_up_required") && body?.scope === "session") return new SignInRequired();
+  if (response.status === 428 || body?.error === "step_up_required") return new StepUpRequired(body?.message, assuranceLevelOf(body?.required));
   if (response.status === 401) return new Unauthenticated();
   if (response.status === 403) return new PermissionDenied(body?.reason);
   return new AdminApiError(response.status, body?.error ?? "request_failed", body?.message ?? `Request failed (${response.status})`, body?.reason);
@@ -298,7 +324,12 @@ export function createAdminApi(options: { baseUrl?: string; fetch?: typeof fetch
       headers: { accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (!response.ok) throw await toApiError(response);
+    if (!response.ok) {
+      const error = await toApiError(response);
+      // The session read reports this itself; notifying on it would re-read the session in a loop.
+      if (error instanceof SignInRequired && path !== "session") for (const listener of signInListeners) listener();
+      throw error;
+    }
     if (response.status === 204) return undefined as T;
     return await response.json() as T;
   }

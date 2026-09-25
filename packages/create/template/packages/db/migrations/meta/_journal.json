@@ -225,6 +225,13 @@
       "when": 1790294400023,
       "tag": "0031_luxuriant_sandman",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790294400024,
+      "tag": "0032_legal_jack_flag",
+      "breakpoints": true
     }
   ]
 }

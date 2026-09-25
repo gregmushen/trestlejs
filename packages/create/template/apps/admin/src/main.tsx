@@ -4,9 +4,11 @@ import { createRootRoute, createRoute, createRouter, Link as RouterLink, Outlet,
 import { forwardRef, lazy, StrictMode, Suspense, useState, type ComponentType, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 
-import { PermissionDenied, api, errorMessage, sessionQueryKey, Unauthenticated } from "./api";
-import { reauthenticateWithPassword, verifySecondFactor, type ReauthResult } from "./auth-client";
+import { PermissionDenied, SignInRequired, api, errorMessage, onSignInRequired, sessionQueryKey, Unauthenticated } from "./api";
+import { reauthenticateWithPasskey, reauthenticateWithPassword, verifySecondFactor, type ReauthResult } from "./auth-client";
 import { viewAvailability, type AdminViewDescriptor } from "./registry";
+import { shouldHoldShell } from "./step-up-machine";
+import { setSignInNotice, useSignInNotice, useStepUpInProgress } from "./step-up-state";
 import { CommandIntent, CommandLayer, CommandProvider } from "./shell/commands";
 import { AdminProvider, useAdmin, useNow } from "./shell/context";
 import { Banner, Button, Empty, Input, KumoPortalProvider, LinkProvider, LayerCard, Loader, SensitiveInput, Sidebar, Toasty, TooltipProvider, type LinkComponentProps } from "./shell/kumo";
@@ -35,10 +37,14 @@ function SignIn(props: { notice?: string }) {
   const [codeKind, setCodeKind] = useState<"totp" | "backup">("totp");
   const [error, setError] = useState<string>();
   const [working, setWorking] = useState(false);
+  const [passkeyWorking, setPasskeyWorking] = useState(false);
   const local = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  // Explains a sign-out a step-up caused (a cancelled code prompt, or a different account's passkey).
+  const stepUpNotice = useSignInNotice();
+  const notice = props.notice ?? stepUpNotice;
   const done = async (result: ReauthResult) => {
     setWorking(false);
-    if (result.ok) { await queryClient.invalidateQueries({ queryKey: sessionQueryKey }); return; }
+    if (result.ok) { setSignInNotice(null); await queryClient.invalidateQueries({ queryKey: sessionQueryKey }); return; }
     if ("needsCode" in result) { setStage("code"); setError(undefined); return; }
     setError(result.error);
   };
@@ -55,7 +61,7 @@ function SignIn(props: { notice?: string }) {
       <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-4">
         <div><p className="text-xs font-semibold uppercase tracking-wider text-kumo-subtle">Platform admin</p><h1 className="mt-1 text-2xl font-semibold text-kumo-default">Operator sign-in</h1></div>
         <p className="text-sm text-kumo-subtle">Access requires an assigned platform role. Organization and application roles grant no platform authority.</p>
-        {props.notice && <Banner variant="alert" size="sm" description={props.notice} />}
+        {notice && <Banner variant="alert" size="sm" description={notice} />}
         {stage === "password" ? <>
           <Input label="Email or username" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} />
           <SensitiveInput label="Password" autoComplete="current-password" required value={password} onChange={(event: { target: { value: string } }) => setPassword(event.target.value)} />
@@ -65,7 +71,8 @@ function SignIn(props: { notice?: string }) {
           <Button variant="ghost" size="sm" onClick={() => setCodeKind(codeKind === "totp" ? "backup" : "totp")}>{codeKind === "totp" ? "Use a backup code" : "Use an authenticator code"}</Button>
         </>}
         {error && <Banner variant="error" size="sm" description={error} />}
-        <Button type="submit" variant="primary" loading={working}>{stage === "code" ? "Verify" : "Sign in"}</Button>
+        <Button type="submit" variant="primary" loading={working && !passkeyWorking} disabled={working}>{stage === "code" ? "Verify" : "Sign in"}</Button>
+        {stage === "password" && <Button variant="secondary" loading={passkeyWorking} disabled={working} onClick={() => { setError(undefined); setWorking(true); setPasskeyWorking(true); void reauthenticateWithPasskey().then(done).finally(() => setPasskeyWorking(false)); }}>Sign in with a passkey</Button>}
       </form>
       {local && <Banner className="mt-6" variant="secondary" size="sm" title="Local development only" description="Username admin, password admin. This account is refused outside local." />}
     </LayerCard.Primary></LayerCard>
@@ -144,21 +151,31 @@ const router = createRouter({ routeTree: rootRoute.addChildren(viewRoutes), defa
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }
 
 function App() {
+  // A step-up's code prompt runs without a live session: hold the poll and keep the app (and its dialog) mounted until it ends.
+  const steppingUp = useStepUpInProgress();
   // Polled so a revoked or expired support session is noticed without a reload.
-  const session = useQuery({ queryKey: sessionQueryKey, queryFn: api.session, retry: false, refetchInterval: 30_000 });
+  const session = useQuery({ queryKey: sessionQueryKey, queryFn: api.session, retry: false, enabled: !steppingUp, refetchInterval: steppingUp ? false : 30_000 });
   if (session.isPending) return <div role="status" className="grid min-h-screen place-items-center bg-kumo-canvas text-kumo-subtle"><span className="flex items-center gap-2"><Loader />Checking your operator session</span></div>;
-  if (session.error instanceof Unauthenticated) return <SignIn />;
+  const held = shouldHoldShell(steppingUp, session.data !== undefined);
+  if (session.error instanceof Unauthenticated && !held) return <SignIn />;
+  // The account has a second factor, but this session proves only a password (for example a customer-app session).
+  if (session.error instanceof SignInRequired && !held) return <SignIn notice={signInRequiredNotice} />;
   // A signed-in account without a platform role can switch to an operator account here.
-  if (session.error instanceof PermissionDenied) return <SignIn notice="This account has no platform role. Sign in as a platform operator." />;
-  if (session.error) return <main className="bg-kumo-canvas p-8"><AdminError error={session.error} retry={() => void session.refetch()} /><p className="mt-3 text-sm text-kumo-subtle">{errorMessage(session.error)}</p></main>;
+  if (session.error instanceof PermissionDenied && !held) return <SignIn notice="This account has no platform role. Sign in as a platform operator." />;
+  if ((session.error && !held) || !session.data) return <main className="bg-kumo-canvas p-8"><AdminError error={session.error} retry={() => void session.refetch()} /><p className="mt-3 text-sm text-kumo-subtle">{errorMessage(session.error)}</p></main>;
   return <AdminProvider session={session.data} registry={adminRegistry}><CommandProvider><RouterProvider router={router} /></CommandProvider></AdminProvider>;
 }
+
+const signInRequiredNotice = "This account has a second factor. Sign in with it or with a passkey.";
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: (count, error) => !(error instanceof SignInRequired) && count < 1, refetchOnWindowFocus: false } } });
+// Any admin call refused for the session's sign-in level re-reads the session, which moves the shell to sign-in.
+onSignInRequired(() => void queryClient.invalidateQueries({ queryKey: sessionQueryKey }));
 
 const element = document.querySelector("#root");
 if (!element) throw new Error("Missing #root element");
 const overlays = document.querySelector<HTMLElement>("#admin-overlays") ?? document.body;
 createRoot(element).render(<StrictMode>
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } })}>
+  <QueryClientProvider client={queryClient}>
     <LinkProvider component={RouterBridge}>
       <KumoPortalProvider container={overlays}>
         <TooltipProvider>

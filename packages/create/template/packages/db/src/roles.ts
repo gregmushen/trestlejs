@@ -72,10 +72,14 @@ export async function configureRuntimeRole(connectionString: string, runtimeRole
     // The login role serves Better Auth and verified provider-event receipts
     // without assuming the tenant role. Never grant it tenant-owned tables;
     // those remain accessible only after SET ROLE trestle_app and RLS context.
-    for (const table of ["user", "session", "account", "verification", "organization", "member", "invitation", "billing_provider_event", "email_delivery_event"]) {
+    for (const table of ["user", "session", "account", "verification", "organization", "member", "invitation", "billing_provider_event", "email_delivery_event", "two_factor", "passkey"]) {
       await sql`grant select, insert, update, delete on ${sql(table)} to ${sql(role)}`;
     }
     await sql`grant select, insert, update on artifact_maintenance_cursor to ${sql(role)}`;
+    // Session assurance is written by the auth hook and read by the admin Worker.
+    await sql`grant select, insert, update on authentication_assurance to ${sql(role)}`;
+    // Account-security events go through the SECURITY DEFINER function, never a direct audit_event insert.
+    await sql`grant execute on function trestle_record_security_event(text, text, text, text) to ${sql(role)}`;
     return {
       role,
       canLogin: record.rolcanlogin,
@@ -159,7 +163,7 @@ export function assertPlatformRole(status: PlatformRoleStatus, expectedRole?: st
 export async function verifyRuntimeRoleDataAccess(connectionString: string): Promise<void> {
   const sql = postgres(connectionString, { max: 1, prepare: false });
   try {
-    const [access] = await sql<{ auth_read: boolean; receipt_write: boolean; tenant_read: boolean; webhook_read: boolean; message_read: boolean; delivery_read: boolean; attempt_read: boolean; secret_read: boolean }[]>`
+    const [access] = await sql<{ auth_read: boolean; receipt_write: boolean; tenant_read: boolean; webhook_read: boolean; message_read: boolean; delivery_read: boolean; attempt_read: boolean; secret_read: boolean; security_event_execute: boolean }[]>`
       select has_table_privilege(current_user, 'member', 'SELECT') as auth_read,
              has_table_privilege(current_user, 'billing_provider_event', 'INSERT') as receipt_write,
              has_table_privilege(current_user, 'tenant_record', 'SELECT') as tenant_read,
@@ -167,9 +171,11 @@ export async function verifyRuntimeRoleDataAccess(connectionString: string): Pro
              has_table_privilege(current_user, 'webhook_message', 'SELECT') as message_read,
              has_table_privilege(current_user, 'webhook_delivery', 'SELECT') as delivery_read,
              has_table_privilege(current_user, 'webhook_attempt', 'SELECT') as attempt_read,
-             has_table_privilege(current_user, 'webhook_secret_version', 'SELECT') as secret_read
+             has_table_privilege(current_user, 'webhook_secret_version', 'SELECT') as secret_read,
+             has_function_privilege(current_user, 'trestle_record_security_event(text, text, text, text)', 'EXECUTE') as security_event_execute
     `;
     if (!access?.auth_read || !access.receipt_write) throw new Error("Runtime login lacks required non-tenant table access");
+    if (!access.security_event_execute) throw new Error("Runtime login cannot execute trestle_record_security_event");
     if (access.tenant_read || access.webhook_read || access.message_read || access.delivery_read || access.attempt_read || access.secret_read) throw new Error("Runtime login can read tenant records without assuming the RLS role");
     await sql`select id, application_role from member limit 0`;
     const url = new URL(connectionString);

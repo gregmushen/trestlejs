@@ -8,5 +8,5 @@ export default function OrganizationRolesView() {
   const { can } = useAdmin();
   const [createRequests, setCreateRequests] = useState(0);
   return <RoleManager plane="organization" title="Organization roles" createRequests={createRequests}
-    description="Account-administration roles available to every organization. Owner is not an application or platform administrator. Built-in roles are protected; clone one to customize it." />;
+    description="Account-administration roles available to every organization. Owner is not an application or platform administrator. Roles are defined in reviewed source (packages/authz)." />;
 }
