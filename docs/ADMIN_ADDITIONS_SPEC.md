@@ -2,7 +2,7 @@
 
 **Status:** Implemented in part; see Implementation status.
 
-**Scope:** Webhooks, notifications, and support sessions in the generated
+**Scope:** Webhooks and support sessions in the generated
 customer and platform administration interfaces.
 
 ## Implementation status
@@ -35,8 +35,8 @@ Paths are relative to a generated project.
   verification and test events, customer replay, signing-secret rotation, last
   successful and failed delivery on the endpoint list, and separate
   permissions for rotation and replay.
-- Notifications: all of §2, including the platform Notifications and Email
-  Delivery views.
+- Notifications (§2) are parked in the [roadmap](ROADMAP.md) until a real
+  application needs them.
 - Support sessions: support access profiles, a preview of granted
   permissions, tenant-application authority in a session, a banner that
   persists across all admin views, revocation by security operators, listing
@@ -132,48 +132,11 @@ log without the operator's identity or reason.
 
 ## 2. Notifications
 
-**Deferred.** None of this section is implemented. Email remains available
-through the existing email boundary (local capture or Resend), and
-`trestle email` inspects locally captured mail. There is no admin email view.
-
-Target design:
-
-Generated customer applications add a notification bell, unread count,
-notification inbox, mark-read actions, and notification-preferences screen when
-notifications are enabled.
-
-Notification definitions remain application-owned and declare:
-
-- supported channels;
-- default preferences;
-- mandatory or configurable behavior;
-- grouping and deduplication behavior; and
-- channel templates.
-
-Email is a notification channel through the existing email boundary.
-
-Platform admin adds **Communications -> Notifications** and **Email Delivery**.
-The notification list shows:
-
-- notification type;
-- logical recipient and tenant;
-- channel states;
-- created and scheduled times;
-- failure category; and
-- correlation identifier.
-
-The detail view shows grouping, deduplication, preference resolution, and safe
-attempt history.
-
-Authorized operators may retry an eligible failed delivery or cancel a pending
-optional delivery when the application exposes those actions. Admin never
-shows reset or verification URLs, authentication tokens, unrestricted message
-bodies, provider payloads, or credentials.
-
-Users may read their own notifications and manage their configurable
-preferences. Organization-wide defaults and delivery history require explicit
-organization permissions. Cross-tenant visibility requires a platform
-permission.
+**Parked.** Notifications, digests, and an admin Email Delivery view are listed
+under Parked in the [roadmap](ROADMAP.md) and will be specified when a real
+application needs them. Email remains available through the existing email
+boundary (local capture or Resend), and `trestle email` inspects locally
+captured mail.
 
 ## 3. Support Sessions
 
@@ -259,16 +222,14 @@ must not share the support-session action, permission, or audit vocabulary.
 
 The addition is complete when a generated application can:
 
-1. render Webhooks, Notifications, and Support Sessions from declared
-   capability state. Webhooks and Support sessions render; Notifications and
-   capability gating are **Deferred**;
+1. render Webhooks and Support Sessions from declared capability state. Both
+   render; capability gating is **Deferred**;
 2. enforce every view and action permission on the server (shipped for the
    implemented views);
 3. redact sensitive fields while preserving audit and correlation links
    (shipped);
-4. operate endpoint and notification delivery actions only through their
-   registered application services. Endpoint actions ship; notification
-   delivery is **Deferred**; and
+4. operate endpoint delivery actions only through their registered
+   application services (shipped); and
 5. enter, display, expire, exit, and revoke a support session while preserving
    the platform operator as the attributed actor. Enter, display, expire, and
    exit ship; revocation by another operator is **Deferred**.

@@ -355,47 +355,20 @@ normal application role must not casually bypass RLS.
 
 ## 13. Administrative Access and Admin Application
 
-Tenant admins remain RLS-bound with elevated in-tenant permissions.
-Platform administration uses an explicit, narrowly controlled privileged
-capability. "Admin" must not automatically mean global RLS bypass.
-
-An application may install an Avo/ActiveAdmin-style administrative surface:
-
-``` bash
-trestle admin install
-trestle generate admin-resource Article
-```
-
-Installation adds `apps/admin` and records the capability in the project
-manifest. The admin application uses the same React, TanStack Router, TanStack
-Query, TanStack Form, Tailwind CSS, Better Auth identity, Zod contracts, Hono
-API, domain/application services, contextual logging, and correlation model as
-the customer application. It is an application surface, not a generic database
-browser.
+Tenant admins remain RLS-bound with elevated in-tenant permissions. Platform
+administration uses an explicit, narrowly controlled privileged capability;
+"admin" never automatically means global RLS bypass.
 
 > **Admin interfaces use application semantics, not database semantics.**
 
-Generated admin actions invoke application/domain operations and their normal
-validation, authorization, events, and audit behavior. They do not casually
-expose unrestricted Drizzle CRUD, raw SQL, arbitrary table editing, secret
-values, or provider credentials. Read models optimized for administration are
-allowed, but mutation authority remains explicit and narrow.
+The optional admin application (`trestle admin install`) invokes application
+and domain operations with their normal validation, authorization, events, and
+audit behavior. Selecting a tenant context runs ordinary tenant operations
+through `withTenant()` under forced RLS; cross-tenant and global operations
+use separately declared platform capabilities with auditable reasons.
 
-A platform administrator may explicitly select a tenant context. Once selected,
-ordinary tenant operations construct the normal `ApiContext` and execute
-through `withTenant()` under forced PostgreSQL RLS. Cross-tenant and global
-operations use separately declared platform capabilities, dedicated endpoints,
-strong authorization, and auditable reasons; tenant switching alone never
-grants them. Better Auth application roles, tenant-admin permissions, and
-platform/database privileges remain distinct.
-
-The v1 admin surface includes users, organizations, authorized tenant-context
-switching, generated resource list/detail screens, relationships, search,
-filtering, cursor pagination, application-backed actions, outbox and DLQ
-inspection, and audit records. Destructive and bulk actions preview scope,
-require confirmation where appropriate, use idempotency keys, and report
-partial failure. Rich workflow visualization and general operational
-dashboards are deferred until implementation demonstrates a need.
+[`ADMIN_SPEC.md`](ADMIN_SPEC.md) is the authoritative specification for the
+admin surface, platform roles, capabilities, and audit.
 
 ## 14. Resource-Hiding Semantics
 
@@ -698,72 +671,32 @@ trestle secrets rotate NAME --env production
 trestle secrets key rotate --env production
 ```
 
-`edit` decrypts into a newly created private temporary directory, writes a
-mode-0600 temporary YAML file, and opens `$VISUAL`, then `$EDITOR`, then `vi`.
-On editor success it parses and validates the full document, encrypts to a
-temporary ciphertext, atomically replaces the encrypted file, and removes the
-plaintext temporary file. On validation failure the editor reopens with the
-error without overwriting valid ciphertext. Cleanup is best effort after a
-process or host crash, so `doctor` detects stale TrestleJS plaintext temp files
-where the platform permits it.
+Command rules (the CLI reference documents each flag):
 
-`show` intentionally decrypts and prints the complete credentials document to
-standard output. `get NAME --raw` prints only that value for deliberate shell
-composition. `show --format` prints the requested plaintext representation
-(YAML, JSON, or dotenv) and may be redirected by the operator. These commands
-do not mask values, emit their plaintext through structured logs, or write
-shell commands. When attached to an interactive terminal they print a concise
-warning to standard error; they
-do not require a confirmation ceremony. Operators are responsible for
-terminal scrollback, redirection targets, screen sharing, and shell capture.
-
-`set`, `import`, and `rotate` accept new values through an interactive hidden
-prompt, standard input, a protected file, or the encrypted editor. Values are
-not accepted as command-line arguments because process listings and shell
-history may expose them. `list` returns names, targets, and status without
-values. Remote Cloudflare secret values remain non-readable; `show` and `get`
-read the local encrypted source of truth.
-
-`trestle dev` decrypts the selected credentials in memory, validates them, and
-injects them into the child Worker development process. It does not create a
-persistent plaintext `.dev.vars` file. Existing `.dev.vars` and `.env` files
-may be explicitly imported for migration, and plaintext export remains
-available when a developer wants to use those tools directly. Generated
-`.gitignore` rules exclude master keys, plaintext exports, `.dev.vars*`,
-`.env*`, and CLI scratch files.
-
-`import` is strict and additive: it accepts only declared names for the
-selected target and never deletes an unspecified secret. Pruning is a separate
-explicit operation subject to the same required-secret safeguards as
-`delete`. Before a production mutation, the CLI prints the account, Worker,
-environment, affected names, and whether the platform operation immediately
-changes traffic or only creates a deployable version.
-
-`push` decrypts locally, selects only manifest entries targeted at the chosen
-provider, and uploads them without writing an intermediate plaintext file.
-`diff --remote` compares names and non-reversible local fingerprints or
-provider version metadata where supported; it never claims value equality
-when the provider cannot prove it and never retrieves remote plaintext.
-
-`check` compares the declared manifest with the selected environment and
-fails for missing required names, invalid bindings, public configuration that
-looks secret, or environment-crossing references. Deployment runs `check`
-before migration or upload. Preview deployments never inherit staging or
-production secrets implicitly, and untrusted fork workflows do not receive
-secrets.
-
-Secret updates are environment-scoped and create an auditable platform
-version. Rotation supports application-defined overlap: deploy code that can
-accept old and new values, activate the new value, verify it, then revoke the
-old value. Immediate single-value replacement remains available for providers
-that cannot overlap. Destructive deletion requires the exact environment and
-name and is refused while the manifest still marks the secret as required.
-
-`key rotate` generates a new master key and re-encrypts the credentials file
-atomically without changing its plaintext values. Rotating a master key does
-not rotate the credentials themselves. The command reports that distinction
-and leaves secure distribution of the new master key to the operator or CI
-environment workflow.
+- `edit` works in a private mode-0600 temporary file, validates before
+  atomically replacing ciphertext, and never overwrites valid ciphertext on a
+  validation failure; `doctor` reports stale plaintext temp files.
+- `show` and `get --raw` deliberately print plaintext without masking or
+  confirmation, warning on standard error when interactive. They read only the
+  local encrypted source; remote Cloudflare values are never retrieved.
+- New values arrive through a hidden prompt, standard input, a protected file,
+  or the editor, never as command-line arguments. `list` never prints values.
+- `trestle dev` injects decrypted credentials in memory and writes no
+  `.dev.vars`; generated `.gitignore` rules exclude keys, plaintext exports,
+  `.dev.vars*`, and `.env*`.
+- `import` is strict and additive; pruning and deletion are explicit and are
+  refused while the manifest still requires the name. Production mutations
+  print the account, Worker, environment, and affected names first.
+- `push` uploads only the entries targeted at the chosen provider without an
+  intermediate plaintext file. `diff --remote` compares names and fingerprints
+  or provider metadata and never claims value equality it cannot prove.
+- `check` fails for missing required names, invalid bindings, secret-looking
+  public configuration, or environment-crossing references, and deployment runs
+  it before migration or upload. Previews never inherit staging or production
+  secrets, and untrusted fork workflows receive none.
+- Rotation supports application-defined overlap (accept old and new, activate,
+  verify, revoke). `key rotate` re-encrypts under a new master key without
+  changing the credentials themselves and says so.
 
 CI authenticates to infrastructure with short-lived or federated credentials
 where supported. Migration credentials are not installed as Worker runtime
@@ -897,10 +830,7 @@ requirements, and staging/production separation.
 
 ### Observability, delivery events, and privacy
 
-Email uses semantic events including `email.send.started`,
-`email.send.accepted`, `email.send.failed`, `email.schedule.created`,
-`email.schedule.cancelled`, `email.schedule.rescheduled`, and
-`email.schedule.failed`. Useful fields include the Trestle delivery ID,
+Email emits semantic `email.send.*` and `email.schedule.*` events. Useful fields include the Trestle delivery ID,
 template, provider, correlation and causation IDs, organization ID, and
 duration. Logs do not include API keys, raw verification/reset tokens, magic
 links, authorization URLs containing secrets, provider request bodies, full
@@ -991,11 +921,10 @@ provider identifiers, plan, normalized status, current period, cancellation
 state, and update time. Normalized statuses include `active`, `trialing`,
 `past_due`, `cancelled`, and `incomplete`.
 
-Plans are version-controlled application configuration. They map commercial
-packages to application capabilities; environment-specific Stripe Price IDs are
-provider configuration. Domain authorization checks entitlements such as
-`ctx.entitlements.require("workflows.advanced")`, never plan-name conditionals or
-live Stripe responses.
+Plans and entitlements are specified in
+[`ADMIN_SPEC.md` §9](ADMIN_SPEC.md#9-plans-subscriptions-and-entitlements).
+Domain authorization checks entitlements, never plan-name conditionals or live
+Stripe responses.
 
 Marketing and Southwind pricing links carry plan intent only. The normal flow is
 pricing intent, authentication, authenticated checkout creation, Stripe
@@ -1017,10 +946,8 @@ acknowledges delivery.
 
 `billing_provider_event` has a unique `(provider, provider_event_id)` boundary
 and records type, receipt and processing times, status, and a safe error
-category. Normalized events include `BillingCheckoutCompleted`,
-`SubscriptionActivated`, `SubscriptionUpdated`, `SubscriptionCancelled`,
-`SubscriptionPastDue`, `InvoicePaid`, and `InvoicePaymentFailed`. Stripe event
-names remain inside the adapter.
+category. Stripe event names are normalized to provider-neutral billing events
+and never leave the adapter.
 
 The projection update, entitlement replacement, domain event, and outbox record
 commit in one PostgreSQL transaction. External Stripe API calls do not execute
@@ -1955,165 +1882,22 @@ discover project and architecture through structured commands
 
 ## 33. Agent Setup Skill
 
-TrestleJS provides an LLM-invokable setup skill, working name `trestle-setup`,
-that turns a product idea, existing codebase, or partially configured project
-into a reviewed and verified TrestleJS application. The skill supplies discovery,
-product reasoning, architecture judgment, and user collaboration. The TrestleJS
-CLI owns deterministic filesystem and infrastructure operations.
+Every generated project ships `.agents/skills/trestle-setup/SKILL.md`, which
+owns the discovery and conversation procedure: it turns a product idea or an
+existing project into a reviewed, verified TrestleJS application, while the CLI
+owns every deterministic filesystem and infrastructure operation. The
+architectural contract is:
 
-``` text
-human intent
-  -> read-only discovery and focused questions
-  -> shared understanding
-  -> reviewed architecture
-  -> versioned SetupPlan
-  -> mutation review and explicit approval
-  -> deterministic TrestleJS CLI
-  -> verification and report
-```
-
-The skill does not behave like a configuration questionnaire. It asks about
-users, organizations, resources, workflows, artifacts, integrations,
-coordination, operations, environments, delivery, cost, compliance, latency,
-and geography only when relevant. It prefers product questions such as "what
-happens after submission?" and derives infrastructure such as Queues or
-Workflows from the answer. It asks one primary question at a time, offers two
-or three meaningful alternatives when a genuine choice exists, recommends one
-with reasons, and does not manufacture choices around settled TrestleJS
-conventions.
-
-### Discovery and design lifecycle
-
-The skill tracks these phases:
-
-``` text
-DISCOVER -> UNDERSTAND -> CLARIFY -> SHARED UNDERSTANDING
-         -> DESIGN -> DESIGN REVIEW -> SETUP PLAN
-         -> MUTATION REVIEW -> EXPLICIT APPROVAL
-         -> APPLY -> VERIFY -> REPORT
-```
-
-Before questioning, it performs safe read-only discovery: repository and Git
-state, package manager and runtime, current architecture and dependencies,
-existing TrestleJS configuration, auth and database shape, Wrangler and GitHub
-configuration and authentication status, resource metadata, environment
-names, secret names/status without values, and current CI/CD. Existing
-projects are analyzed before recommendations; they are never assumed safe to
-replace wholesale with a template.
-
-Before architecture design, the skill presents a concise checkpoint divided
-into `Known`, `Inferred`, and `Assumed`, and receives confirmation or
-corrections. Architecture is then reviewed incrementally across application
-surfaces, identity and tenancy, resources, data and storage, async execution,
-administration, integrations and email, UI, environments, delivery, secrets,
-and observability. Later answers may revise earlier conclusions.
-
-Inference follows the TrestleJS conventions in this specification: Better Auth;
-PostgreSQL, Drizzle, and forced RLS; React with TanStack Router, Query, and
-Form; Tailwind CSS; Zod boundaries; R2 for large artifacts; Queues for async
-transport; Workflows for durable progression; and Durable Objects for
-coordinated mutable state. A component is enabled only when a requirement
-justifies it.
-
-The skill explicitly discovers cost constraints. It never silently chooses a
-paid resource. A paid proposal states why it is needed, its determinable cost,
-free alternatives, and the consequences of those alternatives, and requires
-explicit approval.
-
-### Read-only and mutation boundary
-
-Before SetupPlan approval, the skill may inspect but may not create or modify
-files, install dependencies, provision resources, create or rotate secrets,
-run migrations, deploy, change GitHub settings or DNS, touch production, or
-create paid resources. Positive reactions to the design are not mutation
-approval.
-
-After design approval, the skill renders a versioned machine-readable plan in
-memory and validates it through `trestle plan validate -`. Its proposed
-persistent location is `.trestle/setup.json`. Creating or updating that file is
-the first item in the mutation review and does not occur before approval,
-unless the user's request explicitly authorized creation of only a plan
-artifact. The plan contains configuration intent, not secret values, and is:
-
-- deterministic, serializable, diffable, resumable, and schema-validatable;
-- explicit about project topology, UI stack, identity, tenancy, resources,
-  providers, environments, CI/CD, secrets, logging, cost, and verification;
-- explicit about paid resources and destructive operations; and
-- rejected when its schema version or requested CLI capability is unsupported.
-
-`trestle plan validate` accepts a path or standard input and checks schema
-validity, missing decisions, unsupported combinations, dependency conflicts,
-environment
-consistency, provider requirements, paid-resource declarations, destructive
-intent, and CLI capability. `trestle plan diff` also accepts a path or standard
-input, resolves the plan against current local and remote state, and classifies
-each item as `already correct`,
-`create`, `update`, `delete`, `blocked`, or `unknown`.
-
-The final mutation review lists exact filesystem changes, dependencies,
-database and Cloudflare resources, GitHub Actions and settings, encrypted
-credential files and key locations, migrations, deployments, destructive
-operations, expected cost, and explicitly excluded actions. Mutation begins
-only after a direct affirmative response to that review.
-
-Production deployment, production-secret changes, production master-key
-rotation, destructive production migrations, production DNS changes,
-production deletion, and paid production resources require a separate,
-operation-specific approval even when initial setup was approved.
-
-### Apply, secrets, and resumability
-
-After approval the skill prefers the highest-level available idempotent
-command, normally `trestle apply .trestle/setup.json`. If the CLI supports an
-operation, the skill does not hand-write an equivalent Wrangler file,
-migration, provider API call, Better Auth configuration, or generated project
-structure. A CLI capability gap may be worked around only after the deviation,
-consequences, and resulting maintenance ownership are presented and approved.
-
-Apply converges toward declared intent rather than duplicating resources. It
-persists safe operation status and supports resuming after partial failure.
-Re-running apply reports completed, pending, conflicting, and blocked steps
-and continues from existing state. It never restarts destructively merely for
-convenience.
-
-The SetupPlan contains secret names and requirements only. It never contains
-master keys or plaintext values. The skill may initialize encrypted credential
-files, open `trestle secrets edit --env <name>` for direct user entry, validate
-them, and push them after approval. It does not repeat decrypted values into
-conversation or structured logs. The user's direct invocation of
-`show/get/export` remains available as defined by the secrets specification;
-the setup skill does not invoke those disclosure commands unless explicitly
-asked.
-
-### Verification and report
-
-Mutation is not completion. Verification is derived from the plan and includes
-all applicable checks:
-
-- generated-file and clean regeneration checks;
-- dependency installation, lint, typecheck, unit, integration, system, RLS,
-  idempotency, and build checks;
-- `trestle doctor`, SetupPlan convergence, encrypted-credential presence, and
-  required remote binding checks without printing values;
-- migration status and application-role/forced-RLS tests;
-- local application boot and generated Better Auth/TanStack/Tailwind screen
-  smoke tests;
-- Cloudflare resource and binding existence for each approved environment;
-- GitHub Actions validation and environment/secret-name status;
-- staging deployment and post-deploy system smoke tests when staging was in
-  the approved mutation plan; and
-- absence of unapproved production, DNS, paid-resource, or destructive
-  mutations.
-
-Failed verification leaves the plan resumable and reports the failing command,
-safe diagnostic evidence, completed operations, rollback or recovery options,
-and the smallest action needed to continue. The skill never declares success
-solely because apply exited successfully.
-
-The final report states what was discovered, designed, created, reused,
-changed, verified, skipped, blocked, and left for later; resulting cost and
-free-tier assumptions; environment and deployment status; secret names and
-key locations without values; deviations from the plan; and exact next steps.
+- The skill's durable output is a SetupPlan at `.trestle/setup.json`
+  (`trestle plan init` writes a starter), which stores secret names and
+  requirements, never values.
+- Before explicit approval it performs read-only work only.
+- Mutation goes through `trestle plan diff` and `trestle apply --yes`; the
+  skill never reproduces a CLI-owned operation by hand.
+- Production, DNS, paid, and destructive operations each need separate,
+  operation-specific approval.
+- Verification uses `trestle doctor` and the project's own checks, and the
+  final report distinguishes evidence from assumptions.
 
 ## 34. Small Runtime, Strong Conventions
 
@@ -2241,153 +2025,18 @@ v1 should include:
 35. Payments: provider-neutral `BillingService`, local deterministic billing,
     Stripe Checkout/Portal/webhooks adapter (shipped).
 
-## 38. Deferred Functionality and Architecture Freeze
+## 38. Deferred Functionality
 
-Defer until justified by real applications:
-
--   generic realtime abstraction;
--   WebSocket framework;
--   Redis or a generalized cache abstraction;
--   dedicated search engine;
--   GraphQL;
--   vector database integration;
--   generic event sourcing;
--   dependency-injection framework;
--   service mesh;
--   custom RPC protocol;
--   alternative ORMs;
--   alternative auth engines;
--   alternative SQL dialects;
--   Kubernetes/container deployment;
--   generalized policy engine;
--   schema-per-tenant tenancy;
--   plugin marketplace;
--   broad cloud-provider abstraction beyond what the core interfaces
-    naturally permit;
--   tenant-managed secret vault;
--   making beta Cloudflare Secrets Store the default provider.
-
-### Architecture freeze
-
-After the v1 items above, the conceptual architecture is frozen until evidence
-from implementation shows that an existing primitive cannot satisfy a real
-requirement cleanly. A new infrastructure abstraction requires a concrete
-failing use case, alternatives considered, operational and cost impact, and an
-architecture decision record. Symmetry, trend coverage, or speculative
-completeness is not sufficient justification.
-
-Corrections that tighten security, resolve contradictions, or make an existing
-contract implementable remain allowed during the freeze. They should reduce
-ambiguity rather than introduce another subsystem.
-
-### First implementation milestone
-
-The next milestone after architecture freeze is the smallest complete vertical
-slice:
-
-``` bash
-npx create-trestlejs hello
-cd hello
-trestle dev
-trestle generate resource Article
-```
-
-That slice must prove one coherent path through React resource UI, TanStack
-Router/Query/Form, Tailwind styling, Zod contracts, Hono routes, a Better Auth
-session, `ExecutionContext`, contextual logging, Drizzle schema and migration,
-forced PostgreSQL RLS, `withTenant()`, CRUD behavior, adversarial tenant
-isolation tests, Docker PostgreSQL, the local Wrangler/workerd runtime,
-`trestle doctor`, and machine-readable project/resource/route introspection.
-
-Success is measured by whether this workflow is materially clearer, safer, and
-faster than assembling the components manually. Findings from that slice—not
-additional speculative design—drive the next architecture revision.
+The deferred list and the rule for adding a new subsystem live in
+[ROADMAP](ROADMAP.md) *Deliberately deferred*.
 
 ## 39. Acceptance Criteria
 
-TrestleJS v1 is successful when a developer can:
-
-1.  run `npx create-trestlejs my-app`;
-2.  boot a working local app;
-3.  sign up/sign in through self-hosted Better Auth;
-4.  create an organization;
-5.  generate a tenant-scoped resource;
-6.  migrate PostgreSQL with Drizzle-defined RLS;
-7.  call generated CRUD APIs from TanStack Query;
-8.  use and customize application-owned authentication screens implemented
-    with TanStack Form, Zod, and Tailwind CSS;
-9.  verify cross-tenant access fails at the database boundary;
-10. generate and execute a Queue/Workflow path with resource-derived
-    tenancy;
-11. store/retrieve a large artifact in R2;
-12. deploy an isolated staging environment;
-13. deploy the same topology to production;
-14. trace a request across async boundaries using correlation metadata;
-15. understand generated code without learning a large hidden TrestleJS
-    runtime;
-16. declare, set, validate, rotate, and delete environment-scoped secrets
-    without placing plaintext values in source control, command history,
-    logs, or browser bundles;
-17. deploy with an application role that cannot bypass forced RLS and prove
-    missing tenant context fails closed;
-18. recover poison messages through a DLQ and redrive path;
-19. inspect provider backup status, restore a selected production-shaped
-    recovery point only into an isolated non-production environment, verify
-    schema/Auth/roles/forced-RLS/tenant/domain/R2-reference integrity, and
-    retain non-secret evidence that recovery succeeded;
-20. push a trusted pull request and receive isolated Worker and web preview
-    URLs without exposing staging or production secrets;
-21. merge to the protected branch and observe serialized staging deployment,
-    a passing staging smoke gate, production promotion, and a production smoke
-    gate recorded as GitHub deployments;
-22. edit encrypted credentials in the configured terminal editor, commit only
-    ciphertext, deliberately print or export plaintext when requested, and
-    run local development without a persistent plaintext secrets file;
-23. apply a product theme by changing semantic CSS/Tailwind variables while
-    retaining accessible generated authentication and resource screens;
-24. use `trestle-setup` to move from product intent through confirmed shared
-    understanding, reviewed architecture, an approved SetupPlan, deterministic
-    resumable apply, and evidence-backed verification without an unapproved
-    mutation;
-25. reconstruct an HTTP-to-outbox-to-Queue-to-Workflow operation from
-    standardized semantic log records without exposing registered secret
-    values;
-26. clone a repository, obtain its local master key, and run `trestle dev` to
-    start Vite, the Worker, local R2/Queues/Workflows/Durable Objects, and real
-    Docker PostgreSQL with migrations, roles, Better Auth, and forced RLS;
-27. stop and restart ordinary development without losing state, then use
-    `trestle dev --fresh` to recreate only explicitly identified local state;
-28. inspect local database and Cloudflare execution and optionally expose the
-    local Worker through Cloudflare Tunnel without provisioning a cloud
-    development environment;
-29. run `trestle doctor` locally or against a declared environment and receive
-    actionable human or stable JSON diagnostics without the command mutating
-    tools, services, migrations, configuration, or state;
-30. open `trestle console` locally with application services and top-level
-    `await`, enter a tenant-bound context that preserves forced RLS, and use
-    explicitly confirmed, authenticated, and audited access for staging or
-    production without automatically exposing secrets;
-31. distinguish the safe application-aware console from explicitly requested
-    raw PostgreSQL access through `trestle db console`;
-32. inspect routes, resources, events, workflows, queues, Durable Objects,
-    bindings, permissions, environments, and project structure through
-    human-readable or versioned structured commands without reading the whole
-    repository;
-33. regenerate the resource registry and managed `AGENTS.md` content from
-    authoritative manifest/source declarations while preserving custom agent
-    guidance and detecting staleness through `trestle doctor`;
-34. seed repeatable demo and two-tenant isolation scenarios and deterministically
-    advance business time in tests without sleeping;
-35. replace or test an external provider through an application-owned
-    integration interface without changing domain behavior or exposing its
-    credentials and sensitive payloads in logs;
-36. evaluate typed features through `ExecutionContext` without scattering
-    environment-variable conditionals through domain code; and
-37. install the optional admin application, generate an `Article` admin
-    resource, enter an authorized tenant context, and perform an
-    application-backed action through normal validation, authorization,
-    logging, audit, `withTenant()`, and forced RLS without receiving generic
-    database-editing authority.
+v1 is accepted when a clean `create-trestlejs` project completes the
+[ROADMAP](ROADMAP.md) *Beta completion criteria* path without manual source
+repair, covering the §37 scope, and every invariant stated in the sections
+above has at least one automated test. The
+[beta testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md) records the evidence.
 
 ## 40. Product Positioning
 
