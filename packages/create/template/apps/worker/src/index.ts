@@ -9,7 +9,7 @@ import { activeSupportView, applyBillingNotificationEvent, billingReconciliation
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
-import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
+import { createQueueConsumer, createWorkflowQueueConsumer, EventConsumerRegistry, type QueueBatch } from "./async-runtime.js";
 import { maintainArtifacts } from "./artifact-maintenance.js";
 import { auditArtifactReferences } from "./artifact-reference-audit.js";
 import { auditArtifactOrphans } from "./artifact-orphan-audit.js";
@@ -25,9 +25,12 @@ import { createBillingService, stripeConfigurationReady } from "./services.js";
 import { hasCurrentEntitlement, projectWebhookForEvent } from "./webhook-runtime.js";
 import { maintainWebhookPayloads } from "./webhook-retention.js";
 import { maintainReadyArtifacts } from "./artifact-retention.js";
-import { maintainNativeWebhookDeliveries } from "./webhook-recovery.js";
 import { consumeNativeWebhookQueueMessages, looksLikeNativeWebhookWakeup } from "./webhook-native-queue.js";
-import type { Database, NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
+import type { Database } from "@__TRESTLE_PROJECT_NAME__/db";
+import { scheduledJobs } from "./jobs.js";
+import { runSafetySweep, wakeOutboxDispatch } from "./scheduler-runtime.js";
+import { frameworkDueWork, scheduleDueWork, schedulerStub } from "./scheduler.js";
+import type { WorkerEnvironment } from "./worker-environment.js";
 import { z } from "zod";
 
 export const app = new Hono<{ Bindings: AuthEnvironment; Variables: AppVariables }>();
@@ -375,6 +378,12 @@ app.post("/api/webhooks/resend", async (context) => {
   }
 });
 
+// A processed billing notification commits outbox rows: dispatch them now.
+app.use("/webhooks/stripe", async (context, next) => {
+  await next();
+  if (context.res.status === 202) wakeOutboxDispatch(context);
+});
+
 app.post("/webhooks/stripe", async (context) => {
   const log = createLogger({ correlationId: context.get("correlationId"), provider: "stripe" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   if (!context.env.STRIPE_WEBHOOK_SECRET) return context.json({ error: "Stripe webhook is not configured" }, 503);
@@ -526,11 +535,35 @@ app.get("/api/health/operational", (context) => context.json({
     queues: { configured: Boolean((context.env as WorkerEnvironment).TRESTLE_EVENTS) },
     artifacts: { configured: artifactRuntimeReady(context.env), mode: context.env.TRESTLE_ARTIFACTS ? "r2" : context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" : "unavailable" },
     workflows: { enabled: (context.env as WorkerEnvironment).TRESTLE_WORKFLOWS_ENABLED === "true", configured: Boolean((context.env as WorkerEnvironment).TRESTLE_WORKFLOW) },
+    scheduler: { configured: Boolean((context.env as WorkerEnvironment).TRESTLE_SCHEDULER), jobs: scheduledJobs.names().length },
   },
 }));
 
-/** Matches FRAMEWORK_MAINTENANCE_CRON in scripts/queue-config.mjs, which adds it to deployed Workers. */
-const frameworkMaintenanceCron = "* * * * *";
+/** Local only: what the due-time scheduler holds. Its own state answers "anything pending?" without a database. */
+app.get("/api/dev/scheduler", async (context) => {
+  if (context.env.APP_ENV && context.env.APP_ENV !== "local") return context.notFound();
+  const binding = (context.env as WorkerEnvironment).TRESTLE_SCHEDULER;
+  if (!binding) return context.json({ configured: false, alarmAt: null, work: [] });
+  const pending = await schedulerStub(binding).pending?.();
+  return context.json({ configured: true, alarmAt: pending?.alarmAt ?? null, work: pending?.work ?? [] });
+});
+
+/** Local only: record a no-op probe due after `delayMs`, to watch the scheduler's alarm fire and clear under wrangler dev. */
+app.post("/api/dev/scheduler/probe", async (context) => {
+  if (context.env.APP_ENV && context.env.APP_ENV !== "local") return context.notFound();
+  const binding = (context.env as WorkerEnvironment).TRESTLE_SCHEDULER;
+  if (!binding) return context.json({ error: "scheduler_not_configured" }, 409);
+  const delay = Number(context.req.query("delayMs") ?? "0");
+  if (!Number.isInteger(delay) || delay < 0 || delay > 60_000) return context.json({ error: "invalid_delay" }, 400);
+  const key = frameworkDueWork.probe(crypto.randomUUID());
+  const dueAt = new Date(Date.now() + delay).toISOString();
+  await scheduleDueWork(binding, [{ key, dueAt }]);
+  return context.json({ key, dueAt }, 202);
+});
+
+/** The framework's cron triggers. scripts/queue-config.mjs adds the same expressions (FRAMEWORK_CRONS) to deployed Workers. */
+export const frameworkSweepCron = "*/15 * * * *";
+export const frameworkMaintenanceCron = "7 * * * *";
 const artifactIdPattern =/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 // Artifacts are product resources: only application-plane authority grants them.
@@ -603,7 +636,6 @@ app.onError((error, context) => {
   return context.json({ error: mapped.code, message: mapped.message, retryable: mapped.retryable }, mapped.status);
 });
 
-type WorkerEnvironment = AuthEnvironment & { TRESTLE_EVENTS?: CloudflareQueueBinding<EventEnvelope | NativeWebhookWakeup>; TRESTLE_WORKFLOW?: CloudflareWorkflowBinding; TRESTLE_WORKFLOWS_ENABLED?: string };
 export default {
   fetch: app.fetch.bind(app),
   queue: async (batch: QueueBatch, environment: WorkerEnvironment) => {
@@ -640,35 +672,27 @@ export default {
     const outbox = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
     try {
       const events = await createQueueConsumer(eventConsumers, inbox, outbox, async (envelope, currentEnvironment, committed, context) => {
-        await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox, ...(committed ? { committed } : {}), ...(context ? { now: () => context.clock.now() } : {}), ...(environment.TRESTLE_EVENTS ? { queue: environment.TRESTLE_EVENTS } : {}) });
+        await projectWebhookForEvent({ envelope, environment: currentEnvironment, outbox, ...(committed ? { committed } : {}), ...(context ? { now: () => context.clock.now() } : {}), ...(environment.TRESTLE_EVENTS ? { queue: environment.TRESTLE_EVENTS } : {}), ...(environment.TRESTLE_SCHEDULER ? { scheduler: environment.TRESTLE_SCHEDULER } : {}) });
       }, observeEvent)({ messages: eventMessages }, environment);
       return { acknowledged: native.acknowledged + events.acknowledged, retried: native.retried + events.retried };
     } finally { await Promise.all([inbox.close(), outbox.close()]); }
   },
   scheduled: async (event: { cron?: string } | undefined, environment: WorkerEnvironment) => {
-    // Application crons declared in wrangler.jsonc arrive with their own expression: handle them here.
-    // Framework maintenance runs only on its own tick (or a local invocation that names no cron).
-    if (event?.cron !== undefined && event.cron !== frameworkMaintenanceCron) return;
+    // Application crons declared in wrangler.jsonc arrive with their own expression: handle them
+    // here, by matching event.cron. Prefer registering due work in jobs.ts over adding a cron.
+    // Framework work runs only on its own crons (or a local invocation that names no cron):
+    // the safety sweep every 15 minutes and hourly maintenance. Everything else is due-time work
+    // run by the TrestleScheduler Durable Object, so an idle project makes no database queries.
+    const sweep = event?.cron === undefined || event.cron === frameworkSweepCron;
+    const maintenance = event?.cron === undefined || event.cron === frameworkMaintenanceCron;
+    if (!sweep && !maintenance) return;
     const log = createLogger({ environment: environment.APP_ENV ?? "local" }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
     if (!environment.TRESTLE_EVENTS && !environment.TRESTLE_ARTIFACTS && environment.WEBHOOK_DELIVERY_MODE !== "local") {
       if (!environment.APP_ENV || environment.APP_ENV === "local") return;
       throw new Error("Remote scheduled work requires a Queue or R2 binding");
     }
-    if (environment.TRESTLE_EVENTS) {
-      const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
-      try {
-        const result = await dispatchQueuedOutbox(store, environment.TRESTLE_EVENTS);
-        log.info("outbox.dispatch.completed", result);
-      } finally {
-        await store.close();
-      }
-    }
-    if (environment.WEBHOOK_DELIVERY_MODE === "native") {
-      if (!environment.TRESTLE_EVENTS) throw new Error("Native webhook recovery requires the TRESTLE_EVENTS Queue binding");
-      const result = await maintainNativeWebhookDeliveries({ environment, queue: environment.TRESTLE_EVENTS });
-      log.info("webhook.native.recovery.completed", result);
-      if (result.failed > 0) throw new Error("Native webhook recovery left incomplete work");
-    }
+    if (sweep) await runSafetySweep(environment, log);
+    if (!maintenance) return;
     let artifactUnresolved = false;
     if (environment.TRESTLE_ARTIFACTS) {
       try {

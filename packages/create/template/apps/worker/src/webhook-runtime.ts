@@ -5,6 +5,8 @@ import { captureLocalWebhookDelivery, createTenantDatabase, loadCurrentWebhookSi
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type OutboxEntry, type defineEventCatalog } from "@__TRESTLE_PROJECT_NAME__/events";
 import { and, eq, isNull } from "drizzle-orm";
 
+import { frameworkDueWork, scheduleDueWork, type DueWorkSchedulerBinding } from "./scheduler.js";
+
 type Catalog = ReturnType<typeof defineEventCatalog>;
 
 /** The tenant's current entitlement from the billing projection, read at handling time. */
@@ -29,6 +31,8 @@ export async function projectWebhookForEvent(input: {
   now?: () => Date;
   localScenario?: LocalWebhookScenario;
   queue?: CloudflareQueueBinding<NativeWebhookWakeup>;
+  /** Records a local delivery's retry time, so the retry runs when due. */
+  scheduler?: DueWorkSchedulerBinding;
 }): Promise<WebhookProjectionResult | null> {
   const catalog = input.catalog ?? applicationEventCatalog;
   const queued = input.envelope;
@@ -77,10 +81,15 @@ export async function projectWebhookForEvent(input: {
         endpointId: delivery.endpointId,
       });
       if (!signingSecret) throw new Error("Local outbound webhook endpoint has no current signing secret");
-      await captureLocalWebhookDelivery({
+      const captured = await captureLocalWebhookDelivery({
         organizationId, deliveryId: delivery.id, tenantDatabase, signingSecret,
         scenario: input.localScenario ?? { kind: "succeed" }, clock: { now: input.now ?? (() => new Date()) },
       });
+      if (captured.state === "retry" && captured.nextRetryAt) {
+        // The retry is durable in webhook_delivery; recording it only makes it run on time.
+        try { await scheduleDueWork(input.scheduler, [{ key: frameworkDueWork.webhooks(organizationId), dueAt: captured.nextRetryAt }]); }
+        catch { createLogger({ organizationId }, undefined, { secretValues: loggerSecretsFromEnvironment(input.environment) }).warn("webhook.local.retry.unscheduled", { deliveryId: delivery.id }); }
+      }
     }
   }
   createLogger({ correlationId: actual.correlationId, organizationId: committed.organizationId }, undefined, { secretValues: loggerSecretsFromEnvironment(input.environment) }).info(

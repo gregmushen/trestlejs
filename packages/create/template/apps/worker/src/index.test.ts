@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const state = vi.hoisted(() => ({ authenticated: false, committed: new Map<string, { id: string; message: unknown; organizationId?: string }>() }));
+const state = vi.hoisted(() => ({ authenticated: false, committed: new Map<string, { id: string; message: unknown; organizationId?: string }>(), outboxNextDue: null as Date | null }));
 
 vi.mock("@__TRESTLE_PROJECT_NAME__/auth", () => ({
   createAuth: () => ({
@@ -23,11 +23,16 @@ vi.mock("@__TRESTLE_PROJECT_NAME__/db", async (importOriginal) => ({
   ...await importOriginal<typeof import("@__TRESTLE_PROJECT_NAME__/db")>(),
   PostgresOutboxStore: class {
     async findCommitted(id: string) { return state.committed.get(id) ?? null; }
+    async lease() { return []; }
+    async nextDue() { return state.outboxNextDue; }
     async close() {}
   },
 }));
 
-import worker, { app } from "./index.js";
+import { Hono } from "hono";
+import worker, { app, frameworkMaintenanceCron, frameworkSweepCron } from "./index.js";
+import { scheduledJobs } from "./jobs.js";
+import { wakeOutboxDispatch } from "./scheduler-runtime.js";
 import { eventEnvelopeSchema } from "@__TRESTLE_PROJECT_NAME__/events";
 
 const environment = {
@@ -47,10 +52,60 @@ describe("worker routes", () => {
     await expect(worker.scheduled(undefined, environment)).resolves.toBeUndefined();
   });
 
-  it("runs framework maintenance only on the framework tick", async () => {
-    // Without bindings, maintenance throws, so resolving proves an application cron skipped it.
+  it("routes framework work by cron and leaves every other cron to the application", async () => {
+    // Without bindings, framework work throws, so resolving proves a cron skipped it.
     await expect(worker.scheduled({ cron: "0 * * * *" }, { ...environment, APP_ENV: "preview" })).resolves.toBeUndefined();
-    await expect(worker.scheduled({ cron: "* * * * *" }, { ...environment, APP_ENV: "preview" })).rejects.toThrow("Queue or R2 binding");
+    // The old every-minute tick is no longer framework work; an application may still declare it.
+    await expect(worker.scheduled({ cron: "* * * * *" }, { ...environment, APP_ENV: "preview" })).resolves.toBeUndefined();
+    await expect(worker.scheduled({ cron: frameworkSweepCron }, { ...environment, APP_ENV: "preview" })).rejects.toThrow("Queue or R2 binding");
+    await expect(worker.scheduled({ cron: frameworkMaintenanceCron }, { ...environment, APP_ENV: "preview" })).rejects.toThrow("Queue or R2 binding");
+    expect(frameworkSweepCron).toBe("*/15 * * * *");
+    expect(frameworkMaintenanceCron).toBe("7 * * * *");
+  });
+
+  it("re-records due work with the scheduler on the safety sweep and runs no maintenance there", async () => {
+    const scheduled: Array<{ key: string; dueAt: string }> = [];
+    const artifactCalls: string[] = [];
+    const scheduler = { idFromName: (name: string) => name, get: () => ({ schedule: async (items: Array<{ key: string; dueAt: string }>) => { scheduled.push(...items); } }) };
+    state.outboxNextDue = new Date("2026-09-25T12:05:00.000Z");
+    await worker.scheduled({ cron: frameworkSweepCron }, { ...environment, APP_ENV: "staging", TRESTLE_EVENTS: { send: async () => {} }, TRESTLE_SCHEDULER: scheduler,
+      TRESTLE_ARTIFACTS: new Proxy({}, { get: (_target, property) => { artifactCalls.push(String(property)); throw new Error("maintenance must not run on the sweep"); } }) as never });
+    expect(scheduled).toEqual([{ key: "framework:outbox", dueAt: "2026-09-25T12:05:00.000Z" }]);
+    expect(artifactCalls).toEqual([]);
+  });
+
+  it("fails the sweep loudly when application jobs are registered without a scheduler binding", async () => {
+    scheduledJobs.register("index-test.job", { next: () => new Date("2026-09-25T12:30:00.000Z"), run: async () => {} });
+    await expect(worker.scheduled({ cron: frameworkSweepCron }, { ...environment, APP_ENV: "staging", TRESTLE_EVENTS: { send: async () => {} } })).rejects.toThrow("TRESTLE_SCHEDULER");
+  });
+
+  it("wakes outbox dispatch after a request commits events, without waiting for a cron", async () => {
+    const scheduled: Array<{ key: string; dueAt: string }> = [];
+    const waited: Promise<unknown>[] = [];
+    const scheduler = { idFromName: (name: string) => name, get: () => ({ schedule: async (items: Array<{ key: string; dueAt: string }>) => { scheduled.push(...items); } }) };
+    const wakeEnvironment = { ...environment, TRESTLE_EVENTS: { send: async () => {} }, TRESTLE_SCHEDULER: scheduler };
+    const executionContext = { waitUntil: (promise: Promise<unknown>) => { waited.push(promise); }, passThroughOnException: () => {}, props: {} };
+    const probe = new Hono<{ Bindings: typeof wakeEnvironment }>();
+    probe.post("/commit", async (context) => { wakeOutboxDispatch(context); return context.json({ ok: true }); });
+    const response = await probe.request("/commit", { method: "POST" }, wakeEnvironment, executionContext);
+    expect(response.status).toBe(200);
+    await Promise.all(waited);
+    expect(waited).toHaveLength(1);
+    expect(scheduled).toEqual([{ key: "framework:outbox", dueAt: expect.any(String) }]);
+    // Without a Queue there is nothing to dispatch, so nothing is woken.
+    scheduled.length = 0;
+    await probe.request("/commit", { method: "POST" }, { ...environment, TRESTLE_SCHEDULER: scheduler } as never, executionContext);
+    expect(scheduled).toEqual([]);
+  });
+
+  it("reports the scheduler in operational health and exposes its state only locally", async () => {
+    const scheduler = { idFromName: (name: string) => name, get: () => ({ schedule: async () => {}, pending: async () => ({ alarmAt: null, work: [] }) }) };
+    const health = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "preview", TRESTLE_SCHEDULER: scheduler });
+    await expect(health.json()).resolves.toMatchObject({ capabilities: { scheduler: { configured: true } } });
+    const local = await app.request("/api/dev/scheduler", undefined, { ...environment, TRESTLE_SCHEDULER: scheduler });
+    expect(local.status).toBe(200);
+    await expect(local.json()).resolves.toEqual({ configured: true, alarmAt: null, work: [] });
+    expect((await app.request("/api/dev/scheduler", undefined, { ...environment, APP_ENV: "preview", TRESTLE_SCHEDULER: scheduler })).status).toBe(404);
   });
 
   it("fails enabled Workflow delivery without its binding", async () => {

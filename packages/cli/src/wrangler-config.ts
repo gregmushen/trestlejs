@@ -67,6 +67,19 @@ export function wranglerCapabilityBinding(block: string, capability: CloudflareB
   return Boolean(durableObjects?.match(/"name"\s*:\s*"TRESTLE_STATE"/u) && durableObjects?.match(/"class_name"\s*:\s*"[^"]+"/u));
 }
 
+/** The due-time scheduler's Durable Object binding: TRESTLE_SCHEDULER bound to this Worker's TrestleScheduler class. */
+export function wranglerSchedulerBinding(block: string): boolean {
+  const bindings = arrayForKey(objectForKey(block, "durable_objects") ?? "", "bindings") ?? "";
+  return (bindings.match(/\{[^{}]*\}/gu) ?? []).some((binding) =>
+    /"name"\s*:\s*"TRESTLE_SCHEDULER"/u.test(binding) && /"class_name"\s*:\s*"TrestleScheduler"/u.test(binding) && !/"script_name"/u.test(binding));
+}
+
+/** The scheduler's class migration: TrestleScheduler created as a SQLite-backed class in a tagged migration. */
+export function wranglerSchedulerMigration(block: string): boolean {
+  const migrations = arrayForKey(block, "migrations") ?? "";
+  return /"new_sqlite_classes"\s*:\s*\[[^\]]*"TrestleScheduler"/u.test(migrations);
+}
+
 export function wranglerEnvironmentBlock(source: string, environment: EnvironmentName): string {
   if (environment === "local") return objectForKey(source, "vars") ?? "";
   const environments = objectForKey(source, "env");

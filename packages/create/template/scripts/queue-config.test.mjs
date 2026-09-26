@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-import { artifactBucketName, FRAMEWORK_MAINTENANCE_CRON, queueNames, queuesEnabled, r2Enabled, renderQueueConfig, workflowsEnabled } from "./queue-config.mjs";
+import { artifactBucketName, FRAMEWORK_CRONS, FRAMEWORK_MAINTENANCE_CRON, FRAMEWORK_SWEEP_CRON, queueNames, queuesEnabled, r2Enabled, renderQueueConfig, SCHEDULER_BINDING, SCHEDULER_MIGRATION, workflowsEnabled } from "./queue-config.mjs";
 
 const wrangler = await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8");
 
@@ -65,10 +65,66 @@ test("rendered Worker config binds producer, consumer, and DLQ without a preview
   assert.throws(() => renderQueueConfig(wrangler, "local", "example-worker"), /requires preview/u);
 });
 
-test("staging retains its cron trigger for scheduled delivery", () => {
+test("staging gets the safety sweep and hourly maintenance instead of an every-minute tick", () => {
+  assert.deepEqual(FRAMEWORK_CRONS, ["*/15 * * * *", "7 * * * *"]);
+  assert.equal(FRAMEWORK_SWEEP_CRON, "*/15 * * * *");
+  assert.equal(FRAMEWORK_MAINTENANCE_CRON, "7 * * * *");
   const rendered = JSON.parse(renderQueueConfig(wrangler, "staging", "example-worker-staging", { queues: true, r2: true, workflows: true }));
-  assert.deepEqual(rendered.env.staging.triggers.crons, ["* * * * *"]);
+  assert.deepEqual(rendered.env.staging.triggers.crons, ["*/15 * * * *", "7 * * * *"]);
+  assert.ok(!rendered.env.staging.triggers.crons.includes("* * * * *"));
   assert.equal(rendered.env.preview.triggers, undefined);
+});
+
+test("Queues or R2 bind the due-time scheduler Durable Object with an additive SQLite migration", () => {
+  assert.deepEqual(SCHEDULER_BINDING, { name: "TRESTLE_SCHEDULER", class_name: "TrestleScheduler" });
+  assert.deepEqual(SCHEDULER_MIGRATION, { tag: "trestle-scheduler-v1", new_sqlite_classes: ["TrestleScheduler"] });
+  for (const capabilities of [{ queues: true, r2: false, workflows: false }, { queues: false, r2: true, workflows: false }]) {
+    for (const environment of ["preview", "staging", "production"]) {
+      const rendered = JSON.parse(renderQueueConfig(wrangler, environment, `example-worker-${environment}`, capabilities));
+      assert.deepEqual(rendered.env[environment].durable_objects, { bindings: [SCHEDULER_BINDING] });
+      assert.deepEqual(rendered.env[environment].migrations, [SCHEDULER_MIGRATION]);
+    }
+  }
+  const workflowsOnly = JSON.parse(renderQueueConfig(wrangler, "staging", "example-worker-staging", { queues: false, r2: false, workflows: true }));
+  assert.equal(workflowsOnly.env.staging.durable_objects, undefined);
+  assert.equal(workflowsOnly.env.staging.migrations, undefined);
+});
+
+test("cron-free preview still binds the scheduler, so its events dispatch without a cron", () => {
+  const rendered = JSON.parse(renderQueueConfig(wrangler, "preview", "example-worker-pr-12", { queues: true, r2: false, workflows: false }, { cron: false }));
+  assert.equal(rendered.env.preview.triggers, undefined);
+  assert.deepEqual(rendered.env.preview.durable_objects, { bindings: [SCHEDULER_BINDING] });
+});
+
+test("application Durable Objects and migrations are kept in order and the scheduler is appended once", () => {
+  const config = JSON.parse(wrangler);
+  config.env.staging.durable_objects = { bindings: [{ name: "ROOMS", class_name: "Room" }] };
+  config.env.staging.migrations = [{ tag: "v1", new_sqlite_classes: ["Room"] }, { tag: "v2", renamed_classes: [{ from: "Room", to: "Room" }] }];
+  const source = JSON.stringify(config);
+  const once = renderQueueConfig(source, "staging", "example-worker-staging", { queues: true, r2: false, workflows: false });
+  const rendered = JSON.parse(once);
+  assert.deepEqual(rendered.env.staging.durable_objects.bindings, [{ name: "ROOMS", class_name: "Room" }, SCHEDULER_BINDING]);
+  assert.deepEqual(rendered.env.staging.migrations.map((migration) => migration.tag), ["v1", "v2", "trestle-scheduler-v1"]);
+  assert.equal(renderQueueConfig(once, "staging", "example-worker-staging", { queues: true, r2: false, workflows: false }), once);
+  assert.deepEqual(JSON.parse(source), config);
+});
+
+test("a conflicting scheduler binding or malformed migrations are reported, never replaced", () => {
+  const conflicting = JSON.parse(wrangler);
+  conflicting.env.staging.durable_objects = { bindings: [{ name: "TRESTLE_SCHEDULER", class_name: "Other" }] };
+  assert.throws(() => renderQueueConfig(JSON.stringify(conflicting), "staging", "example-worker-staging"), /TRESTLE_SCHEDULER/u);
+  const malformed = JSON.parse(wrangler);
+  malformed.env.staging.migrations = { tag: "v1" };
+  assert.throws(() => renderQueueConfig(JSON.stringify(malformed), "staging", "example-worker-staging"), /migrations/u);
+  const changed = JSON.parse(wrangler);
+  changed.env.staging.migrations = [{ tag: "trestle-scheduler-v1", new_classes: ["TrestleScheduler"] }];
+  assert.throws(() => renderQueueConfig(JSON.stringify(changed), "staging", "example-worker-staging"), /trestle-scheduler-v1/u);
+});
+
+test("local development binds the scheduler so Durable Object alarms run under wrangler dev", () => {
+  const config = JSON.parse(wrangler);
+  assert.deepEqual(config.durable_objects, { bindings: [SCHEDULER_BINDING] });
+  assert.deepEqual(config.migrations, [SCHEDULER_MIGRATION]);
 });
 
 function withStagingCrons(crons) {
@@ -77,16 +133,19 @@ function withStagingCrons(crons) {
   return JSON.stringify(config);
 }
 
-test("staging keeps application crons and appends the framework tick", () => {
+test("staging keeps application crons and appends the framework crons", () => {
   const source = withStagingCrons(["0 * * * *", "30 9 * * 1"]);
   const rendered = JSON.parse(renderQueueConfig(source, "staging", "example-worker-staging", { queues: true, r2: false, workflows: false }));
-  assert.deepEqual(rendered.env.staging.triggers.crons, ["0 * * * *", "30 9 * * 1", FRAMEWORK_MAINTENANCE_CRON]);
+  assert.deepEqual(rendered.env.staging.triggers.crons, ["0 * * * *", "30 9 * * 1", ...FRAMEWORK_CRONS]);
   assert.deepEqual(rendered.env.production.triggers, JSON.parse(source).env.production.triggers);
 });
 
-test("the framework tick is not duplicated and application order is kept", () => {
-  const rendered = JSON.parse(renderQueueConfig(withStagingCrons(["* * * * *", "0 * * * *", "0 * * * *"]), "staging", "example-worker-staging", { queues: false, r2: true, workflows: false }));
-  assert.deepEqual(rendered.env.staging.triggers.crons, ["* * * * *", "0 * * * *"]);
+test("framework crons are not duplicated and application order is kept", () => {
+  const rendered = JSON.parse(renderQueueConfig(withStagingCrons([FRAMEWORK_SWEEP_CRON, "0 * * * *", "0 * * * *"]), "staging", "example-worker-staging", { queues: false, r2: true, workflows: false }));
+  assert.deepEqual(rendered.env.staging.triggers.crons, [FRAMEWORK_SWEEP_CRON, "0 * * * *", FRAMEWORK_MAINTENANCE_CRON]);
+  // A former framework minute tick is now just an application cron, and is kept.
+  const legacy = JSON.parse(renderQueueConfig(withStagingCrons(["* * * * *"]), "staging", "example-worker-staging", { queues: true, r2: false, workflows: false }));
+  assert.deepEqual(legacy.env.staging.triggers.crons, ["* * * * *", ...FRAMEWORK_CRONS]);
 });
 
 test("application crons survive when no capability needs maintenance", () => {
@@ -104,9 +163,13 @@ test("malformed cron lists are reported rather than replaced", () => {
   assert.throws(() => renderQueueConfig(withStagingCrons(["0 * * * *", 5]), "staging", "example-worker-staging"), /triggers\.crons/u);
 });
 
-test("the Worker gates framework maintenance on the same tick", async () => {
+test("the Worker routes framework work by the same crons and exports the scheduler class", async () => {
   const worker = await readFile(new URL("../apps/worker/src/index.ts", import.meta.url), "utf8");
-  assert.match(worker, new RegExp(`const frameworkMaintenanceCron = "${FRAMEWORK_MAINTENANCE_CRON.replaceAll("*", "\\*")}";`, "u"));
+  const escape = (cron) => cron.replaceAll("*", "\\*").replaceAll("/", "\\/");
+  assert.match(worker, new RegExp(`export const frameworkSweepCron = "${escape(FRAMEWORK_SWEEP_CRON)}";`, "u"));
+  assert.match(worker, new RegExp(`export const frameworkMaintenanceCron = "${escape(FRAMEWORK_MAINTENANCE_CRON)}";`, "u"));
+  const entry = await readFile(new URL("../apps/worker/src/worker-entry.ts", import.meta.url), "utf8");
+  assert.match(entry, new RegExp(`export \\{ ${SCHEDULER_BINDING.class_name} \\}`, "u"));
 });
 
 test("preview can explicitly omit cron without losing Queue and Workflow bindings", () => {

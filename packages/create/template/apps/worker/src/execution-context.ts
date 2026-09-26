@@ -8,7 +8,8 @@ import { activeApplicationRoles, createDatabase, createTenantDatabase, member, o
 import type { SubscriptionSummary } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createMiddleware } from "hono/factory";
-import { createEventPublisher, type EventPublisher } from "./events.js";
+import { createEventPublisher, eventStatementCount, type EventPublisher } from "./events.js";
+import { wakeOutboxDispatch } from "./scheduler-runtime.js";
 import { createServices, type AppServices } from "./services.js";
 
 type AuthenticatedSession = {
@@ -199,6 +200,8 @@ export const requireExecutionContext = createMiddleware<{ Bindings: AuthEnvironm
     if (policy.permission || policy.entitlement) execution.access.require({ ...(policy.permission ? { permission: policy.permission } : {}), ...(policy.entitlement ? { entitlement: policy.entitlement } : {}) });
     context.set("execution", execution);
     await next();
+    // Dispatch on commit: events this request wrote are published now, not at the next sweep.
+    if (eventStatementCount(execution.events) > 0) wakeOutboxDispatch(context);
   } catch (error) {
     if (error instanceof ExecutionContextError) return context.json({ error: error.code, message: error.message }, error.status);
     if (error instanceof AccessDeniedError) return context.json(publicDenial(error.decision), error.status);

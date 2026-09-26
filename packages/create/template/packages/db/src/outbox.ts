@@ -64,6 +64,11 @@ export class PostgresOutboxStore implements OutboxStore {
     const [row] = await this.sql<Row[]>`select * from outbox_message where id=${id}`;
     return row ? entry(row) : null;
   }
+  /** When pending or leased work is next due: the earliest available pending row or expiring lease, or null when none remains. */
+  async nextDue(): Promise<Date | null> {
+    const [row] = await this.sql<[{ next: Date | null }]>`select min(case when status = 'pending' then available_at else leased_until end) as next from outbox_message where status in ('pending', 'leased')`;
+    return row?.next ?? null;
+  }
   async lease(limit = 10, leaseMs = 30_000): Promise<OutboxEntry[]> {
     const rows = await this.sql.begin(async (transaction) => await transaction<Row[]>`with candidates as (select id from outbox_message where (status='pending' and available_at <= now()) or (status='leased' and leased_until <= now()) order by available_at for update skip locked limit ${limit}) update outbox_message set status='leased', leased_until=now()+(${leaseMs} * interval '1 millisecond') from candidates where outbox_message.id=candidates.id returning outbox_message.*`);
     return rows.map(entry);

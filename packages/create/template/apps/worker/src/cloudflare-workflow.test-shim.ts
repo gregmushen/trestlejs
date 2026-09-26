@@ -7,3 +7,8 @@ export class WorkflowEntrypoint<Environment> {
 export class NonRetryableError extends Error {
   constructor(message: string, name = "NonRetryableError") { super(message); this.name = name; }
 }
+
+/** Vitest-only Durable Object base: the runtime supplies ctx (with storage and alarms) and env. */
+export class DurableObject<Environment> {
+  constructor(protected readonly ctx: unknown, protected readonly env: Environment) {}
+}

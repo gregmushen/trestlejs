@@ -1,6 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import { wranglerCapabilityBinding, wranglerEnvironmentBlock, wranglerStringVariable, type CloudflareBindingCapability } from "./wrangler-config.js";
+import { wranglerCapabilityBinding, wranglerEnvironmentBlock, wranglerSchedulerBinding, wranglerSchedulerMigration, wranglerStringVariable, type CloudflareBindingCapability } from "./wrangler-config.js";
 
 import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectManifest } from "./core.js";
 
@@ -277,6 +277,25 @@ export async function runDoctor(
     });
   }
 
+  // Projects adopt the due-time scheduler by exporting its Durable Object class
+  // from the Worker entry; projects still on the legacy minute tick are not checked.
+  const workerEntry = manifest.apps.worker ? await readFile(path.join(root, manifest.apps.worker, "src", "worker-entry.ts"), "utf8").catch(() => "") : "";
+  const schedulerAdopted = /export\s*\{[^}]*\bTrestleScheduler\b[^}]*\}/u.test(workerEntry);
+  if (environment === "local" && schedulerAdopted && manifest.apps.worker) {
+    // wrangler dev runs the scheduler's alarms locally from the top-level binding.
+    const workerPath = manifest.apps.worker;
+    const config = await readFile(path.join(root, workerPath, "wrangler.jsonc"), "utf8").catch(() => "");
+    const topLevel = config.slice(0, Math.max(0, config.search(/"env"\s*:/u)) || undefined);
+    const ready = wranglerSchedulerBinding(topLevel) && wranglerSchedulerMigration(topLevel);
+    checks.push({
+      id: "cloudflare.scheduler.local",
+      group: "architecture",
+      status: ready ? "pass" : "fail",
+      message: ready ? "wrangler dev binds the due-time scheduler" : "the Worker exports TrestleScheduler but wrangler dev does not bind it; scheduled jobs and local webhook retries will not run locally",
+      ...(!ready ? { remediation: `Declare the TRESTLE_SCHEDULER Durable Object binding and the trestle-scheduler-v1 migration at the top level of ${workerPath}/wrangler.jsonc` } : {}),
+    });
+  }
+
   if (environment !== "local") {
     const workerPath = manifest.apps.worker;
     const workerConfig = workerPath ? await readFile(path.join(root, process.env.TRESTLE_WRANGLER_CONFIG ?? path.join(workerPath, "wrangler.jsonc")), "utf8").catch(() => "") : "";
@@ -290,6 +309,27 @@ export async function runDoctor(
         status: configured ? "pass" : "fail",
         message: configured ? `${capability} has a ${environment} Worker binding` : `${capability} is enabled but has no ${environment} Worker binding`,
         ...(!configured ? { remediation: `Declare the ${capability} binding in ${workerPath ?? "apps/worker"}/wrangler.jsonc for ${environment}, or disable the capability in .trestle/project.yaml` } : {}),
+      });
+    }
+    if (schedulerAdopted && (manifest.capabilities.queues || manifest.capabilities.r2)) {
+      // Queues and R2 create framework due work: outbox dispatch, retries, and maintenance.
+      // The scheduler Durable Object runs it when due; without it nothing dispatches between sweeps.
+      const bound = wranglerSchedulerBinding(block);
+      checks.push({
+        id: "cloudflare.scheduler.binding",
+        group: "architecture",
+        status: bound ? "pass" : "fail",
+        message: bound ? `the due-time scheduler Durable Object is bound for ${environment}` : `Queues or R2 are enabled but ${environment} has no TRESTLE_SCHEDULER Durable Object binding`,
+        ...(!bound ? { remediation: `Render the ${environment} Worker config with node scripts/queue-config.mjs render ${environment} <worker-name> and deploy it with --config .trestle-queues.wrangler.jsonc` } : {}),
+      });
+      // Durable Object bindings are not inherited from the top level, so the rendered environment declares its migrations too.
+      const migrated = wranglerSchedulerMigration(block);
+      checks.push({
+        id: "cloudflare.scheduler.migration",
+        group: "architecture",
+        status: migrated ? "pass" : "fail",
+        message: migrated ? `the TrestleScheduler class has its SQLite Durable Object migration for ${environment}` : `${environment} has no Durable Object migration creating the TrestleScheduler SQLite class`,
+        ...(!migrated ? { remediation: 'Append { "tag": "trestle-scheduler-v1", "new_sqlite_classes": ["TrestleScheduler"] } to the Worker migrations; never edit or remove a deployed migration' } : {}),
       });
     }
     const retention = wranglerStringVariable(block, "ARTIFACT_READY_RETENTION_DAYS");

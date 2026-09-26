@@ -260,6 +260,13 @@
       "when": 1790394164170,
       "tag": "0036_unusual_viper",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1790395037488,
+      "tag": "0037_clean_bloodstrike",
+      "breakpoints": true
     }
   ]
 }

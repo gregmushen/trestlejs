@@ -1307,12 +1307,20 @@ safety work on existing mechanisms. In order:
    verification for every private Queue and Workflow handler.
 4. **P4 gaps:** durable reconciliation requests and local-adapter parity (done; live sandbox evidence remains a beta gate).
 
-The due-time scheduler (Selected item 1) must merge its maintenance crons
-with application crons using P3's rules.
+The due-time scheduler (Selected item 1) merges its sweep and maintenance
+crons with application crons using P3's rules.
 
 ### Selected (in order)
 
-1. **Due-time scheduler, replacing the every-minute cron.**
+1. **Due-time scheduler, replacing the every-minute cron.** **Done.**
+   `TrestleScheduler` (`apps/worker/src/scheduler-object.ts`) is bound as
+   `TRESTLE_SCHEDULER` wherever Queues or R2 are enabled, previews included,
+   and locally for `wrangler dev`. Requests wake outbox dispatch on commit;
+   outbox publish retries, local webhook retries, and application jobs
+   (`scheduledJobs.register` in `apps/worker/src/jobs.ts`, lease-safe through
+   the `scheduled_job` table, migration 0037) run on its alarm. The framework
+   crons are now a `*/15 * * * *` safety sweep and `7 * * * *` hourly
+   maintenance, merged with application crons by P3's rules.
    - **The problem.** `queue-config.mjs` adds `* * * * *` whenever Queues or R2
      are enabled. Each run queries Neon for outbox dispatch, native webhook
      recovery, and artifact maintenance, so compute never suspends, even with
@@ -1327,7 +1335,10 @@ with application crons using P3's rules.
    - **Slower background work.** Maintenance runs hourly or daily; a safety
      sweep runs every 10–15 minutes.
    - Durable Object alarms run under `wrangler dev` and Miniflare.
-2. **Idle check in the canary.** An idle generated project makes zero database
+2. **Idle check in the canary.** **Done.** `scheduler.integration.test.ts`
+   runs in `check:generated` behind a counting PostgreSQL proxy, and
+   `tests/browser/local-scheduler.spec.ts` checks the alarm under
+   `wrangler dev`. An idle generated project makes zero database
    queries over a sampled window. Created events still dispatch promptly, and a
    scheduled webhook retry fires at its due time. This keeps the scale-to-zero
    principle from regressing.
