@@ -299,6 +299,18 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toContain("run trestle upgrade to adopt development accounts");
   });
 
+  it("reports provider readiness per environment with a failing exit code when a live provider is not ready", async () => {
+    const root = await fixture();
+    const local = capture(root);
+    expect(await executeCli(["providers", "--env", "local"], local.runtime), local.stderr()).toBe(0);
+    expect(local.stdout()).toMatch(/resend\s+fixture\s+fixture/u);
+    const staging = capture(root);
+    expect(await executeCli(["providers", "--env", "staging", "--json"], staging.runtime)).toBe(1);
+    const report = JSON.parse(staging.stdout()).data;
+    expect(report).toMatchObject({ environment: "staging", ready: false });
+    expect(report.providers.find((provider: { id: string }) => provider.id === "stripe")).toMatchObject({ mode: "live", state: "inaccessible", repair: expect.stringContaining("TRESTLE_MASTER_KEY") });
+  });
+
   it("requires an explicit console authority plane", async () => {
     const root = await fixture();
     const output = capture(root);
