@@ -13,6 +13,18 @@ describe("resource field definitions", () => {
     expect(() => parseResourceField("revision:integer?")).toThrow("reserved");
   });
 
+  it("parses json, decimal, and enum fields with their shapes", () => {
+    expect(parseResourceField("meta:json?")).toEqual({ name: "meta", type: "json", required: false });
+    expect(parseResourceField("price:decimal(10,2)?")).toEqual({ name: "price", type: "decimal", required: false, precision: 10, scale: 2 });
+    expect(parseResourceField("status:enum(draft|published)?")).toEqual({ name: "status", type: "enum", required: false, values: ["draft", "published"] });
+    expect(() => parseResourceField("price:decimal?")).toThrow("decimal(precision,scale)");
+    expect(() => parseResourceField("price:decimal(2,3)?")).toThrow("scale");
+    expect(() => parseResourceField("status:enum()?")).toThrow("enum(value|value)");
+    expect(() => parseResourceField("status:enum(Draft|draft)?")).toThrow("enum values");
+    expect(() => parseResourceField("status:enum(draft|draft)?")).toThrow("enum values");
+    expect(() => parseResourceField("meta:json?:Author")).toThrow("cannot reference");
+  });
+
   it("keeps a Drizzle snapshot aligned with the latest base migration", async () => {
     const metadata = path.resolve("packages/create/template/packages/db/migrations/meta");
     const journal = JSON.parse(await readFile(path.join(metadata, "_journal.json"), "utf8")) as { entries: Array<{ idx: number }> };

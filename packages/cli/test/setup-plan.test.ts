@@ -65,6 +65,19 @@ describe("SetupPlan", () => {
     expect(() => parseSetupPlan(JSON.stringify(input))).toThrow(SetupPlanError);
   });
 
+  it("accepts json, decimal, and enum fields only with valid shapes", () => {
+    const withFields = (fields: unknown[]) => JSON.stringify({ ...validPlan, resources: [{ name: "Product", fields: [{ name: "name", type: "string", required: true }, ...fields] }] });
+    expect(parseSetupPlan(withFields([
+      { name: "meta", type: "json", required: false },
+      { name: "price", type: "decimal", required: false, precision: 10, scale: 2 },
+      { name: "status", type: "enum", required: false, values: ["draft", "published"] },
+    ])).resources[0]?.fields).toHaveLength(4);
+    expect(() => parseSetupPlan(withFields([{ name: "price", type: "decimal", required: false }]))).toThrow(SetupPlanError);
+    expect(() => parseSetupPlan(withFields([{ name: "price", type: "decimal", required: false, precision: 2, scale: 3 }]))).toThrow(SetupPlanError);
+    expect(() => parseSetupPlan(withFields([{ name: "status", type: "enum", required: false, values: [] }]))).toThrow(SetupPlanError);
+    expect(() => parseSetupPlan(withFields([{ name: "meta", type: "json", required: false, values: ["a"] }]))).toThrow(SetupPlanError);
+  });
+
   it("keeps resource events private unless public webhook exposure is selected", () => {
     expect(parseSetupPlan(JSON.stringify(validPlan)).resources[0]?.webhookEvents).toEqual([]);
     const input = { ...validPlan, resources: [{ name: "Article", tenant: true, crud: true, webhookEvents: ["created", "updated"] }] };

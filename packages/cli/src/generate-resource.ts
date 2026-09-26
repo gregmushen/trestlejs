@@ -17,11 +17,16 @@ export type ResourceNames = {
 
 export type ResourceField = SetupResource["fields"][number];
 
+const enumValuePattern = /^[a-z][a-z0-9_-]{0,62}$/u;
+
 export function parseResourceField(value: string): ResourceField {
   const [name, type = "string", reference, onDelete = "restrict"] = value.split(":");
   const required = !type.endsWith("?");
-  const normalizedType = type.replace(/\?$/u, "") as ResourceField["type"];
-  if (!name || !/^[a-z][A-Za-z0-9]*$/u.test(name) || !["string", "text", "integer", "boolean", "datetime", "relation"].includes(normalizedType)) throw new CliFailure(`invalid field ${value}; expected name:type[?] or name:relation:Resource[:onDelete]`);
+  const typeSpec = type.replace(/\?$/u, "");
+  const decimal = /^decimal(?:\((\d+),(\d+)\))?$/u.exec(typeSpec);
+  const enumeration = /^enum(?:\((.*)\))?$/u.exec(typeSpec);
+  const normalizedType = (decimal ? "decimal" : enumeration ? "enum" : typeSpec) as ResourceField["type"];
+  if (!name || !/^[a-z][A-Za-z0-9]*$/u.test(name) || !["string", "text", "integer", "boolean", "datetime", "json", "decimal", "enum", "relation"].includes(normalizedType)) throw new CliFailure(`invalid field ${value}; expected name:type[?] or name:relation:Resource[:onDelete]`);
   if (["id", "organizationId", "revision", "createdAt", "updatedAt"].includes(name)) throw new CliFailure(`field ${name} is reserved for resource identity and versioning`);
   if (normalizedType === "relation") {
     if (!reference || !/^[A-Z][A-Za-z0-9]*$/u.test(reference) || !["restrict", "cascade", "set-null"].includes(onDelete)) throw new CliFailure(`invalid relationship field ${value}`);
@@ -29,12 +34,56 @@ export function parseResourceField(value: string): ResourceField {
     return { name, type: normalizedType, required, references: { resource: reference, onDelete: onDelete as "restrict" | "cascade" | "set-null" } };
   }
   if (reference) throw new CliFailure(`non-relation field ${name} cannot reference ${reference}`);
+  if (decimal) {
+    if (decimal[1] === undefined || decimal[2] === undefined) throw new CliFailure(`decimal field ${name} must declare decimal(precision,scale), for example ${name}:decimal(10,2)?`);
+    const precision = Number(decimal[1]);
+    const scale = Number(decimal[2]);
+    if (precision < 1 || precision > 1000 || scale > precision) throw new CliFailure(`decimal field ${name} needs 1 <= precision <= 1000 and a scale no larger than its precision`);
+    return { name, type: "decimal", required, precision, scale };
+  }
+  if (enumeration) {
+    const values = enumeration[1] ? enumeration[1].split("|") : [];
+    if (!values.length) throw new CliFailure(`enum field ${name} must declare enum(value|value), for example ${name}:enum(draft|published)?`);
+    if (values.length > 50 || new Set(values).size !== values.length || values.some((entry) => !enumValuePattern.test(entry))) throw new CliFailure(`enum values for ${name} must be 1 to 50 unique lowercase identifiers`);
+    return { name, type: "enum", required, values };
+  }
   return { name, type: normalizedType, required };
 }
 
 function zodExpression(field: ResourceField): string {
-  const base = field.type === "string" ? "z.string().trim().min(1).max(200)" : field.type === "text" ? "z.string().max(10000)" : field.type === "integer" ? "z.number().int()" : field.type === "boolean" ? "z.boolean()" : field.type === "datetime" ? "z.coerce.date()" : "z.string().uuid()";
+  const base = field.type === "string" ? "z.string().trim().min(1).max(200)"
+    : field.type === "text" ? "z.string().max(10000)"
+    : field.type === "integer" ? "z.number().int()"
+    : field.type === "boolean" ? "z.boolean()"
+    : field.type === "datetime" ? "z.coerce.date()"
+    : field.type === "json" ? "z.json()"
+    // Decimals travel as strings so no digits are lost to floating point.
+    : field.type === "decimal" ? `z.string().regex(/^-?\\d{1,${Math.max(field.precision! - field.scale!, 1)}}${field.scale! > 0 ? `(\\.\\d{1,${field.scale!}})?` : ""}$/u)`
+    : field.type === "enum" ? `z.enum([${field.values!.map((entry) => JSON.stringify(entry)).join(", ")}])`
+    : "z.string().uuid()";
   return field.required ? base : `${base}.optional()`;
+}
+
+/** Update change detection casts types whose parameters PostgreSQL cannot compare untyped. */
+function changedExpression(resource: ResourceNames, field: ResourceField): string {
+  const value = field.type === "json" ? `\${JSON.stringify(input.${field.name})}::jsonb`
+    : field.type === "decimal" ? `\${input.${field.name}}::numeric`
+    : `\${input.${field.name}}`;
+  return `input.${field.name} !== undefined ? sql\`\${${resource.camel}.${field.name}} is distinct from ${value}\` : undefined,`;
+}
+
+/** Enum fields are also constrained in the database, so rows written outside the API stay valid. */
+function fieldCheckExpression(resource: ResourceNames, field: ResourceField): string | undefined {
+  if (field.type !== "enum") return undefined;
+  return `  check("${constraintName(`${resource.snake}_${columnName(field)}_values`)}", sql\`\${table.${field.name}} in (${field.values!.map((entry) => `'${entry}'`).join(", ")})\`),`;
+}
+
+function pgCoreImports(fields: readonly ResourceField[]): string[] {
+  return [
+    ...(fields.some((field) => field.type === "json") ? ["jsonb"] : []),
+    ...(fields.some((field) => field.type === "decimal") ? ["numeric"] : []),
+    ...(fields.some((field) => field.type === "enum") ? ["check"] : []),
+  ];
 }
 
 export function columnName(field: ResourceField): string {
@@ -44,11 +93,34 @@ export function columnName(field: ResourceField): string {
 function columnExpression(field: ResourceField): string {
   const column = columnName(field);
   // Relations are plain columns here; the tenant-scoped composite key is declared with the table (relationKeyExpression).
-  const base = field.type === "integer" ? `integer("${column}")` : field.type === "boolean" ? `boolean("${column}")` : field.type === "datetime" ? `timestamp("${column}", { withTimezone: true })` : field.type === "relation" ? `uuid("${column}")` : `text("${column}")`;
+  const base = field.type === "integer" ? `integer("${column}")`
+    : field.type === "boolean" ? `boolean("${column}")`
+    : field.type === "datetime" ? `timestamp("${column}", { withTimezone: true })`
+    : field.type === "relation" ? `uuid("${column}")`
+    : field.type === "json" ? `jsonb("${column}").$type<JsonValue>()`
+    : field.type === "decimal" ? `numeric("${column}", { precision: ${field.precision}, scale: ${field.scale} })`
+    : field.type === "enum" ? `text("${column}", { enum: [${field.values!.map((entry) => JSON.stringify(entry)).join(", ")}] })`
+    : `text("${column}")`;
   return field.required ? `${base}.notNull()` : base;
 }
 
+const jsonValueImport = 'import type { JsonValue } from "./json-value.js";';
+const jsonValueSource = `/** A JSON value, matching the contracts' z.json() type, for jsonb columns. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+`;
+
+/** Generated jsonb columns type their values with the shared JsonValue alias. */
+async function ensureJsonValueType(dbSource: string): Promise<string | undefined> {
+  const target = path.join(dbSource, "json-value.ts");
+  if (await exists(target)) return undefined;
+  await writeFile(target, jsonValueSource, "utf8");
+  return target;
+}
+
 function exampleExpression(field: ResourceField): string {
+  if (field.type === "json") return '{ example: true }';
+  if (field.type === "decimal") return field.scale! > 0 ? `"1.${"2".repeat(Math.min(field.scale!, 2))}"` : '"12"';
+  if (field.type === "enum") return JSON.stringify(field.values![0]);
   if (field.type === "integer") return "42";
   if (field.type === "boolean") return "true";
   if (field.type === "datetime") return '"2026-01-01T00:00:00.000Z"';
@@ -320,7 +392,7 @@ import { and, asc, eq, gt, or, sql, type SQL } from "drizzle-orm";
 type ResourceEvents = { statement(name: string, payload: unknown, options: { schemaVersion?: number; idempotencyKey: string }): SQL };
 
 export class Postgres${n.className}Repository implements ${n.className}Repository {
-  constructor(private readonly database: Database, private readonly organizationId: string, private readonly events: ResourceEvents) {}
+  constructor(private readonly database: Database, private readonly organizationId: string, private readonly events: ResourceEvents, private readonly clock: { now(): Date } = { now: () => new Date() }) {}
   async list(input: { cursor?: string; limit: number }): Promise<{ items: ${n.className}[]; nextCursor?: string }> {
     const rows = await this.database.select().from(${n.camel}).where(and(eq(${n.camel}.organizationId, this.organizationId), input.cursor ? gt(${n.camel}.id, input.cursor) : undefined)).orderBy(asc(${n.camel}.id)).limit(input.limit + 1);
     const hasMore = rows.length > input.limit;
@@ -344,14 +416,14 @@ export class Postgres${n.className}Repository implements ${n.className}Repositor
   async update(id: string, input: Update${n.className}): Promise<${n.className} | null> {
     return this.database.transaction(async (transaction) => {
       const changed = or(
-${resource.fields.map((field) => `        input.${field.name} !== undefined ? sql\`\${${n.camel}.${field.name}} is distinct from \${input.${field.name}}\` : undefined,`).join("\n")}
+${resource.fields.map((field) => `        ${changedExpression(n, field)}`).join("\n")}
       );
       if (!changed) {
         const [record] = await transaction.select().from(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).limit(1);
         return record ?? null;
       }
       const [record] = await transaction.update(${n.camel})
-        .set({ ...input, revision: sql\`\${${n.camel}.revision} + 1\`, updatedAt: new Date() })
+        .set({ ...input, revision: sql\`\${${n.camel}.revision} + 1\`, updatedAt: this.clock.now() })
         .where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId), changed)).returning();
       if (!record) {
         const [current] = await transaction.select().from(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).limit(1);
@@ -381,9 +453,14 @@ ${resource.fields.map((field) => `        input.${field.name} !== undefined ? sq
     const parentSchema = path.join(root, dbPath, "src", `${names(related).kebab}-schema.ts`);
     if (await ensureTenantKey(parentSchema, names(related))) created.push(path.relative(root, parentSchema));
   }
+  const hasJson = resource.fields.some((field) => field.type === "json");
+  if (hasJson) {
+    const jsonValue = await ensureJsonValueType(path.dirname(targets[4]!));
+    if (jsonValue) created.push(path.relative(root, jsonValue));
+  }
   await writeGenerated(targets[4]!, `import { sql } from "drizzle-orm";
-import { boolean, ${relations.length ? "foreignKey, " : ""}index, integer, pgPolicy, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
-${[...new Set(resource.fields.filter((field) => field.type === "relation").map((field) => field.references!.resource))].map((related) => `import { ${names(related).camel} } from "./${names(related).kebab}-schema.js";`).join("\n")}
+import { ${["boolean", ...(relations.length ? ["foreignKey"] : []), "index", "integer", "pgPolicy", "pgTable", "text", "timestamp", "unique", "uuid", ...pgCoreImports(resource.fields)].sort((a, b) => a.localeCompare(b)).join(", ")} } from "drizzle-orm/pg-core";
+${hasJson ? `${jsonValueImport}\n` : ""}${[...new Set(resource.fields.filter((field) => field.type === "relation").map((field) => field.references!.resource))].map((related) => `import { ${names(related).camel} } from "./${names(related).kebab}-schema.js";`).join("\n")}
 
 export const ${n.camel} = pgTable("${n.snake}", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -395,7 +472,7 @@ ${resource.fields.map((field) => `  ${field.name}: ${columnExpression(field)},`)
 }, (table) => [
   index("${n.snake}_organization_idx").on(table.organizationId),
   unique("${tenantKeyName(n)}").on(table.organizationId, table.id),
-${relations.map((field) => `${relationKeyExpression(n, field)}\n`).join("")}  pgPolicy("${n.snake}_tenant", {
+${relations.map((field) => `${relationKeyExpression(n, field)}\n`).join("")}${resource.fields.map((field) => fieldCheckExpression(n, field)).filter(Boolean).map((line) => `${line}\n`).join("")}  pgPolicy("${n.snake}_tenant", {
     for: "all",
     to: "trestle_app",
     using: sql\`\${table.organizationId} = current_setting('app.organization_id', true)\`,
@@ -416,7 +493,7 @@ export const ${n.camel}Routes = new Hono<{ Bindings: AuthEnvironment; Variables:
 ${n.camel}Routes.use("${routePath}", requireExecutionContext);
 ${n.camel}Routes.use("${routePath}/*", requireExecutionContext);
 function service(execution: AppVariables["execution"]) {
-  return new ${n.className}Service(new Postgres${n.className}Repository(execution.data, execution.tenant.organizationId, execution.events));
+  return new ${n.className}Service(new Postgres${n.className}Repository(execution.data, execution.tenant.organizationId, execution.events, execution.clock));
 }
 async function operation<T>(execution: AppVariables["execution"], event: string, work: () => Promise<T>): Promise<T> {
   const started = execution.clock.now().getTime();
@@ -868,6 +945,18 @@ export async function addResourceField(root: string, manifest: ProjectManifest, 
     const importLine = `import { ${related.camel} } from "./${related.kebab}-schema.js";`;
     if (!schema.includes(importLine)) schema = schema.replace("\n\nexport const", `\n${importLine}\n\nexport const`);
     schema = withPgCoreImports(schema.replace(policyAnchor, `${relationKeyExpression(n, field)}\n${policyAnchor}`), ["foreignKey"]);
+  }
+  const check = fieldCheckExpression(n, field);
+  if (check) {
+    const policyAnchor = `  pgPolicy("${n.snake}_tenant", {`;
+    if (!schema.includes(policyAnchor)) throw new CliFailure("resource schema does not contain the managed tenant policy anchor");
+    schema = schema.replace(policyAnchor, `${check}\n${policyAnchor}`);
+  }
+  if (pgCoreImports([field]).length) schema = withPgCoreImports(schema, pgCoreImports([field]));
+  if (field.type === "json") {
+    const jsonValue = await ensureJsonValueType(path.dirname(schemaPath));
+    if (jsonValue) changed.push(path.relative(root, jsonValue));
+    if (!schema.includes(jsonValueImport)) schema = schema.replace(/(import \{[^}]*\} from "drizzle-orm\/pg-core";\n)/u, `$1${jsonValueImport}\n`);
   }
   schema = schema.replace(schemaAnchor, `  ${field.name}: ${columnExpression(field)},\n${schemaAnchor}`);
   await writeFile(contractsPath, contracts, "utf8");

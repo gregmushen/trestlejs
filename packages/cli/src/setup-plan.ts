@@ -4,10 +4,21 @@ import { environmentNameSchema } from "./manifest.js";
 
 export const setupResourceFieldSchema = z.object({
   name: z.string().regex(/^[a-z][A-Za-z0-9]*$/u, "must be camelCase"),
-  type: z.enum(["string", "text", "integer", "boolean", "datetime", "relation"]),
+  type: z.enum(["string", "text", "integer", "boolean", "datetime", "json", "decimal", "enum", "relation"]),
   required: z.boolean().default(true),
   references: z.object({ resource: z.string().regex(/^[A-Z][A-Za-z0-9]*$/u), onDelete: z.enum(["restrict", "cascade", "set-null"]).default("restrict") }).strict().optional(),
+  /** decimal only: total significant digits and digits after the point. */
+  precision: z.number().int().min(1).max(1000).optional(),
+  scale: z.number().int().min(0).max(1000).optional(),
+  /** enum only: the allowed lowercase values. */
+  values: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,62}$/u, "enum values must be lowercase identifiers")).min(1).max(50).optional(),
 }).strict().superRefine((field, context) => {
+  if (field.type === "decimal" && (field.precision === undefined || field.scale === undefined)) context.addIssue({ code: "custom", path: ["precision"], message: "decimal fields require precision and scale" });
+  if (field.type === "decimal" && field.precision !== undefined && field.scale !== undefined && field.scale > field.precision) context.addIssue({ code: "custom", path: ["scale"], message: "decimal scale cannot exceed precision" });
+  if (field.type !== "decimal" && (field.precision !== undefined || field.scale !== undefined)) context.addIssue({ code: "custom", path: ["precision"], message: "only decimal fields accept precision and scale" });
+  if (field.type === "enum" && !field.values) context.addIssue({ code: "custom", path: ["values"], message: "enum fields require values" });
+  if (field.type === "enum" && field.values && new Set(field.values).size !== field.values.length) context.addIssue({ code: "custom", path: ["values"], message: "enum values must be unique" });
+  if (field.type !== "enum" && field.values) context.addIssue({ code: "custom", path: ["values"], message: "only enum fields accept values" });
   if (field.type === "relation" && !field.references) context.addIssue({ code: "custom", path: ["references"], message: "relation fields require a resource reference" });
   if (field.type === "relation" && field.required) context.addIssue({ code: "custom", path: ["required"], message: "generated relationships must initially be optional for migration safety" });
   if (field.type !== "relation" && field.references) context.addIssue({ code: "custom", path: ["references"], message: "only relation fields accept references" });

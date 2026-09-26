@@ -834,7 +834,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
   generate.command("resource")
     .argument("<name>")
-    .option("--field <definition...>", "additional field as name:type[?] or name:relation:Resource[:onDelete]")
+    .option("--field <definition...>", "additional field as name:type[?] (string, text, integer, boolean, datetime, json, decimal(p,s), enum(a|b)) or name:relation:Resource[:onDelete]")
     .option("--webhook-event <kind...>", "explicitly expose created, updated, or deleted as a versioned customer webhook")
     .option("--read-permission <permission>", "application permission required to list/read", "resource.read")
     .option("--write-permission <permission>", "application permission required to create/update/delete", "resource.write")
