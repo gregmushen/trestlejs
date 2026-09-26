@@ -196,7 +196,10 @@ try {
       "rejects cross-tenant and changed subscription identities without publishing",
       "rolls back invalid invoice payloads and leaves their receipt retryable",
     ]);
-    await run("pnpm", ["--filter", "./packages/data", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    await requireScenarios(project, "./packages/data", [], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "rolls back update and delete when the event cannot be recorded",
+      "rejects stale revisions without writing",
+    ]);
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     // P1 adoption: a project with pre-#186 ID-only relations moves to composite keys without losing data.
     await run(process.execPath, [path.join(root, "scripts/check-legacy-relations.mjs")], root, { TRESTLE_LEGACY_CLI_ARCHIVE: cliArchive });
