@@ -46,6 +46,10 @@ jobs:
         run: pnpm check:upgrade
         env:
           TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: Rehearse the published beta.1 to beta.3 upgrade
+        run: pnpm check:beta-upgrade
+        env:
+          TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       - name: Install browser test runtime
         run: npx --yes playwright@1.63.0 install --with-deps --only-shell chromium
       - run: pnpm check:generated
