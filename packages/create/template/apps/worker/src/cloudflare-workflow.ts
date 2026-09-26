@@ -4,9 +4,10 @@ import { NonRetryableError } from "cloudflare:workflows";
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { createLogger, loggerSecretsFromEnvironment, type Logger } from "@__TRESTLE_PROJECT_NAME__/context";
 import { PostgresEventInbox, PostgresOutboxStore, type CommittedEventStore, type NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
-import { eventEnvelopeSchema, PermanentEventError, safeErrorCategory, type CloudflareQueueBinding, type EventEnvelope, type EventInboxStore } from "@__TRESTLE_PROJECT_NAME__/events";
-import { handleEventWithInbox, type EventConsumerRegistry, type PostCommitEffect } from "./async-runtime.js";
+import { eventEnvelopeSchema, type CloudflareQueueBinding, type EventEnvelope, type EventInboxStore } from "@__TRESTLE_PROJECT_NAME__/events";
+import type { EventConsumerRegistry, PostCommitEffect } from "./async-runtime.js";
 import { eventConsumers } from "./index.js";
+import { consumeCommittedEvent } from "./job-runtime.js";
 import { projectWebhookForEvent } from "./webhook-runtime.js";
 
 /**
@@ -29,18 +30,11 @@ export async function consumeWorkflowEvent<Environment, Data = unknown>(input: {
   log: Logger;
   postCommit?: PostCommitEffect<Environment>;
 }): Promise<void> {
-  const fields = { workflowId: input.workflowId, eventName: input.envelope.name };
-  try {
-    await handleEventWithInbox(input.registry, input.inbox, input.outbox, input.envelope, input.environment, input.postCommit);
-    input.log.info("workflow.event.completed", fields);
-  } catch (error) {
-    if (error instanceof PermanentEventError) {
-      input.log.warn("workflow.event.rejected", { ...fields, reason: error.reason });
-      throw new NonRetryableError(`Workflow event rejected: ${error.reason}`);
-    }
-    input.log.warn("workflow.event.retrying", { ...fields, errorCategory: safeErrorCategory(error) });
-    throw new Error("Workflow handler failed");
-  }
+  await consumeCommittedEvent({
+    ...input, runId: input.workflowId, runtime: "cloudflare", logPrefix: "workflow", retryMessage: "Workflow handler failed",
+    fields: { workflowId: input.workflowId, eventName: input.envelope.name },
+    permanent: (message) => new NonRetryableError(`Workflow ${message.charAt(0).toLowerCase()}${message.slice(1)}`),
+  });
 }
 
 export class TrestleWorkflow extends WorkflowEntrypoint<AuthEnvironment, EventEnvelope> {

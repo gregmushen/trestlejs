@@ -810,6 +810,32 @@ how it confirms changes. The conventions:
 - **Experimental commands** (`[experimental]` in help) need `--experimental` or
   `TRESTLE_EXPERIMENTAL=1`.
 
+### Background jobs and runtimes
+
+Background work is written once:
+
+- event consumers, with `eventConsumers.register` in `apps/worker/src/index.ts`;
+- scheduled jobs, with `scheduledJobs.register` in `apps/worker/src/jobs.ts`.
+
+`pnpm exec trestle jobs list` prints what is registered, as the code declares
+it.
+
+The runtime that executes this work is chosen in `.trestle/project.yaml`:
+
+```yaml
+jobs:
+  runtime: cloudflare   # default: Queues, Workflows, the scheduler Durable Object
+  # runtime: trigger    # trigger.dev
+  # runtime: inngest    # Inngest
+  # hosting: self-hosted
+  # endpoint: https://jobs.example.com
+```
+
+Every runtime receives the same committed events from the transactional
+outbox under their stable event IDs, so a resend never runs a job twice.
+Every execution rechecks provenance, the 14-day window, and current tenant
+entitlements before running a handler.
+
 ### API contracts
 
 The OpenAPI documents are generated from the route policies in

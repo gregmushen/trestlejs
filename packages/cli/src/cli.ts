@@ -1308,6 +1308,32 @@ export function createProgram(runtime: CliRuntime): Command {
       if (unmet.length) throw new CliFailure(`not verified at this revision: ${unmet.join(", ")}`);
     });
 
+  const jobs = program.command("jobs").description("inspect background jobs and the runtime that executes them");
+  jobs.command("list")
+    .description("list event consumers and scheduled jobs as registered in code, and the selected runtime")
+    .option("--json", "print the machine-readable inventory")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      try { await access(path.join(context.root, "scripts", "jobs.ts")); }
+      catch { throw new CliFailure("this project has no scripts/jobs.ts; run trestle upgrade to adopt the job inventory"); }
+      let inventory: { consumers: Array<{ event: string; schemaVersion: number; authority: string; requires?: string }>; scheduledJobs: Array<{ name: string; leaseMs: number; limit: number; requires?: string }> };
+      try {
+        const { stdout } = await runCommand("pnpm", ["exec", "tsx", "--import", "./scripts/cloudflare-shim.mjs", "scripts/jobs.ts"], { cwd: context.root, stdio: "pipe", env: process.env });
+        inventory = JSON.parse(stdout.trim().split("\n").at(-1)!);
+      } catch (error) {
+        throw new CliFailure(`could not load the job registrations: ${error instanceof Error ? error.message.split("\n").find((line) => /Error/u.test(line)) ?? error.message : String(error)}`);
+      }
+      const selected = context.manifest.jobs ?? { runtime: "cloudflare" as const, hosting: "cloud" as const };
+      if (options.json) { runtime.stdout(`${JSON.stringify(structuredOutput({ runtime: selected, ...inventory }), null, 2)}\n`); return; }
+      runtime.stdout([
+        `Runtime: ${selected.runtime}${selected.runtime === "cloudflare" ? "" : ` (${selected.hosting}${"endpoint" in selected && selected.endpoint ? ` at ${selected.endpoint}` : ""})`}`,
+        `Event consumers (${inventory.consumers.length}):`,
+        ...inventory.consumers.map((consumer) => `  ${consumer.event}@${consumer.schemaVersion}  ${consumer.authority}${consumer.requires ? `  requires ${consumer.requires}` : ""}`),
+        `Scheduled jobs (${inventory.scheduledJobs.length}):`,
+        ...inventory.scheduledJobs.map((job) => `  ${job.name}  lease ${job.leaseMs} ms, limit ${job.limit}${job.requires ? `, requires ${job.requires}` : ""}`),
+      ].join("\n") + "\n");
+    });
+
   program.command("commands")
     .description("list every command with its options, whether it is experimental, and how it confirms changes")
     .option("--json", "print the machine-readable inventory")

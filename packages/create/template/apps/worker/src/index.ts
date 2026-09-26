@@ -1,3 +1,4 @@
+import { jobRuntime } from "./job-runtime.js";
 import { apiReferencePage, customerOpenApi } from "./openapi.js";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -541,6 +542,7 @@ app.get("/api/health/operational", (context) => context.json({
     artifacts: { configured: artifactRuntimeReady(context.env), mode: context.env.TRESTLE_ARTIFACTS ? "r2" : context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" : "unavailable" },
     workflows: { enabled: (context.env as WorkerEnvironment).TRESTLE_WORKFLOWS_ENABLED === "true", configured: Boolean((context.env as WorkerEnvironment).TRESTLE_WORKFLOW) },
     scheduler: { configured: Boolean((context.env as WorkerEnvironment).TRESTLE_SCHEDULER), jobs: scheduledJobs.names().length },
+    jobRuntime: (() => { try { const selected = jobRuntime(context.env as WorkerEnvironment); return { name: selected.name, ...selected.describe(context.env as WorkerEnvironment) }; } catch (error) { return { name: (context.env as WorkerEnvironment).TRESTLE_JOB_RUNTIME ?? "cloudflare", configured: false, detail: error instanceof Error ? error.message : "unavailable" }; } })(),
   },
 }));
 

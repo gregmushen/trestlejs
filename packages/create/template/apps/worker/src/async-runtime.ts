@@ -68,6 +68,14 @@ export class EventConsumerRegistry<Environment = unknown, Data = unknown> {
     });
   }
 
+  /** The registered consumers, for `trestle jobs list`. */
+  describe(): Array<{ event: string; schemaVersion: number; authority: EventAuthority; requires?: string }> {
+    return [...this.handlers.entries()].map(([key, registered]) => {
+      const at = key.lastIndexOf("@");
+      return { event: key.slice(0, at), schemaVersion: Number(key.slice(at + 1)), authority: registered.authority, ...(registered.requires ? { requires: registered.requires.entitlement } : {}) };
+    });
+  }
+
   validate(envelope: EventEnvelope): void {
     const key = `${envelope.name}@${envelope.schemaVersion}`;
     if (!this.handlers.has(key) && !this.catalog?.has(envelope.name, envelope.schemaVersion)) throw new Error(`No event consumer registered for ${key}`);
