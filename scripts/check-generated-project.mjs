@@ -167,6 +167,11 @@ try {
       "creates one linked execution, signs a local attempt, and never alters the original",
       "rejects non-failed, expired, and inactive deliveries without an audit row",
     ]);
+    await requireScenarios(project, "./packages/db", ["src/webhook-replay-owner.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "gives the owner login no tenant webhook rows and no audit forgery",
+      "keeps platform replay working through the dedicated replay role",
+      "runs the replay function as a NOLOGIN role with only the columns replay reads and writes",
+    ]);
     await requireScenarios(project, "./packages/db", ["src/webhook-claims.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "bounds simultaneous leases per endpoint across competing workers",
       "bounds one tenant across competing endpoints without throttling another tenant",

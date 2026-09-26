@@ -70,6 +70,14 @@ suite("platform operations on the trestle_platform connection", () => {
     const failed = await listFailedWebhookDeliveries(platform, { limit: 100 });
     expect(failed.find(({ id }) => id === ids.dead)).toMatchObject({ state: "exhausted", replayable: true, eventType: "article.published" });
     expect(failed.find(({ id }) => id === ids.purged)).toMatchObject({ replayable: false });
+    // Replay eligibility mirrors the server's provenance refusal without exposing the source event.
+    for (const id of [ids.old, ids.orphan]) expect(failed.find((row) => row.id === id), id).toMatchObject({ replayable: false, replayUnavailableReason: "provenance_expired" });
+    expect(JSON.stringify(failed)).not.toMatch(/"secret"|payload"|envelope"/u);
+    const [source] = await sql!<{ occurred_at: Date }[]>`select o.occurred_at from outbox_message o join webhook_message m on o.id = m.source_event_id::text where m.id = ${`${ids.dead}-m`}`;
+    const window = 14 * 86_400_000;
+    const at = async (now: Date) => (await listFailedWebhookDeliveries(platform, { limit: 100, now })).find(({ id }) => id === ids.dead);
+    expect(await at(new Date(source!.occurred_at.getTime() + window))).toMatchObject({ replayable: true, replayUnavailableReason: null });
+    expect(await at(new Date(source!.occurred_at.getTime() + window + 1))).toMatchObject({ replayable: false, replayUnavailableReason: "provenance_expired" });
     expect(failed.map(({ id }) => id)).not.toContain(ids.succeeded);
     expect((await artifactOperations(platform, { staleBefore: new Date(Date.now() - 86_400_000) })).stalePending).toBeGreaterThanOrEqual(1);
     for (const statement of ["select payload from outbox_message limit 1", "select envelope from webhook_message limit 1", "select destination_url from webhook_endpoint limit 1",

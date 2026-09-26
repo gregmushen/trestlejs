@@ -10,6 +10,7 @@ import { OrganizationPicker } from "../../shell/pickers";
 import { AdminCreateDialog, AdminDetailDrawer, AdminFacts, OneTimeSecretDialog, useSelectedDetail } from "../../shell/resource";
 import { AdminCode, AdminCopy, AdminDataTable, AdminEmpty, AdminFilter, AdminPageHeader, AdminQueryState, AdminStatus, formatDate, type StatusVariant } from "../../shell/ui";
 import { useViewSearch } from "../../shell/url-state";
+import { ReplayCell } from "./replay";
 
 /** Endpoint health as the delivery pipeline reports it. */
 const health = (endpoint: WebhookEndpointSummary) => endpoint.health ?? "unknown";
@@ -57,7 +58,7 @@ function EndpointDrawer(props: { id: string; open: boolean; onClose: () => void;
           { header: "Status", nowrap: true, cell: (row) => <AdminStatus value={row.status}>{row.status}</AdminStatus> },
           { header: "Attempts", nowrap: true, cell: (row) => row.attempts },
           { header: "Reason", minWidth: "10rem", cell: (row) => row.failureCategory ?? "—" },
-          { header: "", nowrap: true, cell: (row) => can("platform.webhooks.manage") && (row as { replayable?: boolean }).replayable ? <Button size="sm" variant="ghost" onClick={() => replay(row.id, row.event)}>Replay</Button> : <span className="text-xs text-kumo-subtle">{(row as { replayUnavailableReason?: string | null }).replayUnavailableReason?.replaceAll("_", " ") ?? ""}</span> },
+          { header: "", nowrap: true, cell: (row) => <ReplayCell row={row} canManage={can("platform.webhooks.manage")} onReplay={() => replay(row.id, row.event)} /> },
         ]} /> : <AdminEmpty title="No deliveries yet" />)}
       </div>
     </>}</AdminQueryState>
@@ -96,7 +97,7 @@ export default function WebhooksView() {
     });
   };
   return <>
-    <AdminPageHeader title="Webhooks" description="Tenant endpoints across organizations and their failed deliveries. Operators can emergency-disable an endpoint or replay a delivery whose payload is still retained; destinations, secrets, and payloads are never shown."
+    <AdminPageHeader title="Webhooks" description="Tenant endpoints across organizations and their failed deliveries. Operators can emergency-disable an endpoint or replay a delivery whose payload is still retained and whose source event is inside the 14-day replay window; destinations, secrets, and payloads are never shown."
       actions={<span className="flex flex-wrap items-center gap-2">
         <Select placeholder="All states" aria-label="Filter by state" value={search.state ?? ""} onValueChange={(value) => update({ state: String(value ?? "") || undefined })}>
           <Select.Option value="">All states</Select.Option><Select.Option value="active">active</Select.Option><Select.Option value="paused">paused</Select.Option><Select.Option value="disabled">disabled</Select.Option>

@@ -108,6 +108,41 @@ suite("customer webhook replay under forced tenant RLS", () => {
     expect((await sql!`select id from webhook_delivery where replay_of_delivery_id in (${succeeded.deliveryId}, ${expired.deliveryId}, ${inactive.deliveryId})`)).toEqual([]);
   });
 
+  it("reports replay eligibility from the source event's age at the injected clock, without exposing it", async () => {
+    const boundary = await fixture("eligibility-boundary", { provenance: "boundary" });
+    const old = await fixture("eligibility-old", { provenance: "old" });
+    const missing = await fixture("eligibility-missing", { provenance: "missing" });
+    const foreign = await fixture("eligibility-foreign");
+    await sql!`update outbox_message set organization_id = ${`${run}-someone-else`} where id = (select source_event_id::text from webhook_message where id = ${foreign.messageId})`;
+    const eligibility = async (source: { organizationId: string; endpointId: string; deliveryId: string }, at: Date) =>
+      (await listWebhookDeliveries({ ...source, environment: "local", tenantDatabase, deliveryMode: "local", now: at })).find((item) => item.id === source.deliveryId);
+    // Exactly 14 days old is still inside the window; one millisecond later it is not.
+    expect(await eligibility(boundary, now)).toMatchObject({ replayable: true, replayUnavailableReason: null });
+    const later = new Date(now.getTime() + 1);
+    expect(await eligibility(boundary, later)).toMatchObject({ replayable: false, replayUnavailableReason: "provenance_expired" });
+    for (const source of [old, missing, foreign]) expect(await eligibility(source, now)).toMatchObject({ replayable: false, replayUnavailableReason: "provenance_expired" });
+    // The read model agrees with the server, whose refusal stays authoritative.
+    expect(await replayTenantWebhookDelivery({ ...request(boundary), now: later })).toEqual({ state: "provenance_expired" });
+    const row = await eligibility(boundary, now);
+    expect(Object.keys(row!).sort()).toEqual(["activeReplayId", "attemptCount", "completedAt", "correlationId", "createdAt", "eventType", "eventVersion", "id", "messageId", "nextAttemptAt", "occurredAt", "payloadAvailable", "replayOfDeliveryId", "replayUnavailableReason", "replayable", "state", "successfulReplayId", "terminalReason"]);
+    expect(JSON.stringify(row)).not.toMatch(/never-inspect-this-payload|private=secret/u);
+  });
+
+  it("indexes every delivery of a message for replay lookups, including replays", async () => {
+    const indexes = await sql!<{ indexname: string; indexdef: string }[]>`select indexname, indexdef from pg_indexes where tablename = 'webhook_delivery' and indexdef like '%(message_id%' order by indexname`;
+    // The unique message/endpoint index is partial and excludes replays, so it cannot serve them.
+    expect(indexes).toEqual([
+      { indexname: "webhook_delivery_message_endpoint_uidx", indexdef: "CREATE UNIQUE INDEX webhook_delivery_message_endpoint_uidx ON public.webhook_delivery USING btree (message_id, endpoint_id) WHERE (replay_of_delivery_id IS NULL)" },
+      { indexname: "webhook_delivery_message_idx", indexdef: "CREATE INDEX webhook_delivery_message_idx ON public.webhook_delivery USING btree (message_id)" },
+    ]);
+    const source = await fixture("replay-lookup-index");
+    const plan = await sql!.begin(async (transaction) => {
+      await transaction`set local enable_seqscan = off`;
+      return await transaction.unsafe("explain (format json) select id from webhook_delivery where message_id = $1 and replay_of_delivery_id is not null", [source.messageId]);
+    });
+    expect(JSON.stringify(plan)).toContain("webhook_delivery_message_idx");
+  });
+
   it("refuses a replay once the source event is outside the 14-day replay window or no longer retained", async () => {
     const old = await fixture("old-provenance", { provenance: "old" });
     const missing = await fixture("missing-provenance", { provenance: "missing" });

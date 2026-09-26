@@ -40,4 +40,6 @@ export const auditEvent = pgTable("audit_event", {
   // The platform admin reads all history and records platform actions (any tenant or none).
   pgPolicy("audit_event_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
   pgPolicy("audit_event_platform_insert", { for: "insert", to: "trestle_platform", withCheck: sql`true` }),
+  // The platform replay function (owned by trestle_webhook_replay) records only its own event.
+  pgPolicy("audit_event_replay_insert", { for: "insert", to: "trestle_webhook_replay", withCheck: sql`${table.name} = 'platform.webhook_delivery.replayed' AND ${table.targetType} = 'webhook_delivery' AND ${table.organizationId} IS NOT NULL` }),
 ]).enableRLS();

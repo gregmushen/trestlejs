@@ -337,7 +337,11 @@ retain their committed identity and status.
 A failed delivery can be replayed by the organization or the platform admin
 only while its source event is at most 14 days old and its committed outbox
 record is still retained; otherwise the replay is refused with a conflict
-error. A native delivery whose source event passes the 14-day window, or whose
+error. Both delivery views report such a delivery as `provenance_expired` and
+disable the replay action with that explanation; the server's refusal remains
+authoritative. Platform replay runs through a SECURITY DEFINER function owned
+by `trestle_webhook_replay`, a NOLOGIN role that no login is a member of and
+that can read and write only the webhook columns replay needs. A native delivery whose source event passes the 14-day window, or whose
 outbox record is gone, is settled as `exhausted` with the terminal reason
 `provenance_expired` (by its Queue consumer, or by the recovery cron) instead
 of waiting in retry.

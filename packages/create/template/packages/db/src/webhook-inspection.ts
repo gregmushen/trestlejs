@@ -1,6 +1,8 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
+import { outsideReplayWindow } from "./event-provenance.js";
 import type { Database } from "./index.js";
+import { outboxMessage } from "./outbox-schema.js";
 import { webhookAttempt } from "./webhook-attempt-schema.js";
 import { webhookDelivery, webhookMessage } from "./webhook-projection-schema.js";
 import { webhookEndpoint, webhookSubscription } from "./webhook-schema.js";
@@ -61,6 +63,10 @@ export async function listWebhookSubscriptions(input: {
     .orderBy(webhookSubscription.publicEventType, webhookSubscription.publicVersion);
 }
 
+/** A failed delivery is replayable only while its payload is retained and its
+ * source event is inside the 14-day replay window at `now` (default: the
+ * current time). The source event's age decides eligibility but is not
+ * returned; replayTenantWebhookDelivery remains the authority. */
 export async function listWebhookDeliveries(input: {
   organizationId: string;
   environment: "local" | "preview" | "staging" | "production";
@@ -68,8 +74,11 @@ export async function listWebhookDeliveries(input: {
   tenantDatabase: (organizationId: string) => Database;
   limit?: number;
   deliveryMode?: "disabled" | "local" | "native" | "svix";
+  now?: Date;
 }) {
   const limit = inspectionLimit(input.limit ?? 50);
+  const now = input.now ?? new Date();
+  if (!Number.isFinite(now.getTime())) throw new Error("Invalid webhook replay eligibility time");
   const rows = await input.tenantDatabase(input.organizationId).select({
     id: webhookDelivery.id, messageId: webhookMessage.id, eventType: webhookMessage.publicEventType,
     eventVersion: webhookMessage.publicVersion, occurredAt: webhookMessage.occurredAt,
@@ -83,6 +92,7 @@ export async function listWebhookDeliveries(input: {
     payloadPresent: sql<boolean>`${webhookMessage.envelope} IS NOT NULL`,
     endpointState: webhookEndpoint.state, endpointProvider: webhookEndpoint.provider,
     correlationId: webhookMessage.correlationId,
+    sourceOccurredAt: sql<Date | null>`(select source.occurred_at from outbox_message source where source.id = ${webhookMessage.sourceEventId}::text and source.organization_id = ${input.organizationId})`.mapWith(outboxMessage.occurredAt),
   }).from(webhookDelivery)
     .innerJoin(webhookMessage, and(eq(webhookMessage.id, webhookDelivery.messageId), eq(webhookMessage.organizationId, webhookDelivery.organizationId)))
     .innerJoin(webhookEndpoint, and(eq(webhookEndpoint.id, webhookDelivery.endpointId), eq(webhookEndpoint.organizationId, webhookDelivery.organizationId)))
@@ -90,7 +100,7 @@ export async function listWebhookDeliveries(input: {
       eq(webhookDelivery.organizationId, input.organizationId), eq(webhookDelivery.endpointId, input.endpointId),
       eq(webhookEndpoint.environment, input.environment), isNull(webhookEndpoint.deletedAt),
     )).orderBy(desc(webhookDelivery.createdAt), desc(webhookDelivery.id)).limit(limit);
-  return rows.map(({ payloadDeletedAt, messageStatus, payloadPresent, endpointState, endpointProvider, ...row }) => {
+  return rows.map(({ payloadDeletedAt, messageStatus, payloadPresent, endpointState, endpointProvider, sourceOccurredAt, ...row }) => {
     const payloadAvailable = !payloadDeletedAt && messageStatus === "ready" && payloadPresent;
     const expectedMode = input.environment === "local" ? "local" : "native";
     const providerReady = endpointProvider === expectedMode && (input.deliveryMode === undefined || input.deliveryMode === expectedMode);
@@ -99,7 +109,8 @@ export async function listWebhookDeliveries(input: {
       : row.successfulReplayId ? "resolved"
       : endpointState !== "active" ? "endpoint_inactive"
       : !providerReady ? "provider_unavailable"
-      : row.activeReplayId ? "replay_pending" : null;
+      : row.activeReplayId ? "replay_pending"
+      : sourceOccurredAt === null || outsideReplayWindow(sourceOccurredAt, now) ? "provenance_expired" : null;
     return { ...row, payloadAvailable, replayable: replayUnavailableReason === null, replayUnavailableReason };
   });
 }
