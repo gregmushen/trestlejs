@@ -865,6 +865,24 @@ How it behaves:
   inbox still prevents a second completion.
 - **Deploys:** a run finishes on the task version it started on.
 
+**Inngest.** Start with `create-trestlejs <dir> --jobs inngest`, or switch
+with `pnpm exec trestle jobs use inngest [--endpoint https://your-inngest.example] --yes`.
+Inngest calls the Worker's signed endpoint, `/api/jobs/inngest`, so functions
+keep every Worker binding. The endpoint is left out of published API
+documents.
+
+1. Set `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` for each deployed
+   environment.
+2. Register `https://<worker>/api/jobs/inngest` as the app URL in Inngest.
+3. Locally, `trestle dev` runs the Inngest Dev Server
+   (http://localhost:8288).
+
+As with trigger.dev, only the event ID is sent, and each step re-verifies the
+event and rechecks entitlements on every attempt. Unlike trigger.dev, a run in
+flight during a deploy continues on the new code. A self-hosted Inngest is
+selected with `--endpoint`; see `docs/JOB_RUNTIMES.md` for its supported
+topology.
+
 ### API contracts
 
 The OpenAPI documents are generated from the route policies in

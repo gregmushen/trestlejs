@@ -1,9 +1,6 @@
-import type { Logger } from "@__TRESTLE_PROJECT_NAME__/context";
-import { PostgresEventInbox, PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
-import { PermanentEventError, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
+import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 
-import type { EventConsumerRegistry, PostCommitEffect } from "./async-runtime.js";
-import { consumeCommittedEvent, type JobRuntimeAdapter, type JobRuntimeName } from "./job-runtime.js";
+import type { JobRuntimeAdapter } from "./job-runtime.js";
 import type { WorkerEnvironment } from "./worker-environment.js";
 
 /** The trigger.dev task that runs committed events (apps/jobs/src/trigger/event.ts). */
@@ -50,33 +47,4 @@ export const triggerRuntime: JobRuntimeAdapter = {
   },
 };
 
-/**
- * The body of a trigger.dev task run for one committed event: load it from
- * the outbox by ID, then run the runtime-neutral step. An unknown ID is a
- * permanent rejection. `permanent` is trigger.dev's AbortTaskRunError.
- */
-export async function executeCommittedEventById<Environment, Data>(input: {
-  eventId: string;
-  connectionString: string;
-  registry: EventConsumerRegistry<Environment, Data>;
-  environment: Environment;
-  runId: string;
-  runtime: JobRuntimeName;
-  log: Logger;
-  permanent: (message: string) => Error;
-  postCommit?: PostCommitEffect<Environment>;
-  assumeApplicationRole?: boolean;
-}): Promise<void> {
-  const inbox = new PostgresEventInbox(input.connectionString, { assumeApplicationRole: input.assumeApplicationRole ?? true });
-  const outbox = new PostgresOutboxStore(input.connectionString, { assumeApplicationRole: input.assumeApplicationRole ?? true });
-  try {
-    const committed = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(input.eventId) ? await outbox.findCommitted(input.eventId) : null;
-    if (!committed) {
-      input.log.warn("job.event.rejected", { runId: input.runId, runtime: input.runtime, reason: "provenance_missing" });
-      throw input.permanent(`Event rejected: ${new PermanentEventError("provenance_missing").reason}`);
-    }
-    await consumeCommittedEvent({ registry: input.registry, inbox, outbox, envelope: committed.message, environment: input.environment, runId: input.runId, runtime: input.runtime, log: input.log, permanent: input.permanent, ...(input.postCommit ? { postCommit: input.postCommit } : {}) });
-  } finally {
-    await Promise.all([inbox.close(), outbox.close()]);
-  }
-}
+export { executeCommittedEventById } from "./job-runtime.js";

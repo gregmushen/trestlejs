@@ -35,7 +35,7 @@ export type OpenApiOptions = Readonly<{
 
 const classify = (policy: ApiRoutePolicy): ApiClassification =>
   policy.audience === "platform" ? "admin-internal"
-    : policy.public && /\/webhooks?\//u.test(policy.path) ? "webhook"
+    : policy.public && /\/(webhooks?|jobs)\//u.test(policy.path) ? "webhook"
       : policy.public ? "public"
         : policy.principals?.includes("api_key") ? "machine" : "browser-internal";
 

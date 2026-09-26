@@ -375,6 +375,36 @@ try {
   const triggerJobs = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "jobs", "list", "--json"], { cwd: triggerProject, encoding: "utf8" })).data;
   if (triggerJobs.runtime.runtime !== "trigger") throw new Error("A --jobs trigger project does not select trigger.dev");
   await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "src/job-runtime-trigger.test.ts"], triggerProject);
+  // The Inngest job runtime: a project created with --jobs inngest serves the signed endpoint,
+  // matches its bundled template, and passes the conformance suite against the real Inngest Dev Server.
+  const inngestProject = path.join(temporaryRoot, "inngest-canary");
+  await run(process.execPath, [path.join(root, "packages/create/dist/bin.js"), inngestProject, "--no-git", "--no-install", "--jobs", "inngest"], root);
+  const inngestManifestPath = path.join(inngestProject, "package.json");
+  const inngestManifest = JSON.parse(await readFile(inngestManifestPath, "utf8"));
+  inngestManifest.devDependencies.trestlejs = `file:${cliArchive}`;
+  await writeFile(inngestManifestPath, `${JSON.stringify(inngestManifest, null, 2)}\n`);
+  await run("pnpm", ["install"], inngestProject);
+  const inngestDiff = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "diff", "--json"], { cwd: inngestProject, encoding: "utf8" }));
+  if (inngestDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) throw new Error(`Fresh Inngest project did not match its bundled template: ${JSON.stringify(inngestDiff.data.entries.filter((entry) => entry.classification !== "same"))}`);
+  await run("pnpm", ["--filter", "./apps/worker", "typecheck"], inngestProject);
+  await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "src/job-runtime-inngest.test.ts", "src/openapi.test.ts"], inngestProject);
+  if (process.env.TRESTLE_GENERATED_DATABASE_URL) {
+    const inngestDatabaseUrl = new URL(process.env.TRESTLE_GENERATED_DATABASE_URL);
+    inngestDatabaseUrl.pathname = "/trestle_inngest_canary";
+    await run(process.execPath, ["-e", `const postgres = require("postgres"); const sql = postgres(${JSON.stringify(process.env.TRESTLE_GENERATED_DATABASE_URL)}, { max: 1 }); (async () => { await sql.unsafe("drop database if exists trestle_inngest_canary with (force)"); await sql.unsafe("create database trestle_inngest_canary"); await sql.end(); })().catch((error) => { console.error(error); process.exit(1); });`], path.join(inngestProject, "packages", "db"));
+    await run("pnpm", ["db:migrate"], inngestProject, { DATABASE_URL: inngestDatabaseUrl.toString() });
+    await requireScenarios(inngestProject, "./apps/worker", ["src/inngest/conformance.integration.test.ts"], { TRESTLE_INNGEST_CONFORMANCE: "1", TRESTLE_RLS_TEST_DATABASE_URL: inngestDatabaseUrl.toString() }, [
+      "runs a committed event exactly once under its tenant",
+      "retries a transient failure and completes once",
+      "runs a duplicate delivery once",
+      "resends after a lost dispatch acknowledgement without running twice",
+      "skips a handler whose entitlement was revoked before it ran",
+      "rejects expired provenance permanently without retrying",
+      "fans out to several tenants, each under its own authority",
+      "recovers accepted work across an executor restart",
+      "completes in-flight work exactly once across a deploy",
+    ]);
+  }
   // Admin disabled (the default): no admin app and no admin deployment configuration.
   if (await stat(path.join(project, "apps", "admin")).then(() => true, () => false)) throw new Error("The default project generated apps/admin");
   // Admin enabled: a second project generated with --admin installs, builds, and passes its admin
