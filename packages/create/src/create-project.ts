@@ -15,7 +15,7 @@ export type CreateProjectOptions = {
   /** Generate the optional platform admin (capabilities.admin). Off by default. */
   admin?: boolean;
   /** The background job runtime; trigger adds apps/jobs for trigger.dev. */
-  jobs?: "cloudflare" | "trigger";
+  jobs?: "cloudflare" | "trigger" | "inngest";
   /** Project name; defaults to the directory name, which must then be a valid project name. */
   name?: string;
   run?: (command: string, arguments_: string[], cwd: string) => Promise<void>;
@@ -120,7 +120,7 @@ export async function createProject(options: CreateProjectOptions): Promise<Crea
 
   try {
     const baseline: Record<string, string> = {};
-    const enabled = new Set<OptionalTemplateCapability>([...(options.admin ? ["admin" as const] : []), ...(options.jobs === "trigger" ? ["trigger" as const] : [])]);
+    const enabled = new Set<OptionalTemplateCapability>([...(options.admin ? ["admin" as const] : []), ...(options.jobs === "trigger" ? ["trigger" as const] : []), ...(options.jobs === "inngest" ? ["inngest" as const] : [])]);
     await copyTemplate(templateRoot, destination, name, baseline, enabled);
     if (enabled.size) await applyCapabilities(destination, baseline, enabled);
     await writeFile(path.join(destination, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files: Object.fromEntries(Object.entries(baseline).sort(([left], [right]) => left.localeCompare(right))), packageSource: await readFile(path.join(destination, "package.json"), "utf8") }, null, 2)}\n`);

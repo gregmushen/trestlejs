@@ -1,5 +1,6 @@
 import { jobRuntime, registerJobRuntime } from "./job-runtime.js";
 import { triggerRuntime } from "./job-runtime-trigger.js";
+import { inngestRuntime } from "./job-runtime-inngest.js";
 import { apiReferencePage, customerOpenApi } from "./openapi.js";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -645,6 +646,7 @@ app.onError((error, context) => {
 });
 
 registerJobRuntime(triggerRuntime);
+registerJobRuntime(inngestRuntime);
 
 export default {
   fetch: app.fetch.bind(app),

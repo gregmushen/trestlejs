@@ -18,6 +18,7 @@ export function developmentPorts(manifest: ProjectManifest): ReadonlyArray<Reado
     { port: 42069, service: "app" },
     { port: 8787, service: "api" },
     ...(manifest.apps.admin ? [{ port: 42070, service: "admin" }, { port: 8788, service: "admin-api" }] : []),
+    ...(manifest.jobs?.runtime === "inngest" ? [{ port: 8288, service: "inngest" }] : []),
   ];
 }
 

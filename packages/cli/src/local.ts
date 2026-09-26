@@ -26,5 +26,7 @@ export async function localEnvironment(
     // apps/jobs (trigger.dev) reads its project and API from the manifest.
     ...(manifest.jobs?.runtime === "trigger" && manifest.jobs.project ? { TRIGGER_PROJECT_REF: manifest.jobs.project } : {}),
     ...(manifest.jobs?.runtime === "trigger" && manifest.jobs.endpoint ? { TRIGGER_API_URL: manifest.jobs.endpoint } : {}),
+    // Locally, the Worker talks to the Inngest Dev Server that trestle dev runs.
+    ...(manifest.jobs?.runtime === "inngest" && environment === "local" ? { INNGEST_DEV: "1", INNGEST_BASE_URL: "http://127.0.0.1:8288" } : {}),
   };
 }

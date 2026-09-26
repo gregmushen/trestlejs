@@ -4,7 +4,7 @@ import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { applyFileCapabilities } from "./template-capabilities.js";
+import { applyFileCapabilities, capabilityRenderedFiles } from "./template-capabilities.js";
 import { applyManifestCapabilities, parseProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "./core.js";
 import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -318,7 +318,7 @@ async function enabledCapabilities(root: string): Promise<ReadonlySet<OptionalTe
   try {
     if (!source) return new Set();
     const manifest = parseProjectManifest(source);
-    return new Set<OptionalTemplateCapability>([...(manifest.capabilities.admin ? ["admin" as const] : []), ...(manifest.jobs?.runtime === "trigger" ? ["trigger" as const] : [])]);
+    return new Set<OptionalTemplateCapability>([...(manifest.capabilities.admin ? ["admin" as const] : []), ...(manifest.jobs?.runtime === "trigger" ? ["trigger" as const] : []), ...(manifest.jobs?.runtime === "inngest" ? ["inngest" as const] : [])]);
   }
   catch { return new Set(); }
 }
@@ -631,37 +631,42 @@ export async function enableAdminCapability(root: string, projectName: string, t
 }
 
 /**
- * Switches an existing project to the trigger.dev job runtime: adds apps/jobs
- * from this CLI's template, selects the runtime in the manifest (with its
- * hosting and self-hosted endpoint), and sets the Worker's runtime variables.
- * The project must be on this CLI's template version. Pending outbox work is
- * dispatched to the new runtime once the Worker is deployed with it; see
- * `trestle jobs migrate` for draining in-flight Cloudflare work first.
+ * Switches an existing project from the default Cloudflare runtime to
+ * trigger.dev (adds apps/jobs) or Inngest (adds the Worker's signed serve
+ * endpoint), selecting it in the manifest with its hosting and self-hosted
+ * endpoint and setting the Worker's runtime variables. The project must be on
+ * this CLI's template version. Edited framework files keep their edits and
+ * remain application-owned; unedited ones stay template-owned.
  */
-export async function enableTriggerRuntime(root: string, projectName: string, options: Readonly<{ hosting: "cloud" | "self-hosted"; endpoint?: string }>, templateRoot = defaultTemplateRoot): Promise<readonly string[]> {
+export async function enableJobRuntime(root: string, projectName: string, runtime: "trigger" | "inngest", options: Readonly<{ hosting: "cloud" | "self-hosted"; endpoint?: string }>, templateRoot = defaultTemplateRoot): Promise<readonly string[]> {
   const manifestPath = path.join(root, ".trestle", "project.yaml");
   if (!(await safeApplicationPath(root, ".trestle/project.yaml"))) throw new Error("Unsafe application path: .trestle/project.yaml");
   const manifestSource = await readFile(manifestPath, "utf8");
   const manifest = parseProjectManifest(manifestSource);
-  if (manifest.jobs?.runtime === "trigger") return [];
+  if (manifest.jobs?.runtime === runtime) return [];
   if (manifest.jobs && manifest.jobs.runtime !== "cloudflare") throw new Error(`This project uses the ${manifest.jobs.runtime} job runtime; switch with trestle jobs migrate`);
   const framework = JSON.parse(await readFile(path.join(root, ".trestle", "framework.json"), "utf8")) as { templateVersion?: string };
-  if (framework.templateVersion !== TRESTLEJS_VERSION) throw new Error(`Selecting trigger.dev requires template ${TRESTLEJS_VERSION}; this project is on ${framework.templateVersion ?? "an unknown version"}. Run trestle upgrade first.`);
-  if (options.hosting === "self-hosted" && !options.endpoint) throw new Error("A self-hosted trigger.dev needs --endpoint");
-  const enabled = new Set<OptionalTemplateCapability>([...await enabledCapabilities(root), "trigger"]);
-  const files = (await targetTemplateFiles(templateRoot, enabled)).filter((relative) => templatePathCapability(relative) === "trigger");
+  if (framework.templateVersion !== TRESTLEJS_VERSION) throw new Error(`Selecting ${runtime} requires template ${TRESTLEJS_VERSION}; this project is on ${framework.templateVersion ?? "an unknown version"}. Run trestle upgrade first.`);
+  if (options.hosting === "self-hosted" && !options.endpoint) throw new Error(`A self-hosted ${runtime} needs --endpoint`);
+  const before = await enabledCapabilities(root);
+  const enabled = new Set<OptionalTemplateCapability>([...before, runtime]);
+  const files = (await targetTemplateFiles(templateRoot, enabled)).filter((relative) => templatePathCapability(relative) === runtime);
   for (const relative of files) {
     if (!(await safeApplicationPath(root, relative))) throw new Error(`Unsafe application path: ${relative}`);
-    if (await optionalText(path.join(root, relative)) !== undefined) throw new Error(`${relative} already exists; move it aside before selecting trigger.dev`);
+    if (await optionalText(path.join(root, relative)) !== undefined) throw new Error(`${relative} already exists; move it aside before selecting ${runtime}`);
   }
   const hostingLines = `  hosting: ${options.hosting}\n${options.endpoint ? `  endpoint: ${options.endpoint}\n` : ""}`;
-  const withoutJobs = manifestSource.replace(/^jobs:\n(?: {2}.*\n)*/mu, "");
-  const updatedManifest = applyManifestCapabilities(withoutJobs, enabled).replace("  hosting: cloud\n", hostingLines);
-  if (parseProjectManifest(updatedManifest).jobs?.runtime !== "trigger") throw new Error("Unable to select trigger.dev in the project manifest");
-  const wranglerPath = path.join(root, "apps", "worker", "wrangler.jsonc");
-  const wranglerSource = await readFile(wranglerPath, "utf8");
-  let updatedWrangler = wranglerSource.includes('"TRESTLE_JOB_RUNTIME"') ? wranglerSource : applyFileCapabilities("apps/worker/wrangler.jsonc", wranglerSource, enabled);
-  if (options.endpoint) updatedWrangler = updatedWrangler.replaceAll('"TRIGGER_API_URL": "https://api.trigger.dev"', `"TRIGGER_API_URL": ${JSON.stringify(options.endpoint)}`);
+  const updatedManifest = applyManifestCapabilities(manifestSource.replace(/^jobs:\n(?: {2}.*\n)*/mu, ""), enabled).replace("  hosting: cloud\n", hostingLines);
+  if (parseProjectManifest(updatedManifest).jobs?.runtime !== runtime) throw new Error(`Unable to select ${runtime} in the project manifest`);
+  const rendered = new Map<string, { source: string; updated: string }>();
+  for (const relative of capabilityRenderedFiles) {
+    const source = await readFile(path.join(root, relative), "utf8");
+    let updated = applyFileCapabilities(relative, source, new Set([runtime]));
+    if (relative === "apps/worker/wrangler.jsonc" && options.endpoint) updated = runtime === "trigger"
+      ? updated.replaceAll('"TRIGGER_API_URL": "https://api.trigger.dev"', `"TRIGGER_API_URL": ${JSON.stringify(options.endpoint)}`)
+      : updated.replaceAll('"TRESTLE_JOB_RUNTIME": "inngest"', `"TRESTLE_JOB_RUNTIME": "inngest", "INNGEST_BASE_URL": ${JSON.stringify(options.endpoint)}`);
+    if (updated !== source) rendered.set(relative, { source, updated });
+  }
 
   const written: string[] = [];
   for (const relative of files) {
@@ -671,7 +676,7 @@ export async function enableTriggerRuntime(root: string, projectName: string, op
     written.push(relative);
   }
   await writeFile(manifestPath, updatedManifest, "utf8");
-  await writeFile(wranglerPath, updatedWrangler, "utf8");
+  for (const [relative, { updated }] of rendered) await writeFile(path.join(root, relative), updated, "utf8");
 
   const baselinePath = path.join(root, ".trestle", "template-baseline.json");
   const baselineSource = await safeApplicationPath(root, ".trestle/template-baseline.json") ? await optionalText(baselinePath) : undefined;
@@ -680,12 +685,14 @@ export async function enableTriggerRuntime(root: string, projectName: string, op
     if (baseline.schemaVersion === 1 && baseline.templateVersion === TRESTLEJS_VERSION && validBaselineFiles(baseline.files)) {
       const baselineFiles: Record<string, string> = { ...baseline.files };
       for (const relative of written) baselineFiles[relative] = digest(await readFile(path.join(root, relative), "utf8"));
-      // Unedited framework files stay template-owned in their trigger.dev form.
+      // Unedited framework files stay template-owned in their new form.
       if (baselineFiles[".trestle/project.yaml"] === digest(manifestSource)) baselineFiles[".trestle/project.yaml"] = digest(await targetContent(templateRoot, ".trestle/project.yaml", projectName, enabled));
-      if (baselineFiles["apps/worker/wrangler.jsonc"] === digest(wranglerSource)) baselineFiles["apps/worker/wrangler.jsonc"] = digest(await targetContent(templateRoot, "apps/worker/wrangler.jsonc", projectName, enabled));
+      for (const [relative, { source }] of rendered) {
+        if (baselineFiles[relative] === digest(source)) baselineFiles[relative] = digest(await targetContent(templateRoot, relative, projectName, enabled));
+      }
       const sorted = Object.fromEntries(Object.entries(baselineFiles).sort(([left], [right]) => left.localeCompare(right)));
       await writeFile(baselinePath, `${JSON.stringify({ ...baseline, files: sorted }, null, 2)}\n`, "utf8");
     }
   }
-  return [...written, ".trestle/project.yaml", "apps/worker/wrangler.jsonc"];
+  return [...written, ".trestle/project.yaml", ...rendered.keys()];
 }

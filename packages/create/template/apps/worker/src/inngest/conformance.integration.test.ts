@@ -1,0 +1,118 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { createServer, type Server } from "node:http";
+
+import { PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
+import { dispatchOutbox } from "@__TRESTLE_PROJECT_NAME__/events";
+import { Hono } from "hono";
+import { Inngest, NonRetriableError } from "inngest";
+import { serve } from "inngest/hono";
+
+import { conformanceRegistry } from "../job-conformance.js";
+import { runtimeConformanceSuite, type ConformanceHarness } from "../job-conformance-suite.js";
+import { inngestEventName, sendCommittedEventToInngest } from "../job-runtime-inngest.js";
+import { executeCommittedEventById } from "../job-runtime.js";
+
+/**
+ * The conformance suite against the real Inngest engine (the Dev Server,
+ * downloaded by npx): the harness serves the conformance function from a Node
+ * HTTP server it controls, so restarts stop and start the executor Inngest
+ * calls, and a deploy swaps the served code while runs are in flight.
+ * Enable with TRESTLE_INNGEST_CONFORMANCE=1.
+ */
+const devPort = 18_288;
+const appPort = 13_939;
+const quiet = { info() {}, warn() {}, error() {}, debug() {}, child() { return quiet; } } as never;
+const finished = new Set(["Completed", "Failed", "Cancelled"]);
+
+function listen(app: Hono): Promise<Server> {
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    const body = chunks.length ? Buffer.concat(chunks) : undefined;
+    const init: RequestInit = { method: request.method ?? "GET", headers: request.headers as HeadersInit };
+    if (body && request.method !== "GET") init.body = body;
+    const result = await app.fetch(new Request(`http://127.0.0.1:${appPort}${request.url}`, init));
+    response.writeHead(result.status, Object.fromEntries(result.headers));
+    response.end(Buffer.from(await result.arrayBuffer()));
+  });
+  return new Promise((resolve) => server.listen(appPort, "127.0.0.1", () => resolve(server)));
+}
+
+async function inngestHarness(connectionString: string): Promise<ConformanceHarness> {
+  let version = "v1";
+  const inngest = new Inngest({ id: "trestle-conformance", isDev: true, baseUrl: `http://127.0.0.1:${devPort}` });
+  const probe = inngest.createFunction(
+    { id: "trestle-conformance-event", retries: 5, triggers: [{ event: inngestEventName }] },
+    async ({ event, step, runId }) => {
+      await step.run("consume-event-v1", async () => {
+        await executeCommittedEventById({ eventId: String(event.data.eventId), connectionString, registry: conformanceRegistry(connectionString, version), environment: {}, runId, runtime: "inngest", log: quiet, permanent: (message) => new NonRetriableError(message), assumeApplicationRole: false });
+      });
+    },
+  );
+  const app = new Hono();
+  app.on(["GET", "POST", "PUT"], "/api/jobs/inngest", serve({ client: inngest, functions: [probe] }));
+  let server = await listen(app);
+  const dev: ChildProcess = spawn("npx", ["--yes", "inngest-cli@1.45.1", "dev", "--port", String(devPort), "-u", `http://127.0.0.1:${appPort}/api/jobs/inngest`, "--no-discovery", "--no-poll"], { stdio: "ignore", detached: true });
+  for (let waited = 0; ; waited += 1_000) {
+    const registered = await fetch(`http://127.0.0.1:${devPort}/dev`).then((response) => response.ok ? response.json() as Promise<{ functions?: unknown[] }> : undefined).catch(() => undefined);
+    if (registered?.functions?.length) break;
+    if (waited > 180_000) throw new Error("the Inngest Dev Server did not register the conformance function");
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  const events = new Map<string, string[]>();
+  // A run between retries is reported "Failed" with no ended_at; only ended_at marks a finished run.
+  const runsFor = async (id: string) => ((await (await fetch(`http://127.0.0.1:${devPort}/v1/events/${id}/runs`)).json()) as { data: Array<{ status: string; run_started_at: string; ended_at: string | null }> }).data;
+  const latest = async (eventId: string) => (await Promise.all((events.get(eventId) ?? []).map(runsFor))).flat().sort((left, right) => right.run_started_at.localeCompare(left.run_started_at))[0];
+  const publisher: ConformanceHarness["publisher"] = {
+    send: async (envelope, delivery) => {
+      // The Worker's own send, to the Dev Server.
+      const ids = await sendCommittedEventToInngest({ environment: { INNGEST_DEV: "1", INNGEST_BASE_URL: `http://127.0.0.1:${devPort}` }, eventId: envelope.id, generation: delivery?.generation ?? 0 });
+      events.set(envelope.id, [...(events.get(envelope.id) ?? []), ...ids]);
+    },
+  };
+  const settledRuns = async () => {
+    for (let waited = 0; waited < 240_000; waited += 2_000) {
+      const runs = await Promise.all([...events.keys()].map(latest));
+      if (runs.every((run) => run && run.ended_at && finished.has(run.status))) return;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    throw new Error("Inngest runs did not settle");
+  };
+  return {
+    runtime: "inngest",
+    publisher,
+    async settle() {
+      await settledRuns();
+      const store = new PostgresOutboxStore(connectionString);
+      try {
+        for (let round = 0; round < 3 && (await store.settleUnconsumed({ olderThanMs: 0 })).length > 0; round++) {
+          await dispatchOutbox(store, publisher);
+          await settledRuns();
+        }
+      } finally { await store.close(); }
+    },
+    async failed() {
+      const failed: string[] = [];
+      for (const eventId of events.keys()) { const run = await latest(eventId); if (run?.ended_at && run.status === "Failed") failed.push(eventId); }
+      return failed;
+    },
+    async deploy(next) { version = next; },
+    async restart() {
+      await new Promise((resolve) => server.close(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      server = await listen(app);
+    },
+    async close() {
+      await new Promise((resolve) => server.close(resolve));
+      try { process.kill(-dev.pid!, "SIGTERM"); } catch { /* already stopped */ }
+    },
+  };
+}
+
+runtimeConformanceSuite({
+  runtime: "inngest",
+  connectionString: process.env.TRESTLE_INNGEST_CONFORMANCE === "1" ? process.env.TRESTLE_RLS_TEST_DATABASE_URL : undefined,
+  harness: inngestHarness,
+  deploy: "new-code",
+  timeoutMs: 300_000,
+});

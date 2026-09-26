@@ -27,7 +27,7 @@ export async function executeCreateCli(
     .option("--no-install", "skip pnpm install")
     .option("--no-git", "skip git initialization")
     .option("--admin", "include the optional platform admin (apps/admin)")
-    .option("--jobs <runtime>", "background job runtime: cloudflare (default) or trigger (adds apps/jobs for trigger.dev)")
+    .option("--jobs <runtime>", "background job runtime: cloudflare (default), trigger (adds apps/jobs for trigger.dev), or inngest (adds the Worker's Inngest endpoint)")
     .option("--name <name>", "project name, when it differs from the directory name")
     .showHelpAfterError()
     .showSuggestionAfterError()
@@ -40,7 +40,7 @@ export async function executeCreateCli(
         install: options.install,
         git: options.git,
         admin: Boolean(options.admin),
-        jobs: options.jobs === undefined || options.jobs === "cloudflare" ? "cloudflare" : options.jobs === "trigger" ? "trigger" : (() => { throw new Error("--jobs must be cloudflare or trigger"); })(),
+        jobs: options.jobs === undefined || options.jobs === "cloudflare" ? "cloudflare" : options.jobs === "trigger" || options.jobs === "inngest" ? options.jobs : (() => { throw new Error("--jobs must be cloudflare, trigger, or inngest"); })(),
         ...(options.name !== undefined ? { name: options.name } : {}),
       });
       runtime.stdout(

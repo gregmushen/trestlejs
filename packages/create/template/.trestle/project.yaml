@@ -85,6 +85,13 @@ secrets:
   TRIGGER_SECRET_KEY:
     target: worker
     required: []
+  # Inngest keys, used when jobs.runtime is inngest.
+  INNGEST_EVENT_KEY:
+    target: worker
+    required: []
+  INNGEST_SIGNING_KEY:
+    target: worker
+    required: []
   DATABASE_MIGRATION_URL:
     target: ci
     required: [staging, production]

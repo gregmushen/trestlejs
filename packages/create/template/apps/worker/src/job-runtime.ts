@@ -1,5 +1,5 @@
 import type { Logger } from "@__TRESTLE_PROJECT_NAME__/context";
-import type { CommittedEventStore } from "@__TRESTLE_PROJECT_NAME__/db";
+import { PostgresEventInbox, PostgresOutboxStore, type CommittedEventStore } from "@__TRESTLE_PROJECT_NAME__/db";
 import { CloudflareQueuePublisher, PermanentEventError, safeErrorCategory, type EventEnvelope, type EventInboxStore, type QueuePublisher } from "@__TRESTLE_PROJECT_NAME__/events";
 
 import { handleEventWithInbox, type EventConsumerRegistry, type PostCommitEffect } from "./async-runtime.js";
@@ -86,5 +86,36 @@ export async function consumeCommittedEvent<Environment, Data = unknown>(input: 
     }
     input.log.warn(`${prefix}.event.retrying`, { ...fields, errorCategory: safeErrorCategory(error) });
     throw new Error(input.retryMessage ?? "Job handler failed");
+  }
+}
+
+/**
+ * The body of an external runtime's run for one committed event (trigger.dev
+ * task, Inngest step): load it from the outbox by ID, then run the
+ * runtime-neutral step. An unknown ID is a permanent rejection.
+ */
+export async function executeCommittedEventById<Environment, Data>(input: {
+  eventId: string;
+  connectionString: string;
+  registry: EventConsumerRegistry<Environment, Data>;
+  environment: Environment;
+  runId: string;
+  runtime: JobRuntimeName;
+  log: Logger;
+  permanent: (message: string) => Error;
+  postCommit?: PostCommitEffect<Environment>;
+  assumeApplicationRole?: boolean;
+}): Promise<void> {
+  const inbox = new PostgresEventInbox(input.connectionString, { assumeApplicationRole: input.assumeApplicationRole ?? true });
+  const outbox = new PostgresOutboxStore(input.connectionString, { assumeApplicationRole: input.assumeApplicationRole ?? true });
+  try {
+    const committed = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(input.eventId) ? await outbox.findCommitted(input.eventId) : null;
+    if (!committed) {
+      input.log.warn("job.event.rejected", { runId: input.runId, runtime: input.runtime, reason: "provenance_missing" });
+      throw input.permanent(`Event rejected: ${new PermanentEventError("provenance_missing").reason}`);
+    }
+    await consumeCommittedEvent({ registry: input.registry, inbox, outbox, envelope: committed.message, environment: input.environment, runId: input.runId, runtime: input.runtime, log: input.log, permanent: input.permanent, ...(input.postCommit ? { postCommit: input.postCommit } : {}) });
+  } finally {
+    await Promise.all([inbox.close(), outbox.close()]);
   }
 }

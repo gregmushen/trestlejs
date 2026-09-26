@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +41,7 @@ import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { formatProviderStatuses, providerStatuses } from "./providers.js";
 import { evidenceReport, formatEvidenceReport, readLedger, recordEvidence, starterLedger, writeLedger } from "./evidence.js";
-import { enableTriggerRuntime } from "./upgrade-source.js";
+import { enableJobRuntime } from "./upgrade-source.js";
 import { applySourceUpgrade, sourceFileDiff, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { auditMigrations, formatMigrationAudit, rebaseMigrations } from "./upgrade-migrations.js";
 import {
@@ -1087,7 +1088,12 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(
         `${context.manifest.apps.site ? "Site   http://localhost:42068\n" : ""}App    http://localhost:42069\nAPI    http://localhost:8787\n`,
       );
-      const exitCode = await runDevelopment(context.root, childEnvironment);
+      // Inngest: its Dev Server calls the Worker's signed endpoint and shows runs at http://localhost:8288.
+      const inngestDev = context.manifest.jobs?.runtime === "inngest"
+        ? spawn("npx", ["--yes", "inngest-cli@1.45.1", "dev", "-u", "http://127.0.0.1:8787/api/jobs/inngest", "--no-discovery"], { cwd: context.root, stdio: "inherit", env: childEnvironment })
+        : undefined;
+      if (inngestDev) runtime.stdout("Inngest http://localhost:8288\n");
+      const exitCode = await runDevelopment(context.root, childEnvironment).finally(() => { inngestDev?.kill("SIGTERM"); });
       if (exitCode !== 0) throw new CliFailure(`development processes exited with status ${exitCode}`, exitCode);
     });
 
@@ -1336,24 +1342,27 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   jobs.command("use")
-    .description("select the job runtime for this project: trigger adds apps/jobs for trigger.dev (hosted, or self-hosted with --endpoint)")
-    .argument("<runtime>", "trigger")
+    .description("select the job runtime: trigger adds apps/jobs for trigger.dev; inngest adds the Worker's Inngest endpoint (hosted, or self-hosted with --endpoint)")
+    .argument("<runtime>", "trigger or inngest")
     .option("--project <ref>", "the trigger.dev project ref (proj_...)")
-    .option("--endpoint <url>", "a self-hosted trigger.dev URL; omit for hosted trigger.dev")
+    .option("--endpoint <url>", "a self-hosted trigger.dev or Inngest URL; omit for the hosted service")
     .option("--yes", "confirm adding apps/jobs and changing the manifest and Worker configuration")
     .action(async (runtimeName: string, options: { project?: string; endpoint?: string; yes?: boolean }, command: Command) => {
-      if (runtimeName !== "trigger") throw new CliFailure("jobs use supports trigger; Inngest arrives in a later release, and cloudflare is the default");
-      if (!options.yes) throw new CliFailure("jobs use trigger adds apps/jobs and changes .trestle/project.yaml and apps/worker/wrangler.jsonc; rerun with --yes");
+      if (runtimeName !== "trigger" && runtimeName !== "inngest") throw new CliFailure("jobs use supports trigger or inngest; cloudflare is the default");
+      if (!options.yes) throw new CliFailure(`jobs use ${runtimeName} adds the runtime's code and changes .trestle/project.yaml and the Worker configuration; rerun with --yes`);
       const context = await projectContext(command, runtime);
       let changed: readonly string[];
-      try { changed = await enableTriggerRuntime(context.root, context.manifest.project.name, { hosting: options.endpoint ? "self-hosted" : "cloud", ...(options.endpoint ? { endpoint: options.endpoint } : {}) }); }
+      try { changed = await enableJobRuntime(context.root, context.manifest.project.name, runtimeName, { hosting: options.endpoint ? "self-hosted" : "cloud", ...(options.endpoint ? { endpoint: options.endpoint } : {}) }); }
       catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
       if (options.project) {
         const manifestPath = path.join(context.root, ".trestle", "project.yaml");
         const source = await readFile(manifestPath, "utf8");
         if (!/^ {2}project: /mu.test(source)) await writeFile(manifestPath, source.replace(/^(jobs:\n)/mu, `$1  project: ${options.project}\n`), "utf8");
       }
-      runtime.stdout(`${changed.length ? `Selected trigger.dev.\n${changed.map((file) => `  ${file}`).join("\n")}` : "trigger.dev is already selected."}\nNext: pnpm install; set TRIGGER_SECRET_KEY per environment (trestle secrets set TRIGGER_SECRET_KEY --env <env>); trestle jobs env push --env <env>; deploy apps/jobs with pnpm --filter ./apps/jobs deploy.\n`);
+      const next = runtimeName === "trigger"
+        ? "Next: pnpm install; set TRIGGER_SECRET_KEY per environment (trestle secrets set TRIGGER_SECRET_KEY --env <env>); trestle jobs env push --env <env>; deploy apps/jobs with pnpm --filter ./apps/jobs deploy."
+        : "Next: pnpm install; set INNGEST_EVENT_KEY and INNGEST_SIGNING_KEY per deployed environment (trestle secrets set … --env <env>) and deploy the Worker; register https://<worker>/api/jobs/inngest as the app URL in Inngest. Locally, trestle dev runs the Inngest Dev Server.";
+      runtime.stdout(`${changed.length ? `Selected ${runtimeName}.\n${changed.map((file) => `  ${file}`).join("\n")}` : `${runtimeName} is already selected.`}\n${next}\n`);
     });
 
   jobs.command("env")

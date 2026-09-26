@@ -67,9 +67,25 @@ function triggerProvider(manifest: ProjectManifest): Record<string, ProviderDecl
   };
 }
 
+/** The Inngest job runtime, when selected: the Worker sends with the event key; Inngest calls back with the signing key. */
+function inngestProvider(manifest: ProjectManifest): Record<string, ProviderDeclaration> {
+  if (manifest.jobs?.runtime !== "inngest") return {};
+  const apiUrl = (manifest.jobs.endpoint ?? "https://api.inngest.com").replace(/\/$/u, "");
+  return {
+    inngest: {
+      description: `Background jobs (Inngest${manifest.jobs.hosting === "self-hosted" ? `, self-hosted at ${apiUrl}` : ""}); local development uses the Inngest Dev Server`,
+      secrets: ["INNGEST_EVENT_KEY", "INNGEST_SIGNING_KEY"],
+      mode: { local: "fixture", preview: "live", staging: "live", production: "live" },
+      patterns: { INNGEST_SIGNING_KEY: "^signkey-" },
+      setup: "Create an event key and copy the signing key in the Inngest dashboard, then: pnpm exec trestle secrets set INNGEST_EVENT_KEY --env <environment> (and INNGEST_SIGNING_KEY)",
+      health: { url: `${apiUrl}/v1/events?limit=1`, bearer: "INNGEST_SIGNING_KEY", expect: [200] },
+    },
+  };
+}
+
 export function declaredProviders(manifest: ProjectManifest): Record<string, ProviderDeclaration> {
   const declared = (manifest as { providers?: Record<string, ProviderDeclaration> }).providers ?? {};
-  return { ...builtInProviders, ...triggerProvider(manifest), ...declared };
+  return { ...builtInProviders, ...triggerProvider(manifest), ...inngestProvider(manifest), ...declared };
 }
 
 /**
