@@ -23,6 +23,7 @@ import { generateAdminModule } from "./generate-admin-module.js";
 import { addResourceField, generateResource, generateResourceMigration, names, parseResourceField } from "./generate-resource.js";
 import { sharedEditorPermission } from "./generate-shared-resource.js";
 import { adminReadPermission, enableAdminRead } from "./generate-admin-read.js";
+import { formatStatus, localStatus, portConflicts, portOwner } from "./local-status.js";
 import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
@@ -987,8 +988,26 @@ export function createProgram(runtime: CliRuntime): Command {
     .description("start PostgreSQL, apply migrations, and run the local applications")
     .option("--fresh", "remove only declared project-local state before startup")
     .option("--yes", "confirm the reviewed fresh-state plan")
-    .action(async (options: { fresh?: boolean; yes?: boolean }, command: Command) => {
+    .option("--reclaim", "stop stale processes from this project that still hold development ports")
+    .option("--takeover <port...>", "also stop the unrelated processes holding these specific ports")
+    .action(async (options: { fresh?: boolean; yes?: boolean; reclaim?: boolean; takeover?: string[] }, command: Command) => {
       const context = await projectContext(command, runtime);
+      const conflicts = await portConflicts(context.manifest, (port) => portOwner(port, context.root));
+      if (conflicts.length) {
+        const takeover = new Set((options.takeover ?? []).map(Number));
+        const stoppable = conflicts.filter((conflict) => (conflict.owned && options.reclaim) || takeover.has(conflict.port));
+        const blocking = conflicts.filter((conflict) => !stoppable.includes(conflict));
+        if (blocking.length) {
+          throw new CliFailure(`development ports are in use:\n${blocking.map((conflict) => `  ${conflict.port} (${conflict.service}): ${conflict.command} pid ${conflict.pid}${conflict.cwd ? ` in ${conflict.cwd}` : ""} — ${conflict.owned ? "from this project; rerun with --reclaim to stop it" : `not from this project; stop it yourself or pass --takeover ${conflict.port}`}`).join("\n")}`);
+        }
+        for (const conflict of stoppable) {
+          runtime.stdout(`Stopping ${conflict.command} (pid ${conflict.pid}) on port ${conflict.port}\n`);
+          try { process.kill(conflict.pid, "SIGTERM"); } catch { /* already exited */ }
+        }
+        for (let attempt = 0; attempt < 50 && (await portConflicts(context.manifest, (port) => portOwner(port, context.root))).some((conflict) => stoppable.some((stopped) => stopped.port === conflict.port)); attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
       const childEnvironment = await localEnvironment(context.root, context.manifest, "local", runtime);
       const database = assertLocalDatabaseUrl(childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL ?? "");
       const composeEnvironment = {
@@ -1135,6 +1154,19 @@ export function createProgram(runtime: CliRuntime): Command {
     runtime.stdout(`Removing only the Compose volumes declared by ${path.join(context.root, "compose.yaml")}\n`);
     await runCommand("docker", ["compose", "down", "--volumes"], { cwd: context.root, env: composeEnvironment });
   });
+
+  program.command("status")
+    .description("report local development health: apps, APIs, database, migrations, email sink, scheduler, and providers")
+    .option("--json", "print structured status")
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const childEnvironment = await localEnvironment(context.root, context.manifest, "local", runtime);
+      const statuses = await localStatus(context.root, context.manifest, childEnvironment);
+      const failed = statuses.filter((status) => status.state === "failed" || status.state === "starting");
+      if (options.json) runtime.stdout(`${JSON.stringify(structuredOutput({ healthy: failed.length === 0, services: statuses }), null, 2)}\n`);
+      else runtime.stdout(`${formatStatus(statuses)}\n`);
+      if (failed.length) throw new CliFailure(`${failed.length} local service${failed.length === 1 ? " is" : "s are"} not healthy`, 1);
+    });
 
   const api = program.command("api").description("inspect the application's API contracts");
   api.command("spec")
