@@ -20,7 +20,8 @@ import { buildLogTailArguments, tailSemanticLogs } from "./logs.js";
 import { clearLocalEmail, formatEmail, formatEmailList, getLocalEmail, listLocalEmail, openLocalEmail } from "./email.js";
 import { generateEmail } from "./generate-email.js";
 import { generateAdminModule } from "./generate-admin-module.js";
-import { addResourceField, generateResource, generateResourceMigration, parseResourceField } from "./generate-resource.js";
+import { addResourceField, generateResource, generateResourceMigration, names, parseResourceField } from "./generate-resource.js";
+import { sharedEditorPermission } from "./generate-shared-resource.js";
 import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
@@ -834,13 +835,14 @@ export function createProgram(runtime: CliRuntime): Command {
     });
   generate.command("resource")
     .argument("<name>")
+    .option("--shared", "shared (non-tenant) reference data every tenant reads; only platform editors with platform.<plural>.manage change it in the admin")
     .option("--field <definition...>", "additional field as name:type[?] (string, text, integer, boolean, datetime, json, decimal(p,s), enum(a|b)) or name:relation:Resource[:onDelete]")
     .option("--webhook-event <kind...>", "explicitly expose created, updated, or deleted as a versioned customer webhook")
     .option("--read-permission <permission>", "application permission required to list/read", "resource.read")
     .option("--write-permission <permission>", "application permission required to create/update/delete", "resource.write")
     .option("--page-size <size>", "default cursor page size", Number, 25)
     .option("--max-page-size <size>", "maximum cursor page size", Number, 100)
-    .action(async (name: string, options: { field?: string[]; webhookEvent?: string[]; readPermission: string; writePermission: string; pageSize: number; maxPageSize: number }, command: Command) => {
+    .action(async (name: string, options: { shared?: boolean; field?: string[]; webhookEvent?: string[]; readPermission: string; writePermission: string; pageSize: number; maxPageSize: number }, command: Command) => {
       const context = await projectContext(command, runtime);
       const additional = (options.field ?? []).map(parseResourceField);
       if (additional.some(({ name: fieldName }) => fieldName === "name")) throw new CliFailure("the required name:string field is generated automatically; do not redeclare it");
@@ -848,10 +850,13 @@ export function createProgram(runtime: CliRuntime): Command {
       const webhookEvents = options.webhookEvent ?? [];
       if (webhookEvents.some((kind) => !["created", "updated", "deleted"].includes(kind)) || new Set(webhookEvents).size !== webhookEvents.length) throw new CliFailure("--webhook-event accepts each of created, updated, and deleted at most once");
       if (!Number.isInteger(options.pageSize) || !Number.isInteger(options.maxPageSize) || options.pageSize < 1 || options.maxPageSize > 250 || options.pageSize > options.maxPageSize) throw new CliFailure("page sizes must be integers with 1 <= default <= maximum <= 250");
-      const resource = { name, tenant: true as const, crud: true as const, fields: [{ name: "name", type: "string", required: true } as const, ...additional], webhookEvents: webhookEvents as Array<"created" | "updated" | "deleted">, authorization: { read: options.readPermission, write: options.writePermission }, pagination: { defaultLimit: options.pageSize, maxLimit: options.maxPageSize } };
+      if (options.shared && webhookEvents.length) throw new CliFailure("shared resources do not emit tenant webhooks; remove --webhook-event");
+      if (options.shared && options.writePermission !== "resource.write") throw new CliFailure("shared resources are written only with their platform editorial permission; remove --write-permission");
+      const resource = { name, tenant: !options.shared, crud: true as const, fields: [{ name: "name", type: "string", required: true } as const, ...additional], webhookEvents: webhookEvents as Array<"created" | "updated" | "deleted">, authorization: { read: options.readPermission, write: options.shared ? sharedEditorPermission(names(name)) : options.writePermission }, pagination: { defaultLimit: options.pageSize, maxLimit: options.maxPageSize } };
       const files = await generateResource(context.root, context.manifest, resource);
       files.push(...await generateResourceMigration(context.root, context.manifest, [resource]));
       runtime.stdout(`Generated ${name}\n${files.map((file) => `  ${file}`).join("\n")}\n`);
+      if (options.shared) runtime.stdout(`\n${name} is shared: every tenant reads it and only ${resource.authorization.write} may change it.\nNo platform role includes that permission yet; add it to a platform role in packages/authz/src/role-definitions.ts (for example a catalog editor).\n${context.manifest.capabilities.admin ? "Editors change records in the platform admin." : "Enable the platform admin to edit records there; until then, change them through reviewed migrations or seeds."}\n`);
     });
 
   const payments = program.command("payments").description("manage application payments integrations");

@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { ProjectManifest, SetupResource } from "./core.js";
 
+import { generateSharedResource } from "./generate-shared-resource.js";
 import { runCommand } from "./processes.js";
 import { CliFailure } from "./runtime.js";
 
@@ -50,7 +51,7 @@ export function parseResourceField(value: string): ResourceField {
   return { name, type: normalizedType, required };
 }
 
-function zodExpression(field: ResourceField): string {
+export function zodExpression(field: ResourceField): string {
   const base = field.type === "string" ? "z.string().trim().min(1).max(200)"
     : field.type === "text" ? "z.string().max(10000)"
     : field.type === "integer" ? "z.number().int()"
@@ -65,7 +66,7 @@ function zodExpression(field: ResourceField): string {
 }
 
 /** Update change detection casts types whose parameters PostgreSQL cannot compare untyped. */
-function changedExpression(resource: ResourceNames, field: ResourceField): string {
+export function changedExpression(resource: ResourceNames, field: ResourceField): string {
   const value = field.type === "json" ? `\${JSON.stringify(input.${field.name})}::jsonb`
     : field.type === "decimal" ? `\${input.${field.name}}::numeric`
     : `\${input.${field.name}}`;
@@ -73,12 +74,12 @@ function changedExpression(resource: ResourceNames, field: ResourceField): strin
 }
 
 /** Enum fields are also constrained in the database, so rows written outside the API stay valid. */
-function fieldCheckExpression(resource: ResourceNames, field: ResourceField): string | undefined {
+export function fieldCheckExpression(resource: ResourceNames, field: ResourceField): string | undefined {
   if (field.type !== "enum") return undefined;
   return `  check("${constraintName(`${resource.snake}_${columnName(field)}_values`)}", sql\`\${table.${field.name}} in (${field.values!.map((entry) => `'${entry}'`).join(", ")})\`),`;
 }
 
-function pgCoreImports(fields: readonly ResourceField[]): string[] {
+export function pgCoreImports(fields: readonly ResourceField[]): string[] {
   return [
     ...(fields.some((field) => field.type === "json") ? ["jsonb"] : []),
     ...(fields.some((field) => field.type === "decimal") ? ["numeric"] : []),
@@ -90,7 +91,7 @@ export function columnName(field: ResourceField): string {
   return field.name.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase();
 }
 
-function columnExpression(field: ResourceField): string {
+export function columnExpression(field: ResourceField): string {
   const column = columnName(field);
   // Relations are plain columns here; the tenant-scoped composite key is declared with the table (relationKeyExpression).
   const base = field.type === "integer" ? `integer("${column}")`
@@ -104,20 +105,20 @@ function columnExpression(field: ResourceField): string {
   return field.required ? `${base}.notNull()` : base;
 }
 
-const jsonValueImport = 'import type { JsonValue } from "./json-value.js";';
+export const jsonValueImport = 'import type { JsonValue } from "./json-value.js";';
 const jsonValueSource = `/** A JSON value, matching the contracts' z.json() type, for jsonb columns. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 `;
 
 /** Generated jsonb columns type their values with the shared JsonValue alias. */
-async function ensureJsonValueType(dbSource: string): Promise<string | undefined> {
+export async function ensureJsonValueType(dbSource: string): Promise<string | undefined> {
   const target = path.join(dbSource, "json-value.ts");
   if (await exists(target)) return undefined;
   await writeFile(target, jsonValueSource, "utf8");
   return target;
 }
 
-function exampleExpression(field: ResourceField): string {
+export function exampleExpression(field: ResourceField): string {
   if (field.type === "json") return '{ example: true }';
   if (field.type === "decimal") return field.scale! > 0 ? `"1.${"2".repeat(Math.min(field.scale!, 2))}"` : '"12"';
   if (field.type === "enum") return JSON.stringify(field.values![0]);
@@ -141,12 +142,12 @@ export function names(name: string): ResourceNames {
   };
 }
 
-async function exists(target: string): Promise<boolean> {
+export async function exists(target: string): Promise<boolean> {
   return access(target).then(() => true, () => false);
 }
 
 /** PostgreSQL truncates identifiers past 63 bytes, so long constraint names end in a stable digest instead. */
-function constraintName(value: string): string {
+export function constraintName(value: string): string {
   if (value.length <= 63) return value;
   const digest = createHash("sha256").update(value).digest("hex").slice(0, 8);
   return `${value.slice(0, 63 - digest.length - 1).replace(/_+$/u, "")}_${digest}`;
@@ -171,17 +172,42 @@ export function relationKeyExpression(resource: ResourceNames, field: ResourceFi
   return `  foreignKey({ name: "${relationKeyName(resource, field)}", columns: [table.organizationId, table.${field.name}], foreignColumns: [${related.camel}.organizationId, ${related.camel}.id] }).onDelete("${action}"),`;
 }
 
-/** Relations may only target another generated tenant resource. Checked before any file is written. */
-async function assertRelationTargets(root: string, dbPath: string, resourceName: string, fields: readonly ResourceField[]): Promise<void> {
+export function sharedRelationKeyName(resource: ResourceNames, field: ResourceField): string {
+  return constraintName(`${resource.snake}_${columnName(field)}_shared_fk`);
+}
+
+/**
+ * A shared parent has no organization, so the tenant-scoped composite key does not apply: any tenant
+ * may reference any shared row, and the plain key only guarantees the row exists.
+ */
+export function sharedRelationKeyExpression(resource: ResourceNames, field: ResourceField): string {
+  const related = names(field.references!.resource);
+  const action = field.references!.onDelete === "set-null" ? "set null" : field.references!.onDelete;
+  return `  foreignKey({ name: "${sharedRelationKeyName(resource, field)}", columns: [table.${field.name}], foreignColumns: [${related.camel}.id] }).onDelete("${action}"),`;
+}
+
+/**
+ * Relations may target another generated tenant resource or a shared resource; a shared resource may
+ * only target other shared resources. Checked before any file is written. Returns the shared targets.
+ */
+export async function assertRelationTargets(root: string, dbPath: string, resourceName: string, fields: readonly ResourceField[], tenant = true): Promise<Set<string>> {
+  const shared = new Set<string>();
   for (const field of fields.filter(({ type }) => type === "relation")) {
     const target = field.references!.resource;
     if (target === resourceName) throw new CliFailure(`${resourceName}.${field.name} cannot reference its own resource; self-relations are not generated yet`);
     const related = names(target);
     const declaration = await readFile(path.join(root, ".trestle", "resources", `${related.kebab}.json`), "utf8").then((source) => JSON.parse(source) as { tenant?: unknown }, () => undefined);
-    if (declaration?.tenant !== true || !(await exists(path.join(root, dbPath, "src", `${related.kebab}-schema.ts`)))) {
-      throw new CliFailure(`${resourceName}.${field.name} references ${target}, which is not a generated tenant resource; generate ${target} first`);
+    const generated = await exists(path.join(root, dbPath, "src", `${related.kebab}-schema.ts`));
+    if (generated && declaration?.tenant === false) {
+      shared.add(target);
+      continue;
     }
+    if (declaration?.tenant !== true || !generated) {
+      throw new CliFailure(`${resourceName}.${field.name} references ${target}, which is not a generated tenant or shared resource; generate ${target} first`);
+    }
+    if (!tenant) throw new CliFailure(`${resourceName}.${field.name}: shared resources cannot reference tenant resource ${target}; a shared row would expose one tenant's data to every tenant`);
   }
+  return shared;
 }
 
 export function withPgCoreImports(source: string, required: readonly string[]): string {
@@ -201,7 +227,7 @@ export async function ensureTenantKey(schemaPath: string, parent: ResourceNames)
   return true;
 }
 
-async function appendExport(target: string, exportLine: string): Promise<void> {
+export async function appendExport(target: string, exportLine: string): Promise<void> {
   const source = await readFile(target, "utf8");
   if (source.includes(exportLine)) return;
   await writeFile(target, `${source.trimEnd()}\n${exportLine}\n`, "utf8");
@@ -235,7 +261,26 @@ ${afterParentDelete}
 `;
 }
 
+/** Real-PostgreSQL proof that rows in any tenant may reference a shared row, and only an existing one. */
+function sharedRelationIntegrationTest(resource: ResourceNames, field: ResourceField): string {
+  const related = names(field.references!.resource);
+  const column = columnName(field);
+  return `
+  it("lets every tenant reference shared ${related.className} rows through ${field.name}", async () => {
+    const [parent] = await sql!\`insert into ${related.snake} (name) values (\${\`\${prefix}shared\`}) returning id\`;
+    try {
+      await sql!\`insert into ${resource.snake} (organization_id, name, ${column}) values ('org-a', \${\`\${prefix}shared-a\`}, \${parent!.id}), ('org-b', \${\`\${prefix}shared-b\`}, \${parent!.id})\`;
+      await expect(sql!\`insert into ${resource.snake} (organization_id, name, ${column}) values ('org-a', \${\`\${prefix}missing\`}, \${crypto.randomUUID()})\`).rejects.toThrow(/${sharedRelationKeyName(resource, field)}/u);
+    } finally {
+      await sql!\`delete from ${resource.snake} where ${column} = \${parent!.id}\`;
+      await sql!\`delete from ${related.snake} where id = \${parent!.id}\`;
+    }
+  });
+`;
+}
+
 export async function generateResource(root: string, manifest: ProjectManifest, resource: SetupResource): Promise<string[]> {
+  if (resource.tenant === false) return await generateSharedResource(root, manifest, resource);
   const contextSource = await readFile(path.join(root, manifest.packages.context ?? "packages/context", "src", "index.ts"), "utf8").catch(() => undefined);
   if (contextSource && !/export const AUTHORITY_MODEL_VERSION\s*=\s*(?:[3-9]|\d{2,})\s*;/u.test(contextSource)) {
     throw new CliFailure("resource generation requires independent application authority; migrate to the permission-registry ExecutionContext (authority model 3) before generating new routes");
@@ -306,7 +351,7 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
     return [];
   }
 
-  await assertRelationTargets(root, dbPath, resource.name, resource.fields);
+  const sharedTargets = await assertRelationTargets(root, dbPath, resource.name, resource.fields);
   for (const target of targets) await mkdir(path.dirname(target), { recursive: true });
   const created: string[] = [];
   const writeGenerated = async (target: string, source: string) => {
@@ -466,7 +511,7 @@ ${resource.fields.map((field) => `        ${changedExpression(n, field)}`).join(
 `);
 
   const relations = resource.fields.filter((field) => field.type === "relation");
-  for (const related of [...new Set(relations.map((field) => field.references!.resource))]) {
+  for (const related of [...new Set(relations.map((field) => field.references!.resource))].filter((target) => !sharedTargets.has(target))) {
     const parentSchema = path.join(root, dbPath, "src", `${names(related).kebab}-schema.ts`);
     if (await ensureTenantKey(parentSchema, names(related))) created.push(path.relative(root, parentSchema));
   }
@@ -489,7 +534,7 @@ ${resource.fields.map((field) => `  ${field.name}: ${columnExpression(field)},`)
 }, (table) => [
   index("${n.snake}_organization_idx").on(table.organizationId),
   unique("${tenantKeyName(n)}").on(table.organizationId, table.id),
-${relations.map((field) => `${relationKeyExpression(n, field)}\n`).join("")}${resource.fields.map((field) => fieldCheckExpression(n, field)).filter(Boolean).map((line) => `${line}\n`).join("")}  pgPolicy("${n.snake}_tenant", {
+${relations.map((field) => `${sharedTargets.has(field.references!.resource) ? sharedRelationKeyExpression(n, field) : relationKeyExpression(n, field)}\n`).join("")}${resource.fields.map((field) => fieldCheckExpression(n, field)).filter(Boolean).map((line) => `${line}\n`).join("")}  pgPolicy("${n.snake}_tenant", {
     for: "all",
     to: "trestle_app",
     using: sql\`\${table.organizationId} = current_setting('app.organization_id', true)\`,
@@ -873,7 +918,7 @@ suite("${n.className} forced tenant isolation", () => {
       expect((await transaction\`delete from ${n.snake} where organization_id = 'org-b'\`).count).toBe(0);
     });
   });
-${relations.slice(0, 1).map((field) => relationIntegrationTest(n, field)).join("")}});
+${relations.filter((field) => !sharedTargets.has(field.references!.resource)).slice(0, 1).map((field) => relationIntegrationTest(n, field)).join("")}${relations.filter((field) => sharedTargets.has(field.references!.resource)).slice(0, 1).map((field) => sharedRelationIntegrationTest(n, field)).join("")}});
 `);
 
   await appendExport(path.join(root, contractsPath, "src", "index.ts"), `export * from "./resources/${n.kebab}.js";`);
@@ -980,7 +1025,11 @@ export async function generateResourceMigration(root: string, manifest: ProjectM
   for (const resource of resources) {
     for (const field of resource.fields) sqlSource = narrowSetNull(sqlSource, names(resource.name), field);
     const table = names(resource.name).snake;
-    sqlSource = `${sqlSource.trimEnd()}\n--> statement-breakpoint\nALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;\n--> statement-breakpoint\nREVOKE ALL ON "${table}" FROM PUBLIC;\n--> statement-breakpoint\nGRANT SELECT, INSERT, UPDATE, DELETE ON "${table}" TO trestle_app;\n`;
+    // Shared rows are read by every tenant runtime and written only on the platform connection.
+    const grants = resource.tenant === false
+      ? `GRANT SELECT ON "${table}" TO trestle_app;\n--> statement-breakpoint\nGRANT SELECT, INSERT, UPDATE, DELETE ON "${table}" TO trestle_platform;`
+      : `GRANT SELECT, INSERT, UPDATE, DELETE ON "${table}" TO trestle_app;`;
+    sqlSource = `${sqlSource.trimEnd()}\n--> statement-breakpoint\nALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;\n--> statement-breakpoint\nREVOKE ALL ON "${table}" FROM PUBLIC;\n--> statement-breakpoint\n${grants}\n`;
   }
   await writeFile(generated.migrationPath, sqlSource, "utf8");
   return generated.files;
@@ -993,6 +1042,8 @@ export async function addResourceField(root: string, manifest: ProjectManifest, 
   const declaration = JSON.parse(await readFile(declarationPath, "utf8")) as SetupResource & { schemaVersion: number };
   if (declaration.schemaVersion !== 2 || !Array.isArray(declaration.fields)) throw new CliFailure(`resource ${resourceName} must be regenerated with a version 2 declaration before safe edits`);
   if (declaration.fields.some(({ name }) => name === field.name)) throw new CliFailure(`resource ${resourceName} already has field ${field.name}`);
+  const shared = declaration.tenant === false;
+  const policyAnchor = shared ? `  pgPolicy("${n.snake}_tenant_read", {` : `  pgPolicy("${n.snake}_tenant", {`;
   const contractsPath = path.join(root, manifest.packages.contracts ?? "packages/contracts", "src", "resources", `${n.kebab}.ts`);
   const schemaPath = path.join(root, manifest.packages.db ?? "packages/db", "src", `${n.kebab}-schema.ts`);
   let contracts = await readFile(contractsPath, "utf8");
@@ -1008,19 +1059,17 @@ export async function addResourceField(root: string, manifest: ProjectManifest, 
   const changed: string[] = [];
   if (field.type === "relation") {
     const dbPath = manifest.packages.db ?? "packages/db";
-    await assertRelationTargets(root, dbPath, resourceName, [field]);
+    const sharedParent = (await assertRelationTargets(root, dbPath, resourceName, [field], !shared)).size > 0;
     const related = names(field.references!.resource);
-    const policyAnchor = `  pgPolicy("${n.snake}_tenant", {`;
     if (!schema.includes(policyAnchor)) throw new CliFailure("resource schema does not contain the managed tenant policy anchor");
     const parentSchema = path.join(root, dbPath, "src", `${related.kebab}-schema.ts`);
-    if (await ensureTenantKey(parentSchema, related)) changed.push(path.relative(root, parentSchema));
+    if (!sharedParent && await ensureTenantKey(parentSchema, related)) changed.push(path.relative(root, parentSchema));
     const importLine = `import { ${related.camel} } from "./${related.kebab}-schema.js";`;
     if (!schema.includes(importLine)) schema = schema.replace("\n\nexport const", `\n${importLine}\n\nexport const`);
-    schema = withPgCoreImports(schema.replace(policyAnchor, `${relationKeyExpression(n, field)}\n${policyAnchor}`), ["foreignKey"]);
+    schema = withPgCoreImports(schema.replace(policyAnchor, `${sharedParent ? sharedRelationKeyExpression(n, field) : relationKeyExpression(n, field)}\n${policyAnchor}`), ["foreignKey"]);
   }
   const check = fieldCheckExpression(n, field);
   if (check) {
-    const policyAnchor = `  pgPolicy("${n.snake}_tenant", {`;
     if (!schema.includes(policyAnchor)) throw new CliFailure("resource schema does not contain the managed tenant policy anchor");
     schema = schema.replace(policyAnchor, `${check}\n${policyAnchor}`);
   }
@@ -1032,6 +1081,14 @@ export async function addResourceField(root: string, manifest: ProjectManifest, 
   }
   schema = schema.replace(schemaAnchor, `  ${field.name}: ${columnExpression(field)},\n${schemaAnchor}`);
   await writeFile(contractsPath, contracts, "utf8");
+  if (shared) {
+    const editorPath = path.join(path.dirname(schemaPath), `${n.kebab}-editor.ts`);
+    const editor = await readFile(editorPath, "utf8");
+    const editorAnchor = "\n}).strict();\n";
+    if (!editor.includes(editorAnchor)) throw new CliFailure("shared resource editor does not contain the managed field anchor");
+    await writeFile(editorPath, editor.replace(editorAnchor, `\n  ${field.name}: ${zodExpression(field)},${editorAnchor}`), "utf8");
+    changed.push(path.relative(root, editorPath));
+  }
   await writeFile(schemaPath, schema, "utf8");
   declaration.fields = [...declaration.fields, field];
   await writeFile(declarationPath, `${JSON.stringify(declaration, null, 2)}\n`, "utf8");

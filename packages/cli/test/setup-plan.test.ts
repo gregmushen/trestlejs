@@ -46,10 +46,11 @@ describe("SetupPlan", () => {
     expect(() => parseSetupPlan(JSON.stringify(destructive))).toThrow(SetupPlanError);
   });
 
-  it("only accepts tenant-owned CRUD resources", () => {
-    const input = { ...validPlan, resources: [{ name: "Article", tenant: false }] };
-    expect(() => parseSetupPlan(JSON.stringify(input))).toThrow(SetupPlanError);
+  it("accepts tenant-owned and shared CRUD resources", () => {
     expect(parseSetupPlan(JSON.stringify({ ...validPlan, resources: [{ name: "Article" }] })).resources[0]).toMatchObject({ tenant: true, crud: true });
+    expect(parseSetupPlan(JSON.stringify({ ...validPlan, resources: [{ name: "Crop", tenant: false }] })).resources[0]).toMatchObject({ tenant: false, crud: true });
+    expect(() => parseSetupPlan(JSON.stringify({ ...validPlan, resources: [{ name: "Crop", tenant: false, webhookEvents: ["created"] }] }))).toThrow(SetupPlanError);
+    expect(() => parseSetupPlan(JSON.stringify({ ...validPlan, resources: [{ name: "Crop", crud: false }] }))).toThrow(SetupPlanError);
   });
 
   it("rejects duplicate resource names", () => {

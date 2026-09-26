@@ -648,7 +648,7 @@ export const applicationEventCatalog = defineEventCatalog([
 
     const orphan = capture(root);
     expect(await executeCli(["generate", "resource", "Comment", "--field", "ghostId:relation?:Ghost:set-null"], orphan.runtime)).toBe(1);
-    expect(orphan.stderr()).toContain("not a generated tenant resource");
+    expect(orphan.stderr()).toContain("not a generated tenant or shared resource");
     await expect(readFile(path.join(root, ".trestle/resources/comment.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(await executeCli(["generate", "resource", "Comment", "--field", "articleId:relation?:Article:cascade"], capture(root).runtime)).toBe(0);
     expect(await readFile(path.join(root, "packages/db/src/comment-schema.ts"), "utf8")).toContain('foreignKey({ name: "comment_article_id_tenant_fk", columns: [table.organizationId, table.articleId], foreignColumns: [article.organizationId, article.id] }).onDelete("cascade")');
@@ -684,5 +684,33 @@ export const applicationEventCatalog = defineEventCatalog([
     expect(articleApi).toContain('"if-match": `"${options.expectedRevision}"`');
     const articleEvents = await readFile(path.join(root, "packages/data/src/resources/article-events.integration.test.ts"), "utf8");
     expect(articleEvents).toContain("rejects stale revisions without writing");
+
+    const noRegistry = capture(root);
+    expect(await executeCli(["generate", "resource", "Crop", "--shared"], noRegistry.runtime)).toBe(1);
+    expect(noRegistry.stderr()).toContain("packages/authz/src/permissions.ts");
+    await mkdir(path.join(root, "packages/authz/src"), { recursive: true });
+    await writeFile(path.join(root, "packages/authz/src/permissions.ts"), 'export const permissions = definePermissions({\n  "resource.read": { plane: "application", description: "Read" },\n});\n');
+    expect(await executeCli(["generate", "resource", "Crop", "--shared", "--field", "family:string?"], capture(root).runtime)).toBe(0);
+    const cropDeclaration = JSON.parse(await readFile(path.join(root, ".trestle/resources/crop.json"), "utf8"));
+    expect(cropDeclaration).toMatchObject({ tenant: false, authorization: { read: "resource.read", write: "platform.crops.manage" } });
+    const cropSchema = await readFile(path.join(root, "packages/db/src/crop-schema.ts"), "utf8");
+    expect(cropSchema).not.toContain("organizationId");
+    expect(cropSchema).toContain('pgPolicy("crop_tenant_read", { as: "permissive", for: "select", to: "trestle_app", using: sql`true` })');
+    expect(cropSchema).toContain('pgPolicy("crop_platform_manage", { as: "permissive", for: "all", to: "trestle_platform", using: sql`true`, withCheck: sql`true` })');
+    expect(await readFile(path.join(root, "packages/authz/src/permissions.ts"), "utf8")).toContain('"platform.crops.manage": { plane: "platform", description: "Create, update, and delete shared Crop records" },');
+    const cropRoutes = await readFile(path.join(root, "apps/worker/src/resources/crop-routes.ts"), "utf8");
+    expect(cropRoutes).toContain('access.require({ permission: "resource.read" })');
+    expect(cropRoutes).not.toMatch(/cropRoutes\.(post|patch|put|delete)\(/u);
+    const cropEditor = await readFile(path.join(root, "packages/db/src/crop-editor.ts"), "utf8");
+    expect(cropEditor).toContain('"platform.crop.updated"');
+    expect(cropEditor).toContain("eq(crop.revision, input.expectedRevision)");
+    expect(await readFile(path.join(root, "packages/db/src/index.ts"), "utf8")).toContain('export * from "./crop-editor.js";');
+
+    expect(await executeCli(["generate", "resource", "Planting", "--field", "cropId:relation?:Crop:restrict"], capture(root).runtime)).toBe(0);
+    expect(await readFile(path.join(root, "packages/db/src/planting-schema.ts"), "utf8")).toContain('foreignKey({ name: "planting_crop_id_shared_fk", columns: [table.cropId], foreignColumns: [crop.id] }).onDelete("restrict"),');
+    expect(await readFile(path.join(root, "packages/db/src/crop-schema.ts"), "utf8")).toBe(cropSchema);
+    const sharedToTenant = capture(root);
+    expect(await executeCli(["generate", "resource", "Variety", "--shared", "--field", "plantingId:relation?:Planting:restrict"], sharedToTenant.runtime)).toBe(1);
+    expect(sharedToTenant.stderr()).toContain("shared resources cannot reference tenant resource Planting");
   });
 });

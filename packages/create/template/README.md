@@ -638,6 +638,21 @@ validates it, and only then drops the ID-only key. `drizzle-kit migrate` applies
 it in one transaction, so writes to both tables wait until it commits: apply it
 in a quiet window, and preflight every environment before deploying it.
 
+Shared reference data, such as a catalog every organization reads, uses
+`trestle generate resource Crop --shared`. The table has no `organization_id`.
+Forced RLS lets the tenant runtime role only read it, and only the
+`trestle_platform` role may write. Customer routes and screens are read-only.
+The generator registers a platform permission (`platform.crops.manage`) and a
+platform editor in `packages/db/src/crop-editor.ts`. Each editor change needs a
+reason and the expected revision, and is audited in the same transaction. With
+the platform admin enabled, it also generates an admin view and admin Worker
+routes that require that permission and fresh step-up. No platform role
+includes the permission until you add it to one in
+`packages/authz/src/role-definitions.ts`. Tenant resources may reference a
+shared resource (`cropId:relation?:Crop:restrict`) with a plain foreign key,
+because the shared parent has no tenant to match. Shared resources cannot
+reference tenant resources.
+
 `pnpm db:generate` preserves a strictly increasing migration journal timestamp,
 including when an older checked-in migration was future-dated. A generated
 release canary checks that running it without schema changes creates no drift.

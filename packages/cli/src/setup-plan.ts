@@ -27,7 +27,8 @@ export const setupResourceFieldSchema = z.object({
 
 export const setupResourceSchema = z.object({
   name: z.string().regex(/^[A-Z][A-Za-z0-9]*$/u, "must be PascalCase"),
-  tenant: z.literal(true).default(true),
+  /** false generates shared reference data: every tenant reads it, only platform editors write it. */
+  tenant: z.boolean().default(true),
   crud: z.literal(true).default(true),
   fields: z.array(setupResourceFieldSchema).min(1).default([{ name: "name", type: "string", required: true }]),
   webhookEvents: z.array(z.enum(["created", "updated", "deleted"])).default([]),
@@ -94,6 +95,7 @@ export const setupPlanSchema = z.object({
     if (fields.some((name) => ["id", "organizationId", "revision", "createdAt", "updatedAt"].includes(name))) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "resource fields cannot use generated identity or versioning names" });
     if (!resource.fields.some((field) => field.name === "name" && field.type === "string" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "generated CRUD screens require a required name:string field" });
     if (resource.fields.some((field) => field.name !== "name" && field.required)) context.addIssue({ code: "custom", path: ["resources", index, "fields"], message: "additional generated fields must initially be optional for additive migration safety" });
+    if (!resource.tenant && resource.webhookEvents.length) context.addIssue({ code: "custom", path: ["resources", index, "webhookEvents"], message: "shared resources do not emit tenant webhooks" });
     if (resource.pagination.defaultLimit > resource.pagination.maxLimit) context.addIssue({ code: "custom", path: ["resources", index, "pagination"], message: "default pagination limit cannot exceed max limit" });
   });
 });

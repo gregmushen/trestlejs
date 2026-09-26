@@ -595,6 +595,12 @@ admin.get("/api/admin/health", async (context) => {
   });
 });
 
+/** What generated shared-resource editors (`trestle generate resource --shared`) need to register their routes. */
+export type AdminResourceHelpers = Readonly<{ platformDatabase: typeof platformDatabase; actionContext: typeof actionContext }>;
+const adminResourceHelpers: AdminResourceHelpers = { platformDatabase, actionContext };
+// trestle:admin-resource-routes
+void adminResourceHelpers;
+
 const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const;
 
 admin.onError((error, context) => {

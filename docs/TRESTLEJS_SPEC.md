@@ -327,6 +327,15 @@ unknown. Generated migrations define separate policies, or an equivalent
 auditable policy, for SELECT, INSERT, UPDATE, and DELETE with both `USING` and
 `WITH CHECK` where applicable.
 
+Shared reference data (`trestle generate resource <Name> --shared`) is the one
+generated exception to the tenant key. A shared table has no `organization_id`
+and still forces RLS: the application role may only `SELECT` it, and only
+`trestle_platform` may write. Writes need a registered platform permission, a
+reason, the expected revision, and an audit record. Tenant resources may
+reference a shared row with a plain foreign key; a shared resource never
+references tenant data. Tenant defaults are never relaxed to make shared data
+writable.
+
 ## 12. Tenant-Bound Transactions
 
 Tenant state must never leak through pooled connections. All normal

@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ProjectManifest } from "./core.js";
 
 import {
-  columnName, ensureTenantKey, isTenantKeyStatement, migrationStatements, names, narrowSetNull, relationKeyExpression, relationKeyName, runDatabaseGenerate, withPgCoreImports,
+  columnName, ensureTenantKey, isTenantKeyStatement, migrationStatements, names, narrowSetNull, relationKeyExpression, relationKeyName, runDatabaseGenerate, sharedRelationKeyName, withPgCoreImports,
   type ResourceField,
 } from "./generate-resource.js";
 import { inspectResources } from "./inspect.js";
@@ -30,7 +30,8 @@ export type ResourceRelation = {
   /** The child schema, relative to the project root. */
   schema: string;
   definition: ResourceField;
-  state: "legacy" | "composite" | "unrecognized";
+  /** shared: a plain key to a shared (non-tenant) parent, which has no tenant to match. */
+  state: "legacy" | "composite" | "shared" | "unrecognized";
 };
 
 export type RelationPreflightRow = { relation: string; missing_parents: number; cross_tenant: number };
@@ -44,7 +45,9 @@ function legacyReference(relation: Pick<ResourceRelation, "field" | "column" | "
 export async function inspectResourceRelations(root: string, manifest: ProjectManifest): Promise<ResourceRelation[]> {
   const dbPath = manifest.packages.db ?? "packages/db";
   const relations: ResourceRelation[] = [];
-  for (const declaration of await inspectResources(root)) {
+  const declarations = await inspectResources(root);
+  const shared = new Set(declarations.filter((declaration) => (declaration as { tenant?: boolean }).tenant === false).map((declaration) => declaration.name));
+  for (const declaration of declarations) {
     const fields = ((declaration as { fields?: ResourceField[] }).fields ?? []).filter((field) => field.type === "relation" && field.references);
     if (!fields.length) continue;
     const n = names(declaration.name);
@@ -57,7 +60,9 @@ export async function inspectResourceRelations(root: string, manifest: ProjectMa
         table: declaration.persistence?.table ?? n.snake, column: columnName(field), parentTable: names(field.references!.resource).snake,
         onDelete: field.references!.onDelete, constraint: relationKeyName(n, field), schema, definition: field,
       };
-      const state = legacyReference(relation).test(source) ? "legacy" : source.includes(`"${relation.constraint}"`) ? "composite" : "unrecognized";
+      const state = legacyReference(relation).test(source) ? "legacy"
+        : source.includes(`"${relation.constraint}"`) ? "composite"
+          : shared.has(relation.parent) && source.includes(`"${sharedRelationKeyName(n, field)}"`) ? "shared" : "unrecognized";
       relations.push({ ...relation, state });
     }
   }

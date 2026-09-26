@@ -11,8 +11,12 @@ and API keys.
 ## Implementation status
 
 For the supported new- and existing-project enablement path, see
-[Enable Admin](ENABLE_ADMIN.md). A generated admin-module is a view shell,
-not a global-resource or editorial-workflow generator.
+[Enable Admin](ENABLE_ADMIN.md). A generated admin-module is a view shell.
+`trestle generate resource <Name> --shared` generates the editor for a
+global (non-tenant) resource. It registers `platform.<plural>.manage`, adds
+admin Worker routes and a view that require that permission and step-up, and
+writes an audited, revision-checked editor on the `trestle_platform`
+connection (TRESTLEJS_SPEC §11).
 
 Paths below are relative to a generated project (`packages/create/template`
 in the TrestleJS repository) unless they name a TrestleJS package.
