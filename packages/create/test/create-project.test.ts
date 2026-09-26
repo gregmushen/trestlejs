@@ -167,6 +167,31 @@ describe("createProject", () => {
     expect(baseline[".trestle/project.yaml"]).toBe(createHash("sha256").update(await readFile(path.join(withAdmin.directory, ".trestle", "project.yaml"))).digest("hex"));
   });
 
+  it("names the project independently of its directory", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "create-trestlejs-"));
+    temporaryDirectories.push(parent);
+    const result = await createProject({ cwd: parent, directory: "freegardenplan.com", name: "freegardenplan", install: false, git: false });
+
+    expect(result).toEqual({ name: "freegardenplan", directory: path.join(parent, "freegardenplan.com") });
+    expect((await loadProjectManifest(result.directory)).project.name).toBe("freegardenplan");
+    expect(JSON.parse(await readFile(path.join(result.directory, "package.json"), "utf8")).name).toBe("freegardenplan");
+    expect((await readSecrets(result.directory, "local")).DATABASE_URL).toBe("postgres://trestle:trestle@localhost:55432/freegardenplan");
+  });
+
+  it("suggests --name when the directory is not a valid project name", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "create-trestlejs-"));
+    temporaryDirectories.push(parent);
+
+    await expect(
+      createProject({ cwd: parent, directory: "FreeGardenPlan.com", install: false, git: false }),
+    ).rejects.toThrow("--name freegardenplan-com");
+    await expect(stat(path.join(parent, "FreeGardenPlan.com"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      createProject({ cwd: parent, directory: "garden", name: "Bad_Name", install: false, git: false }),
+    ).rejects.toThrow("Project name must use lowercase letters, numbers, and single hyphens");
+    await expect(stat(path.join(parent, "garden"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("refuses a non-empty target", async () => {
     const parent = await mkdtemp(path.join(os.tmpdir(), "create-trestlejs-"));
     temporaryDirectories.push(parent);
