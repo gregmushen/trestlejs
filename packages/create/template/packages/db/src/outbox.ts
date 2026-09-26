@@ -75,6 +75,17 @@ export class PostgresOutboxStore implements OutboxStore {
   }
   async succeed(id: string): Promise<void> { const result = await this.sql`update outbox_message set status='succeeded', leased_until=null, processed_at=now() where id=${id} and status in ('leased','succeeded')`; if (result.count === 0) throw new Error(`Outbox entry ${id} is not leased`); }
   async fail(id: string, error: unknown, maxAttempts = 5): Promise<void> { const category = safeErrorCategory(error); const result = await this.sql`update outbox_message set attempts=attempts+1,last_error=${category},leased_until=null,status=case when attempts+1 >= ${maxAttempts} then 'dead' else 'pending' end,available_at=case when attempts+1 >= ${maxAttempts} then available_at else now()+(power(2,attempts)*interval '1 second') end where id=${id} and status='leased'`; if (result.count === 0) throw new Error(`Outbox entry ${id} is not leased`); }
+  /**
+   * Settlement for runtimes that can end a run without success (a canceled or
+   * crashed run): events dispatched longer ago than `olderThanMs`, still inside
+   * the replay window, that no consumer completed, return to pending under the
+   * next generation. Bounded by the dead-letter attempt cap. The inbox still
+   * guarantees a handler never completes twice.
+   */
+  async settleUnconsumed(options: { olderThanMs: number; maxAttempts?: number; limit?: number }): Promise<string[]> {
+    const rows = await this.sql<{ id: string }[]>`with stale as (select o.id from outbox_message o where o.status='succeeded' and o.processed_at <= now() - (${options.olderThanMs} * interval '1 millisecond') and o.occurred_at > now() - interval '14 days' and o.attempts + 1 < ${options.maxAttempts ?? 5} and not exists (select 1 from event_inbox i where i.idempotency_key = o.idempotency_key and i.status = 'completed') order by o.processed_at for update of o skip locked limit ${options.limit ?? 100}) update outbox_message set status='pending', available_at=now(), attempts=attempts+1, processed_at=null from stale where outbox_message.id = stale.id returning outbox_message.id`;
+    return rows.map((row) => row.id);
+  }
   async listDead(): Promise<OutboxEntry[]> { return (await this.sql<Row[]>`select * from outbox_message where status='dead' order by available_at,id`).map(entry); }
   async redrive(id: string): Promise<OutboxEntry> { const [row] = await this.sql<Row[]>`update outbox_message set status='pending',available_at=now(),leased_until=null,last_error=null where id=${id} and status='dead' returning *`; if (!row) throw new Error(`Outbox entry ${id} is not dead-lettered`); return entry(row); }
   /**

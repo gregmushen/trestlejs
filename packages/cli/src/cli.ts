@@ -40,6 +40,7 @@ import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { formatProviderStatuses, providerStatuses } from "./providers.js";
 import { evidenceReport, formatEvidenceReport, readLedger, recordEvidence, starterLedger, writeLedger } from "./evidence.js";
+import { enableTriggerRuntime } from "./upgrade-source.js";
 import { applySourceUpgrade, sourceFileDiff, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { auditMigrations, formatMigrationAudit, rebaseMigrations } from "./upgrade-migrations.js";
 import {
@@ -1332,6 +1333,54 @@ export function createProgram(runtime: CliRuntime): Command {
         `Scheduled jobs (${inventory.scheduledJobs.length}):`,
         ...inventory.scheduledJobs.map((job) => `  ${job.name}  lease ${job.leaseMs} ms, limit ${job.limit}${job.requires ? `, requires ${job.requires}` : ""}`),
       ].join("\n") + "\n");
+    });
+
+  jobs.command("use")
+    .description("select the job runtime for this project: trigger adds apps/jobs for trigger.dev (hosted, or self-hosted with --endpoint)")
+    .argument("<runtime>", "trigger")
+    .option("--project <ref>", "the trigger.dev project ref (proj_...)")
+    .option("--endpoint <url>", "a self-hosted trigger.dev URL; omit for hosted trigger.dev")
+    .option("--yes", "confirm adding apps/jobs and changing the manifest and Worker configuration")
+    .action(async (runtimeName: string, options: { project?: string; endpoint?: string; yes?: boolean }, command: Command) => {
+      if (runtimeName !== "trigger") throw new CliFailure("jobs use supports trigger; Inngest arrives in a later release, and cloudflare is the default");
+      if (!options.yes) throw new CliFailure("jobs use trigger adds apps/jobs and changes .trestle/project.yaml and apps/worker/wrangler.jsonc; rerun with --yes");
+      const context = await projectContext(command, runtime);
+      let changed: readonly string[];
+      try { changed = await enableTriggerRuntime(context.root, context.manifest.project.name, { hosting: options.endpoint ? "self-hosted" : "cloud", ...(options.endpoint ? { endpoint: options.endpoint } : {}) }); }
+      catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
+      if (options.project) {
+        const manifestPath = path.join(context.root, ".trestle", "project.yaml");
+        const source = await readFile(manifestPath, "utf8");
+        if (!/^ {2}project: /mu.test(source)) await writeFile(manifestPath, source.replace(/^(jobs:\n)/mu, `$1  project: ${options.project}\n`), "utf8");
+      }
+      runtime.stdout(`${changed.length ? `Selected trigger.dev.\n${changed.map((file) => `  ${file}`).join("\n")}` : "trigger.dev is already selected."}\nNext: pnpm install; set TRIGGER_SECRET_KEY per environment (trestle secrets set TRIGGER_SECRET_KEY --env <env>); trestle jobs env push --env <env>; deploy apps/jobs with pnpm --filter ./apps/jobs deploy.\n`);
+    });
+
+  jobs.command("env")
+    .description("sync the variables trigger.dev tasks need to a trigger.dev environment")
+    .command("push")
+    .description("push secrets shared with jobs (shareWith: [jobs]) and APP_ENV to the selected environment's trigger.dev environment")
+    .option("--env <environment>", "environment to push", environment, "local")
+    .option("--yes", "confirm a production push")
+    .action(async (options: { env: ReturnType<typeof environment>; yes?: boolean }, command: Command) => {
+      if (options.env === "production" && !options.yes) throw new CliFailure("pushing production job variables requires --yes");
+      const context = await projectContext(command, runtime);
+      const selected = context.manifest.jobs;
+      if (selected?.runtime !== "trigger") throw new CliFailure("this project does not use trigger.dev; run trestle jobs use trigger");
+      if (!selected.project) throw new CliFailure("set jobs.project (the trigger.dev project ref) in .trestle/project.yaml");
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      const secretKey = values.TRIGGER_SECRET_KEY;
+      if (!secretKey) throw new CliFailure(`TRIGGER_SECRET_KEY is not set for ${options.env}; run trestle secrets set TRIGGER_SECRET_KEY --env ${options.env}`);
+      const shared = Object.entries(context.manifest.secrets ?? {}).filter(([, declaration]) => declaration.shareWith?.includes("jobs")).map(([name]) => name);
+      const variables: Record<string, string> = { APP_ENV: options.env };
+      const missing: string[] = [];
+      for (const name of shared) { if (values[name]) variables[name] = values[name]!; else missing.push(name); }
+      if (missing.length) throw new CliFailure(`${options.env} credentials are missing ${missing.join(", ")}`);
+      const slug = ({ local: "dev", preview: "preview", staging: "staging", production: "prod" } as const)[options.env];
+      const apiUrl = (selected.endpoint ?? "https://api.trigger.dev").replace(/\/$/u, "");
+      const response = await fetch(`${apiUrl}/api/v1/projects/${selected.project}/envvars/${slug}/import`, { method: "POST", headers: { authorization: `Bearer ${secretKey}`, "content-type": "application/json" }, body: JSON.stringify({ variables, override: true }) });
+      if (!response.ok) throw new CliFailure(`trigger.dev refused the variables (HTTP ${response.status})`);
+      runtime.stdout(`Pushed ${Object.keys(variables).sort().join(", ")} to trigger.dev ${slug}. Values were not printed.\n`);
     });
 
   program.command("commands")

@@ -1,4 +1,5 @@
-import { jobRuntime } from "./job-runtime.js";
+import { jobRuntime, registerJobRuntime } from "./job-runtime.js";
+import { triggerRuntime } from "./job-runtime-trigger.js";
 import { apiReferencePage, customerOpenApi } from "./openapi.js";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -642,6 +643,8 @@ app.onError((error, context) => {
   createLogger({ correlationId: context.get("correlationId") }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("http.request.failed", { code: mapped.code, retryable: mapped.retryable, durationMs: Date.now() - context.get("requestStartedAt"), ...safeErrorDiagnostic(error) });
   return context.json({ error: mapped.code, message: mapped.message, retryable: mapped.retryable }, mapped.status);
 });
+
+registerJobRuntime(triggerRuntime);
 
 export default {
   fetch: app.fetch.bind(app),

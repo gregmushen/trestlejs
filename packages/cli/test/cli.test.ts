@@ -311,6 +311,18 @@ describe("TrestleJS CLI", () => {
     expect(report.providers.find((provider: { id: string }) => provider.id === "stripe")).toMatchObject({ mode: "live", state: "inaccessible", repair: expect.stringContaining("TRESTLE_MASTER_KEY") });
   });
 
+  it("requires confirmation to select trigger.dev and supports only known runtimes", async () => {
+    const root = await fixture();
+    const unconfirmed = capture(root);
+    expect(await executeCli(["jobs", "use", "trigger"], unconfirmed.runtime)).toBe(1);
+    expect(unconfirmed.stderr()).toContain("rerun with --yes");
+    const unknown = capture(root);
+    expect(await executeCli(["jobs", "use", "celery", "--yes"], unknown.runtime)).toBe(1);
+    const push = capture(root);
+    expect(await executeCli(["jobs", "env", "push", "--env", "staging"], push.runtime)).toBe(1);
+    expect(push.stderr()).toContain("does not use trigger.dev");
+  });
+
   it("requires an explicit console authority plane", async () => {
     const root = await fixture();
     const output = capture(root);

@@ -183,7 +183,7 @@ try {
       "rejects expired provenance permanently without retrying",
       "fans out to several tenants, each under its own authority",
       "recovers accepted work across an executor restart",
-      "runs in-flight work with the newly deployed code",
+      "completes in-flight work exactly once across a deploy",
     ]);
     // Development accounts and the additive seed lifecycle.
     await requireScenarios(project, "./packages/auth", ["src/dev-account.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
@@ -360,6 +360,21 @@ try {
     throw new Error("Explicit cron-free preview lost required bindings or kept a cron trigger");
   }
   await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);
+  // The trigger.dev job runtime: a project created with --jobs trigger installs, typechecks
+  // its tasks against the Worker's registrations, matches its bundled template, and lists its jobs.
+  const triggerProject = path.join(temporaryRoot, "trigger-canary");
+  await run(process.execPath, [path.join(root, "packages/create/dist/bin.js"), triggerProject, "--no-git", "--no-install", "--jobs", "trigger"], root);
+  const triggerManifestPath = path.join(triggerProject, "package.json");
+  const triggerManifest = JSON.parse(await readFile(triggerManifestPath, "utf8"));
+  triggerManifest.devDependencies.trestlejs = `file:${cliArchive}`;
+  await writeFile(triggerManifestPath, `${JSON.stringify(triggerManifest, null, 2)}\n`);
+  await run("pnpm", ["install"], triggerProject);
+  const triggerDiff = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "diff", "--json"], { cwd: triggerProject, encoding: "utf8" }));
+  if (triggerDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) throw new Error(`Fresh trigger.dev project did not match its bundled template: ${JSON.stringify(triggerDiff.data.entries.filter((entry) => entry.classification !== "same"))}`);
+  await run("pnpm", ["--filter", "./apps/jobs", "typecheck"], triggerProject);
+  const triggerJobs = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "jobs", "list", "--json"], { cwd: triggerProject, encoding: "utf8" })).data;
+  if (triggerJobs.runtime.runtime !== "trigger") throw new Error("A --jobs trigger project does not select trigger.dev");
+  await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "src/job-runtime-trigger.test.ts"], triggerProject);
   // Admin disabled (the default): no admin app and no admin deployment configuration.
   if (await stat(path.join(project, "apps", "admin")).then(() => true, () => false)) throw new Error("The default project generated apps/admin");
   // Admin enabled: a second project generated with --admin installs, builds, and passes its admin

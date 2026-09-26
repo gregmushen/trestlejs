@@ -23,5 +23,8 @@ export async function localEnvironment(
     TRESTLE_ENV: environment,
     TRESTLE_WEB_URL: values.BETTER_AUTH_URL ?? "http://localhost:42069",
     TRESTLE_WORKER_DIR: path.join(root, manifest.apps.worker ?? "apps/worker"),
+    // apps/jobs (trigger.dev) reads its project and API from the manifest.
+    ...(manifest.jobs?.runtime === "trigger" && manifest.jobs.project ? { TRIGGER_PROJECT_REF: manifest.jobs.project } : {}),
+    ...(manifest.jobs?.runtime === "trigger" && manifest.jobs.endpoint ? { TRIGGER_API_URL: manifest.jobs.endpoint } : {}),
   };
 }

@@ -14,6 +14,8 @@ import type { WorkerEnvironment } from "./worker-environment.js";
 /** Rows leased per dispatch batch (the outbox default) and batches per drain. */
 const outboxBatchSize = 10;
 const outboxBatchesPerDrain = 20;
+/** Longer than a run's full retry schedule, so settlement never races a run that is still retrying. */
+const settlementGraceMs = 30 * 60_000;
 
 function schedulerLog(environment: WorkerEnvironment, fields: Record<string, unknown> = {}): Logger {
   return createLogger({ environment: environment.APP_ENV ?? "local", ...fields }, undefined, { secretValues: loggerSecretsFromEnvironment(environment) });
@@ -100,6 +102,14 @@ export async function runDueWork(key: string, dueAt: Date, environment: WorkerEn
  */
 export async function runSafetySweep(environment: WorkerEnvironment, log: Logger): Promise<void> {
   const due: DueWorkItem[] = [];
+  if (jobRuntime(environment).name !== "cloudflare" && jobRuntime(environment).publisher(environment)) {
+    // External runtimes can end a run without success; re-dispatch what no consumer completed.
+    const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
+    try {
+      const settled = await store.settleUnconsumed({ olderThanMs: settlementGraceMs });
+      if (settled.length) log.warn("outbox.settlement.redispatched", { count: settled.length });
+    } finally { await store.close(); }
+  }
   if (jobRuntime(environment).publisher(environment)) {
     const result = await drainOutbox(environment);
     log.info("outbox.dispatch.completed", { sent: result.sent, failed: result.failed });
