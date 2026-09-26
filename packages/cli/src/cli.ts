@@ -38,6 +38,7 @@ import { stripeDeploymentIssues, stripeServerKeyMatchesMode } from "./stripe-dep
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
+import { formatProviderStatuses, providerStatuses } from "./providers.js";
 import { applySourceUpgrade, sourceFileDiff, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { auditMigrations, formatMigrationAudit, rebaseMigrations } from "./upgrade-migrations.js";
 import {
@@ -1184,6 +1185,26 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.json) runtime.stdout(`${JSON.stringify(structuredOutput({ healthy: failed.length === 0, services: statuses }), null, 2)}\n`);
       else runtime.stdout(`${formatStatus(statuses)}\n`);
       if (failed.length) throw new CliFailure(`${failed.length} local service${failed.length === 1 ? " is" : "s are"} not healthy`, 1);
+    });
+
+  program.command("providers")
+    .description("report each external provider's readiness for an environment: mode, credentials, format, and optionally a live read-only health request")
+    .option("--env <environment>", "environment to check", environment, "local")
+    .option("--live-check", "send each provider's declared read-only health request (never creates, buys, or sends anything)")
+    .option("--json", "print structured status")
+    .action(async (options: { env: ReturnType<typeof environment>; liveCheck?: boolean; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      let secrets: Record<string, string> | { inaccessible: string };
+      try {
+        secrets = await readSecrets(context.root, options.env, selectedMasterKey(runtime)) as Record<string, string>;
+      } catch (error) {
+        secrets = { inaccessible: `cannot read ${options.env} credentials: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      const statuses = await providerStatuses(context.manifest, options.env, secrets, { live: Boolean(options.liveCheck) });
+      const blocking = statuses.filter((status) => status.mode === "live" && status.state !== "healthy");
+      if (options.json) runtime.stdout(`${JSON.stringify(structuredOutput({ environment: options.env, ready: blocking.length === 0, providers: statuses }), null, 2)}\n`);
+      else runtime.stdout(`${formatProviderStatuses(statuses)}\n`);
+      if (blocking.length) throw new CliFailure(`${blocking.length} provider${blocking.length === 1 ? " is" : "s are"} not ready for ${options.env}`, 1);
     });
 
   const api = program.command("api").description("inspect the application's API contracts");

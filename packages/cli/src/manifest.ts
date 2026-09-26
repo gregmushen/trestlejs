@@ -32,6 +32,32 @@ export const secretDeclarationSchema = z
   .strict()
   .refine((declaration) => !declaration.shareWith || declaration.target === "worker", { message: "only Worker secrets can be shared with the platform admin", path: ["shareWith"] });
 
+const providerModeSchema = z.enum(["disabled", "fixture", "live"]);
+
+/**
+ * An external provider the application depends on. The application supplies
+ * the adapter; this declares what each environment needs so readiness can be
+ * reported without deploying. Health checks are read-only requests, run only
+ * when asked for.
+ */
+export const providerDeclarationSchema = z
+  .object({
+    description: z.string().min(1),
+    secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/u)).default([]),
+    /** Per environment: disabled, fixture (local stand-in, no credentials), or live. Unlisted environments are disabled. */
+    mode: z.partialRecord(environmentNameSchema, providerModeSchema).default({}),
+    /** Optional format checks for secret values, as regular expressions; values are never printed. */
+    patterns: z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/u), z.string().min(1)).optional(),
+    setup: z.string().min(1),
+    health: z.object({
+      url: z.string().url().refine((value) => value.startsWith("https://"), "health checks must use https"),
+      /** Sends this secret as a bearer token; the URL never carries secrets. */
+      bearer: z.string().regex(/^[A-Z][A-Z0-9_]*$/u).optional(),
+      expect: z.array(z.number().int().min(100).max(599)).min(1).default([200]),
+    }).strict().optional(),
+  })
+  .strict();
+
 export const projectManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -73,6 +99,7 @@ export const projectManifestSchema = z
       .strict(),
     environments: z.array(environmentNameSchema).min(1),
     secrets: z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/u), secretDeclarationSchema).optional(),
+    providers: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/u), providerDeclarationSchema).optional(),
   })
   .strict()
   .superRefine((manifest, context) => {

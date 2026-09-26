@@ -732,6 +732,38 @@ Upgrades keep your changes. After installing the new CLI:
    are older. Apply them once with `pnpm db:migrate -- --apply-skipped`.
 5. `pnpm exec trestle upgrade source-finalize --yes` runs `pnpm check` and
    records the new baseline. Your edits stay yours for the next upgrade.
+### External providers
+
+Declare each external service your application calls in `.trestle/project.yaml`
+under `providers`. Your code supplies the adapter; the declaration tells
+TrestleJS what each environment needs:
+
+```yaml
+providers:
+  geocoder:
+    description: Address geocoding
+    secrets: [GEOCODER_API_KEY]
+    mode: { local: fixture, preview: fixture, staging: live, production: live }
+    patterns: { GEOCODER_API_KEY: "^geo_" }
+    setup: "Create a key in the provider dashboard, then: pnpm exec trestle secrets set GEOCODER_API_KEY --env <environment>"
+    health: { url: "https://api.geocoder.example/v1/status", bearer: GEOCODER_API_KEY, expect: [200] }
+```
+
+`pnpm exec trestle providers --env staging` reports each provider:
+
+- `disabled`, `fixture`, or `healthy`;
+- `unconfigured` (a secret is missing);
+- `invalid` (a value has the wrong format, or the credentials were rejected);
+- `inaccessible` (no key for that environment's credentials, or the provider
+  could not be reached).
+
+Each problem comes with the setup step. The command exits non-zero while a
+live provider is not ready, and `--json` gives the same data. It is read-only.
+`--live-check` also sends each declared health request: a GET with the secret
+as a bearer token, never in the URL, and it never creates, buys, or sends
+anything. Resend and Stripe follow the same convention as built-ins; declare
+`resend` or `stripe` yourself to override them. Use `trestle doctor --env` for
+bindings, migrations, and database roles.
 
 ### API contracts
 
