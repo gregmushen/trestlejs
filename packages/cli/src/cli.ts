@@ -1040,6 +1040,50 @@ export function createProgram(runtime: CliRuntime): Command {
       await runCommand("pnpm", ["exec", "tsx", "seed/index.ts", options.scenario], { cwd: context.root, env: { ...childEnvironment, APP_ENV: "local", DATABASE_URL: childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL } });
     });
 
+  program.command("dev-account")
+    .description("create or find a verified local development account, with organization, application, and platform roles")
+    .argument("<email>", "account email; an existing account is reused")
+    .option("--name <name>", "display name")
+    .option("--password-stdin", "read the password from standard input (required to create an account)")
+    .option("--organization <slug>", "create or join this organization")
+    .option("--organization-name <name>", "name for a newly created organization")
+    .option("--org-role <role>", "organization role (owner, admin, member)", "owner")
+    .option("--app-role <role...>", "application roles in the organization (tenant authority)")
+    .option("--platform-role <role...>", "platform roles (operator authority in the platform admin)")
+    .option("--json", "print the structured result")
+    .action(async (email: string, options: { name?: string; passwordStdin?: boolean; organization?: string; organizationName?: string; orgRole: string; appRole?: string[]; platformRole?: string[]; json?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      try {
+        await access(path.join(context.root, "scripts", "dev-account.ts"));
+      } catch {
+        throw new CliFailure("this project has no scripts/dev-account.ts; run trestle upgrade to adopt development accounts");
+      }
+      const password = options.passwordStdin ? await runtime.stdin?.() : undefined;
+      if (options.passwordStdin && !password) throw new CliFailure("--password-stdin requires the password on standard input");
+      const childEnvironment = await localEnvironment(context.root, context.manifest, "local", runtime);
+      const databaseUrl = childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL ?? "";
+      assertLocalDatabaseUrl(databaseUrl);
+      const request = {
+        email, ...(options.name ? { name: options.name } : {}), passwordStdin: Boolean(password),
+        ...(options.organization ? { organization: { slug: options.organization, role: options.orgRole, ...(options.organizationName ? { name: options.organizationName } : {}) } } : {}),
+        ...(options.appRole ? { applicationRoles: options.appRole } : {}), ...(options.platformRole ? { platformRoles: options.platformRole } : {}),
+      };
+      let output: string;
+      try {
+        output = (await runCommand("pnpm", ["exec", "tsx", "scripts/dev-account.ts"], { cwd: context.root, stdio: "pipe", ...(password ? { input: password } : {}), env: { ...childEnvironment, APP_ENV: "local", TRESTLE_ENV: "local", DATABASE_URL: databaseUrl, TRESTLE_DEV_ACCOUNT: JSON.stringify(request) } })).stdout;
+      } catch (error) {
+        throw new CliFailure(`development account failed: ${error instanceof Error ? error.message.split("\n").filter((line) => line && !/DeprecationWarning|trace-deprecation/u.test(line)).at(-1) ?? error.message : String(error)}`);
+      }
+      const result = JSON.parse(output.trim().split("\n").at(-1)!) as { userId: string; created: boolean; passwordSet: boolean; organizationId?: string; organizationCreated?: boolean; organizationRole?: string; applicationRolesGranted: string[]; platformRolesGranted: string[] };
+      if (options.json) { runtime.stdout(`${JSON.stringify(structuredOutput({ account: { email, ...result } }), null, 2)}\n`); return; }
+      runtime.stdout([
+        `${result.created ? "Created" : "Found"} ${email} (${result.userId}), email verified${result.passwordSet ? ", password set" : ""}`,
+        ...(result.organizationId ? [`Organization ${options.organization} (${result.organizationId})${result.organizationCreated ? " created" : ""}; role ${result.organizationRole}`] : []),
+        `Application roles granted: ${result.applicationRolesGranted.join(", ") || "none new"}`,
+        `Platform roles granted: ${result.platformRolesGranted.join(", ") || "none new"}`,
+      ].join("\n") + "\n");
+    });
+
   const databaseRoles = database.command("roles").description("manage restricted remote PostgreSQL runtime roles");
   databaseRoles.command("bootstrap")
     .requiredOption("--env <environment>", "staging or production environment", environment)

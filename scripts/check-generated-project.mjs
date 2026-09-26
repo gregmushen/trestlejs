@@ -34,8 +34,9 @@ const browserSiteEnvironment = {
  * database-gated suite cannot silently skip. Used only when a database is set.
  */
 async function requireScenarios(projectRoot, filter, files, environment, titles) {
-  const report = path.join(temporaryRoot, `scenarios-${path.basename(projectRoot)}-${filter.replaceAll(/[^a-z]/gu, "")}.json`);
-  await run("pnpm", ["--filter", filter, "exec", "vitest", "run", ...files, "--reporter=default", "--reporter=json", `--outputFile.json=${report}`], projectRoot, environment);
+  const report = path.join(temporaryRoot, `scenarios-${path.basename(projectRoot)}-${filter.replaceAll(/[^a-z]/gu, "") || "root"}-${randomInt(1_000_000)}.json`);
+  // "." runs the project root's own tests (for example seed/).
+  await run("pnpm", [...(filter === "." ? [] : ["--filter", filter]), "exec", "vitest", "run", ...files, "--reporter=default", "--reporter=json", `--outputFile.json=${report}`], projectRoot, environment);
   const results = JSON.parse(await readFile(report, "utf8")).testResults.flatMap((file) => file.assertionResults);
   const missing = titles.filter((title) => !results.some((result) => result.title === title && result.status === "passed"));
   if (missing.length) throw new Error(`Required ${filter} scenarios did not pass: ${missing.join("; ")}`);
@@ -167,6 +168,14 @@ try {
       "rotates a verified account without email or extra users",
     ]);
     await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    // Development accounts and the additive seed lifecycle.
+    await requireScenarios(project, "./packages/auth", ["src/dev-account.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "creates a verified account once and converges on repeated runs",
+      "refuses unknown roles, missing passwords, and non-local databases",
+    ]);
+    await requireScenarios(project, ".", ["seed/preserve.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "seeds additively, preserving development accounts and application data",
+    ]);
     await requireScenarios(project, "./packages/db", ["src/crop-rls.integration.test.ts", "src/crop-editor.integration.test.ts", "src/planting-rls.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "is readable by every tenant and writable by none",
       "lets only the platform role write",
