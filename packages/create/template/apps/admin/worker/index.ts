@@ -7,7 +7,7 @@ import { Entitlements, featureDefinitions } from "@__TRESTLE_PROJECT_NAME__/bill
 import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   artifactOperations, createDatabase, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
-  activeSupportSession, endSupportSession, listSupportSessions, startSupportSession, supportableOrganizations, supportOrganizationView,
+  activeSupportSession, endSupportSession, listSupportSessions, mintSupportHandoff, startSupportSession, supportableOrganizations, supportOrganizationView,
   grantPlatformRole, listPlatformAuditEvents, listPlatformEmailEvents, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
   listPlatformApiKeys, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   sessionAssurance, type Database, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
@@ -32,6 +32,8 @@ export type AdminEnvironment = {
   ADMIN_ORIGIN?: string;
   /** The customer Worker, read for sanitized capability status. */
   API_URL?: string;
+  /** The customer application origin, used for an operator-initiated one-time handoff. */
+  APP_URL?: string;
   APP_ENV?: "local" | "preview" | "staging" | "production";
 };
 
@@ -260,7 +262,7 @@ admin.get("/api/admin/session", async (context) => {
     factors,
     stepUpRequiredAfter: assurance && assuranceRank[assurance.level] >= assuranceRank[actionAssuranceLevel(environment)] ? new Date(assurance.verifiedAt.getTime() + stepUpWindowMinutes * 60_000).toISOString() : null,
     supportSession: open ? {
-      id: open.id, operatorId: open.operatorId, organizationId: open.organizationId,
+      id: open.id, operatorId: open.operatorId, organizationId: open.organizationId, targetUserId: open.targetUserId,
       organizationName: organizations.find((item) => item.organizationId === open.organizationId)?.organizationName ?? open.organizationId,
       reason: open.reason, ticket: null, profile: "Read-only support",
       startedAt: open.startedAt.toISOString(), expiresAt: open.expiresAt.toISOString(), endedAt: null, endedBy: null,
@@ -468,10 +470,32 @@ admin.get("/api/admin/support/sessions", async (context) => {
 });
 
 admin.post("/api/admin/support/sessions", async (context) => {
-  const body = await context.req.json().catch(() => ({})) as { organizationId?: unknown; durationMinutes?: unknown; reason?: unknown };
+  const body = await context.req.json().catch(() => ({})) as { organizationId?: unknown; targetUserId?: unknown; durationMinutes?: unknown; reason?: unknown };
   if (typeof body.organizationId !== "string") throw new PlatformOperationError("invalid", "Choose an organization");
-  const session = await startSupportSession(platformDatabase(context.env), { organizationId: body.organizationId, durationMinutes: typeof body.durationMinutes === "number" ? body.durationMinutes : 30 }, await actionContext(context, body));
+  if (body.targetUserId !== undefined && (typeof body.targetUserId !== "string" || !body.targetUserId.trim())) throw new PlatformOperationError("invalid", "Choose a member to view");
+  const session = await startSupportSession(platformDatabase(context.env), { organizationId: body.organizationId, ...(typeof body.targetUserId === "string" ? { targetUserId: body.targetUserId } : {}), durationMinutes: typeof body.durationMinutes === "number" ? body.durationMinutes : 30 }, await actionContext(context, body));
   return context.json({ id: session.id, organizationId: session.organizationId, expiresAt: session.expiresAt.toISOString(), correlationId: context.get("correlationId") }, 201);
+});
+
+admin.post("/api/admin/support/sessions/:id/handoff", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { reason?: unknown };
+  const change = await actionContext(context, body);
+  const session = await activeSupportSession(platformDatabase(context.env), context.req.param("id"), context.get("operator").id);
+  if (!session?.targetUserId) return context.json({ error: "forbidden", reason: "member_bound_session_required" }, 403);
+  const appUrl = context.env.APP_URL ?? (adminEnvironment(context.env) === "local" ? "http://localhost:42069" : undefined);
+  let appOrigin: string;
+  try {
+    const parsed = new URL(appUrl ?? "");
+    const local = adminEnvironment(context.env) === "local" && parsed.protocol === "http:" && ["localhost", "127.0.0.1"].includes(parsed.hostname);
+    if (!appUrl || (!local && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.origin !== appUrl.replace(/\/$/u, "")) throw new Error("invalid origin");
+    appOrigin = parsed.origin;
+  } catch { throw new AdminConfigurationError("APP_URL must be a bare HTTPS customer app origin (localhost HTTP is local-only)"); }
+  const token = await mintSupportHandoff(platformDatabase(context.env), session, change);
+  const url = new URL("/support/view", appOrigin);
+  // The fragment stays out of Worker/CDN request logs and Referer headers. The app removes it before exchange.
+  url.hash = `handoff=${token}`;
+  context.header("Cache-Control", "no-store");
+  return context.json({ url: url.toString() });
 });
 
 admin.get("/api/admin/support/sessions/:id/organization", async (context) => {

@@ -1428,6 +1428,12 @@ with application crons using P3's rules.
 - **A database-level bound on support reads.** Support-session reads run on
   `trestle_platform`, and the Worker's session check is the only boundary. A
   policy tied to an open `support_session` would enforce it in PostgreSQL.
+- **View-as-member product pages.** The initial customer-app handoff has a
+  separate, read-only support credential and a server-checked banner, but
+  deliberately blocks ordinary product routes. Reviewed product GET routes
+  still need explicit support-mode opt-in, an operator/effective-user context,
+  read-only database access, and page-level tests before custom domain data can
+  be displayed as a member. No Alice login cookie or broad impersonation mode.
 - **Transactional webhook audit.** Tenant webhook endpoint changes are audited
   after commit, not in the same transaction.
 - **API-key controls.**

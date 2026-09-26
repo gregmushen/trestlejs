@@ -124,6 +124,7 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
   { id: "support-sessions", path: "/support/sessions", label: "Support Sessions", group: "Customers", permission: "platform.support_sessions.use", api: [
     { method: "GET", path: "/api/admin/support/sessions" },
     { method: "POST", path: "/api/admin/support/sessions", permission: "platform.support_sessions.use" },
+    { method: "POST", path: "/api/admin/support/sessions/:id/handoff", permission: "platform.support_sessions.use" },
     { method: "GET", path: "/api/admin/support/sessions/:id/organization" },
     // Ending a support session only gives up access.
     { method: "POST", path: "/api/admin/support/sessions/:id/end", permission: "platform.support_sessions.use", stepUp: false },

@@ -57,7 +57,7 @@ export type UsageProvenanceRow = { featureCode: string; periodStart: string; per
 export type Operator = { id: string; email: string; name: string };
 /** An operator's audited, time-boxed support session in one tenant. */
 export type SupportSession = {
-  id: string; operatorId: string; organizationId: string; organizationName: string; reason: string; ticket: string | null; profile: string;
+  id: string; operatorId: string; organizationId: string; organizationName: string; targetUserId: string | null; reason: string; ticket: string | null; profile: string;
   permissions: { organization: string[]; application: string[]; denied: string[] };
   startedAt: string; expiresAt: string; endedAt: string | null; endReason: string | null; endedBy: string | null; revocationReason: string | null;
 };
@@ -346,13 +346,14 @@ export function createAdminApi(options: { baseUrl?: string; fetch?: typeof fetch
     recoverRegional: (id: string, input: RegionalConfiguredJson, reason: string) => request<OrganizationRegionalJson>("PUT", `organizations/${segment(id)}/regional`, { ...input, ...reasoned(reason) }),
     supportProfiles: () => request<{ profiles: SupportProfile[]; durations: number[] }>("GET", "support/profiles"),
     previewSupport: (organizationId: string, profile: string) => request<{ profile: SupportProfile; permissions: SupportPermissionPreview[] }>("POST", "support/preview", { organizationId, profile }),
-    startSupportSession: (input: { organizationId: string; profile: string; durationMinutes: number; ticket?: string }, reason: string) => request<{ session: SupportSession }>("POST", "support/sessions", { ...input, ...reasoned(reason) }),
+    startSupportSession: (input: { organizationId: string; targetUserId?: string; profile: string; durationMinutes: number; ticket?: string }, reason: string) => request<{ session: SupportSession }>("POST", "support/sessions", { ...input, ...reasoned(reason) }),
     exitSupportSession: () => request<void>("DELETE", "support/sessions/current"),
     supportSessions: (status?: "active") => request<{ sessions: SupportSessionSummary[] }>("GET", "support/sessions", undefined, { status }),
     supportSession: (id: string) => request<{ session: SupportSession & { operator: Operator }; activity: SupportActivity[] }>("GET", `support/sessions/${segment(id)}`),
     revokeSupportSession: (id: string, reason: string) => request<ActionOutcome>("POST", `support/sessions/${segment(id)}/revoke`, reasoned(reason)),
     supportTenant: () => request<{ session: SupportSession; permitted: string[] }>("GET", "support/tenant"),
     supportMembers: () => request<{ members: Array<{ memberId: string; userId: string; name: string; organizationRoles: string[] }> }>("GET", "support/tenant/members"),
+    supportHandoff: (sessionId: string) => request<{ url: string }>("POST", `support/sessions/${segment(sessionId)}/handoff`, { reason: "Open the customer application in read-only support mode" }),
     supportWebhooks: () => request<{ endpoints: Array<{ id: string; name: string; url: string; events: string[]; state: string; health: string; consecutiveFailures: number; lastSuccessAt: string | null; lastFailureAt: string | null }> }>("GET", "support/tenant/webhooks"),
     supportWebhookDeliveries: (id: string) => request<{ deliveries: Array<{ id: string; event: string; status: string; attempts: number; responseCode: number | null; failureCategory: string | null; test: boolean; createdAt: string }> }>("GET", `support/tenant/webhooks/${segment(id)}`),
     supportWebhookAction: (id: string, action: "pause" | "resume" | "test") => request<ActionOutcome>("POST", `support/tenant/webhooks/${segment(id)}/${action}`),

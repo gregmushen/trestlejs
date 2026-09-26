@@ -52,6 +52,15 @@ suite("support sessions", () => {
     expect(events[0]!.reason).toBe("customer ticket 812");
   });
 
+  it("binds a viewed user to a member of the selected organization", async () => {
+    const platform = createPlatformDatabase(connectionString!, "postgres-js");
+    await expect(startSupportSession(platform, { organizationId, targetUserId: "outsider", durationMinutes: 30 }, context()))
+      .rejects.toThrow("not a member");
+    const session = await startSupportSession(platform, { organizationId, targetUserId: `${run}-member`, durationMinutes: 30 }, context());
+    expect((await activeSupportSession(platform, session.id, operator))?.targetUserId).toBe(`${run}-member`);
+    await endSupportSession(platform, session.id, context(""));
+  });
+
   it("closes an expired session with an audited exit before the operator starts another", async () => {
     const platform = createPlatformDatabase(connectionString!, "postgres-js");
     const past = new Date(Date.now() - 60 * 60_000);

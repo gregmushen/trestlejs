@@ -21,7 +21,7 @@ type WireSession = {
   permissions: string[];
   environment: AdminSession["environment"];
   capabilities: CapabilityStatus[];
-  supportSession: { id: string; operatorId: string; organizationId: string; organizationName: string; reason: string; startedAt: string; expiresAt: string } | null;
+  supportSession: { id: string; operatorId: string; organizationId: string; organizationName: string; targetUserId: string | null; reason: string; startedAt: string; expiresAt: string } | null;
   assurance: { level: "password" | "mfa" | "phishing_resistant"; method: string; verifiedAt: string } | null;
   /** Null when the session has no recorded assurance. */
   stepUpRequiredAfter: string | null;
@@ -35,7 +35,7 @@ type WireWebhooks = {
   failedDeliveries: Array<{ id: string; organizationId: string; endpointId: string; eventType: string; state: string; attemptCount: number; terminalReason: string | null; completedAt: string | null; replayable: boolean; replayUnavailableReason: string | null }>;
 };
 type WireOrganizations = { organizations: Array<{ id: string; name: string; slug: string; createdAt: string; members: number }> };
-type WireSupportSessions = { sessions: Array<{ id: string; organizationId: string; operatorId: string; reason: string; startedAt: string; expiresAt: string; endedAt: string | null; endedBy: string | null }>; organizations: Array<{ organizationId: string; organizationName: string }> };
+type WireSupportSessions = { sessions: Array<{ id: string; organizationId: string; operatorId: string; targetUserId: string | null; reason: string; startedAt: string; expiresAt: string; endedAt: string | null; endedBy: string | null }>; organizations: Array<{ organizationId: string; organizationName: string }> };
 type WireSupportOrganization = { recentAudit: Array<{ name: string; occurredAt: string; actorType: string; outcome: string; correlationId: string }> };
 type WireSubscriptions = { subscriptions: Array<{ organizationId: string; organizationName: string; plan: string | null; planVersion: number | null; status: string | null; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean | null }> };
 type WireCommercial = {
@@ -379,10 +379,10 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
         { code: "application permissions", plane: "application", description: "Product actions", allowed: false, reason: "support sessions grant no tenant-application authority" },
       ],
     }),
-    startSupportSession: async (input: { organizationId: string; profile: string; durationMinutes: number; ticket?: string }, reason: string): Promise<{ session: SupportSession }> => {
-      const started = await request<{ id: string; organizationId: string; expiresAt: string }>("POST", "support/sessions", { organizationId: input.organizationId, durationMinutes: input.durationMinutes, ...reasoned(reason) });
+    startSupportSession: async (input: { organizationId: string; targetUserId?: string; profile: string; durationMinutes: number; ticket?: string }, reason: string): Promise<{ session: SupportSession }> => {
+      const started = await request<{ id: string; organizationId: string; expiresAt: string }>("POST", "support/sessions", { organizationId: input.organizationId, ...(input.targetUserId ? { targetUserId: input.targetUserId } : {}), durationMinutes: input.durationMinutes, ...reasoned(reason) });
       const current = await session();
-      return { session: current.supportSession ?? { id: started.id, operatorId: current.operator.id, organizationId: started.organizationId, organizationName: started.organizationId, reason, ticket: null, profile: supportProfile.name, permissions: supportPermissions, startedAt: new Date().toISOString(), expiresAt: started.expiresAt, endedAt: null, endReason: null, endedBy: null, revocationReason: null } };
+      return { session: current.supportSession ?? { id: started.id, operatorId: current.operator.id, organizationId: started.organizationId, organizationName: started.organizationId, targetUserId: input.targetUserId ?? null, reason, ticket: null, profile: supportProfile.name, permissions: supportPermissions, startedAt: new Date().toISOString(), expiresAt: started.expiresAt, endedAt: null, endReason: null, endedBy: null, revocationReason: null } };
     },
     exitSupportSession: async (): Promise<void> => {
       const current = await session();

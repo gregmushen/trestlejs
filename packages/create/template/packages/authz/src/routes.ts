@@ -23,6 +23,11 @@ export const customerRoutePolicies = defineRoutePolicies(permissions, [
   // Signed, expiring artifact downloads; the signature is the authority.
   { method: "GET", path: "/artifacts/:id", public: true, audience: "public" },
   { method: "GET", path: "/api/me", audience: "session" },
+  // Separate opaque support credential; handlers verify it against the live
+  // platform session and never treat it as a Better Auth customer session.
+  { method: "POST", path: "/api/support/exchange", audience: "support" },
+  { method: "GET", path: "/api/support/context", audience: "support" },
+  { method: "POST", path: "/api/support/exit", audience: "support" },
 
   { method: "GET", path: "/api/tenant/access", audience: "tenant", permission: "organization.read" },
   { method: "GET", path: "/api/tenant/application-role-assignments", audience: "tenant", permission: "application.roles.read" },

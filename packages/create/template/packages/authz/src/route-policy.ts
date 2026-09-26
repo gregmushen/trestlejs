@@ -11,7 +11,7 @@ export type RoutePolicy = Readonly<{
   entitlement?: string;
   /** Principal types accepted by the endpoint. Defaults to the permission's principals. */
   principals?: readonly PermissionPrincipal[];
-  audience: "tenant" | "platform" | "public" | "session";
+  audience: "tenant" | "platform" | "public" | "session" | "support";
   /** The response carries a newly minted credential or signing secret; refused in support sessions. */
   revealsSecret?: true;
 }>;

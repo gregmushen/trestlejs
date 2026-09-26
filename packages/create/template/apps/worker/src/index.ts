@@ -5,7 +5,7 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, planEntitlements, plans } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
-import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, createTenantDatabase, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
+import { activeSupportView, applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, endSupportView, exchangeSupportHandoff, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, createTenantDatabase, newSupportToken, outboxApplicationConnectionString, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, retrieveCurrentStripeSubscription, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -54,6 +54,55 @@ app.use("*", async (context, next) => {
 app.use("/api/*", async (context, next) =>
   cors({ origin: context.env.WEB_ORIGIN ?? context.env.BETTER_AUTH_URL ?? "http://localhost:42069", credentials: true })(context, next),
 );
+
+const supportCookieName = "trestle_support_view";
+const supportCookie = (header: string | undefined): string | null => {
+  const value = header?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${supportCookieName}=`))?.slice(supportCookieName.length + 1);
+  return value && /^[0-9a-f]{64}$/u.test(value) ? value : null;
+};
+const supportDatabase = (environment: AuthEnvironment) => createDatabase(outboxApplicationConnectionString(environment.DATABASE_URL), environment.DATABASE_DRIVER);
+const supportOrigin = (environment: AuthEnvironment) => environment.WEB_ORIGIN ?? environment.BETTER_AUTH_URL ?? "http://localhost:42069";
+const supportCookieHeader = (value: string, environment: AuthEnvironment, maxAge: number) =>
+  `${supportCookieName}=${value}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${environment.APP_ENV === "local" ? "" : "; Secure"}`;
+
+// A support credential is never a customer authentication cookie. Keep it out of
+// all ordinary routes until a route explicitly opts into support-safe reads.
+app.use("/api/*", async (context, next) => {
+  if (supportCookie(context.req.header("cookie")) && !context.req.path.startsWith("/api/support/")) {
+    return context.json({ error: "support_view_read_only", message: "This support view cannot use ordinary application routes" }, 403);
+  }
+  await next();
+});
+
+app.post("/api/support/exchange", async (context) => {
+  if (context.req.header("origin") !== supportOrigin(context.env)) return context.json({ error: "origin_mismatch" }, 403);
+  if (!context.req.header("content-type")?.toLowerCase().startsWith("application/json")) return context.json({ error: "invalid_request" }, 415);
+  const body = await context.req.json().catch(() => null) as { handoff?: unknown } | null;
+  if (typeof body?.handoff !== "string" || !/^[0-9a-f]{64}$/u.test(body.handoff)) return context.json({ error: "invalid_handoff" }, 400);
+  const grant = newSupportToken();
+  if (!await exchangeSupportHandoff(supportDatabase(context.env), body.handoff, grant)) return context.json({ error: "handoff_expired_or_used" }, 403);
+  context.header("Set-Cookie", supportCookieHeader(grant, context.env, 14_400));
+  context.header("Cache-Control", "no-store");
+  return context.json({ active: true });
+});
+
+app.get("/api/support/context", async (context) => {
+  const token = supportCookie(context.req.header("cookie"));
+  if (!token) return context.json({ error: "support_view_required" }, 401);
+  const view = await activeSupportView(supportDatabase(context.env), token, { path: context.req.path, correlationId: context.get("correlationId"), environment: context.env.APP_ENV ?? "local" });
+  if (!view) return context.json({ error: "support_view_ended" }, 401);
+  context.header("Cache-Control", "no-store");
+  return context.json({ sessionId: view.sessionId, organization: { id: view.organizationId, name: view.organizationName }, operator: { id: view.operatorId, email: view.operatorEmail }, viewedUser: { id: view.viewedUserId, name: view.viewedUserName, email: view.viewedUserEmail }, expiresAt: view.expiresAt.toISOString(), readOnly: true });
+});
+
+app.post("/api/support/exit", async (context) => {
+  if (context.req.header("origin") !== supportOrigin(context.env)) return context.json({ error: "origin_mismatch" }, 403);
+  const token = supportCookie(context.req.header("cookie"));
+  if (token) await endSupportView(supportDatabase(context.env), token);
+  context.header("Set-Cookie", supportCookieHeader("", context.env, 0));
+  context.header("Cache-Control", "no-store");
+  return context.json({ ended: true });
+});
 
 function localEmailEnabled(environment: AuthEnvironment): boolean {
   return environment.APP_ENV === "local"
