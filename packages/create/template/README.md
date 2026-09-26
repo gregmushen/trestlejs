@@ -668,6 +668,27 @@ before anyone can use it.
 including when an older checked-in migration was future-dated. A generated
 release canary checks that running it without schema changes creates no drift.
 
+### Local status and ports
+
+`pnpm exec trestle status` reports every local service with one of these
+states: `healthy`, `starting`, `failed`, `disabled`, or `unconfigured`. It
+covers the site, app, API, admin and admin API, the database, migrations
+applied against the journal, the email sink, the scheduler, and the email and
+billing providers. Each problem comes with a repair command. `--json` gives the
+same data in machine-readable form, and the command exits non-zero while any
+service is unhealthy. A port answered by another project's server is reported
+as a failure, not as this project's service.
+
+Before starting, `trestle dev` checks its fixed ports (42068, 42069, 42070,
+8787, and 8788) and names any process holding one:
+
+- `--reclaim` stops stale processes that belong to this project.
+- An unrelated process is never stopped unless you name its port with
+  `--takeover <port>`.
+
+After a partial start, run `trestle status` to see which service failed, then
+rerun `trestle dev --reclaim`.
+
 ### Development accounts and seed data
 
 `pnpm exec trestle dev-account dev@example.test --password-stdin --organization acme --app-role editor --platform-role platform_operator`
