@@ -259,6 +259,10 @@ try {
     await requireScenarios(project, "./apps/worker", ["src/system.integration.test.ts"], workerSystemEnvironment, [
       "verifies email, signs in, selects an organization, and reads tenant billing",
     ]);
+    // The end-to-end canary that the local-canary evidence claim records.
+    await requireScenarios(project, "./apps/worker", ["src/canary.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "verifies, signs in, acts, is denied another tenant, audits an admin change, and completes background work",
+    ]);
     await requireScenarios(project, "./apps/worker", ["src/resend-webhook.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "persists a verified event once and acknowledges a signed duplicate",
       "rejects a tampered raw body and an expired signature before persistence",

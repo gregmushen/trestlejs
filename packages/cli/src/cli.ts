@@ -39,6 +39,7 @@ import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-con
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { formatProviderStatuses, providerStatuses } from "./providers.js";
+import { evidenceReport, formatEvidenceReport, readLedger, recordEvidence, starterLedger, writeLedger } from "./evidence.js";
 import { applySourceUpgrade, sourceFileDiff, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { auditMigrations, formatMigrationAudit, rebaseMigrations } from "./upgrade-migrations.js";
 import {
@@ -111,6 +112,39 @@ function experimental(command: Command, runtime: CliRuntime): Command {
   return command;
 }
 
+export type CommandInventoryEntry = Readonly<{
+  command: string;
+  description: string;
+  arguments: readonly string[];
+  options: ReadonlyArray<Readonly<{ flags: string; description: string; required: boolean }>>;
+  experimental: boolean;
+  /** How the command confirms a change: --yes confirms without a preview, --apply performs a previewed change. */
+  confirmation: "yes" | "apply" | null;
+  json: boolean;
+}>;
+
+/** Every command in the tree, for tooling and the CLI conventions test. */
+export function commandInventory(program: Command): CommandInventoryEntry[] {
+  const entries: CommandInventoryEntry[] = [];
+  const walk = (command: Command, prefix: string[]) => {
+    for (const child of command.commands) {
+      const path = [...prefix, child.name()];
+      const longs = child.options.map((option) => option.long);
+      entries.push({
+        command: path.join(" "), description: child.description(),
+        arguments: child.registeredArguments.map((argument) => argument.name()),
+        options: child.options.map((option) => ({ flags: option.flags, description: option.description, required: option.mandatory })),
+        experimental: child.description().startsWith("[experimental]") || prefix.length > 0 && entries.some((entry) => entry.command === prefix.join(" ") && entry.experimental),
+        confirmation: longs.includes("--yes") ? "yes" : longs.includes("--apply") ? "apply" : null,
+        json: longs.includes("--json"),
+      });
+      walk(child, path);
+    }
+  };
+  walk(program, []);
+  return entries;
+}
+
 export function createProgram(runtime: CliRuntime): Command {
   const program = new Command()
     .name("trestle")
@@ -179,7 +213,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const architecture = program.command("architecture").description("validate static application boundaries and managed guidance");
-  architecture.command("check")
+  architecture.command("check").description("verify the project against its declared architecture contract")
     .option("--json", "emit versioned structured output")
     .action(async (options: { json?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
@@ -251,7 +285,7 @@ export function createProgram(runtime: CliRuntime): Command {
     runtime.stdout(json ? `${JSON.stringify(structuredOutput({ compatible, ...report }), null, 2)}\n` : compatible ? `✓ Project metadata, managed guidance, and CLI are compatible with ${report.targetVersion}\n` : formatUpgradePlan(report));
     if (!compatible) throw new CliFailure("project requires a reviewed upgrade");
   }
-  upgrade.command("plan")
+  upgrade.command("plan").description("list the upgrade operations needed to reach this CLI version")
     .option("--json", "emit versioned structured output")
     .option("--check", "exit non-zero unless the project is already compatible")
     .action(async (options: { json?: boolean; check?: boolean }, command: Command) => {
@@ -260,7 +294,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const report = await planUpgrade(context.root);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatUpgradePlan(report));
     });
-  upgrade.command("apply")
+  upgrade.command("apply").description("apply the automatic upgrade operations once plan reports no manual review")
     .option("--yes", "confirm the reviewed upgrade plan")
     .action(async (options: { yes?: boolean }, command: Command) => {
       if (!options.yes) throw new CliFailure("upgrade apply requires --yes after reviewing trestle upgrade plan");
@@ -292,7 +326,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const file = await initSetupPlan(context.root, context.manifest);
       runtime.stdout(`Wrote ${file}\nNext: edit it, then run trestle plan diff ${file}\n`);
     });
-  plan.command("validate")
+  plan.command("validate").description("validate a SetupPlan file without changing anything")
     .argument("<file>", "SetupPlan JSON path or - for standard input")
     .option("--json", "emit versioned structured output")
     .action(async (file: string, options: { json?: boolean }, command: Command) => {
@@ -300,7 +334,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const loaded = await readSetupPlan(context.root, file, runtime);
       runtime.stdout(options.json ? formatPlanJson({ valid: true, source: loaded.source, plan: loaded.plan }) : `✓ SetupPlan schema version ${loaded.plan.schemaVersion} is valid\n✓ requires TrestleJS ${loaded.plan.minimumTrestleVersion} or newer\n✓ contains no plaintext secret values\n`);
     });
-  plan.command("diff")
+  plan.command("diff").description("show what applying a SetupPlan would change")
     .argument("<file>", "SetupPlan JSON path or - for standard input")
     .option("--json", "emit versioned structured output")
     .action(async (file: string, options: { json?: boolean }, command: Command) => {
@@ -309,7 +343,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const diff = await diffSetupPlan(context.root, context.manifest, loaded.plan, loaded.input);
       runtime.stdout(options.json ? formatPlanJson(diff) : formatPlanDiff(diff));
     });
-  plan.command("status")
+  plan.command("status").description("show the recorded progress of applying a SetupPlan")
     .argument("[file]", "optional SetupPlan JSON path")
     .option("--json", "emit versioned structured output")
     .action(async (file: string | undefined, options: { json?: boolean }, command: Command) => {
@@ -321,7 +355,7 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(options.json ? formatPlanJson(data) : state ? `SetupPlan ${state.planHash.slice(0, 12)}\nUpdated ${state.updatedAt}\n${state.operations.map((operation) => `${operation.status === "completed" ? "✓" : "✗"} ${operation.id}${operation.reason ? ` — ${operation.reason}` : ""}`).join("\n")}\n${matches === false ? "Warning: state belongs to a different plan.\n" : ""}` : "No SetupPlan apply state exists.\n");
     });
 
-  program.command("apply")
+  program.command("apply").description("apply a reviewed SetupPlan (requires --yes)")
     .argument("<file>", "approved SetupPlan JSON path")
     .option("--yes", "confirm the reviewed mutation plan")
     .action(async (file: string, options: { yes?: boolean }, command: Command) => {
@@ -352,7 +386,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const resource = program.command("resource").description("evolve declared application resources with migration safety");
-  resource.command("add-field")
+  resource.command("add-field").description("add an optional field to a generated resource with a migration")
     .argument("<resource>", "existing PascalCase resource")
     .argument("<field>", "optional field as name:type? or name:relation?:Resource:set-null")
     .option("--yes", "confirm source and migration generation")
@@ -420,7 +454,7 @@ export function createProgram(runtime: CliRuntime): Command {
 
   const secrets = program.command("secrets").description("manage encrypted application credentials");
   secrets
-    .command("init")
+    .command("init").description("create encrypted credentials for an environment")
     .option("--env <environment>", "credentials environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
@@ -429,7 +463,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   secrets
-    .command("import")
+    .command("import").description("import declared secrets from a dotenv file")
     .argument("<file>")
     .option("--env <environment>", "credentials environment", environment, "local")
     .action(async (file: string, options: { env: ReturnType<typeof environment> }, command: Command) => {
@@ -443,7 +477,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   secrets
-    .command("edit")
+    .command("edit").description("edit encrypted credentials for an environment in $EDITOR")
     .option("--env <environment>", "credentials environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
@@ -452,7 +486,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   secrets
-    .command("show")
+    .command("show").description("print decrypted credentials (plaintext on standard output)")
     .option("--env <environment>", "credentials environment", environment, "local")
     .option("--format <format>", "yaml, json, or dotenv", "yaml")
     .action(async (options: { env: ReturnType<typeof environment>; format: string }, command: Command) => {
@@ -465,7 +499,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   secrets
-    .command("get")
+    .command("get").description("print one decrypted secret")
     .argument("<name>")
     .option("--env <environment>", "credentials environment", environment, "local")
     .option("--raw", "print only the value")
@@ -478,7 +512,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   secrets
-    .command("list")
+    .command("list").description("list declared secrets and whether each is set")
     .option("--env <environment>", "credentials environment", environment, "local")
     .option("--json", "emit versioned structured output")
     .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
@@ -489,7 +523,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   secrets
-    .command("check")
+    .command("check").description("check that required secrets are present for an environment")
     .option("--env <environment>", "credentials environment", environment, "local")
     .option("--json", "emit versioned structured output")
     .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
@@ -501,7 +535,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   secrets
-    .command("push")
+    .command("push").description("push worker, CI, or admin secrets to their provider")
     .requiredOption("--env <environment>", "remote environment", environment)
     .option("--worker-name <name>", "override the generated Worker target for an isolated preview")
     .option("--worker-config <file>", "rendered Wrangler config in the Worker package for an isolated preview")
@@ -533,7 +567,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   secrets
-    .command("set")
+    .command("set").description("set one secret from standard input")
     .argument("<name>")
     .option("--env <environment>", "credentials environment", environment, "local")
     .action(async (name: string, options: { env: ReturnType<typeof environment> }, command: Command) => {
@@ -549,7 +583,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   secrets
-    .command("unset")
+    .command("unset").description("remove one secret")
     .argument("<secret>")
     .option("--env <environment>", "credentials environment", environment, "local")
     .action(async (secret: string, options: { env: ReturnType<typeof environment> }, command: Command) => {
@@ -563,7 +597,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const key = secrets.command("key").description("manage credentials master keys");
-  key.command("rotate")
+  key.command("rotate").description("rotate the credentials master key for an environment")
     .option("--env <environment>", "credentials environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
@@ -572,14 +606,14 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const email = program.command("email").description("inspect locally captured transactional email");
-  email.command("list")
+  email.command("list").description("list locally captured emails")
     .option("--api-url <url>", "local Worker URL", "http://localhost:8787")
     .option("--json", "emit JSON")
     .action(async (options: { apiUrl: string; json?: boolean }) => {
       const messages = await listLocalEmail(options.apiUrl);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ emails: messages }), null, 2)}\n` : formatEmailList(messages));
     });
-  email.command("show")
+  email.command("show").description("show one captured email")
     .argument("<id>")
     .option("--api-url <url>", "local Worker URL", "http://localhost:8787")
     .option("--json", "emit JSON")
@@ -587,20 +621,20 @@ export function createProgram(runtime: CliRuntime): Command {
       const message = await getLocalEmail(options.apiUrl, id);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ email: message }), null, 2)}\n` : formatEmail(message));
     });
-  email.command("open")
+  email.command("open").description("open a captured email in the browser")
     .argument("<id>")
     .option("--api-url <url>", "local Worker URL", "http://localhost:8787")
     .action(async (id: string, options: { apiUrl: string }, command: Command) => {
       const context = await projectContext(command, runtime);
       await openLocalEmail(options.apiUrl, id, context.root, runtime);
     });
-  email.command("clear")
+  email.command("clear").description("delete locally captured emails")
     .option("--api-url <url>", "local Worker URL", "http://localhost:8787")
     .action(async (options: { apiUrl: string }) => {
       await clearLocalEmail(options.apiUrl);
       runtime.stdout("Cleared locally captured email\n");
     });
-  email.command("doctor")
+  email.command("doctor").description("summarize and check email delivery configuration")
     .option("--env <environment>", "email environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
@@ -629,7 +663,7 @@ export function createProgram(runtime: CliRuntime): Command {
 
   const queue = experimental(program.command("queue").description("operate asynchronous delivery queues"), runtime);
   const dlq = queue.command("dlq").description("inspect dead-lettered outbox messages");
-  dlq.command("list")
+  dlq.command("list").description("list dead-lettered queue messages")
     .requiredOption("--env <environment>", "remote environment", environment)
     .option("--json", "emit JSON")
     .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
@@ -643,7 +677,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const entries = JSON.parse(result.stdout) as unknown;
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ environment: options.env, entries }), null, 2)}\n` : `${(entries as Array<{ id: string; event: string; attempts: number }>).map((entry) => `${entry.id} ${entry.event} attempts=${entry.attempts}`).join("\n")}\n`);
     });
-  dlq.command("redrive")
+  dlq.command("redrive").description("return dead-lettered messages to the queue")
     .argument("<id>")
     .requiredOption("--env <environment>", "remote environment", environment)
     .action(async (id: string, options: { env: ReturnType<typeof environment> }, command: Command) => {
@@ -704,7 +738,7 @@ export function createProgram(runtime: CliRuntime): Command {
         runtime.stdout(`${operation === "grant" ? "Granted" : "Revoked"} platform role ${role} ${operation === "grant" ? "to" : "from"} ${email} in ${options.env} (audit correlation ${outcome.correlationId})\n`);
       });
   }
-  admin.command("list")
+  admin.command("list").description("list platform-role assignments")
     .description("list active platform-role assignments")
     .requiredOption("--env <environment>", "target environment", environment)
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
@@ -713,7 +747,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const workflow = experimental(program.command("workflow").description("inspect and retry Cloudflare Workflow instances"), runtime);
-  workflow.command("list")
+  workflow.command("list").description("list Cloudflare Workflow instances")
     .argument("<name>", "workflow name")
     .option("--env <environment>", "target environment", environment, "local")
     .option("--json", "emit provider JSON")
@@ -721,7 +755,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const context = await projectContext(command, runtime);
       await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", ...workflowArguments("list", name, undefined, options.env, Boolean(options.json))], { cwd: context.root, env: process.env });
     });
-  workflow.command("status")
+  workflow.command("status").description("show one Workflow instance")
     .argument("<name>", "workflow name")
     .argument("[id]", "instance ID or latest", "latest")
     .option("--env <environment>", "target environment", environment, "local")
@@ -730,7 +764,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const context = await projectContext(command, runtime);
       await runCommand("pnpm", ["--filter", `@${context.manifest.project.name}/worker`, "exec", "wrangler", ...workflowArguments("status", name, id, options.env, Boolean(options.json))], { cwd: context.root, env: process.env });
     });
-  workflow.command("retry")
+  workflow.command("retry").description("retry a failed Workflow instance")
     .argument("<name>", "workflow name")
     .argument("<id>", "instance ID")
     .option("--env <environment>", "target environment", environment, "local")
@@ -742,7 +776,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const backup = experimental(program.command("backup").description("inspect and verify declared provider recovery capability"), runtime);
-  backup.command("status")
+  backup.command("status").description("show the latest backup verification")
     .requiredOption("--env <environment>", "protected environment", environment)
     .option("--json", "emit versioned structured output")
     .action(async (options: { env: ReturnType<typeof environment>; json?: boolean }, command: Command) => {
@@ -767,7 +801,7 @@ export function createProgram(runtime: CliRuntime): Command {
       ].join("\n"));
     });
 
-  backup.command("verify")
+  backup.command("verify").description("verify a restorable backup exists")
     .requiredOption("--env <environment>", "protected environment", environment)
     .requiredOption("--to <target>", "declared isolated restore target")
     .option("--at <timestamp>", "past ISO recovery point; defaults to latest")
@@ -814,7 +848,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const restore = experimental(program.command("restore").description("create an isolated Neon point-in-time recovery branch"), runtime);
-  restore.command("create")
+  restore.command("create").description("create an isolated restore branch")
     .requiredOption("--env <environment>", "source environment", environment)
     .requiredOption("--to <target>", "declared isolated restore target")
     .option("--at <timestamp>", "past ISO recovery point; defaults to latest")
@@ -834,7 +868,7 @@ export function createProgram(runtime: CliRuntime): Command {
         runtime.stdout(`Created isolated Neon recovery branch ${provider.target}\nSource: ${provider.source}\nRecovery point: ${provider.recoveryPoint}\nBranch ID: ${provider.branchId}\nNo application or production binding was changed.\n`);
       } finally { await rm(temporary, { recursive: true, force: true }); }
     });
-  restore.command("delete")
+  restore.command("delete").description("delete a restore branch")
     .requiredOption("--env <environment>", "source environment", environment)
     .requiredOption("--target <target>", "declared isolated restore target")
     .option("--yes", "confirm isolated branch deletion")
@@ -850,7 +884,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const generate = program.command("generate").description("generate application-owned source");
-  generate.command("admin-module")
+  generate.command("admin-module").description("generate a guarded platform admin view shell")
     .argument("<name>", "kebab-case module name, for example crop-editorial")
     .requiredOption("--permission <permission>", "existing platform permission that guards this view")
     .action(async (name: string, options: { permission: string }, command: Command) => {
@@ -858,14 +892,14 @@ export function createProgram(runtime: CliRuntime): Command {
       const files = await generateAdminModule(context.root, context.manifest, name, options.permission);
       runtime.stdout(`Generated admin module ${name}\n${files.map((file) => `  ${file}`).join("\n")}\nAdd domain API routes to the admin Worker with platform authorization, step-up, and audit before enabling actions.\n`);
     });
-  generate.command("email")
+  generate.command("email").description("generate a React Email template, fixture, and test")
     .argument("<name>")
     .action(async (name: string, _options: object, command: Command) => {
       const context = await projectContext(command, runtime);
       const files = await generateEmail(context.root, name);
       runtime.stdout(`Generated ${files.join(", ")}\n`);
     });
-  generate.command("resource")
+  generate.command("resource").description("generate a tenant (or --shared) CRUD resource with contracts, routes, screen, and tests")
     .argument("<name>")
     .option("--shared", "shared (non-tenant) reference data every tenant reads; only platform editors with platform.<plural>.manage change it in the admin")
     .option("--field <definition...>", "additional field as name:type[?] (string, text, integer, boolean, datetime, json, decimal(p,s), enum(a|b)) or name:relation:Resource[:onDelete]")
@@ -893,7 +927,7 @@ export function createProgram(runtime: CliRuntime): Command {
 
   const payments = program.command("payments").description("manage application payments integrations");
   const stripe = payments.command("stripe").description("operate the Stripe golden-path adapter");
-  stripe.command("doctor")
+  stripe.command("doctor").description("summarize and check the Stripe billing configuration")
     .option("--env <environment>", "billing environment", environment, "local")
     .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
       const context = await projectContext(command, runtime);
@@ -935,7 +969,7 @@ export function createProgram(runtime: CliRuntime): Command {
       if (report.items.some((item) => item.classification === "blocked")) throw new CliFailure("Stripe sync found blocked immutable drift");
     });
   const stripeWebhook = stripe.command("webhook").description("configure a Stripe billing webhook");
-  stripeWebhook.command("configure")
+  stripeWebhook.command("configure").description("create or rotate the Stripe webhook endpoint for an environment")
     .requiredOption("--env <environment>", "remote environment", environment)
     .requiredOption("--url <url>", "exact deployed /webhooks/stripe URL")
     .requiredOption("--api-key-stdin", "read a Stripe management key from standard input; never store it")
@@ -1058,7 +1092,7 @@ export function createProgram(runtime: CliRuntime): Command {
 
   const database = program.command("db").description("manage the local PostgreSQL database");
   for (const operation of ["start", "stop", "status", "migrate"] as const) {
-    database.command(operation).action(async (_options: object, command: Command) => {
+    database.command(operation).description(({ start: "start the local PostgreSQL container", stop: "stop the local PostgreSQL container", status: "show the local PostgreSQL container", migrate: "apply migrations to the local database" } as const)[operation]).action(async (_options: object, command: Command) => {
       const context = await projectContext(command, runtime);
       const childEnvironment = await localEnvironment(context.root, context.manifest, "local", runtime);
       const url = new URL(childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL ?? "");
@@ -1068,7 +1102,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
   }
 
-  database.command("seed")
+  database.command("seed").description("apply a deterministic seed scenario (additive)")
     .option("--scenario <name>", "default, demo, or tenant-isolation", "default")
     .action(async (options: { scenario: string }, command: Command) => {
       if (!["default", "demo", "tenant-isolation"].includes(options.scenario)) throw new CliFailure("unknown seed scenario; expected default, demo, or tenant-isolation");
@@ -1123,7 +1157,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   const databaseRoles = database.command("roles").description("manage restricted remote PostgreSQL runtime roles");
-  databaseRoles.command("bootstrap")
+  databaseRoles.command("bootstrap").description("create a restricted runtime login in a remote database")
     .requiredOption("--env <environment>", "staging or production environment", environment)
     .requiredOption("--role <name>", "restricted PostgreSQL login role")
     .option("--yes", "confirm the remote database mutation")
@@ -1157,14 +1191,14 @@ export function createProgram(runtime: CliRuntime): Command {
       }
     });
 
-  database.command("console").action(async (_options: object, command: Command) => {
+  database.command("console").description("open psql against the local database").action(async (_options: object, command: Command) => {
     const context = await projectContext(command, runtime);
     const childEnvironment = await localEnvironment(context.root, context.manifest, "local", runtime);
     const url = new URL(childEnvironment.DATABASE_MIGRATION_URL ?? childEnvironment.DATABASE_URL ?? "");
     await runCommand("psql", ["-h", url.hostname, "-p", url.port || "5432", "-U", decodeURIComponent(url.username), "-d", url.pathname.slice(1)], { cwd: context.root, env: { ...childEnvironment, PGPASSWORD: decodeURIComponent(url.password) } });
   });
 
-  database.command("reset").option("--yes", "confirm deletion of the project-scoped local volume").action(async (options: { yes?: boolean }, command: Command) => {
+  database.command("reset").description("delete the local database volume (requires --yes)").option("--yes", "confirm deletion of the project-scoped local volume").action(async (options: { yes?: boolean }, command: Command) => {
     if (!options.yes) throw new CliFailure("db reset is destructive; rerun with --yes after reviewing the project-scoped Compose volume");
     const context = await projectContext(command, runtime);
     const childEnvironment = await localEnvironment(context.root, context.manifest, "local", runtime);
@@ -1205,6 +1239,82 @@ export function createProgram(runtime: CliRuntime): Command {
       if (options.json) runtime.stdout(`${JSON.stringify(structuredOutput({ environment: options.env, ready: blocking.length === 0, providers: statuses }), null, 2)}\n`);
       else runtime.stdout(`${formatProviderStatuses(statuses)}\n`);
       if (blocking.length) throw new CliFailure(`${blocking.length} provider${blocking.length === 1 ? " is" : "s are"} not ready for ${options.env}`, 1);
+    });
+
+  const evidence = program.command("evidence").description("track falsifiable implementation and release claims with recorded proof");
+  evidence.command("init")
+    .description("create .trestle/evidence.yaml with the local and staging end-to-end canary claims")
+    .action(async (_options: unknown, command: Command) => {
+      const context = await projectContext(command, runtime);
+      if (await readLedger(context.root)) throw new CliFailure(".trestle/evidence.yaml already exists");
+      await writeLedger(context.root, starterLedger());
+      runtime.stdout("Created .trestle/evidence.yaml with local-canary and staging-canary claims.\n");
+    });
+  evidence.command("add")
+    .description("declare a claim and the proof that would verify it")
+    .argument("<id>", "kebab-case claim id")
+    .requiredOption("--title <title>", "short name")
+    .requiredOption("--claim <text>", "the falsifiable statement")
+    .requiredOption("--proof <text>", "the command or deployed evidence that proves it")
+    .option("--scope <scope>", "local or deployed", "local")
+    .option("--owner <owner>", "who is responsible")
+    .option("--depends-on <ids...>", "claims that must be verified first")
+    .option("--limitation <text...>", "known limits of the claim")
+    .action(async (id: string, options: { title: string; claim: string; proof: string; scope: string; owner?: string; dependsOn?: string[]; limitation?: string[] }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const ledger = await readLedger(context.root) ?? { schemaVersion: 1 as const, claims: {} };
+      if (ledger.claims[id]) throw new CliFailure(`claim ${id} already exists`);
+      if (options.scope !== "local" && options.scope !== "deployed") throw new CliFailure("--scope must be local or deployed");
+      try {
+        await writeLedger(context.root, { ...ledger, claims: { ...ledger.claims, [id]: { title: options.title, claim: options.claim, proof: options.proof, scope: options.scope, ...(options.owner ? { owner: options.owner } : {}), dependsOn: options.dependsOn ?? [], status: "not-started", limitations: options.limitation ?? [], results: [] } } });
+      } catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
+      runtime.stdout(`Added ${id}.\n`);
+    });
+  evidence.command("record")
+    .description("run a proof command (local claims) or link deployed evidence (deployed claims) and record the result at the current git revision")
+    .argument("<id>", "claim id")
+    .option("--command <command>", "shell command to run from the project root")
+    .option("--url <url>", "CI run, deployment, or dashboard link")
+    .option("--env <environment>", "where the evidence comes from", environment, "local")
+    .option("--note <text>", "context for reviewers")
+    .action(async (id: string, options: { command?: string; url?: string; env: ReturnType<typeof environment>; note?: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      try {
+        const claim = await recordEvidence(context.root, id, { environment: options.env, ...(options.command ? { command: options.command } : {}), ...(options.url ? { url: options.url } : {}), ...(options.note ? { note: options.note } : {}) }, runtime.stdout);
+        runtime.stdout(`${id} is ${claim.status}.\n`);
+      } catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
+    });
+  evidence.command("block")
+    .description("mark a claim blocked, with the reason")
+    .argument("<id>", "claim id")
+    .requiredOption("--reason <text>", "what blocks it")
+    .action(async (id: string, options: { reason: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const ledger = await readLedger(context.root);
+      if (!ledger?.claims[id]) throw new CliFailure(`unknown claim ${id}`);
+      await writeLedger(context.root, { ...ledger, claims: { ...ledger.claims, [id]: { ...ledger.claims[id], status: "blocked", blockedReason: options.reason } } });
+      runtime.stdout(`${id} is blocked.\n`);
+    });
+  evidence.command("status")
+    .description("list claims; verified claims recorded at an older revision are stale")
+    .option("--json", "print structured status")
+    .option("--require <ids...>", "exit non-zero unless these claims are verified at the current revision")
+    .action(async (options: { json?: boolean; require?: string[] }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      let report: Awaited<ReturnType<typeof evidenceReport>>;
+      try { report = await evidenceReport(context.root); } catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : `${formatEvidenceReport(report)}\n`);
+      const unmet = (options.require ?? []).filter((id) => { const claim = report.claims.find((entry) => entry.id === id); return !claim || claim.status !== "verified" || claim.stale; });
+      if (unmet.length) throw new CliFailure(`not verified at this revision: ${unmet.join(", ")}`);
+    });
+
+  program.command("commands")
+    .description("list every command with its options, whether it is experimental, and how it confirms changes")
+    .option("--json", "print the machine-readable inventory")
+    .action((options: { json?: boolean }) => {
+      const inventory = commandInventory(program);
+      runtime.stdout(options.json ? `${JSON.stringify(structuredOutput({ commands: inventory }), null, 2)}\n`
+        : `${inventory.map((entry) => `${entry.command.padEnd(36)} ${entry.experimental ? "[experimental] " : ""}${entry.description.replace(/^\[experimental\] /u, "")}`).join("\n")}\n`);
     });
 
   const api = program.command("api").description("inspect the application's API contracts");

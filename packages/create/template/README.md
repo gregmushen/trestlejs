@@ -764,6 +764,51 @@ as a bearer token, never in the URL, and it never creates, buys, or sends
 anything. Resend and Stripe follow the same convention as built-ins; declare
 `resend` or `stripe` yourself to override them. Use `trestle doctor --env` for
 bindings, migrations, and database roles.
+### Evidence and the end-to-end canary
+
+`apps/worker/src/canary.integration.test.ts` walks one user journey through the
+local stack:
+
+1. create and verify an account, then sign in;
+2. perform a protected resource operation;
+3. be denied without a session and in another tenant;
+4. make an application-role change and find its audit record;
+5. see a committed event dispatched from the outbox and consumed.
+
+Run it with `TRESTLE_SYSTEM_TEST_DATABASE_URL` set, and extend it with your own
+domain action.
+
+`trestle evidence` tracks claims such as "the canary passes on staging":
+
+- `trestle evidence init` creates `.trestle/evidence.yaml` with a local and a
+  staging canary claim. `trestle evidence add` declares more.
+- `trestle evidence record <id> --command "<proof>"` runs the proof and records
+  its exit code and git revision. A dirty working tree never verifies a claim,
+  and neither does a claim whose dependencies are unverified.
+- A `deployed` claim is recorded with `--env <environment> --url <run>`.
+  Local success cannot establish it.
+- `trestle evidence status --require <ids…>` fails unless those claims are
+  verified at the current commit. Proof recorded at an older commit shows as
+  `stale`.
+
+### CLI conventions
+
+`pnpm exec trestle commands` lists every command, and `--json` gives the
+machine-readable inventory: options, whether a command is experimental, and
+how it confirms changes. The conventions:
+
+- **Environment:** always `--env <environment>` (`local`, `preview`, `staging`,
+  `production`).
+- **Confirming changes:** `--yes` confirms a change that has no separate
+  preview, and commands refuse without it. `--apply` performs a change the
+  command first previews by default. Production changes that preview also
+  require `--yes`.
+- **Output and exit codes:** `--json` prints `{ "schemaVersion": 1, "data": … }`.
+  A failing check exits non-zero, and errors name the command that repairs them.
+- **Secrets:** read from standard input (`--*-stdin`) and never printed unless
+  a command exists to reveal them (`secrets show`, `secrets get --raw`).
+- **Experimental commands** (`[experimental]` in help) need `--experimental` or
+  `TRESTLE_EXPERIMENTAL=1`.
 
 ### API contracts
 
