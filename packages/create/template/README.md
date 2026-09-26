@@ -612,6 +612,14 @@ pnpm exec trestle generate resource Article \
 pnpm exec trestle resource add-field Article archived:boolean? --yes
 ```
 
+Field types are `string`, `text`, `integer`, `boolean`, `datetime`, `json`,
+`decimal(precision,scale)`, `enum(value|value)` and `relation`, for example
+`--field meta:json? price:decimal(10,2)? status:enum(draft|published)?`.
+Decimals travel as strings in the contracts so no digits are lost; enum values
+are also enforced by a database check constraint. Generated repositories stamp
+`updatedAt` with the execution context's clock, so fixed-clock tests are
+deterministic.
+
 A relationship is a composite foreign key from `(organization_id, author_id)`
 to the parent's `(organization_id, id)`, so a row can only reference a parent
 in its own tenant. Relations generated before TrestleJS 0.1.0-beta.2 referenced

@@ -653,5 +653,20 @@ export const applicationEventCatalog = defineEventCatalog([
     expect(await executeCli(["generate", "resource", "Comment", "--field", "articleId:relation?:Article:cascade"], capture(root).runtime)).toBe(0);
     expect(await readFile(path.join(root, "packages/db/src/comment-schema.ts"), "utf8")).toContain('foreignKey({ name: "comment_article_id_tenant_fk", columns: [table.organizationId, table.articleId], foreignColumns: [article.organizationId, article.id] }).onDelete("cascade")');
     expect(await readFile(path.join(root, "packages/db/src/article-schema.ts"), "utf8")).toContain('unique("article_tenant_key").on(table.organizationId, table.id)');
+
+    expect(await executeCli(["generate", "resource", "Product", "--field", "meta:json?", "price:decimal(10,2)?", "status:enum(draft|published)?"], capture(root).runtime)).toBe(0);
+    const productSchema = await readFile(path.join(root, "packages/db/src/product-schema.ts"), "utf8");
+    expect(productSchema).toContain('import type { JsonValue } from "./json-value.js";');
+    expect(productSchema).toContain('meta: jsonb("meta").$type<JsonValue>(),');
+    expect(productSchema).toContain('price: numeric("price", { precision: 10, scale: 2 }),');
+    expect(productSchema).toContain('status: text("status", { enum: ["draft", "published"] }),');
+    expect(productSchema).toContain("check(\"product_status_values\", sql`${table.status} in ('draft', 'published')`),");
+    expect(await readFile(path.join(root, "packages/db/src/json-value.ts"), "utf8")).toContain("export type JsonValue");
+    const productContract = await readFile(path.join(root, "packages/contracts/src/resources/product.ts"), "utf8");
+    expect(productContract).toContain("price: z.string().regex(/^-?\\d{1,8}(\\.\\d{1,2})?$/u).optional(),");
+    expect(productContract).toContain('status: z.enum(["draft", "published"]).optional(),');
+    const productRepository = await readFile(path.join(root, "packages/data/src/resources/product-repository.ts"), "utf8");
+    expect(productRepository).toContain("${JSON.stringify(input.meta)}::jsonb");
+    expect(productRepository).toContain("updatedAt: this.clock.now()");
   });
 });
