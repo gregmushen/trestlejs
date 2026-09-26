@@ -17,6 +17,7 @@ Astro public site → React and TanStack app → Hono → Application/Domain →
 - Use `ctx.log`, never `console`, in application packages.
 - Use `ctx.clock` for domain time.
 - Queue payloads contain resource IDs, not tenant authority.
+- Resource relations use composite `(organization_id, <parent>_id)` foreign keys; if `trestle doctor` reports an ID-only relation, run `trestle resource migrate-relations` (dry run, then `--yes`).
 - Blobs belong in R2; Workflows own process progression; Durable Objects own coordination.
 - `apps/site` is static-first public content; authentication stays in `apps/app`.
 - Southwind source is application-owned. Replace its centralized identity rather than introducing a marketing runtime dependency.

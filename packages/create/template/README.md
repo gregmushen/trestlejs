@@ -509,6 +509,19 @@ pnpm exec trestle generate resource Article \
 pnpm exec trestle resource add-field Article archived:boolean? --yes
 ```
 
+A relationship is a composite foreign key from `(organization_id, author_id)`
+to the parent's `(organization_id, id)`, so a row can only reference a parent
+in its own tenant. Relations generated before TrestleJS 0.1.0-beta.2 referenced
+the parent by ID alone; `trestle doctor` reports them. Adopt the composite keys
+with `trestle resource migrate-relations`: the dry run lists the relations and
+runs a read-only preflight counting cross-tenant links and missing parents
+(`--env <environment>` checks that environment's database). It never repairs,
+reassigns or deletes rows; correct any it reports first. `--yes` rewrites the
+schemas and generates a migration that adds each composite key `NOT VALID`,
+validates it, and only then drops the ID-only key. `drizzle-kit migrate` applies
+it in one transaction, so writes to both tables wait until it commits: apply it
+in a quiet window, and preflight every environment before deploying it.
+
 `pnpm db:generate` preserves a strictly increasing migration journal timestamp,
 including when an older checked-in migration was future-dated. A generated
 release canary checks that running it without schema changes creates no drift.

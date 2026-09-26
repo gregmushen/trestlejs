@@ -6,6 +6,7 @@ import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectMan
 
 import { validateCi } from "./ci.js";
 import { inspectResources } from "./inspect.js";
+import { inspectResourceRelations } from "./legacy-relations.js";
 import { diffSetupPlan } from "./plan.js";
 import { hasForcedRlsMigration, missingFiles, readMigrationSql } from "./resource-checks.js";
 import { readSecrets, validateSecrets } from "./secrets.js";
@@ -194,6 +195,22 @@ export async function runDoctor(
           ...(!migrated ? { remediation: "Run pnpm db:generate and ensure the migration forces row-level security before applying it" } : {}),
         });
       }
+    }
+    const relations = await inspectResourceRelations(root, manifest);
+    for (const resource of [...new Set(relations.map(({ resource: name }) => name))]) {
+      const unsafe = relations.filter((relation) => relation.resource === resource && relation.state !== "composite");
+      checks.push({
+        id: `resources.${resource.toLowerCase()}.relations.tenant_safe`,
+        group: "architecture",
+        status: unsafe.length ? "fail" : "pass",
+        message: unsafe.length ? `${resource} has relations without a tenant-safe composite foreign key` : `${resource} relations use tenant-safe composite foreign keys`,
+        ...(unsafe.length ? {
+          evidence: unsafe.map((relation) => `${relation.resource}.${relation.field} (${relation.state === "legacy" ? "ID-only reference" : "no composite key found"} in ${relation.schema})`).join(", "),
+          remediation: unsafe.some(({ state }) => state === "legacy")
+            ? "Run trestle resource migrate-relations to preflight existing rows, then rerun it with --yes and apply the generated migration"
+            : "Declare the composite foreignKey from (organizationId, <relation>) to the parent's (organizationId, id), as trestle generate resource does",
+        } : {}),
+      });
     }
   } catch (error) {
     checks.push({ id: "resources.declarations.valid", group: "architecture", status: "fail", message: "resource declarations cannot be read", evidence: error instanceof Error ? error.message : String(error) });

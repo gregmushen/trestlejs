@@ -1,6 +1,6 @@
 # TrestleJS Platform Hardening Specification
 
-**Status:** Implementation contract; P2, P3 and P5 done, P1 existing-app migration and P4 gaps open. Rebased on `main` at `0.1.0-beta.1` (`6a331a0`). The first draft was written against `0.1.0-alpha.42`.
+**Status:** Implementation contract; P1, P2, P3 and P5 done, P4 gaps open. Rebased on `main` at `0.1.0-beta.1` (`6a331a0`). The first draft was written against `0.1.0-alpha.42`.
 
 **Parent specification:** [TrestleJS Specification](TRESTLEJS_SPEC.md)
 
@@ -16,13 +16,13 @@ These are focused changes to existing mechanisms, not new subsystems. Existing g
 
 | Change | Status on `main` | Needed before |
 |---|---|---|
-| P1 Tenant-safe generated relationships | Done for newly generated relations; existing-app migration open | relying on generated tenant relationships |
+| P1 Tenant-safe generated relationships | Done (§2), including the existing-app migration | relying on generated tenant relationships |
 | P2 Trusted background execution | Done (§3) | private background handlers |
 | P3 Preserve application crons | Done | deploying application crons |
 | P4 Order-safe billing reconciliation | Done (alpha 91–94); gaps in §5 open | paid launch |
 | P5 Provenance lifetime and replay | Done (§6) | provenance cleanup; required by P2 |
 
-Remaining: the P1 preflight and constraint migration for existing applications, and the P4 gaps.
+Remaining: the P4 gaps.
 
 **Lifecycle rule (P2 + P5).** A private handler executes (start, retry, dead-letter replay or Workflow resume) only while its committed event is at most 14 days old, measured from the committed `occurredAt` with an injected clock. Workflows reverify at every execution of the consume step. Committed provenance is retained for 30 days. So pruning never removes provenance that permitted work can still need, and needs no Workflow-state exclusion.
 
@@ -56,6 +56,29 @@ Remaining: the P1 preflight and constraint migration for existing applications, 
 - the migration succeeds on valid data and fails safely on invalid data;
 - generation and add-field produce equivalent constraints;
 - the existing isolation suites still pass.
+
+**Status.** Done. New relations (generation and `resource add-field`) are composite since PR #186, first published in `0.1.0-beta.2`. Existing applications adopt them with `trestle resource migrate-relations`.
+
+**Adoption note (existing applications).** Relations generated before `0.1.0-beta.2` keep `uuid(col).references(() => parent.id)`. Updating the package doesn't change them.
+- `trestle doctor` fails `resources.<resource>.relations.tenant_safe` for each resource whose declared relation still uses the ID-only reference, or has no composite key, and points at the command.
+- `trestle resource migrate-relations [--env <environment>]` is a dry run. It lists the affected relations and prints the preflight SQL. When the environment's credentials have `DATABASE_MIGRATION_URL` or `DATABASE_URL`, it also runs the preflight in a read-only transaction. That role must bypass RLS (superuser or `BYPASSRLS`); any other role would undercount under forced RLS, so the command refuses it. It exits non-zero with per-relation counts and guidance when a row would be rejected. It never repairs, reassigns or deletes rows.
+- `--yes` runs the same preflight and writes nothing if it finds invalid rows. Otherwise it:
+  - rewrites each child schema to the generator's `foreignKey(...)` form;
+  - adds the parent tenant key (`ensureTenantKey`);
+  - runs `pnpm db:generate`;
+  - stages the migration: parent `UNIQUE (organization_id, id)` keys first, each composite key `NOT VALID` (set-null narrowed to `SET NULL ("<column>")`), `VALIDATE CONSTRAINT`, and only then `DROP` of the ID-only key.
+  - It refuses a migration containing unrelated pending schema changes, and restores every file if any step fails.
+- Changed files: the child and parent `packages/db/src/*-schema.ts`, one new migration and its snapshot. Routes, repositories and contracts don't change. Applications that already have composite keys are left as they are.
+- Locking: `drizzle-kit migrate` applies the migration in one transaction, so locks are held until it commits. `ADD UNIQUE` takes `ACCESS EXCLUSIVE` on the parent while its index builds. `ADD FOREIGN KEY` takes `SHARE ROW EXCLUSIVE` on both tables, `VALIDATE` scans the child, and `DROP CONSTRAINT` of a foreign key takes `ACCESS EXCLUSIVE` on both tables. Staging `NOT VALID` then `VALIDATE` keeps the steps reviewable, and an operator can split them into separate migrations for very large tables, but within one transaction it doesn't shorten the lock. Apply it in a quiet window.
+- Operator order: run the dry run with `--env` for every environment, correct any rows it reports, and apply the migration everywhere. If the database changed after the preflight, the migration still fails at `VALIDATE` and rolls back with the ID-only keys intact.
+
+**Evidence.** Unit tests cover detection, the schema rewrite, the preflight SQL, migration staging and refusal, the doctor check, and the dry-run CLI (`packages/cli/test/legacy-relations.test.ts`). `scripts/check-legacy-relations.mjs` runs from `pnpm check:generated` when a database is configured. It generates a project, rewrites Author and Article to the pre-#186 schema and migration, and inserts data. It then proves each of the following:
+- the restricted runtime role can create a cross-tenant link, and `doctor` fails;
+- the dry run reports the link and `--yes` refuses without writing anything;
+- after the link is cleared, the dry run is clean and `--yes` stages the migration;
+- the migration fails and rolls back on a database that still holds a cross-tenant link;
+- applied to valid data, existing rows survive, and the runtime role's cross-tenant inserts and updates and missing parents fail;
+- restrict and set-null deletes keep tenant identity.
 
 ## 3. P2: Trusted background execution
 
