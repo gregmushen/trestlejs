@@ -14,6 +14,8 @@ export type CreateProjectOptions = {
   git: boolean;
   /** Generate the optional platform admin (capabilities.admin). Off by default. */
   admin?: boolean;
+  /** Project name; defaults to the directory name, which must then be a valid project name. */
+  name?: string;
   run?: (command: string, arguments_: string[], cwd: string) => Promise<void>;
 };
 
@@ -90,10 +92,12 @@ async function defaultRun(command: string, arguments_: string[], cwd: string): P
 
 export async function createProject(options: CreateProjectOptions): Promise<CreateProjectResult> {
   const destination = path.resolve(options.cwd, options.directory);
-  const name = path.basename(destination);
+  const name = options.name ?? path.basename(destination);
   if (!projectNamePattern.test(name)) {
+    if (options.name !== undefined) throw new Error("Project name must use lowercase letters, numbers, and single hyphens");
+    const suggestion = name.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "");
     throw new Error(
-      "Project directory name must use lowercase letters, numbers, and single hyphens",
+      `Project directory name must use lowercase letters, numbers, and single hyphens; choose a project name with --name ${suggestion || "<name>"}`,
     );
   }
 
