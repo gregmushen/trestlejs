@@ -1063,7 +1063,7 @@ export async function generateResourceMigration(root: string, manifest: ProjectM
     // Shared rows are read by every tenant runtime and written only on the platform connection.
     const grants = resource.tenant === false
       ? `GRANT SELECT ON "${table}" TO trestle_app;\n--> statement-breakpoint\nGRANT SELECT, INSERT, UPDATE, DELETE ON "${table}" TO trestle_platform;`
-      : `GRANT SELECT, INSERT, UPDATE, DELETE ON "${table}" TO trestle_app;`;
+      : `GRANT SELECT, INSERT, UPDATE, DELETE ON "${table}" TO trestle_app;${(resource as { adminAccess?: { read?: boolean } }).adminAccess?.read ? `\n--> statement-breakpoint\nGRANT SELECT ON "${table}" TO trestle_platform;` : ""}`;
     sqlSource = `${sqlSource.trimEnd()}\n--> statement-breakpoint\nALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;\n--> statement-breakpoint\nREVOKE ALL ON "${table}" FROM PUBLIC;\n--> statement-breakpoint\n${grants}\n`;
   }
   await writeFile(generated.migrationPath, sqlSource, "utf8");

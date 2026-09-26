@@ -14,17 +14,17 @@ export function sharedEditorPermission(resource: ResourceNames): string {
   return `platform.${resource.pluralKebab.replaceAll("-", "_")}.manage`;
 }
 
-/** Registers the editorial permission in the reviewed permission registry (platform plane). */
-async function registerEditorPermission(registryPath: string, resource: ResourceNames, permission: string): Promise<boolean> {
+/** Registers a platform-plane permission in the reviewed permission registry. */
+export async function registerPlatformPermission(registryPath: string, permission: string, description: string): Promise<boolean> {
   const source = await readFile(registryPath, "utf8").catch(() => undefined);
-  if (source === undefined) throw new CliFailure(`shared resources register their editorial permission in packages/authz/src/permissions.ts, which this project does not have; upgrade to the permission registry first`);
+  if (source === undefined) throw new CliFailure(`platform access registers ${permission} in packages/authz/src/permissions.ts, which this project does not have; upgrade to the permission registry first`);
   if (source.includes(`"${permission}":`)) {
-    if (!source.includes(`"${permission}": { plane: "platform"`)) throw new CliFailure(`${permission} is registered outside the platform plane; shared resources are edited only with platform authority`);
+    if (!source.includes(`"${permission}": { plane: "platform"`)) throw new CliFailure(`${permission} is registered outside the platform plane; platform access requires platform authority`);
     return false;
   }
   const anchor = /\n\}\);/u;
   if (!source.includes("definePermissions({") || !anchor.test(source)) throw new CliFailure("the permission registry has no definePermissions({ ... }); list to extend; add the permission by hand");
-  await writeFile(registryPath, source.replace(anchor, `\n  "${permission}": { plane: "platform", description: "Create, update, and delete shared ${resource.className} records" },\n});`), "utf8");
+  await writeFile(registryPath, source.replace(anchor, `\n  "${permission}": { plane: "platform", description: "${description}" },\n});`), "utf8");
   return true;
 }
 
@@ -95,7 +95,7 @@ export async function generateSharedResource(root: string, manifest: ProjectMani
   }
   const registryPath = path.join(root, manifest.packages.authz ?? "packages/authz", "src", "permissions.ts");
   const created: string[] = [];
-  if (await registerEditorPermission(registryPath, n, permission)) created.push(path.relative(root, registryPath));
+  if (await registerPlatformPermission(registryPath, permission, `Create, update, and delete shared ${n.className} records`)) created.push(path.relative(root, registryPath));
   for (const target of all) await mkdir(path.dirname(target), { recursive: true });
   const writeGenerated = async (target: string, source: string) => {
     if (await exists(target)) return;
@@ -494,6 +494,19 @@ export function ${n.className}Screen() {
   return created;
 }
 
+/** Adds a generated admin route module's import and registration call at the admin Worker's anchor. */
+export function withAdminRouteRegistration(source: string, importLine: string, call: string, file: string): string {
+  let next = source;
+  if (!next.includes(importLine)) {
+    const lastImport = [...next.matchAll(/^import [^;]*? from "[^"]+";$/gmu)].at(-1);
+    if (!lastImport) throw new CliFailure(`${file} has no import statements to extend`);
+    const end = lastImport.index + lastImport[0].length;
+    next = `${next.slice(0, end)}\n${importLine}${next.slice(end)}`;
+  }
+  if (!next.includes(call)) next = next.replace("// trestle:admin-resource-routes", `${call}\n// trestle:admin-resource-routes`);
+  return next;
+}
+
 async function generateSharedAdmin(
   root: string, project: string, n: ResourceNames, resource: SetupResource, permission: string,
   admin: { routes: string; routesTest: string; worker: string; registry: string; descriptor: string; view: string }, workerSource: string, registrySource: string,
@@ -566,14 +579,7 @@ describe("${n.className} platform editing", () => {
 `);
   const importLine = `import { ${register} } from "./resources/${n.kebab}.js";`;
   const call = `${register}(admin, adminResourceHelpers);`;
-  let nextWorker = workerSource;
-  if (!nextWorker.includes(importLine)) {
-    const lastImport = [...nextWorker.matchAll(/^import [^;]*? from "[^"]+";$/gmu)].at(-1);
-    if (!lastImport) throw new CliFailure(`${path.relative(root, admin.worker)} has no import statements to extend`);
-    const end = lastImport.index + lastImport[0].length;
-    nextWorker = `${nextWorker.slice(0, end)}\n${importLine}${nextWorker.slice(end)}`;
-  }
-  if (!nextWorker.includes(call)) nextWorker = nextWorker.replace("// trestle:admin-resource-routes", `${call}\n// trestle:admin-resource-routes`);
+  const nextWorker = withAdminRouteRegistration(workerSource, importLine, call, path.relative(root, admin.worker));
   if (nextWorker !== workerSource) await writeFile(admin.worker, nextWorker, "utf8");
 
   const label = `${n.className} catalog`;
@@ -594,52 +600,99 @@ export default defineAdminView({
   commands: [{ id: "${n.pluralKebab}.open", label: "Go to ${label}" }],
 });
 `);
+  const descriptors = resource.fields.map((field) => ({ name: field.name, type: field.type, required: field.required, ...(field.values ? { values: field.values } : {}) }));
   await writeNew(admin.view, `import { useRef, useState } from "react";
 
 import { api } from "../../api";
 import { useConfirmAction, type ConfirmConfig } from "../../shell/ConfirmAction";
 import { useAdminQuery, useInvalidate } from "../../shell/context";
-import { Button, Input } from "../../shell/kumo";
+import { Button, Input, Select, Textarea } from "../../shell/kumo";
+import { AdminDetailDrawer, AdminFacts, useSelectedDetail } from "../../shell/resource";
 import { AdminDataTable, AdminPageHeader, AdminQueryState, AdminSection, formatDate } from "../../shell/ui";
 
-type Row = { id: string; name: string; revision: number; updatedAt: string };
+type Row = { id: string; revision: number; createdAt: string; updatedAt: string } & Record<string, unknown>;
+type Field = { name: string; type: string; required: boolean; values?: readonly string[] };
+/** Generated from the resource declaration; the editor on the server validates every value again. */
+const fields: readonly Field[] = ${JSON.stringify(descriptors)};
+const display = (value: unknown) => value === null || value === undefined ? "—" : typeof value === "object" ? JSON.stringify(value) : String(value);
+const toText = (field: Field, value: unknown) => value === null || value === undefined ? "" : field.type === "json" ? JSON.stringify(value, null, 2) : field.type === "datetime" ? String(value).slice(0, 16) : String(value);
 
-function NameField(props: { draft: { current: string } }) {
-  const [value, setValue] = useState(props.draft.current);
-  return <Input label="Name" value={value} onChange={(event) => { props.draft.current = event.target.value; setValue(event.target.value); }} />;
+/** Converts form text to values; blank optional fields are left out. */
+function valuesOf(draft: Record<string, string>, changedOnly?: Row): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  for (const field of fields) {
+    const text = (draft[field.name] ?? "").trim();
+    if (changedOnly && text === toText(field, changedOnly[field.name]).trim()) continue;
+    if (!text) { if (field.required) throw new Error(\`\${field.name} is required\`); continue; }
+    values[field.name] = field.type === "integer" ? Number(text)
+      : field.type === "boolean" ? text === "true"
+        : field.type === "datetime" ? new Date(text).toISOString()
+          : field.type === "json" ? JSON.parse(text) as unknown
+            : text;
+  }
+  if (changedOnly && Object.keys(values).length === 0) throw new Error("Change at least one field");
+  return values;
+}
+
+function FieldsEditor(props: { draft: { current: Record<string, string> } }) {
+  const [state, setState] = useState(props.draft.current);
+  const set = (name: string, value: string) => { const next = { ...state, [name]: value }; props.draft.current = next; setState(next); };
+  return <div className="grid gap-3">{fields.map((field) => {
+    const label = field.required ? field.name : \`\${field.name} (optional)\`;
+    if (field.type === "enum" || field.type === "boolean") {
+      const options = field.type === "boolean" ? ["true", "false"] : field.values ?? [];
+      return <Select key={field.name} label={label} hideLabel={false} value={state[field.name] ?? ""} onValueChange={(value) => set(field.name, String(value ?? ""))}>
+        {!field.required && <Select.Option value="">—</Select.Option>}
+        {options.map((option) => <Select.Option key={option} value={option}>{option}</Select.Option>)}
+      </Select>;
+    }
+    if (field.type === "json" || field.type === "text") return <Textarea key={field.name} label={label} value={state[field.name] ?? ""} onChange={(event: { target: { value: string } }) => set(field.name, event.target.value)} />;
+    return <Input key={field.name} label={label} type={field.type === "integer" ? "number" : field.type === "datetime" ? "datetime-local" : "text"} value={state[field.name] ?? ""} onChange={(event) => set(field.name, event.target.value)} />;
+  })}</div>;
 }
 
 /**
  * Shared ${n.className} records, which every tenant reads. Changes need ${permission},
- * a reason, and step-up, and they are audited. Edit only name here; extend this view for
- * the other fields (${resource.fields.map((field) => field.name).join(", ")}).
+ * a reason, and step-up; they are revision-checked and audited.
  */
 export default function ${n.className}CatalogView() {
   const invalidate = useInvalidate();
   const confirm = useConfirmAction();
-  const draft = useRef("");
-  const records = useAdminQuery(["${n.pluralKebab}"], () => api.request<{ items: Row[] }>("GET", "${n.pluralKebab}"));
+  const draft = useRef<Record<string, string>>({});
+  const [pages, setPages] = useState<string[]>([]);
+  const cursor = pages.at(-1);
+  const records = useAdminQuery(["${n.pluralKebab}", cursor ?? ""], () => api.request<{ items: Row[]; nextCursor?: string }>("GET", "${n.pluralKebab}", undefined, { cursor }));
+  const detail = useSelectedDetail(records.data?.items, (row) => row.id);
   const done = () => void invalidate("${n.pluralKebab}");
   const create = (): ConfirmConfig => {
-    draft.current = "";
-    return { title: "Add ${n.className}", confirmLabel: "Add", scope: ["Visible to every organization"], fields: <NameField draft={draft} />, onConfirm: (reason) => api.request("POST", "${n.pluralKebab}", { values: { name: draft.current }, reason }), onDone: done };
+    draft.current = {};
+    return { title: "Add ${n.className}", confirmLabel: "Add", scope: ["Visible to every organization"], fields: <FieldsEditor draft={draft} />, onConfirm: (reason) => api.request("POST", "${n.pluralKebab}", { values: valuesOf(draft.current), reason }), onDone: done };
   };
-  const rename = (row: Row): ConfirmConfig => {
-    draft.current = row.name;
-    return { title: "Rename ${n.className}", confirmLabel: "Save", scope: [\`Changes \${row.name} for every organization\`], fields: <NameField draft={draft} />, onConfirm: (reason) => api.request("PATCH", \`${n.pluralKebab}/\${encodeURIComponent(row.id)}\`, { values: { name: draft.current }, expectedRevision: row.revision, reason }), onDone: done };
+  const edit = (row: Row): ConfirmConfig => {
+    draft.current = Object.fromEntries(fields.map((field) => [field.name, toText(field, row[field.name])]));
+    return { title: "Edit ${n.className}", confirmLabel: "Save", scope: [\`Changes \${display(row.name)} for every organization\`], fields: <FieldsEditor draft={draft} />, onConfirm: (reason) => api.request("PATCH", \`${n.pluralKebab}/\${encodeURIComponent(row.id)}\`, { values: valuesOf(draft.current, row), expectedRevision: row.revision, reason }), onDone: done };
   };
-  const remove = (row: Row): ConfirmConfig => ({ title: "Delete ${n.className}", confirmLabel: "Delete", destructive: true, scope: [\`Deletes \${row.name} for every organization\`], onConfirm: (reason) => api.request("DELETE", \`${n.pluralKebab}/\${encodeURIComponent(row.id)}\`, { expectedRevision: row.revision, reason }), onDone: done });
+  const remove = (row: Row): ConfirmConfig => ({ title: "Delete ${n.className}", confirmLabel: "Delete", destructive: true, scope: [\`Deletes \${display(row.name)} for every organization\`], onConfirm: (reason) => api.request("DELETE", \`${n.pluralKebab}/\${encodeURIComponent(row.id)}\`, { expectedRevision: row.revision, reason }), onDone: done });
   return <>
     <AdminPageHeader title="${label}" description="Shared records every organization reads. Changes are audited." actions={<Button variant="primary" onClick={() => confirm.open(create())}>Add ${n.className}</Button>} />
     <AdminSection title="Records">
-      <AdminQueryState query={records} isEmpty={(data) => data.items.length === 0} empty="No ${n.pluralKebab} yet.">{(data) => <AdminDataTable caption="${label}" rows={data.items} rowKey={(row) => row.id} rowLabel={(row) => row.name}
-        rowActions={(row) => [{ label: "Rename", run: () => confirm.open(rename(row)) }, { label: "Delete", destructive: true, run: () => confirm.open(remove(row)) }]}
-        columns={[
-          { header: "Name", cell: (row) => row.name },
-          { header: "Revision", cell: (row) => row.revision },
-          { header: "Updated", cell: (row) => formatDate(row.updatedAt) },
-        ]} />}</AdminQueryState>
+      <AdminQueryState query={records} isEmpty={(data) => data.items.length === 0} empty="No ${n.pluralKebab} yet.">{(data) => <>
+        <AdminDataTable caption="${label}" rows={data.items} rowKey={(row) => row.id} rowLabel={(row) => display(row.name)}
+          rowActions={(row) => [{ label: "Inspect", run: () => detail.select(row.id) }, { label: "Edit", run: () => confirm.open(edit(row)) }, { label: "Delete", destructive: true, run: () => confirm.open(remove(row)) }]}
+          columns={[
+            { header: "Name", cell: (row) => display(row.name) },
+            { header: "Revision", cell: (row) => row.revision },
+            { header: "Updated", cell: (row) => formatDate(row.updatedAt) },
+          ]} />
+        <div className="mt-3 flex gap-2">
+          {pages.length > 0 && <Button onClick={() => setPages(pages.slice(0, -1))}>Previous</Button>}
+          {data.nextCursor && <Button onClick={() => setPages([...pages, data.nextCursor!])}>Next</Button>}
+        </div>
+      </>}</AdminQueryState>
     </AdminSection>
+    <AdminDetailDrawer title={detail.row ? display(detail.row.name) : "${n.className}"} open={detail.open} onClose={detail.close}>
+      {detail.row && <AdminFacts items={[...fields.map((field) => [field.name, display(detail.row![field.name])] as const), ["Revision", detail.row.revision], ["Created", formatDate(detail.row.createdAt)], ["Updated", formatDate(detail.row.updatedAt)], ["ID", detail.row.id]]} />}
+    </AdminDetailDrawer>
     {confirm.dialog}
   </>;
 }
