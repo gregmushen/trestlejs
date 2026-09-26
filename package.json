@@ -17,7 +17,8 @@
     "release:pack": "node scripts/pack-release.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm build && vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:customized-upgrade": "node scripts/check-customized-upgrade.mjs"
   },
   "devDependencies": {
     "@types/node": "26.6.2",

@@ -5,9 +5,148 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { applyManifestCapabilities, parseProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "./core.js";
-import { planUpgrade } from "./upgrade.js";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import { promisify } from "node:util";
 
-export type SourceDiffClassification = "same" | "unchanged" | "modified" | "new" | "missing" | "unverified" | "unsafe"
+import { planUpgrade } from "./upgrade.js";
+import { auditMigrations } from "./upgrade-migrations.js";
+
+const execFileAsync = promisify(execFile);
+
+/** Migration SQL, journal, and snapshots are reconciled by `upgrade migrations --rebase`, not by text merges. */
+const migrationFile = (relative: string) => /^packages\/db\/migrations\/(?:[^/]+\.sql|meta\/(?:_journal|\d{4,}_snapshot)\.json)$/u.test(relative);
+const conflictMarker = /^(?:<{7}|>{7}) /mu;
+
+async function migrationChainConsistent(root: string, templateRoot: string): Promise<boolean> {
+  const audit = await auditMigrations(root, templateRoot).catch(() => undefined);
+  return audit?.classification === "matching" || audit?.classification === "application-ahead";
+}
+
+/**
+ * The previous release's template, needed to three-way merge files both the
+ * application and the framework changed. Fetched with `npm pack`; set
+ * TRESTLE_UPGRADE_SOURCE_TEMPLATE to a template directory to work offline.
+ */
+export async function sourceTemplateRoot(version: string): Promise<string | undefined> {
+  const override = process.env.TRESTLE_UPGRADE_SOURCE_TEMPLATE;
+  if (override) return existsSync(override) ? override : undefined;
+  const directory = await mkdtemp(path.join(os.tmpdir(), "trestle-source-template-"));
+  try {
+    await execFileAsync("npm", ["pack", `trestlejs@${version}`, "--pack-destination", directory, "--silent"], { timeout: 120_000 });
+    const tarball = (await readdir(directory)).find((name) => name.endsWith(".tgz"));
+    if (!tarball) return undefined;
+    await execFileAsync("tar", ["-xzf", path.join(directory, tarball), "-C", directory]);
+    const root = path.join(directory, "package", "dist", "template");
+    return existsSync(root) ? root : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `inserted` is `base` with lines only added before and after it; returns those lines. */
+function insertionAround(inserted: readonly string[], base: readonly string[]): { before: string[]; after: string[] } | undefined {
+  for (let start = 0; start + base.length <= inserted.length; start += 1) {
+    if (base.every((line, index) => inserted[start + index] === line)) return { before: inserted.slice(0, start), after: inserted.slice(start + base.length) };
+  }
+  return undefined;
+}
+
+/** `changed` is `base` with one run of characters inserted; returns where and what. */
+function lineInsertion(changed: string, base: string): { at: number; text: string } | undefined {
+  if (changed.length <= base.length) return undefined;
+  let prefix = 0;
+  while (prefix < base.length && changed[prefix] === base[prefix]) prefix += 1;
+  const text = changed.slice(prefix, prefix + changed.length - base.length);
+  return changed.slice(prefix + text.length) === base.slice(prefix) ? { at: prefix, text } : undefined;
+}
+
+/** Both sides inserted into the same single line, e.g. an entry added to a list literal. */
+function mergeLine(application: string, base: string, target: string): string | undefined {
+  const ours = lineInsertion(application, base);
+  const theirs = lineInsertion(target, base);
+  if (!ours || !theirs) return undefined;
+  const [first, second] = ours.at <= theirs.at ? [ours, theirs] : [theirs, ours];
+  return `${base.slice(0, first.at)}${first.text}${base.slice(first.at, second.at)}${second.text}${base.slice(second.at)}`;
+}
+
+/**
+ * One base line that both sides extended in place, where either side may also
+ * have inserted whole lines around it (a generated route declaration above the
+ * route list it joins).
+ */
+function singleLineMerge(application: readonly string[], base: readonly string[], target: readonly string[]): string[] | undefined {
+  if (base.length !== 1) return undefined;
+  for (const [ours, theirs, oursFirst] of [[application, target, true], [target, application, false]] as const) {
+    if (theirs.length !== 1) continue;
+    for (let index = 0; index < ours.length; index += 1) {
+      const merged = oursFirst ? mergeLine(ours[index]!, base[0]!, theirs[0]!) : mergeLine(theirs[0]!, base[0]!, ours[index]!);
+      if (merged !== undefined) return [...ours.slice(0, index), merged, ...ours.slice(index + 1)];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Settles the conflicts git reports only because edits touch: one side only
+ * inserted lines around unchanged base text (generators prepend imports and
+ * append registrations), or both sides inserted at the same place (framework
+ * text first, then the application's). Anything else keeps its markers.
+ */
+export function settleAdjacentConflicts(merged: string): { text: string; conflicts: boolean } {
+  const lines = merged.split("\n");
+  const output: string[] = [];
+  let conflicts = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index]!.startsWith("<<<<<<< ")) { output.push(lines[index]!); continue; }
+    const block = { application: [] as string[], base: [] as string[], target: [] as string[] };
+    let section: keyof typeof block = "application";
+    const raw = [lines[index]!];
+    for (index += 1; index < lines.length && !lines[index]!.startsWith(">>>>>>> "); index += 1) {
+      raw.push(lines[index]!);
+      if (lines[index]!.startsWith("||||||| ")) section = "base";
+      else if (lines[index] === "=======") section = "target";
+      else block[section].push(lines[index]!);
+    }
+    raw.push(lines[index] ?? "");
+    const application = insertionAround(block.application, block.base);
+    const target = insertionAround(block.target, block.base);
+    const containsTarget = block.target.length > 0 ? insertionAround(block.application, block.target) : undefined;
+    if (block.base.length === 0) output.push(...block.target, ...block.application);
+    // The application already has the framework's version, plus its own inserted lines.
+    else if (containsTarget) output.push(...block.application);
+    else if (application) output.push(...application.before, ...block.target, ...application.after);
+    else if (target) output.push(...target.before, ...block.application, ...target.after);
+    else if (singleLineMerge(block.application, block.base, block.target)) output.push(...singleLineMerge(block.application, block.base, block.target)!);
+    else { output.push(...raw); conflicts = true; }
+  }
+  return { text: output.join("\n"), conflicts };
+}
+
+/** git merge-file: the application's version, the previous template, and the new template. */
+async function mergeThreeWay(application: string, previous: string, target: string): Promise<{ text: string; conflicts: boolean } | undefined> {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "trestle-merge-"));
+  try {
+    const files = ["application", "previous", "target"].map((name) => path.join(directory, name));
+    await writeFile(files[0]!, application, "utf8");
+    await writeFile(files[1]!, previous, "utf8");
+    await writeFile(files[2]!, target, "utf8");
+    try {
+      const { stdout } = await execFileAsync("git", ["merge-file", "-p", "--diff3", "-L", "application", "-L", "previous template", "-L", "new template", ...files], { maxBuffer: 16 * 1024 * 1024 });
+      return { text: stdout, conflicts: false };
+    } catch (error) {
+      const failure = error as { code?: number | string; stdout?: string };
+      if (typeof failure.code === "number" && failure.code > 0 && typeof failure.stdout === "string") return settleAdjacentConflicts(failure.stdout);
+      return undefined;
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/** kept: the application changed a file the target did not change, so the application's version stays. */
+export type SourceDiffClassification = "same" | "unchanged" | "kept" | "modified" | "new" | "missing" | "unverified" | "unsafe"
   | "retired" | "retired-modified" | "retired-missing";
 export type SourceDiffEntry = Readonly<{ path: string; classification: SourceDiffClassification }>;
 export type SourceDiffReport = Readonly<{
@@ -23,13 +162,13 @@ const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const bundledTemplateRoot = path.join(moduleDirectory, "template");
 const defaultTemplateRoot = existsSync(bundledTemplateRoot) ? bundledTemplateRoot : path.join(moduleDirectory, "..", "..", "create", "template");
 
-function render(source: string, projectName: string): string {
+function render(source: string, projectName: string, version = TRESTLEJS_VERSION): string {
   const bucketSource = `${projectName}-worker-artifacts`;
   const artifactBucket = bucketSource.length <= 63 ? bucketSource
     : `${bucketSource.slice(0, 54).replace(/-+$/u, "")}-${digest(bucketSource).slice(0, 8)}`;
   return source.replaceAll("__TRESTLE_ARTIFACT_BUCKET__", artifactBucket)
     .replaceAll("__TRESTLE_PROJECT_NAME__", projectName)
-    .replaceAll("__TRESTLEJS_VERSION__", TRESTLEJS_VERSION);
+    .replaceAll("__TRESTLEJS_VERSION__", version);
 }
 
 async function templateFiles(directory: string, relative = ""): Promise<string[]> {
@@ -108,6 +247,15 @@ function adjacentRelease(from: string | null, to: string): boolean {
   return Boolean(before && after && Number(after![1]) === Number(before![1]) + 1);
 }
 
+/** package.json is compared as JSON: pnpm and editors reformat it without changing it. */
+async function samePackageManifest(root: string, templateRoot: string, projectName: string, enabled: ReadonlySet<OptionalTemplateCapability>): Promise<boolean> {
+  try {
+    return canonicalJson(JSON.parse(await readFile(path.join(root, "package.json"), "utf8"))) === canonicalJson(JSON.parse(await targetContent(templateRoot, "package.json", projectName, enabled)));
+  } catch {
+    return false;
+  }
+}
+
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
@@ -158,9 +306,9 @@ async function targetTemplateFiles(templateRoot: string, enabled: ReadonlySet<Op
 }
 
 /** Rendered target content, with the project manifest reflecting enabled optional capabilities. */
-async function targetContent(templateRoot: string, relative: string, projectName: string, enabled: ReadonlySet<OptionalTemplateCapability>): Promise<string> {
+async function targetContent(templateRoot: string, relative: string, projectName: string, enabled: ReadonlySet<OptionalTemplateCapability>, version = TRESTLEJS_VERSION): Promise<string> {
   const sourceRelative = relative === ".gitignore" ? "_gitignore" : relative;
-  const rendered = render(await readFile(path.join(templateRoot, sourceRelative), "utf8"), projectName);
+  const rendered = render(await readFile(path.join(templateRoot, sourceRelative), "utf8"), projectName, version);
   return relative === ".trestle/project.yaml" ? applyManifestCapabilities(rendered, enabled) : rendered;
 }
 
@@ -189,7 +337,7 @@ export async function planSourceDiff(root: string, projectName: string, template
     && baseline.templateVersion === framework?.templateVersion && validBaselineFiles(baseline.files)
     && (baseline.packageSource === undefined || typeof baseline.packageSource === "string"
       && baseline.packageSource.length <= 100_000 && digest(baseline.packageSource) === baseline.files["package.json"]);
-  const summary: Record<SourceDiffClassification, number> = { same: 0, unchanged: 0, modified: 0, new: 0, missing: 0, unverified: 0, unsafe: 0, retired: 0, "retired-modified": 0, "retired-missing": 0 };
+  const summary: Record<SourceDiffClassification, number> = { same: 0, unchanged: 0, kept: 0, modified: 0, new: 0, missing: 0, unverified: 0, unsafe: 0, retired: 0, "retired-modified": 0, "retired-missing": 0 };
   const entries: SourceDiffEntry[] = [];
   // Optional capabilities (for example the platform admin) are part of the target only when the project enables them.
   const enabled = await enabledCapabilities(root);
@@ -199,10 +347,10 @@ export async function planSourceDiff(root: string, projectName: string, template
     const { hash: currentHash, unsafe } = await applicationHash(root, relative);
     let classification: SourceDiffClassification;
     if (unsafe) classification = "unsafe";
-    else if (currentHash === targetHash) classification = "same";
+    else if (currentHash === targetHash || (relative === "package.json" && currentHash !== undefined && await samePackageManifest(root, templateRoot, projectName, enabled))) classification = "same";
     else if (!baselineTrusted) classification = "unverified";
     else if (currentHash === undefined) classification = baseline!.files![relative] ? "missing" : "new";
-    else classification = baseline!.files![relative] === currentHash ? "unchanged" : "modified";
+    else classification = baseline!.files![relative] === currentHash ? "unchanged" : baseline!.files![relative] === targetHash ? "kept" : "modified";
     summary[classification] += 1;
     entries.push({ path: relative, classification });
   }
@@ -223,7 +371,8 @@ export async function planSourceDiff(root: string, projectName: string, template
 /** Applies only pristine files from the immediately preceding release. This is
  * intentionally not certification: framework metadata stays at its old source
  * version until migrations, generated tests, and provider wiring are reviewed. */
-export async function applySourceUpgrade(root: string, projectName: string, templateRoot = defaultTemplateRoot): Promise<readonly string[]> {
+export async function applySourceUpgrade(root: string, projectName: string, templateRoot = defaultTemplateRoot, options: Readonly<{ accept?: readonly string[] }> = {}): Promise<readonly string[]> {
+  const accepted = new Set(options.accept ?? []);
   const report = await planSourceDiff(root, projectName, templateRoot);
   if (!report.baselineTrusted || !adjacentRelease(report.sourceTemplateVersion, report.targetTemplateVersion)) {
     throw new Error("Source apply requires a matching baseline from the immediately preceding release; use upgrade diff for manual review");
@@ -235,18 +384,44 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
   const packageManifestMatches = await expectedPackageManifest(root, projectName, templateRoot);
   const baseline = JSON.parse(await readFile(path.join(root, ".trestle", "template-baseline.json"), "utf8")) as { files: Record<string, string>; packageSource?: string };
   const packageVersionOnly = await pristinePackageVersionBump(root, report.sourceTemplateVersion!, baseline.files["package.json"], baseline.packageSource);
+  const migrationsConsistent = await migrationChainConsistent(root, templateRoot);
   const conflicts = report.entries.filter(({ path: relative, classification }) => {
     if (relative === ".trestle/framework.json") return classification === "unsafe";
     if (relative === "package.json" && (packageManifestMatches || packageVersionOnly)) return false;
-    const safeChange = classification === "same" || classification === "unchanged" || classification === "new" || classification === "retired-missing";
-    return !safeChange || (classification !== "same" && protectedSourcePath(relative));
+    if (migrationFile(relative) && migrationsConsistent) return false;
+    // Dependency and script edits in package.json are reviewed, never merged.
+    if (relative === "package.json") return classification !== "same" && classification !== "unchanged" && classification !== "kept";
+    // Deployment and configuration files change only when explicitly accepted after review.
+    const reviewed = protectedSourcePath(relative) && !migrationFile(relative) && accepted.has(relative);
+    if (classification === "modified") return migrationFile(relative) || (protectedSourcePath(relative) && !reviewed);
+    const safeChange = classification === "same" || classification === "unchanged" || classification === "kept" || classification === "new" || classification === "retired-missing";
+    return !safeChange || (classification !== "same" && classification !== "kept" && protectedSourcePath(relative) && !reviewed);
   });
-  if (conflicts.length) throw new Error(`Source apply requires manual review: ${conflicts.map(({ path: relative }) => relative).join(", ")}`);
+  const unknown = [...accepted].filter((relative) => !report.entries.some((entry) => entry.path === relative && protectedSourcePath(relative)));
+  if (unknown.length) throw new Error(`--accept names paths that are not protected template files: ${unknown.join(", ")}`);
+  if (conflicts.length) {
+    const migrations = conflicts.filter(({ path: relative }) => migrationFile(relative));
+    const protectedFiles = conflicts.filter(({ path: relative, classification }) => protectedSourcePath(relative) && !migrationFile(relative) && (classification === "unchanged" || classification === "modified" || classification === "new"));
+    const other = conflicts.filter((entry) => !migrations.includes(entry) && !protectedFiles.includes(entry));
+    throw new Error([
+      "Source apply requires review:",
+      ...(migrations.length ? [`- migrations (${migrations.length} files): reconcile the journal first with trestle upgrade migrations --rebase --yes`] : []),
+      ...(protectedFiles.length ? [`- deployment and configuration files: review each with trestle upgrade diff --path <file>, then rerun with --accept ${protectedFiles.map(({ path: relative }) => relative).join(" ")}`] : []),
+      ...other.map(({ path: relative, classification }) => `- ${relative} (${classification}): resolve by hand`),
+    ].join("\n"));
+  }
 
   const enabled = await enabledCapabilities(root);
+  const merges = report.entries.filter(({ path: relative, classification }) => classification === "modified" && !migrationFile(relative) && relative !== "package.json" && relative !== ".trestle/framework.json");
+  const previousTemplate = merges.length ? await sourceTemplateRoot(report.sourceTemplateVersion!) : undefined;
+  if (merges.length && !previousTemplate) {
+    throw new Error(`Merging ${merges.map(({ path: relative }) => relative).join(", ")} needs the ${report.sourceTemplateVersion} template; check network access to npm or set TRESTLE_UPGRADE_SOURCE_TEMPLATE`);
+  }
   const changed: string[] = [];
+  const conflicted: string[] = [];
   for (const entry of report.entries) {
     if (entry.path === ".trestle/framework.json") continue;
+    if (migrationFile(entry.path) && migrationsConsistent && entry.classification !== "new" && entry.classification !== "unchanged") continue;
     if (entry.path === "package.json" && packageManifestMatches) continue;
     if (entry.path === "package.json" && packageVersionOnly) {
       if (!(await pristinePackageVersionBump(root, report.sourceTemplateVersion!, baseline.files["package.json"], baseline.packageSource))) {
@@ -254,6 +429,18 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
       }
       await writeFile(path.join(root, "package.json"), await targetContent(templateRoot, "package.json", projectName, enabled), "utf8");
       changed.push(entry.path);
+      continue;
+    }
+    if (entry.classification === "modified") {
+      const current = await readFile(path.join(root, entry.path), "utf8");
+      const previous = await targetContent(previousTemplate!, entry.path, projectName, enabled, report.sourceTemplateVersion!);
+      if (digest(previous) !== baseline.files[entry.path]) throw new Error(`The fetched ${report.sourceTemplateVersion} template does not match the recorded baseline for ${entry.path}`);
+      const merged = await mergeThreeWay(current, previous, await targetContent(templateRoot, entry.path, projectName, enabled));
+      if (!merged) throw new Error(`Could not merge ${entry.path}: git merge-file is unavailable`);
+      if (digest(await readFile(path.join(root, entry.path), "utf8")) !== digest(current)) throw new Error(`Application file changed during source apply: ${entry.path}`);
+      await writeFile(path.join(root, entry.path), merged.text, "utf8");
+      changed.push(entry.path);
+      if (merged.conflicts) conflicted.push(entry.path);
       continue;
     }
     if (entry.classification !== "unchanged" && entry.classification !== "new") continue;
@@ -270,6 +457,15 @@ export async function applySourceUpgrade(root: string, projectName: string, temp
     await writeFile(destination, target, { encoding: "utf8", flag: entry.classification === "new" ? "wx" : "w" });
     changed.push(entry.path);
   }
+  // Finalization accepts exactly these files once they carry no conflict markers.
+  const statePath = path.join(root, ".trestle", "upgrade-state.json");
+  const merged = report.entries.filter(({ path: relative, classification }) => classification === "modified" && !migrationFile(relative) && relative !== "package.json" && relative !== ".trestle/framework.json").map(({ path: relative }) => relative);
+  const previousState = JSON.parse(await optionalText(statePath) ?? "{}") as { targetTemplateVersion?: string; merged?: string[] };
+  const recorded = previousState.targetTemplateVersion === report.targetTemplateVersion ? previousState.merged ?? [] : [];
+  await writeFile(statePath, `${JSON.stringify({ schemaVersion: 1, sourceTemplateVersion: report.sourceTemplateVersion, targetTemplateVersion: report.targetTemplateVersion, merged: [...new Set([...recorded, ...merged])].sort() }, null, 2)}\n`, "utf8");
+  if (conflicted.length) {
+    throw new Error(`Merged framework changes, but these files have conflicts marked with <<<<<<< and >>>>>>>: ${conflicted.join(", ")}. Resolve them, then run trestle upgrade source-finalize --yes`);
+  }
   return changed;
 }
 
@@ -283,12 +479,22 @@ async function assertSourceReadyToFinalize(root: string, projectName: string, te
     throw new Error("Source finalization requires the target CLI version in package.json and pnpm-lock.yaml");
   }
   const packageManifestMatches = await expectedPackageManifest(root, projectName, templateRoot);
+  const migrationsConsistent = await migrationChainConsistent(root, templateRoot);
+  const state = JSON.parse(await optionalText(path.join(root, ".trestle", "upgrade-state.json")) ?? "{}") as { targetTemplateVersion?: string; merged?: string[] };
+  const mergedThisUpgrade = new Set(state.targetTemplateVersion === report.targetTemplateVersion ? state.merged ?? [] : []);
+  const unmerged: string[] = [];
+  for (const entry of report.entries.filter(({ path: relative, classification }) => classification === "modified" && !migrationFile(relative) && relative !== "package.json" && relative !== ".trestle/framework.json")) {
+    // A file both sides changed is final only if source-apply merged it and no conflict markers remain.
+    if (!mergedThisUpgrade.has(entry.path) || conflictMarker.test(await readFile(path.join(root, entry.path), "utf8"))) unmerged.push(entry.path);
+  }
   const conflicts = report.entries.filter(({ path: relative, classification }) => {
     if (relative === ".trestle/framework.json") return classification !== "unchanged" && classification !== "same";
     if (relative === "package.json") return !packageManifestMatches;
-    return classification !== "same" && classification !== "retired-missing";
+    if (migrationFile(relative) && migrationsConsistent) return false;
+    if (classification === "modified") return unmerged.includes(relative);
+    return classification !== "same" && classification !== "kept" && classification !== "retired-missing";
   });
-  if (conflicts.length) throw new Error(`Source finalization requires target parity and review of retired files: ${conflicts.map(({ path: relative }) => relative).join(", ")}`);
+  if (conflicts.length) throw new Error(`Source finalization requires target parity, merged application changes without conflict markers, and review of retired files: ${conflicts.map(({ path: relative }) => relative).join(", ")}`);
 }
 
 /** Certifies only local source parity, after the caller runs the project's
@@ -315,12 +521,42 @@ export async function finalizeSourceUpgrade(
     const target = await targetContent(templateRoot, relative, projectName, enabled);
     if (relative === "package.json") {
       if (canonicalJson(JSON.parse(current)) !== canonicalJson(JSON.parse(target))) throw new Error("package.json changed during source finalization");
-    } else if (current !== target) throw new Error(`Application file changed during source finalization: ${relative}`);
-    files[relative] = digest(current);
+      files[relative] = digest(current);
+      continue;
+    }
+    // The baseline records the template as released, so application changes stay visible to the next upgrade.
+    files[relative] = digest(target);
   }
   await assertSourceReadyToFinalize(root, projectName, templateRoot);
   await writeFile(path.join(root, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files, packageSource: await readFile(path.join(root, "package.json"), "utf8") }, null, 2)}\n`, "utf8");
   await writeFile(markerPath, updatedMarker, "utf8");
+  await rm(path.join(root, ".trestle", "upgrade-state.json"), { force: true });
+}
+
+/** A unified diff from the application's file to the target template's, for reviewing one path before accepting it. */
+export async function sourceFileDiff(root: string, projectName: string, relative: string, templateRoot = defaultTemplateRoot): Promise<string> {
+  const enabled = await enabledCapabilities(root);
+  const target = await targetContent(templateRoot, relative, projectName, enabled).catch(() => undefined);
+  if (target === undefined) throw new Error(`${relative} is not a target template file`);
+  if (!(await safeApplicationPath(root, relative))) throw new Error(`Unsafe application path: ${relative}`);
+  const directory = await mkdtemp(path.join(os.tmpdir(), "trestle-diff-"));
+  try {
+    const targetFile = path.join(directory, "target");
+    await writeFile(targetFile, target, "utf8");
+    const applicationFile = path.join(root, relative);
+    const current = existsSync(applicationFile) ? applicationFile : path.join(directory, "missing");
+    if (!existsSync(applicationFile)) await writeFile(current, "", "utf8");
+    try {
+      await execFileAsync("git", ["diff", "--no-index", "--no-color", `--src-prefix=application/`, `--dst-prefix=target/`, current, targetFile], { maxBuffer: 16 * 1024 * 1024 });
+      return "";
+    } catch (error) {
+      const failure = error as { code?: number; stdout?: string };
+      if (failure.code === 1 && typeof failure.stdout === "string") return failure.stdout;
+      throw error;
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 export function formatSourceDiff(report: SourceDiffReport): string {

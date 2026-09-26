@@ -710,6 +710,29 @@ The data commands are separate:
 - `trestle dev` migrates and applies the additive default seed on every start,
   so it never deletes data.
 
+### Upgrading a customized project
+
+Upgrades keep your changes. After installing the new CLI:
+
+1. `pnpm exec trestle upgrade diff` classifies every template file:
+   - `unchanged`: you never edited it, so it is updated.
+   - `kept`: you edited it and the framework did not, so your version stays.
+   - `modified`: both changed it, so it is merged three ways.
+2. If you generated migrations since the last release,
+   `pnpm exec trestle upgrade migrations --rebase --yes` adopts the framework's
+   new migrations and renumbers yours after them. It keeps their SQL and
+   timestamps and merges the schema snapshots.
+3. `pnpm exec trestle upgrade source-apply --yes` applies the changes.
+   Deployment and configuration files (workflows, `wrangler.jsonc`, `config/`)
+   change only when you name them with `--accept <file>` after reviewing
+   `pnpm exec trestle upgrade diff --path <file>`. A real conflict is left
+   marked with `<<<<<<<`.
+4. `pnpm db:migrate` refuses migrations that Drizzle would silently skip. That
+   happens when a database already applied your migration and the framework's
+   are older. Apply them once with `pnpm db:migrate -- --apply-skipped`.
+5. `pnpm exec trestle upgrade source-finalize --yes` runs `pnpm check` and
+   records the new baseline. Your edits stay yours for the next upgrade.
+
 ### API contracts
 
 The OpenAPI documents are generated from the route policies in

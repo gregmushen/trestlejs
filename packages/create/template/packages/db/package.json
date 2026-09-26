@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "db:generate": "node scripts/generate-migration.mjs",
-    "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
+    "db:migrate": "node scripts/migrate.mjs",
     "db:roles:bootstrap": "tsx scripts/runtime-role.ts bootstrap",
     "db:roles:configure": "tsx scripts/runtime-role.ts configure",
     "db:roles:verify": "tsx scripts/runtime-role.ts verify",
