@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { InMemoryBillingProjectionRepository, LocalBillingAdapter } from "@__TRESTLE_PROJECT_NAME__/integrations";
-import { Entitlements, planEntitlements } from "./index.js";
+import { InMemoryBillingProjectionRepository, InMemoryLocalBillingProvider, LocalBillingAdapter, retrieveCurrentLocalSubscription } from "@__TRESTLE_PROJECT_NAME__/integrations";
+import { Entitlements, planEntitlements, plans } from "./index.js";
 
 describe("local billing and entitlements", () => {
   it("activates, changes, fails, resumes, and cancels deterministically", async () => {
+    const provider = new InMemoryLocalBillingProvider();
     const repository = new InMemoryBillingProjectionRepository();
-    const billing = new LocalBillingAdapter(repository, planEntitlements);
+    // A unit-test stand-in for the durable reconciler: it projects only what the provider reports now.
+    const billing = new LocalBillingAdapter({ provider, repository, plans: planEntitlements, notify: async (notification) => {
+      const current = await retrieveCurrentLocalSubscription(provider, { id: notification.providerEventId, type: notification.type, providerSubscriptionId: notification.providerSubscriptionId, occurredAt: notification.occurredAt });
+      const plan = current.plan as keyof typeof plans;
+      await repository.put({ organizationId: current.organizationId!, provider: "local", providerSubscriptionId: current.providerSubscriptionId!, plan, planVersion: plans[plan].version,
+        status: current.status!, cancelAtPeriodEnd: current.cancelAtPeriodEnd ?? false,
+        entitlements: current.status === "active" || current.status === "trialing" ? [...planEntitlements[plan]] : [] });
+    } });
     await billing.activate({ organizationId: "org-1", plan: "starter" });
     expect(new Entitlements(new Set((await billing.getSubscription("org-1"))!.entitlements)).has("article.basic")).toBe(true);
     await billing.changePlan({ organizationId: "org-1", plan: "pro", commandId: "change-1" });

@@ -35,6 +35,16 @@ export function outboxStatement(message: EventEnvelope, organizationId: string):
     on conflict (idempotency_key) do nothing`;
 }
 
+/** Compose a tenantless event insert for `{ authority: "system" }` work in the
+ * same transaction as the state that requests it. The committed row carries
+ * no organization, so it can never reach a tenant or verified handler. */
+export function systemOutboxStatement(message: EventEnvelope): SQL {
+  const parsed = eventEnvelopeSchema.parse(message);
+  return sql`insert into outbox_message (id, event_name, schema_version, occurred_at, resource_type, resource_id, organization_id, correlation_id, causation_id, idempotency_key, payload, available_at)
+    values (${parsed.id}, ${parsed.name}, ${parsed.schemaVersion}, ${parsed.occurredAt}::timestamptz, ${parsed.resource.type}, ${parsed.resource.id}, null, ${parsed.correlationId}, ${parsed.causationId ?? null}, ${parsed.idempotencyKey}, ${JSON.stringify(parsed.payload)}::text::jsonb, ${parsed.occurredAt}::timestamptz)
+    on conflict (idempotency_key) do nothing`;
+}
+
 export class PostgresOutboxStore implements OutboxStore {
   private readonly sql;
   constructor(connectionString: string, options: { assumeApplicationRole?: boolean } = {}) { this.sql = postgres(options.assumeApplicationRole ? outboxApplicationConnectionString(connectionString) : connectionString, { max: 2, prepare: false }); }

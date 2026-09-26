@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
-import { app } from "./index.js";
+import worker, { app } from "./index.js";
 
 const databaseUrl = process.env.TRESTLE_SYSTEM_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -12,7 +12,14 @@ const eventIds: string[] = [];
 const subscriptionIds: string[] = [];
 const secret = "whsec_billing_webhook_integration";
 
-async function deliver(input: { eventId: string; organizationId?: string; plan?: string; kind?: "subscription" | "checkout" | "invoice_paid" | "invoice_failed"; remote?: boolean; subscriptionId?: string; customerId?: string }) {
+type Queue = { send(body: unknown): Promise<void> };
+const remoteEnvironment = (queue?: Queue) => ({ DATABASE_URL: databaseUrl!, DATABASE_DRIVER: "postgres-js" as const, STRIPE_WEBHOOK_SECRET: secret,
+  STRIPE_SECRET_KEY: "sk_test_reconciliation", STRIPE_MODE: "test" as const, ...(queue ? { TRESTLE_EVENTS: queue } : {}),
+  BETTER_AUTH_SECRET: "billing-integration-test-secret-long-enough", BETTER_AUTH_URL: "http://localhost:42069", APP_ENV: "local" as const });
+const stripeSubscription = (subscriptionId: string, organizationId: string, status = "active", plan = "pro") => new Response(JSON.stringify({ id: subscriptionId, object: "subscription",
+  customer: "cus_test_atomic", status, cancel_at_period_end: false, items: { data: [] }, metadata: { organizationId, plan } }), { status: 200, headers: { "content-type": "application/json" } });
+
+async function deliver(input: { eventId: string; organizationId?: string; plan?: string; kind?: "subscription" | "checkout" | "invoice_paid" | "invoice_failed"; remote?: boolean; subscriptionId?: string; customerId?: string; queue?: Queue; databaseUrl?: string }) {
   const subscriptionId = input.subscriptionId ?? `sub_${input.eventId}`;
   subscriptionIds.push(subscriptionId);
   const metadata = { ...(input.organizationId ? { organizationId: input.organizationId } : {}), ...(input.plan ? { plan: input.plan } : {}) };
@@ -30,8 +37,9 @@ async function deliver(input: { eventId: string; organizationId?: string; plan?:
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = `t=${timestamp},v1=${createHmac("sha256", secret).update(`${timestamp}.${payload}`).digest("hex")}`;
   return app.request("/webhooks/stripe", { method: "POST", headers: { "stripe-signature": signature, "content-type": "application/json" }, body: payload }, {
-    DATABASE_URL: databaseUrl!, DATABASE_DRIVER: "postgres-js", STRIPE_WEBHOOK_SECRET: secret,
+    DATABASE_URL: input.databaseUrl ?? databaseUrl!, DATABASE_DRIVER: "postgres-js", STRIPE_WEBHOOK_SECRET: secret,
     ...(input.remote ? { STRIPE_SECRET_KEY: "sk_test_reconciliation", STRIPE_MODE: "test" as const } : {}),
+    ...(input.queue ? { TRESTLE_EVENTS: input.queue } : {}),
     BETTER_AUTH_SECRET: "billing-integration-test-secret-long-enough", BETTER_AUTH_URL: "http://localhost:42069", APP_ENV: "local",
   });
 }
@@ -44,6 +52,8 @@ suite("signed Stripe webhook route", () => {
     }
     if (eventIds.length) await sql!`delete from billing_provider_event where provider='stripe' and provider_event_id = any(${eventIds})`;
     if (eventIds.length) await sql!`delete from outbox_message where idempotency_key = any(${eventIds.map((id) => `billing:stripe:${id}`)})`;
+    if (subscriptionIds.length) await sql!`delete from outbox_message where event_name='billing.subscription.reconciliation_requested' and payload->>'providerSubscriptionId' = any(${subscriptionIds})`;
+    if (subscriptionIds.length) await sql!`delete from billing_local_subscription where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
     if (subscriptionIds.length) await sql!`delete from billing_subscription_reconciliation where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
     if (subscriptionIds.length) await sql!`delete from billing_subscription_ownership where provider='stripe' and provider_subscription_id = any(${subscriptionIds})`;
     vi.unstubAllGlobals();
@@ -57,7 +67,10 @@ suite("signed Stripe webhook route", () => {
     eventIds.push(eventId);
     const first = await deliver({ eventId, organizationId, plan: "pro" });
     expect(first.status).toBe(202);
-    await expect(first.json()).resolves.toMatchObject({ duplicate: false, event: { type: "SubscriptionActivated", organizationId, status: "active" } });
+    // Local mode runs the same durable reconciliation inline against the local provider state.
+    await expect(first.json()).resolves.toEqual({ duplicate: false, reconciliation: "applied" });
+    expect((await sql!`select status from billing_provider_event where provider='stripe' and provider_event_id=${eventId}`)[0]?.status).toBe("processed");
+    expect(await sql!`select id from outbox_message where idempotency_key=${`billing-reconcile:stripe:${eventId}`}`).toHaveLength(1);
     expect((await sql!`select event_name, correlation_id, organization_id, payload from outbox_message where idempotency_key=${`billing:stripe:${eventId}`}`)[0])
       .toMatchObject({ event_name: "billing.subscription.activated", correlation_id: first.headers.get("x-correlation-id"),
         organization_id: organizationId, payload: { organizationId, status: "active" } });
@@ -156,7 +169,7 @@ suite("signed Stripe webhook route", () => {
     try {
       const response = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId });
       expect(response.status).toBe(202);
-      await expect(response.json()).resolves.toMatchObject({ event: { type: "SubscriptionCancelled", status: "cancelled", organizationId } });
+      await expect(response.json()).resolves.toEqual({ duplicate: false, reconciliation: "applied" });
       expect((await sql!`select status from organization_subscription where organization_id=${organizationId}`)[0]?.status).toBe("cancelled");
       expect(await sql!`select entitlement from organization_entitlement where organization_id=${organizationId}`).toHaveLength(0);
       const duplicate = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId });
@@ -180,6 +193,9 @@ suite("signed Stripe webhook route", () => {
       expect((await sql!`select status, error from billing_provider_event where provider_event_id=${eventId}`)[0])
         .toEqual({ status: "failed", error: "provider_unavailable" });
       expect(await sql!`select organization_id from organization_subscription where organization_id=${organizationId}`).toHaveLength(0);
+      // The durable request stays due, so the redelivered webhook runs it again.
+      expect((await sql!`select generation::int as generation, reconciled_generation::int as reconciled_generation, lease_token from billing_subscription_reconciliation where provider='stripe' and provider_subscription_id=${subscriptionId}`)[0])
+        .toEqual({ generation: 1, reconciled_generation: 0, lease_token: null });
     } finally { vi.unstubAllGlobals(); }
   });
 
@@ -198,6 +214,108 @@ suite("signed Stripe webhook route", () => {
       expect(response.status).toBe(202);
       expect((await sql!`select plan, status from organization_subscription where organization_id=${organizationId}`)[0])
         .toEqual({ plan: "pro", status: "active" });
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it("commits the receipt and a durable reconciliation request before any Stripe call when a Queue is bound", async () => {
+    const organizationId = `billing_queue_${crypto.randomUUID().replaceAll("-", "")}`;
+    const eventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
+    organizationIds.push(organizationId); eventIds.push(eventId); subscriptionIds.push(subscriptionId);
+    const queued: unknown[] = [];
+    const queue = { send: async (body: unknown) => { queued.push(body); } };
+    const stripeFetch = vi.fn(async () => stripeSubscription(subscriptionId, organizationId));
+    vi.stubGlobal("fetch", stripeFetch);
+    try {
+      const response = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId, queue });
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toEqual({ duplicate: false, queued: true });
+      expect(stripeFetch).not.toHaveBeenCalled();
+      expect((await sql!`select status from billing_provider_event where provider_event_id=${eventId}`)[0]?.status).toBe("received");
+      const [request] = await sql!`select id, organization_id, status from outbox_message where idempotency_key=${`billing-reconcile:stripe:${eventId}`}`;
+      expect(request).toMatchObject({ organization_id: null, status: "pending" });
+      expect(queued).toEqual([expect.objectContaining({ id: request?.id, name: "billing.subscription.reconciliation_requested" })]);
+      expect(await sql!`select organization_id from organization_subscription where organization_id=${organizationId}`).toHaveLength(0);
+      const states: string[] = [];
+      const message = { body: queued[0], ack: () => states.push("ack"), retry: () => states.push("retry") };
+      expect(await worker.queue({ messages: [message] }, remoteEnvironment(queue))).toEqual({ acknowledged: 1, retried: 0 });
+      expect(states).toEqual(["ack"]);
+      expect(stripeFetch).toHaveBeenCalledTimes(1);
+      expect((await sql!`select plan, status from organization_subscription where organization_id=${organizationId}`)[0]).toEqual({ plan: "pro", status: "active" });
+      expect((await sql!`select status from billing_provider_event where provider_event_id=${eventId}`)[0]?.status).toBe("processed");
+      expect((await sql!`select correlation_id from outbox_message where idempotency_key=${`billing:stripe:${eventId}`}`)[0]?.correlation_id)
+        .toBe(response.headers.get("x-correlation-id"));
+      // A redelivered Queue message is acknowledged without another provider call.
+      expect(await worker.queue({ messages: [{ ...message }] }, remoteEnvironment(queue))).toEqual({ acknowledged: 1, retried: 0 });
+      expect(stripeFetch).toHaveBeenCalledTimes(1);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("rejects a forged reconciliation message before it reaches Stripe", async () => {
+    const organizationId = `billing_forged_${crypto.randomUUID().replaceAll("-", "")}`;
+    const eventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
+    const otherSubscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
+    organizationIds.push(organizationId); eventIds.push(eventId); subscriptionIds.push(subscriptionId, otherSubscriptionId);
+    const queued: Array<{ payload: Record<string, unknown> }> = [];
+    const queue = { send: async (body: unknown) => { queued.push(body as { payload: Record<string, unknown> }); } };
+    const stripeFetch = vi.fn(async () => stripeSubscription(otherSubscriptionId, organizationId));
+    vi.stubGlobal("fetch", stripeFetch);
+    try {
+      expect((await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId, queue })).status).toBe(202);
+      const forged = { ...queued[0], payload: { ...queued[0]!.payload, providerSubscriptionId: otherSubscriptionId } };
+      const states: string[] = [];
+      expect(await worker.queue({ messages: [{ body: forged, ack: () => states.push("ack"), retry: () => states.push("retry") }] }, remoteEnvironment(queue)))
+        .toEqual({ acknowledged: 0, retried: 1 });
+      expect(states).toEqual(["retry"]);
+      expect(stripeFetch).not.toHaveBeenCalled();
+      expect(await sql!`select provider_subscription_id from billing_subscription_reconciliation where provider='stripe' and provider_subscription_id=${otherSubscriptionId}`).toHaveLength(0);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("does not acknowledge the webhook unless the receipt and request commit together", async () => {
+    const organizationId = `billing_commit_${crypto.randomUUID().replaceAll("-", "")}`;
+    const eventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
+    organizationIds.push(organizationId); eventIds.push(eventId); subscriptionIds.push(subscriptionId);
+    const queue = { send: vi.fn(async () => undefined) };
+    const stripeFetch = vi.fn(async () => stripeSubscription(subscriptionId, organizationId));
+    vi.stubGlobal("fetch", stripeFetch);
+    await sql!`create or replace function billing_webhook_test_reject() returns trigger language plpgsql as $$ begin raise exception 'injected outbox failure'; end $$`;
+    await sql!`create trigger billing_webhook_test_reject before insert on outbox_message for each row when (new.idempotency_key = ${sql!.unsafe(`'billing-reconcile:stripe:${eventId}'`)}) execute function billing_webhook_test_reject()`;
+    try {
+      const failed = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId, queue });
+      expect(failed.status).toBeGreaterThanOrEqual(500);
+      expect(await sql!`select provider_event_id from billing_provider_event where provider_event_id=${eventId}`).toHaveLength(0);
+      expect(await sql!`select generation from billing_subscription_reconciliation where provider='stripe' and provider_subscription_id=${subscriptionId}`).toHaveLength(0);
+      expect(queue.send).not.toHaveBeenCalled();
+    } finally {
+      await sql!`drop trigger billing_webhook_test_reject on outbox_message`;
+      await sql!`drop function billing_webhook_test_reject()`;
+    }
+    try {
+      const unavailable = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId, queue, databaseUrl: "postgres://postgres:postgres@127.0.0.1:1/unavailable" });
+      expect(unavailable.status).toBeGreaterThanOrEqual(500);
+      const retried = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId, queue });
+      expect(retried.status).toBe(202);
+      expect(stripeFetch).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("rejects a Stripe subscription that no longer exists without changing the projection", async () => {
+    const organizationId = `billing_missing_${crypto.randomUUID().replaceAll("-", "")}`;
+    const eventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+    const subscriptionId = `sub_${crypto.randomUUID().replaceAll("-", "")}`;
+    organizationIds.push(organizationId); eventIds.push(eventId); subscriptionIds.push(subscriptionId);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { type: "invalid_request_error", code: "resource_missing",
+      message: `No such subscription: '${subscriptionId}'`, param: "id" } }), { status: 404, headers: { "content-type": "application/json" } })));
+    try {
+      const response = await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId });
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toEqual({ duplicate: false, reconciliation: "not_found" });
+      expect((await sql!`select status, error from billing_provider_event where provider_event_id=${eventId}`)[0])
+        .toEqual({ status: "rejected", error: "provider_subscription_not_found" });
+      expect(await sql!`select organization_id from organization_subscription where organization_id=${organizationId}`).toHaveLength(0);
+      expect((await deliver({ eventId, organizationId, plan: "pro", remote: true, subscriptionId })).status).toBe(200);
     } finally { vi.unstubAllGlobals(); }
   });
 });

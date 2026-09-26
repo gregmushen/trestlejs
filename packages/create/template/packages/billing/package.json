@@ -15,5 +15,8 @@
     "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/integrations": "workspace:*",
     "drizzle-orm": "0.45.3"
+  },
+  "devDependencies": {
+    "postgres": "3.4.9"
   }
 }
