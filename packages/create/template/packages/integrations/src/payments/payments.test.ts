@@ -1,16 +1,31 @@
 import Stripe from "stripe";
 import { describe, expect, it } from "vitest";
-import { InMemoryBillingProjectionRepository, LocalBillingAdapter } from "./adapters/local.js";
+import { InMemoryBillingProjectionRepository, InMemoryLocalBillingProvider, LocalBillingAdapter, retrieveCurrentLocalSubscription, type LocalBillingNotification } from "./adapters/local.js";
+import { BillingSubscriptionNotFound } from "./types.js";
 import { retrieveCurrentStripeSubscription, verifyAndNormalizeStripeEvent, type NormalizedBillingEvent } from "./events.js";
 
 const plans = { starter: ["article.basic"], pro: ["article.basic", "workflows.advanced"] };
 
 describe("payments boundary", () => {
-  it("uses local canonical state without a Stripe account", async () => {
+  it("changes local provider state and notifies instead of writing the projection", async () => {
+    const provider = new InMemoryLocalBillingProvider();
     const repository = new InMemoryBillingProjectionRepository();
-    const billing = new LocalBillingAdapter(repository, plans);
+    const notifications: LocalBillingNotification[] = [];
+    const billing = new LocalBillingAdapter({ provider, repository, plans, notify: async (notification) => { notifications.push(notification); } });
     await billing.createCheckoutSession({ organizationId: "org-1", plan: "pro", requestId: "request-1" });
-    expect(await billing.getSubscription("org-1")).toMatchObject({ provider: "local", status: "active", entitlements: ["article.basic", "workflows.advanced"] });
+    expect(await billing.getSubscription("org-1")).toBeNull();
+    expect(notifications).toEqual([expect.objectContaining({ provider: "local", providerSubscriptionId: "sub_local_org-1", type: "SubscriptionActivated" })]);
+    expect(notifications[0]?.providerEventId).toMatch(/^evt_local_[0-9a-f]{32}$/u);
+    await expect(retrieveCurrentLocalSubscription(provider, { id: "evt_1", type: "SubscriptionUpdated", providerSubscriptionId: "sub_local_org-1", occurredAt: new Date() }))
+      .resolves.toMatchObject({ type: "SubscriptionUpdated", organizationId: "org-1", plan: "pro", status: "active", providerSubscriptionId: "sub_local_org-1" });
+    await billing.failPayment({ organizationId: "org-1" });
+    await billing.cancel({ organizationId: "org-1" });
+    expect(notifications.map((notification) => notification.type)).toEqual(["SubscriptionActivated", "SubscriptionPastDue", "SubscriptionCancelled"]);
+    await expect(billing.cancel({ organizationId: "org-1" })).rejects.toThrow("already cancelled");
+    await expect(billing.failPayment({ organizationId: "org-2" })).rejects.toBeInstanceOf(BillingSubscriptionNotFound);
+    await expect(billing.activate({ organizationId: "org-1", plan: "unknown" })).rejects.toThrow("unknown plan");
+    await expect(retrieveCurrentLocalSubscription(provider, { id: "evt_2", type: "SubscriptionUpdated", providerSubscriptionId: "sub_local_missing", occurredAt: new Date() }))
+      .rejects.toBeInstanceOf(BillingSubscriptionNotFound);
   });
 
   it("accepts a valid raw-body Stripe signature and rejects a modified body", async () => {
@@ -61,5 +76,8 @@ describe("payments boundary", () => {
       lookup: async () => ({ id: "sub_2" }) as Stripe.Subscription })).rejects.toThrow("different provider identity");
     await expect(retrieveCurrentStripeSubscription({ secretKey: "sk_test_unit", event,
       lookup: async () => { throw new Error("private provider payload"); } })).rejects.toThrow("reconciliation is unavailable");
+    const missing = new Stripe.errors.StripeInvalidRequestError({ type: "invalid_request_error", code: "resource_missing", statusCode: 404, message: "No such subscription" });
+    await expect(retrieveCurrentStripeSubscription({ secretKey: "sk_test_unit", event,
+      lookup: async () => { throw missing; } })).rejects.toBeInstanceOf(BillingSubscriptionNotFound);
   });
 });

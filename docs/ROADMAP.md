@@ -1305,7 +1305,7 @@ safety work on existing mechanisms. In order:
 2. **P1:** tenant-safe composite foreign keys for generated relationships.
 3. **P5 with P2:** a declared provenance window, and committed-event
    verification for every private Queue and Workflow handler.
-4. **P4 gaps:** durable reconciliation requests and local-adapter parity.
+4. **P4 gaps:** durable reconciliation requests and local-adapter parity (done; live sandbox evidence remains a beta gate).
 
 The due-time scheduler (Selected item 1) must merge its maintenance crons
 with application crons using P3's rules.

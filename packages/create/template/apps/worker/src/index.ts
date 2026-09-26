@@ -2,12 +2,12 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { getPlan, planEntitlements, plans } from "@__TRESTLE_PROJECT_NAME__/billing";
+import { getPlan, plans, PostgresLocalBillingProvider } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
-import { activeSupportView, applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, createDatabase, emailDeliveryEvent, endSupportView, exchangeSupportHandoff, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, markBillingReconciliationUnavailable, createTenantDatabase, newSupportToken, outboxApplicationConnectionString, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
+import { activeSupportView, applyBillingNotificationEvent, billingReconciliationRequestedEvent, createDatabase, emailDeliveryEvent, endSupportView, exchangeSupportHandoff, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, createTenantDatabase, newSupportToken, outboxApplicationConnectionString, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, requestBillingSubscriptionReconciliation, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
-import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, retrieveCurrentStripeSubscription, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
+import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, dispatchQueuedOutbox, EventConsumerRegistry, type CloudflareWorkflowBinding, type QueueBatch } from "./async-runtime.js";
 import { maintainArtifacts } from "./artifact-maintenance.js";
@@ -18,6 +18,7 @@ import { accessRoutes } from "./access-routes.js";
 import { machineAccessRoutes } from "./machine-access-routes.js";
 import { regionalRoutes } from "./regional-routes.js";
 import { auditTenantAction } from "./audit.js";
+import { handleBillingReconciliationRequested, runBillingReconciliation } from "./billing-reconciliation.js";
 import { requireExecutionContext, type AppVariables } from "./execution-context.js";
 import { mapHttpError } from "./http-errors.js";
 import { createBillingService, stripeConfigurationReady } from "./services.js";
@@ -36,6 +37,8 @@ export const eventConsumers = new EventConsumerRegistry<AuthEnvironment, Databas
   closeTenantData: async (data) => { await data.$client.end(); },
   hasEntitlement: hasCurrentEntitlement,
 });
+// Durable Stripe/local subscription reconciliation: tenantless, verified system work.
+eventConsumers.register(billingReconciliationRequestedEvent, handleBillingReconciliationRequested, { authority: "system" });
 
 app.use("*", async (context, next) => {
   const supplied = context.req.header("x-correlation-id");
@@ -380,25 +383,49 @@ app.post("/webhooks/stripe", async (context) => {
   let event: Awaited<ReturnType<typeof verifyAndNormalizeStripeEvent>>;
   try { event = await verifyAndNormalizeStripeEvent(await context.req.text(), signature, context.env.STRIPE_WEBHOOK_SECRET); }
   catch (error) { log.warn("billing.webhook.rejected", { reason: "invalid_signature_or_payload", ...safeErrorDiagnostic(error) }); return context.json({ error: "Invalid Stripe webhook" }, 400); }
-  const subscriptionEvent = event.type.startsWith("Subscription");
-  let generation: number | undefined;
-  if (subscriptionEvent && (context.env.STRIPE_MODE ?? "local") !== "local") {
-    if (!context.env.STRIPE_SECRET_KEY || !event.providerSubscriptionId) return context.json({ error: "Stripe reconciliation is not configured" }, 503);
-    const claim = await beginBillingSubscriptionReconciliation({ databaseUrl: context.env.DATABASE_URL,
-      ...(context.env.DATABASE_DRIVER ? { driver: context.env.DATABASE_DRIVER } : {}),
-      provider: "stripe", providerEventId: event.id, providerSubscriptionId: event.providerSubscriptionId, type: event.type });
-    if (claim.duplicate) {
+  if (event.type.startsWith("Subscription")) {
+    const connection = { databaseUrl: context.env.DATABASE_URL, ...(context.env.DATABASE_DRIVER ? { driver: context.env.DATABASE_DRIVER } : {}) };
+    const local = (context.env.STRIPE_MODE ?? "local") === "local";
+    if (!event.providerSubscriptionId) return context.json({ error: "Subscription webhook lacks a provider subscription" }, 422);
+    if (local) {
+      // A signed local fixture stands in for Stripe changing the subscription;
+      // reconciliation then reads it back exactly as it would read Stripe.
+      if (!event.organizationId || !event.status || !event.plan || !getPlan(event.plan)) {
+        log.error("billing.webhook.unresolved_subscription", { providerEventId: event.id, type: event.type });
+        return context.json({ error: "Subscription webhook lacks a known organization or plan" }, 422);
+      }
+      await new PostgresLocalBillingProvider(connection.databaseUrl, connection.driver).put({ provider: "stripe", providerSubscriptionId: event.providerSubscriptionId,
+        organizationId: event.organizationId, plan: event.plan, status: event.status, cancelAtPeriodEnd: event.cancelAtPeriodEnd ?? false,
+        ...(event.providerCustomerId ? { providerCustomerId: event.providerCustomerId } : {}),
+        ...(event.currentPeriodStart ? { currentPeriodStart: event.currentPeriodStart } : {}),
+        ...(event.currentPeriodEnd ? { currentPeriodEnd: event.currentPeriodEnd } : {}) });
+    } else if (!context.env.STRIPE_SECRET_KEY) return context.json({ error: "Stripe reconciliation is not configured" }, 503);
+    // Success below means the verified receipt and the durable reconciliation
+    // request committed together; the provider is called only afterwards.
+    const requested = await requestBillingSubscriptionReconciliation({ ...connection, provider: "stripe", providerEventId: event.id,
+      providerSubscriptionId: event.providerSubscriptionId, type: event.type, correlationId: context.get("correlationId") });
+    if (requested.duplicate) {
       log.info("billing.webhook.duplicate", { providerEventId: event.id, type: event.type });
       return context.json({ duplicate: true }, 200);
     }
-    generation = claim.generation;
-    try { event = await retrieveCurrentStripeSubscription({ secretKey: context.env.STRIPE_SECRET_KEY, event }); }
-    catch (error) {
-      await markBillingReconciliationUnavailable({ databaseUrl: context.env.DATABASE_URL,
-        ...(context.env.DATABASE_DRIVER ? { driver: context.env.DATABASE_DRIVER } : {}),
-        provider: "stripe", providerEventId: event.id }).catch(() => undefined);
-      throw error;
+    const queue = (context.env as { TRESTLE_EVENTS?: CloudflareQueueBinding<EventEnvelope> }).TRESTLE_EVENTS;
+    if (queue && !local) {
+      // The outbox relay delivers the committed request; sending it now only saves a tick.
+      if (requested.request) {
+        try { await queue.send(requested.request); }
+        catch { log.warn("billing.reconciliation.send_deferred", { providerEventId: event.id }); }
+      }
+      log.info("billing.reconciliation.queued", { providerEventId: event.id, type: event.type });
+      return context.json({ duplicate: false, queued: true }, 202);
     }
+    // Local mode and deployments without a Queue run the same reconciler now.
+    // A provider failure answers 503, so the provider's redelivery retries the durable request.
+    const run = await runBillingReconciliation(context.env, { provider: "stripe", providerSubscriptionId: event.providerSubscriptionId });
+    if (run.state === "busy" || run.state === "due") return context.json({ error: "billing_reconciliation_pending", retryable: true }, 503);
+    const outcome = run.outcomes.at(-1) ?? "idle";
+    if (outcome === "not_found" || outcome === "unmapped" || outcome === "ownership_conflict") log.error("billing.reconciliation.rejected", { providerEventId: event.id, type: event.type, outcome });
+    else log.info("billing.webhook.processed", { providerEventId: event.id, type: event.type, outcome });
+    return context.json({ duplicate: false, reconciliation: outcome }, 202);
   }
   if (event.type === "BillingCheckoutCompleted" || event.type === "InvoicePaid" || event.type === "InvoicePaymentFailed") {
     const result = await applyBillingNotificationEvent({ databaseUrl: context.env.DATABASE_URL,
@@ -419,35 +446,8 @@ app.post("/webhooks/stripe", async (context) => {
       { providerEventId: event.id, type: event.type, organizationId: event.organizationId });
     return context.json({ duplicate: result.duplicate, ...(result.duplicate ? {} : { event }) }, result.duplicate ? 200 : 202);
   }
-  const plan = event.plan ? getPlan(event.plan) : undefined;
-  if (subscriptionEvent && (!event.organizationId || !event.status || !plan)) {
-    log.error("billing.webhook.unresolved_subscription", { providerEventId: event.id, type: event.type });
-    return context.json({ error: "Subscription webhook lacks a known organization or plan" }, 422);
-  }
-  try {
-    const result = await applyBillingProviderEvent({ databaseUrl: context.env.DATABASE_URL,
-      ...(context.env.DATABASE_DRIVER ? { driver: context.env.DATABASE_DRIVER } : {}),
-      provider: "stripe", providerEventId: event.id, type: event.type, correlationId: context.get("correlationId"),
-      ...(generation !== undefined && event.providerSubscriptionId ? { reconciliation: { providerSubscriptionId: event.providerSubscriptionId, generation } } : {}),
-      ...(subscriptionEvent && event.organizationId && event.status && event.plan && plan ? { projection: {
-        organizationId: event.organizationId,
-        ...(event.providerCustomerId ? { providerCustomerId: event.providerCustomerId } : {}),
-        ...(event.providerSubscriptionId ? { providerSubscriptionId: event.providerSubscriptionId } : {}),
-        plan: event.plan, planVersion: plan.version, status: event.status,
-        ...(event.cancelAtPeriodEnd !== undefined ? { cancelAtPeriodEnd: event.cancelAtPeriodEnd } : {}),
-        ...(event.currentPeriodStart ? { currentPeriodStart: event.currentPeriodStart } : {}),
-        ...(event.currentPeriodEnd ? { currentPeriodEnd: event.currentPeriodEnd } : {}),
-        entitlements: event.status === "active" || event.status === "trialing" ? [...(planEntitlements[event.plan as keyof typeof planEntitlements] ?? [])] : [],
-      } } : {}),
-    });
-    log.info(result.duplicate ? "billing.webhook.duplicate" : result.superseded ? "billing.webhook.superseded" : "billing.webhook.processed",
-      { providerEventId: event.id, type: event.type, organizationId: event.organizationId });
-    return context.json({ duplicate: result.duplicate, ...(result.superseded ? { superseded: true } : {}),
-      ...(result.duplicate || result.superseded ? {} : { event }) }, result.duplicate ? 200 : 202);
-  } catch (error) {
-    log.error("billing.webhook.failed", { providerEventId: event.id, type: event.type });
-    throw error;
-  }
+  log.error("billing.webhook.unsupported", { providerEventId: event.id, type: event.type });
+  return context.json({ error: "Unsupported billing webhook" }, 422);
 });
 
 app.post("/api/billing/checkout", requireExecutionContext, async (context) => {

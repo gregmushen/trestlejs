@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 
-import { BillingProviderUnavailable, BillingValidationError } from "./types.js";
+import { BillingProviderUnavailable, BillingSubscriptionNotFound, BillingValidationError } from "./types.js";
 
 export type NormalizedBillingEvent = { id: string; type: "BillingCheckoutCompleted" | "SubscriptionActivated" | "SubscriptionUpdated" | "SubscriptionCancelled" | "SubscriptionPastDue" | "InvoicePaid" | "InvoicePaymentFailed"; organizationId?: string; providerCustomerId?: string; providerSubscriptionId?: string; plan?: string; status?: "active" | "trialing" | "past_due" | "cancelled" | "incomplete"; cancelAtPeriodEnd?: boolean; currentPeriodStart?: Date; currentPeriodEnd?: Date; amountMinor?: number; currency?: string; paymentStatus?: "paid" | "unpaid" | "no_payment_required"; occurredAt: Date };
 
@@ -65,7 +65,9 @@ export async function verifyAndNormalizeStripeEvent(rawBody: string, signature: 
 }
 
 /** Webhooks are notifications, not ordered snapshots. The current provider
- * subscription is fetched before an entitlement projection is attempted. */
+ * subscription is fetched before an entitlement projection is attempted.
+ * Throws `BillingSubscriptionNotFound` only when Stripe reports the
+ * subscription missing, and `BillingProviderUnavailable` for anything else. */
 export async function retrieveCurrentStripeSubscription(input: {
   secretKey: string;
   event: NormalizedBillingEvent;
@@ -79,6 +81,10 @@ export async function retrieveCurrentStripeSubscription(input: {
     return normalizeSubscription(subscription, { id: input.event.id, occurredAt: input.event.occurredAt }, input.event.type === "SubscriptionActivated" ? "customer.subscription.created" : "customer.subscription.updated");
   } catch (error) {
     if (error instanceof BillingValidationError) throw error;
+    // Only Stripe's explicit "no such subscription" is terminal; everything else stays retryable.
+    if (error instanceof Stripe.errors.StripeError && error.statusCode === 404 && error.code === "resource_missing") {
+      throw new BillingSubscriptionNotFound("Stripe subscription does not exist");
+    }
     throw new BillingProviderUnavailable("Stripe subscription reconciliation is unavailable");
   }
 }

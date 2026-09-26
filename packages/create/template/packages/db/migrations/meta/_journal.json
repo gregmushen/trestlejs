@@ -253,6 +253,13 @@
       "when": 1790390919018,
       "tag": "0035_romantic_energizer",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1790394164170,
+      "tag": "0036_unusual_viper",
+      "breakpoints": true
     }
   ]
 }

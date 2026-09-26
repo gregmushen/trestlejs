@@ -384,12 +384,27 @@ Doctor checks the environment prefix; deployment preflight checks live API
 read access, and the protected staging provider gate checks a redirected send
 and test-mode Checkout. Verify write permissions through a controlled
 test-mode Checkout and webhook run before treating billing as production-ready.
-For Stripe test/live mode, the signed subscription webhook is a notification:
-the Worker retrieves the current subscription before projecting local billing
-state. A PostgreSQL reconciliation generation ensures an older, slower lookup
-cannot overwrite a newer one; provider calls occur outside the projection
-transaction. Local mode retains deterministic signed-fixture tests without a
-Stripe account. Provider lookup failures leave a retryable, redacted receipt.
+A signed subscription webhook is a notification, not state. The Worker
+commits the verified receipt and a durable reconciliation request in one
+PostgreSQL transaction and only then answers 2xx; it does not wait for
+Stripe. With a Queue binding the request is a private, tenantless outbox
+event (`billing.subscription.reconciliation_requested`) handled with
+`{ authority: "system" }` after committed-event verification. Enable Queues
+for Stripe test and live mode; without a Queue the Worker runs the same
+reconciler after the commit and answers 503 on provider failure, so Stripe's
+redelivery retries it. The reconciler leases the subscription's request,
+retrieves the current subscription with no database transaction open, and
+commits the subscription, entitlements, and billing event together only while
+it still holds the lease. A slower or stalled lookup is fenced and cannot
+overwrite newer state, even after its lease expires; a webhook that arrives
+mid-reconciliation causes another pass. Provider failures keep the last
+confirmed projection and leave a retryable, redacted receipt. A subscription
+Stripe reports missing, or one without a known organization and plan, is
+rejected and logged (`billing.reconciliation.rejected`) without changing
+billing. Local mode takes the same path: the local payment adapter changes
+local provider state and reconciles it through the same durable request,
+inline and deterministically, and signed fixtures work without a Stripe
+account.
 The provider subscription ID is also bound permanently to one organization.
 Another tenant cannot claim it through webhook metadata, an active subscription
 cannot be silently replaced by a second ID, and late events from a canceled
@@ -569,3 +584,14 @@ Upgrading a project generated before scheduled backup verification required
 opting in to experimental commands: `trestle upgrade plan` will flag it for
 manual review, so add `TRESTLE_EXPERIMENTAL: "1"` to the `env:` of the
 `trestle backup verify` step in `.github/workflows/backup-verify.yml`.
+
+Upgrading a project generated before durable billing reconciliation: billing
+source is application-owned, so `trestle upgrade` does not rewrite it. Copy the
+template's `packages/db/src/billing-schema.ts`, `billing-events.ts` and
+`outbox.ts`, migration `0036` (with its snapshot and journal entry),
+`packages/billing/src/reconciliation.ts` and its export,
+`packages/integrations/src/payments/adapters/local.ts` and `events.ts`, and
+the Worker's `billing-reconciliation.ts`, `services.ts`, Stripe route and
+`billingReconciliationRequestedEvent` registration. Apply the migration before
+deploying the code, and enable Queues for Stripe test and live mode. See
+Platform Hardening Specification §5 for the details.

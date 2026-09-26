@@ -1,4 +1,4 @@
-import { getPlan, planEntitlements, plans, PostgresBillingProjectionRepository } from "@__TRESTLE_PROJECT_NAME__/billing";
+import { createLocalBillingNotifier, getPlan, planEntitlements, plans, PostgresBillingProjectionRepository, PostgresLocalBillingProvider } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { LocalBillingAdapter, StripeBillingAdapter, type BillingService } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 
@@ -29,7 +29,11 @@ export function stripeConfigurationReady(environment: AuthEnvironment): boolean 
 export function createBillingService(environment: AuthEnvironment): BillingService {
   const repository = new PostgresBillingProjectionRepository(environment.DATABASE_URL, environment.DATABASE_DRIVER);
   if ((environment.STRIPE_MODE ?? "local") === "local") {
-    return new LocalBillingAdapter(repository, planEntitlements, Object.fromEntries(Object.entries(plans).map(([name, plan]) => [name, plan.version])));
+    // Local changes update local provider state, then run the same durable
+    // receipt → request → reconcile path as Stripe, inline and deterministically.
+    const store = new PostgresLocalBillingProvider(environment.DATABASE_URL, environment.DATABASE_DRIVER);
+    return new LocalBillingAdapter({ provider: store, repository, plans: planEntitlements,
+      notify: createLocalBillingNotifier({ databaseUrl: environment.DATABASE_URL, ...(environment.DATABASE_DRIVER ? { driver: environment.DATABASE_DRIVER } : {}), store }) });
   }
   let prices: Record<string, string> = {};
   try { prices = JSON.parse(environment.STRIPE_PRICES ?? "{}"); } catch { throw new Error("STRIPE_PRICES must be a JSON object"); }

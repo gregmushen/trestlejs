@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { applyBillingNotificationEvent, applyBillingProviderEvent, beginBillingSubscriptionReconciliation, type BillingWebhookProjection } from "./billing-events.js";
+import { applyBillingNotificationEvent, applyBillingProviderEvent, type BillingWebhookProjection } from "./billing-events.js";
 import { outboxApplicationConnectionString } from "./outbox.js";
 
 const databaseUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
@@ -242,56 +242,5 @@ suite("billing provider event atomicity", () => {
     const projections = await sql!`select organization_id from organization_subscription where organization_id in (${first.projection.organizationId}, ${second.projection.organizationId})`;
     expect(projections).toHaveLength(1);
     expect(projections[0]?.organization_id).toBe(binding?.organization_id);
-  });
-
-  it("supersedes a slow stale lookup while a newer subscription reconciliation commits", async () => {
-    const older = fixture();
-    const newerId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
-    eventIds.push(newerId);
-    const newer = { ...older, providerEventId: newerId, type: "SubscriptionCancelled", projection: { ...older.projection, status: "cancelled" as const, entitlements: [] } };
-    const first = await beginBillingSubscriptionReconciliation({ ...older, providerSubscriptionId: older.projection.providerSubscriptionId! });
-    const second = await beginBillingSubscriptionReconciliation({ ...newer, providerSubscriptionId: newer.projection.providerSubscriptionId! });
-    expect(first).toMatchObject({ duplicate: false, generation: 1 });
-    expect(second).toMatchObject({ duplicate: false, generation: 2 });
-    if (first.duplicate || second.duplicate) throw new Error("Unexpected duplicate reconciliation");
-    expect(await applyBillingProviderEvent({ ...older, reconciliation: { providerSubscriptionId: older.projection.providerSubscriptionId!, generation: first.generation } }))
-      .toEqual({ duplicate: false, superseded: true });
-    expect(await sql!`select organization_id from organization_subscription where organization_id=${older.projection.organizationId}`).toHaveLength(0);
-    expect(await applyBillingProviderEvent({ ...newer, reconciliation: { providerSubscriptionId: newer.projection.providerSubscriptionId!, generation: second.generation } }))
-      .toEqual({ duplicate: false });
-    expect((await sql!`select status from organization_subscription where organization_id=${older.projection.organizationId}`)[0]?.status).toBe("cancelled");
-    expect(await sql!`select entitlement from organization_entitlement where organization_id=${older.projection.organizationId}`).toHaveLength(0);
-    expect((await sql!`select status from billing_provider_event where provider_event_id=${older.providerEventId}`)[0]?.status).toBe("superseded");
-    expect(await sql!`select id from outbox_message where idempotency_key=${`billing:stripe:${older.providerEventId}`}`).toHaveLength(0);
-    expect((await sql!`select event_name, payload from outbox_message where idempotency_key=${`billing:stripe:${newer.providerEventId}`}`)[0])
-      .toMatchObject({ event_name: "billing.subscription.cancelled", payload: { status: "cancelled" } });
-    expect(await beginBillingSubscriptionReconciliation({ ...older, providerSubscriptionId: older.projection.providerSubscriptionId! })).toEqual({ duplicate: true });
-  });
-
-  it("retries a failed reconciliation with a fresh generation", async () => {
-    const input = fixture({ entitlements: ["duplicate", "duplicate"] });
-    const identity = { ...input, providerSubscriptionId: input.projection.providerSubscriptionId! };
-    const first = await beginBillingSubscriptionReconciliation(identity);
-    if (first.duplicate) throw new Error("Unexpected duplicate reconciliation");
-    await expect(applyBillingProviderEvent({ ...input, reconciliation: { providerSubscriptionId: identity.providerSubscriptionId, generation: first.generation } })).rejects.toThrow();
-    expect((await sql!`select status from billing_provider_event where provider_event_id=${input.providerEventId}`)[0]?.status).toBe("failed");
-    const second = await beginBillingSubscriptionReconciliation(identity);
-    if (second.duplicate) throw new Error("Unexpected duplicate reconciliation");
-    expect(second.generation).toBe(first.generation + 1);
-    expect(await applyBillingProviderEvent({ ...input, projection: { ...input.projection, entitlements: ["duplicate"] },
-      reconciliation: { providerSubscriptionId: identity.providerSubscriptionId, generation: second.generation } })).toEqual({ duplicate: false });
-  });
-
-  it("assigns distinct generations to concurrent events for one subscription", async () => {
-    const input = fixture();
-    const nextEventId = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
-    eventIds.push(nextEventId);
-    const identity = { ...input, providerSubscriptionId: input.projection.providerSubscriptionId! };
-    const [first, second] = await Promise.all([
-      beginBillingSubscriptionReconciliation(identity),
-      beginBillingSubscriptionReconciliation({ ...identity, providerEventId: nextEventId }),
-    ]);
-    if (first.duplicate || second.duplicate) throw new Error("Unexpected duplicate reconciliation");
-    expect([first.generation, second.generation].sort()).toEqual([1, 2]);
   });
 });

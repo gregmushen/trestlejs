@@ -1,6 +1,6 @@
 # TrestleJS Platform Hardening Specification
 
-**Status:** Implementation contract; P1, P2, P3 and P5 done, P4 gaps open. Rebased on `main` at `0.1.0-beta.1` (`6a331a0`). The first draft was written against `0.1.0-alpha.42`.
+**Status:** Implementation contract; P1, P2, P3 and P5 done, P4 done except live sandbox evidence. Rebased on `main` at `0.1.0-beta.1` (`6a331a0`). The first draft was written against `0.1.0-alpha.42`.
 
 **Parent specification:** [TrestleJS Specification](TRESTLEJS_SPEC.md)
 
@@ -19,10 +19,10 @@ These are focused changes to existing mechanisms, not new subsystems. Existing g
 | P1 Tenant-safe generated relationships | Done (§2), including the existing-app migration | relying on generated tenant relationships |
 | P2 Trusted background execution | Done (§3) | private background handlers |
 | P3 Preserve application crons | Done | deploying application crons |
-| P4 Order-safe billing reconciliation | Done (alpha 91–94); gaps in §5 open | paid launch |
+| P4 Order-safe billing reconciliation | Done (§5), including durable requests and local parity; live sandbox evidence open | paid launch |
 | P5 Provenance lifetime and replay | Done (§6) | provenance cleanup; required by P2 |
 
-Remaining: the P4 gaps.
+Remaining: P4's live sandbox evidence.
 
 **Lifecycle rule (P2 + P5).** A private handler executes (start, retry, dead-letter replay or Workflow resume) only while its committed event is at most 14 days old, measured from the committed `occurredAt` with an injected clock. Workflows reverify at every execution of the consume step. Committed provenance is retained for 30 days. So pruning never removes provenance that permitted work can still need, and needs no Workflow-state exclusion.
 
@@ -148,19 +148,25 @@ Move the verification out of the webhook code into a shared primitive, and use i
 - other environments left unchanged;
 - dispatch with both an application trigger and the framework trigger.
 
-## 5. P4: Order-safe billing reconciliation (remaining gaps)
+## 5. P4: Order-safe billing reconciliation
 
-Alpha 91–94 made billing order-safe:
+**Status: done, except live sandbox evidence.** Alpha 91–94 made billing order-safe:
 - verified webhooks fetch current Stripe state;
 - a per-subscription generation counter fences out stale writers (migration 0029, `packages/db/src/billing-events.ts`);
-- an older in-flight lookup is marked superseded;
 - tenant ownership is immutable;
 - the projection, entitlements, outbox and receipt commit together.
 
-Remaining:
-- **Durable reconciliation request.** Reconciliation runs inside the webhook request. A successful response should mean the receipt and the reconciliation work are committed, not that the provider fetch succeeded. Queue it through the existing outbox or inbox.
-- **Local adapter parity.** The local payment adapter should reconcile the same way, so local tests cover the ordering behavior.
-- **Live sandbox evidence** before paid launch; this is already a beta gate in the ROADMAP.
+The two remaining gaps are now closed in the generated template:
+
+- **Durable reconciliation request.** `requestBillingSubscriptionReconciliation` commits, in one transaction and without calling the provider, the verified receipt, the next generation on `billing_subscription_reconciliation` (the compact durable record, keyed by provider and subscription) and a tenantless outbox event `billing.subscription.reconciliation_requested`. The Stripe route answers 2xx only after that commit. With a Queue binding it answers `202 { queued: true }` and sends the committed envelope at once (the outbox relay sends it again if that fails); the registered `{ authority: "system" }` handler runs only after P2's `verifyCommittedEvent` and inbox claim. Without a Queue, and in local mode, the route runs the same reconciler after the commit and answers 503 on provider failure so the provider's redelivery retries the still-due request. A redelivered receipt reuses its generation; a settled one is a duplicate.
+- **Reconciler** (`reconcileBillingSubscription`, `packages/billing/src/reconciliation.ts`). Each pass leases the request (`claimBillingSubscriptionReconciliation`: token, generation, expiry) in a short transaction, calls the provider with no transaction open, then commits only while it still holds the token (`completeBillingSubscriptionReconciliation`). A live lease makes other workers answer `busy` and retry, never acknowledge. After a lease expires another worker may claim it; the stalled worker's commit is then fenced and writes nothing. A receipt that arrives mid-pass leaves the generation ahead of `reconciled_generation`, so the holder runs another pass. The receipt a pass answered becomes `processed` and older covered receipts `superseded`. Provider failure keeps the last confirmed projection, marks the receipts `failed` (`provider_unavailable`) and leaves the work due. Canceled and deleted subscriptions project as canceled with no entitlements. Terminal outcomes reject the covered receipts (`rejected`) and keep the projection: `not_found` (only Stripe's `resource_missing`), `unmapped` (no known organization or plan) and `ownership_conflict` (provider metadata names another tenant). A competing active subscription (`replacement_conflict`) stays retryable, as before. A late event from a replaced subscription is `superseded`. Platform entitlement overrides are never touched.
+- **Local adapter parity.** `LocalBillingAdapter` no longer writes the projection. It updates local provider state (`billing_local_subscription`) and notifies; the Worker's notifier records the receipt and request, then runs the same reconciler inline, so local runs are deterministic. A signed Stripe fixture in local mode sets that local provider state and follows the same path.
+
+Migration 0036 adds the lease and progress columns to `billing_subscription_reconciliation` (existing cursors are marked reconciled, since they were processed inline), `reconciliation_generation` on `billing_provider_event`, and `billing_local_subscription` (`trestle_app`: select, insert, update). Tests: `packages/billing/src/reconciliation.integration.test.ts` (PostgreSQL, deterministic provider fixtures) and `apps/worker/src/billing-webhook.integration.test.ts`.
+
+**Adoption note for existing applications.** Updating the package does not change copied files. To adopt, copy from the template: `packages/db/src/billing-schema.ts`, `billing-events.ts`, `outbox.ts` (`systemOutboxStatement`), migration `0036` with its snapshot and journal entry, `packages/billing/src/reconciliation.ts` and its export, `packages/integrations/src/payments/adapters/local.ts` and `events.ts`, and in the Worker `billing-reconciliation.ts`, `services.ts` and the Stripe route and handler registration in `index.ts`. Apply the migration before deploying the code. `LocalBillingAdapter` now takes an options object; `beginBillingSubscriptionReconciliation` and `markBillingReconciliationUnavailable` are gone, and `applyBillingProviderEvent` no longer takes `reconciliation`. Enable Queues for Stripe test and live mode so the webhook never waits on Stripe; without them the webhook reconciles inline after the commit. A request that exhausts Queue retries is in the dead-letter queue and can be redriven within the 14-day window; the next receipt for the subscription also makes it due again.
+
+Remaining: **live sandbox evidence** before paid launch; this is already a beta gate in the ROADMAP.
 
 ## 6. P5: Provenance lifetime and replay
 

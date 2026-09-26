@@ -187,9 +187,6 @@ try {
       "rejects a competing subscription while the current one is active",
       "allows a canceled subscription to be replaced but supersedes later old events",
       "serializes two organizations racing to claim the same provider identity",
-      "supersedes a slow stale lookup while a newer subscription reconciliation commits",
-      "retries a failed reconciliation with a fresh generation",
-      "assigns distinct generations to concurrent events for one subscription",
       "retries an early invoice and publishes exactly once after ownership is established",
       "rejects cross-tenant and changed subscription identities without publishing",
       "rolls back invalid invoice payloads and leaves their receipt retryable",
@@ -198,6 +195,25 @@ try {
     await run("pnpm", ["--filter", "./packages/billing", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
     // P1 adoption: a project with pre-#186 ID-only relations moves to composite keys without losing data.
     await run(process.execPath, [path.join(root, "scripts/check-legacy-relations.mjs")], root, { TRESTLE_LEGACY_CLI_ARCHIVE: cliArchive });
+    await requireScenarios(project, "./packages/billing", ["src/reconciliation.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "commits a receipt and a tenantless reconciliation request without contacting the provider",
+      "records a redelivered receipt once and acknowledges it as a duplicate after reconciliation",
+      "assigns distinct generations to concurrent receipts for one subscription",
+      "converges on current provider state when events arrive older first",
+      "converges on current provider state when events arrive newer first",
+      "orders by durable generation, not timestamps, when two receipts share a timestamp",
+      "runs another pass when a receipt arrives while a reconciliation holds the lease",
+      "fences a slow reconciliation after its lease expires and a newer one commits",
+      "keeps the last confirmed projection through provider failure and converges on retry",
+      "recovers work abandoned by a crashed reconciler once its lease expires",
+      "commits the subscription and entitlements together or not at all",
+      "applies cancellation, allows replacement, and ignores a delayed event from the replaced subscription",
+      "handles a deleted provider subscription as canceled and a missing one without touching the projection",
+      "never lets an unknown mapping or another tenant's metadata touch a projection",
+      "preserves platform entitlement overrides across reconciliation",
+      "reconciles the local payment adapter through the same durable path",
+      "orders local adapter changes by durable generation even if a stale local lookup is slow",
+    ]);
     const workerSystemEnvironment = { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" };
     await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "--exclude", "src/system.integration.test.ts"], project, workerSystemEnvironment);
     await requireScenarios(project, "./apps/worker", ["src/system.integration.test.ts"], workerSystemEnvironment, [
@@ -216,6 +232,10 @@ try {
       "reconciles a signed but stale active event against the current cancelled Stripe subscription",
       "keeps a provider lookup failure retryable without exposing the provider response",
       "recovers subscription identity from current Stripe state when the signed snapshot lacks metadata",
+      "commits the receipt and a durable reconciliation request before any Stripe call when a Queue is bound",
+      "rejects a forged reconciliation message before it reaches Stripe",
+      "does not acknowledge the webhook unless the receipt and request commit together",
+      "rejects a Stripe subscription that no longer exists without changing the projection",
     ]);
     // Tenant-side admin-capability scenarios: cross-plane denial and a scoped API key before and after revocation.
     await requireScenarios(project, "./apps/worker", ["src/machine-access.integration.test.ts", "src/execution-context.test.ts", "src/access-routes.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
