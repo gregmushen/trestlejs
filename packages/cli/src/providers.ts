@@ -51,9 +51,25 @@ const defaultProbe: ProviderProbe = async (url, headers) => {
   }
 };
 
+/** The trigger.dev job runtime, when selected: the Worker dispatches with the environment's secret key. */
+function triggerProvider(manifest: ProjectManifest): Record<string, ProviderDeclaration> {
+  if (manifest.jobs?.runtime !== "trigger") return {};
+  const apiUrl = (manifest.jobs.endpoint ?? "https://api.trigger.dev").replace(/\/$/u, "");
+  return {
+    trigger: {
+      description: `Background jobs (trigger.dev${manifest.jobs.hosting === "self-hosted" ? `, self-hosted at ${apiUrl}` : ""})`,
+      secrets: ["TRIGGER_SECRET_KEY"],
+      mode: { local: "live", preview: "live", staging: "live", production: "live" },
+      patterns: { TRIGGER_SECRET_KEY: "^tr_(dev|preview|stg|prod)_" },
+      setup: "Copy the environment's secret key from the trigger.dev dashboard (API keys), then: pnpm exec trestle secrets set TRIGGER_SECRET_KEY --env <environment>",
+      health: { url: `${apiUrl}/api/v1/runs?page%5Bsize%5D=1`, bearer: "TRIGGER_SECRET_KEY", expect: [200] },
+    },
+  };
+}
+
 export function declaredProviders(manifest: ProjectManifest): Record<string, ProviderDeclaration> {
   const declared = (manifest as { providers?: Record<string, ProviderDeclaration> }).providers ?? {};
-  return { ...builtInProviders, ...declared };
+  return { ...builtInProviders, ...triggerProvider(manifest), ...declared };
 }
 
 /**

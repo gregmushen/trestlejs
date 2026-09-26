@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { applyManifestCapabilities, loadProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "trestlejs";
+import { applyFileCapabilities, applyManifestCapabilities, capabilityRenderedFiles, loadProjectManifest, templatePathCapability, TRESTLEJS_VERSION, type OptionalTemplateCapability } from "trestlejs";
 import { initializeSecrets } from "trestlejs";
 
 export type CreateProjectOptions = {
@@ -14,6 +14,8 @@ export type CreateProjectOptions = {
   git: boolean;
   /** Generate the optional platform admin (capabilities.admin). Off by default. */
   admin?: boolean;
+  /** The background job runtime; trigger adds apps/jobs for trigger.dev. */
+  jobs?: "cloudflare" | "trigger";
   /** Project name; defaults to the directory name, which must then be a valid project name. */
   name?: string;
   run?: (command: string, arguments_: string[], cwd: string) => Promise<void>;
@@ -71,6 +73,12 @@ async function copyTemplate(source: string, destination: string, projectName: st
 /** Declares enabled optional capabilities in the manifest; each capability and its app path move together. */
 async function applyCapabilities(destination: string, baseline: Record<string, string>, enabled: ReadonlySet<OptionalTemplateCapability>): Promise<void> {
   const manifestPath = path.join(destination, ".trestle", "project.yaml");
+  for (const relative of capabilityRenderedFiles) {
+    const target = path.join(destination, relative);
+    const rendered = applyFileCapabilities(relative, await readFile(target, "utf8"), enabled);
+    await writeFile(target, rendered, "utf8");
+    baseline[relative] = createHash("sha256").update(rendered).digest("hex");
+  }
   const updated = applyManifestCapabilities(await readFile(manifestPath, "utf8"), enabled);
   await writeFile(manifestPath, updated);
   baseline[".trestle/project.yaml"] = createHash("sha256").update(updated).digest("hex");
@@ -112,7 +120,7 @@ export async function createProject(options: CreateProjectOptions): Promise<Crea
 
   try {
     const baseline: Record<string, string> = {};
-    const enabled = new Set<OptionalTemplateCapability>(options.admin ? ["admin"] : []);
+    const enabled = new Set<OptionalTemplateCapability>([...(options.admin ? ["admin" as const] : []), ...(options.jobs === "trigger" ? ["trigger" as const] : [])]);
     await copyTemplate(templateRoot, destination, name, baseline, enabled);
     if (enabled.size) await applyCapabilities(destination, baseline, enabled);
     await writeFile(path.join(destination, ".trestle", "template-baseline.json"), `${JSON.stringify({ schemaVersion: 1, templateVersion: TRESTLEJS_VERSION, files: Object.fromEntries(Object.entries(baseline).sort(([left], [right]) => left.localeCompare(right))), packageSource: await readFile(path.join(destination, "package.json"), "utf8") }, null, 2)}\n`);

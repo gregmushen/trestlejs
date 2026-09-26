@@ -44,11 +44,11 @@ environments:
 secrets:
   DATABASE_URL:
     target: worker
-    shareWith: [admin]
+    shareWith: [admin, jobs]
     required: [local, staging, production]
   DATABASE_DRIVER:
     target: worker
-    shareWith: [admin]
+    shareWith: [admin, jobs]
     required: [local, preview, staging, production]
   BETTER_AUTH_SECRET:
     target: worker
@@ -81,6 +81,10 @@ secrets:
   STRIPE_WEBHOOK_SECRET:
     target: worker
     required: [preview, staging, production]
+  # The trigger.dev environment secret key, used when jobs.runtime is trigger.
+  TRIGGER_SECRET_KEY:
+    target: worker
+    required: []
   DATABASE_MIGRATION_URL:
     target: ci
     required: [staging, production]

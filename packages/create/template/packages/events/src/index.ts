@@ -124,13 +124,18 @@ export interface OutboxStore {
   redrive(id: string): Promise<OutboxEntry>;
 }
 
-export interface QueuePublisher { send(message: EventEnvelope): Promise<void> }
+/**
+ * `generation` counts earlier dispatches of the same row (its attempts). A
+ * resend after a lost acknowledgement repeats the generation; a settlement
+ * re-dispatch advances it, so an external runtime starts a fresh run.
+ */
+export interface QueuePublisher { send(message: EventEnvelope, delivery?: { generation: number }): Promise<void> }
 
 export async function dispatchOutbox(store: OutboxStore, publisher: QueuePublisher, options: { limit?: number; leaseMs?: number; maxAttempts?: number } = {}): Promise<{ sent: number; failed: number }> {
   const leased = await store.lease(options.limit, options.leaseMs);
   let sent = 0; let failed = 0;
   for (const entry of leased) {
-    try { await publisher.send(entry.message); await store.succeed(entry.id); sent += 1; }
+    try { await publisher.send(entry.message, { generation: entry.attempts }); await store.succeed(entry.id); sent += 1; }
     catch (error) { await store.fail(entry.id, error, options.maxAttempts); failed += 1; }
   }
   return { sent, failed };

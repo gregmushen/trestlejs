@@ -24,8 +24,8 @@ export const secretDeclarationSchema = z
   .object({
     /** Where the value is pushed: the customer Worker, CI only, or the optional platform admin Worker. */
     target: z.enum(["worker", "ci", "admin"]),
-    /** Also pushed to the platform admin Worker when capabilities.admin is enabled. */
-    shareWith: z.array(z.literal("admin")).min(1).optional(),
+    /** Also pushed to the platform admin Worker (admin) or the trigger.dev job runtime's environment (jobs). */
+    shareWith: z.array(z.enum(["admin", "jobs"])).min(1).optional(),
     required: z.array(environmentNameSchema),
     rotation: z.enum(["single-value", "dual-value"]).optional(),
   })
@@ -68,6 +68,8 @@ export const jobsDeclarationSchema = z
   .object({
     runtime: z.enum(["cloudflare", "trigger", "inngest"]).default("cloudflare"),
     hosting: z.enum(["cloud", "self-hosted"]).default("cloud"),
+    /** The trigger.dev project ref (not a secret). */
+    project: z.string().regex(/^proj_[a-z0-9]+$/u).optional(),
     endpoint: z.string().url().refine((value) => value.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/u.test(value), "self-hosted endpoints must use https (http only for localhost)").optional(),
   })
   .strict()

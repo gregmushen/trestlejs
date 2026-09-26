@@ -27,18 +27,20 @@ export async function executeCreateCli(
     .option("--no-install", "skip pnpm install")
     .option("--no-git", "skip git initialization")
     .option("--admin", "include the optional platform admin (apps/admin)")
+    .option("--jobs <runtime>", "background job runtime: cloudflare (default) or trigger (adds apps/jobs for trigger.dev)")
     .option("--name <name>", "project name, when it differs from the directory name")
     .showHelpAfterError()
     .showSuggestionAfterError()
     .exitOverride()
     .configureOutput({ writeOut: runtime.stdout, writeErr: runtime.stderr })
-    .action(async (directory: string, options: { install: boolean; git: boolean; admin?: boolean; name?: string }) => {
+    .action(async (directory: string, options: { install: boolean; git: boolean; admin?: boolean; jobs?: string; name?: string }) => {
       const result = await createProject({
         cwd: runtime.cwd(),
         directory,
         install: options.install,
         git: options.git,
         admin: Boolean(options.admin),
+        jobs: options.jobs === undefined || options.jobs === "cloudflare" ? "cloudflare" : options.jobs === "trigger" ? "trigger" : (() => { throw new Error("--jobs must be cloudflare or trigger"); })(),
         ...(options.name !== undefined ? { name: options.name } : {}),
       });
       runtime.stdout(

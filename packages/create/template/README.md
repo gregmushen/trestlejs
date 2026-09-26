@@ -836,6 +836,35 @@ outbox under their stable event IDs, so a resend never runs a job twice.
 Every execution rechecks provenance, the 14-day window, and current tenant
 entitlements before running a handler.
 
+**trigger.dev.** Start with `create-trestlejs <dir> --jobs trigger`, or switch
+an existing project with
+`pnpm exec trestle jobs use trigger --project proj_… [--endpoint https://your-trigger.example] --yes`.
+That adds `apps/jobs`, whose trigger.dev tasks run the Worker's own event
+consumers and scheduled jobs, and sets the Worker's runtime variables. Then:
+
+1. Store each environment's secret key:
+   `pnpm exec trestle secrets set TRIGGER_SECRET_KEY --env <env>`.
+2. Sync the variables tasks need, which are the secrets marked
+   `shareWith: [jobs]` (the database login):
+   `pnpm exec trestle jobs env push --env <env>`.
+3. Deploy the tasks with `pnpm --filter ./apps/jobs deploy`.
+4. Check readiness with `pnpm exec trestle providers --env <env> --live-check`.
+
+Locally, `trestle dev` also runs `trigger dev`.
+
+How it behaves:
+
+- **Payloads stay in your database.** Only the event ID goes to trigger.dev;
+  the task loads the committed event from the outbox.
+- **Tasks run with the Worker's database login** (restricted, tenant-bound
+  under forced RLS). Cloudflare-only bindings such as R2 are not available
+  inside tasks.
+- **Recovery:** if a run ends without success (for example it was cancelled,
+  or crashed in `trigger dev`), the Worker's 15-minute sweep re-dispatches
+  events that no consumer completed, under a new idempotency generation. The
+  inbox still prevents a second completion.
+- **Deploys:** a run finishes on the task version it started on.
+
 ### API contracts
 
 The OpenAPI documents are generated from the route policies in

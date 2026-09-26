@@ -1,0 +1,22 @@
+{
+  "name": "@__TRESTLE_PROJECT_NAME__/jobs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "trigger dev",
+    "deploy": "trigger deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@__TRESTLE_PROJECT_NAME__/context": "workspace:*",
+    "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
+    "@trigger.dev/sdk": "4.6.4"
+  },
+  "devDependencies": {
+    "@trigger.dev/build": "4.6.4",
+    "trigger.dev": "4.6.4",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}

@@ -74,3 +74,12 @@ describe("jobs declaration", () => {
     expect(withJobs({ runtime: "inngest", hosting: "self-hosted", endpoint: "http://inngest.example.com" }).success).toBe(false);
   });
 });
+
+describe("trigger.dev provider", () => {
+  it("appears only when trigger.dev is the job runtime, pointing at the selected endpoint", async () => {
+    expect((await providerStatuses(manifest, "staging", {})).some((status) => status.id === "trigger")).toBe(false);
+    const selfHosted = projectManifestSchema.parse({ ...manifest, jobs: { runtime: "trigger", hosting: "self-hosted", endpoint: "https://jobs.example.com", project: "proj_abc" } }) as ProjectManifest;
+    const statuses = await providerStatuses(selfHosted, "staging", { TRIGGER_SECRET_KEY: "sk_wrong" });
+    expect(statuses.find((status) => status.id === "trigger")).toMatchObject({ mode: "live", state: "invalid", description: expect.stringContaining("self-hosted at https://jobs.example.com") });
+  });
+});

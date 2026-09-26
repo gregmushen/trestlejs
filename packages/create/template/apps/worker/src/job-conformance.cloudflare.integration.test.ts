@@ -1,7 +1,8 @@
 import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { NonRetryableError } from "cloudflare:workflows";
 
-import { conformanceRegistry, executeConformanceEvent, runtimeConformanceSuite, type ConformanceHarness } from "./job-conformance.js";
+import { conformanceRegistry, executeConformanceEvent } from "./job-conformance.js";
+import { runtimeConformanceSuite, type ConformanceHarness } from "./job-conformance-suite.js";
 
 /**
  * The Cloudflare runtime, in process: Queue delivery creates one Workflow
