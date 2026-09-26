@@ -13,10 +13,10 @@ import { supportSession } from "./support-schema.js";
 /** The longest a support session may run; the database enforces the same bound. */
 export const maximumSupportSessionMinutes = 240;
 
-export type SupportSession = Readonly<{ id: string; organizationId: string; operatorId: string; reason: string; startedAt: Date; expiresAt: Date; endedAt: Date | null; endedBy: string | null }>;
+export type SupportSession = Readonly<{ id: string; organizationId: string; operatorId: string; targetUserId: string | null; reason: string; startedAt: Date; expiresAt: Date; endedAt: Date | null; endedBy: string | null }>;
 
 const columns = {
-  id: supportSession.id, organizationId: supportSession.organizationId, operatorId: supportSession.operatorId, reason: supportSession.reason,
+  id: supportSession.id, organizationId: supportSession.organizationId, operatorId: supportSession.operatorId, targetUserId: supportSession.targetUserId, reason: supportSession.reason,
   startedAt: supportSession.startedAt, expiresAt: supportSession.expiresAt, endedAt: supportSession.endedAt, endedBy: supportSession.endedBy,
 };
 
@@ -27,7 +27,7 @@ function requireReason(reason: string): string {
 }
 
 /** Opens a session for the operator in one organization and audits its start on that organization. */
-export async function startSupportSession(database: Database, input: Readonly<{ organizationId: string; durationMinutes: number }>, context: PlatformChangeContext): Promise<SupportSession> {
+export async function startSupportSession(database: Database, input: Readonly<{ organizationId: string; targetUserId?: string; durationMinutes: number }>, context: PlatformChangeContext): Promise<SupportSession> {
   const reason = requireReason(context.reason);
   if (!Number.isInteger(input.durationMinutes) || input.durationMinutes < 5 || input.durationMinutes > maximumSupportSessionMinutes) {
     throw new PlatformOperationError("invalid", `A support session lasts between 5 and ${maximumSupportSessionMinutes} minutes`);
@@ -37,6 +37,11 @@ export async function startSupportSession(database: Database, input: Readonly<{ 
   return await database.transaction(async (transaction) => {
     const [target] = await transaction.select({ id: organization.id }).from(organization).where(eq(organization.id, input.organizationId)).limit(1);
     if (!target) throw new PlatformOperationError("not_found", "The organization does not exist");
+    if (input.targetUserId) {
+      const [targetMember] = await transaction.select({ userId: member.userId }).from(member)
+        .where(and(eq(member.organizationId, input.organizationId), eq(member.userId, input.targetUserId))).limit(1);
+      if (!targetMember) throw new PlatformOperationError("not_found", "The selected user is not a member of this organization");
+    }
     // An expired session still counts as open until it is ended; end it now so the operator can start another.
     const expired = await transaction.select({ id: supportSession.id, organizationId: supportSession.organizationId }).from(supportSession)
       .where(and(eq(supportSession.operatorId, context.actor.id), isNull(supportSession.endedAt), lte(supportSession.expiresAt, startedAt))).for("update");
@@ -49,11 +54,11 @@ export async function startSupportSession(database: Database, input: Readonly<{ 
     }
     const [open] = await transaction.select({ id: supportSession.id }).from(supportSession).where(and(eq(supportSession.operatorId, context.actor.id), isNull(supportSession.endedAt))).limit(1);
     if (open) throw new PlatformOperationError("conflict", "End your open support session before starting another");
-    const session: SupportSession = { id: crypto.randomUUID(), organizationId: input.organizationId, operatorId: context.actor.id, reason, startedAt, expiresAt, endedAt: null, endedBy: null };
-    await transaction.insert(supportSession).values({ id: session.id, organizationId: session.organizationId, operatorId: session.operatorId, reason, startedAt, expiresAt, correlationId: context.correlationId });
+    const session: SupportSession = { id: crypto.randomUUID(), organizationId: input.organizationId, operatorId: context.actor.id, targetUserId: input.targetUserId ?? null, reason, startedAt, expiresAt, endedAt: null, endedBy: null };
+    await transaction.insert(supportSession).values({ id: session.id, organizationId: session.organizationId, operatorId: session.operatorId, targetUserId: session.targetUserId, reason, startedAt, expiresAt, correlationId: context.correlationId });
     await recordAuditEvent(transaction, {
       name: "platform.support_session.started", actor: context.actor, organizationId: input.organizationId, target: { type: "support_session", id: session.id },
-      reason, summary: { expiresAt: expiresAt.toISOString() }, environment: context.environment, correlationId: context.correlationId, supportSessionId: session.id, occurredAt: startedAt,
+      reason, summary: { expiresAt: expiresAt.toISOString(), ...(session.targetUserId ? { viewedUserId: session.targetUserId } : {}) }, environment: context.environment, correlationId: context.correlationId, supportSessionId: session.id, occurredAt: startedAt,
     });
     return session;
   });

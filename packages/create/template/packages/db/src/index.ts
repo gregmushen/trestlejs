@@ -34,6 +34,7 @@ export * from "./machine-access-schema.js";
 export * from "./machine-access.js";
 export * from "./support-schema.js";
 export * from "./support-sessions.js";
+export * from "./support-view.js";
 export * from "./regional-schema.js";
 export * from "./regional.js";
 export * from "./auth-schema.js";

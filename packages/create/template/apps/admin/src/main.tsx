@@ -90,6 +90,7 @@ function EnvironmentStrip() {
 /** Persistent while a support session is active; cleared when the server reports it ended. */
 function SupportBanner() {
   const { supportSession, session, exitSupportSession } = useAdmin();
+  const [handoffError, setHandoffError] = useState<string>();
   const now = useNow();
   if (!supportSession) return null;
   const remaining = Math.max(0, Date.parse(supportSession.expiresAt) - now);
@@ -107,10 +108,15 @@ function SupportBanner() {
         </span>
         {/* Actions wrap with the text so the banner never forces horizontal scrolling on phones. */}
         <span className="flex flex-wrap gap-2">
+          {supportSession.targetUserId && <Button size="sm" variant="primary" onClick={() => {
+            setHandoffError(undefined);
+            void api.supportHandoff(supportSession.id).then(({ url }) => window.location.assign(url)).catch((error: unknown) => setHandoffError(errorMessage(error)));
+          }}>View as member in app</Button>}
           <Button size="sm" variant="secondary" onClick={() => void router.navigate({ to: "/support/sessions" as never, search: { selected: supportSession.id } as never })}>Session and audit</Button>
           <Button size="sm" variant="secondary" onClick={() => void router.navigate({ to: "/support/workspace" as never })}>Workspace</Button>
           <Button size="sm" variant="primary" onClick={() => void exitSupportSession()}>Exit support context</Button>
         </span>
+        {handoffError && <span role="alert">{handoffError}</span>}
       </span>} />
   </div>;
 }

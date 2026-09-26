@@ -157,6 +157,12 @@ try {
       "rotates a verified account without email or extra users",
     ]);
     await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    await requireScenarios(project, "./packages/db", ["src/support-view.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "exchanges once, keeps actor separate from Alice, audits reads, and fails closed on exit",
+      "revoking the operator role or Alice's membership immediately ends the view",
+      "refuses an expired handoff even while the support session remains active",
+      "does not grant the app role direct access to support credentials",
+    ]);
     await requireScenarios(project, "./packages/db", ["src/webhook-replay.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "creates one linked execution, signs a local attempt, and never alters the original",
       "rejects non-failed, expired, and inactive deliveries without an audit row",
@@ -209,6 +215,9 @@ try {
       "never lets organization ownership reach artifacts without an application role",
       "keeps service-account management in the application plane",
       "mints a scoped key that works before revocation and fails after, with audited changes",
+    ]);
+    await requireScenarios(project, "./apps/worker", ["src/support-view.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "exchanges once without an Alice login, blocks ordinary routes, and ends immediately with the platform session",
     ]);
     await run("pnpm", ["test:browser"], project, { ...browserSiteEnvironment, TRESTLE_BROWSER_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_BROWSER_ARTICLES: "1" });
     await run("pnpm", ["exec", "playwright", "test", "tests/browser/site-handoff.spec.ts", "--list"], project, {
@@ -284,6 +293,9 @@ try {
   await run("pnpm", ["--filter", "./apps/admin", "exec", "wrangler", "deploy", "--dry-run", "--env", "production"], adminProject);
   await run("pnpm", ["--filter", "./apps/admin", "exec", "vitest", "run"], adminProject, process.env.TRESTLE_GENERATED_DATABASE_URL ? { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL } : {});
   if (process.env.TRESTLE_GENERATED_DATABASE_URL) {
+    await requireScenarios(adminProject, "./apps/admin", ["worker/support-handoff.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "requires the operator's own member-bound session and creates a one-time app link",
+    ]);
     // Platform sign-in, cross-plane denial, and support-session entry and exit against PostgreSQL.
     await requireScenarios(adminProject, "./apps/admin", ["worker/index.integration.test.ts", "worker/index.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "signs a real account in on the admin origin and requires a platform role",

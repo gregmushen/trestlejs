@@ -18,7 +18,13 @@ function SupportSessionFields(props: { organizationId: string; choice: { current
   const onChange = (next: SessionChoice) => { props.choice.current = next; setState(next); };
   const profiles = useQuery({ queryKey: ["admin", environment, "support", "profiles"], queryFn: api.supportProfiles });
   const preview = useQuery({ queryKey: ["admin", environment, "support", "preview", props.organizationId, state.profile], queryFn: () => api.previewSupport(props.organizationId, state.profile) });
+  const members = useQuery({ queryKey: ["admin", environment, "organizations", props.organizationId], queryFn: () => api.organization(props.organizationId) });
   return <div className="flex flex-col gap-3">
+    <Select label="View as member" hideLabel={false} value={state.targetUserId} onValueChange={(value) => onChange({ ...state, targetUserId: String(value) })}>
+      <Select.Option value="none">Organization overview only</Select.Option>
+      {(members.data?.members ?? []).map((member) => <Select.Option key={member.userId} value={member.userId}>{member.name} ({member.email})</Select.Option>)}
+    </Select>
+    {members.isError && <AdminError error={members.error} />}
     <div className="grid gap-3 sm:grid-cols-3">
       <Select label="Profile" hideLabel={false} value={state.profile} onValueChange={(value) => onChange({ ...state, profile: String(value) })}>
         {(profiles.data?.profiles ?? [{ key: "read_only", name: "Read-only support" }]).map((option) => <Select.Option key={option.key} value={option.key}>{option.name}</Select.Option>)}
@@ -42,24 +48,28 @@ function SupportSessionFields(props: { organizationId: string; choice: { current
   </div>;
 }
 
-export type SessionChoice = Readonly<{ profile: string; duration: number; ticket: string }>;
+export type SessionChoice = Readonly<{ profile: string; duration: number; ticket: string; targetUserId: string }>;
 
 /** Builds the confirmation for starting a support session; the caller opens it from a button or its hotkey. */
 export function useStartSupportSession() {
   const { startSupportSession } = useAdmin();
   // Read when the operator confirms, so the latest profile, duration, and ticket are used.
-  const choice = useRef<SessionChoice>({ profile: "read_only", duration: 30, ticket: "" });
-  const config = (organization: { id: string; name: string }): ConfirmConfig => ({
+  const choice = useRef<SessionChoice>({ profile: "read_only", duration: 30, ticket: "", targetUserId: "none" });
+  const config = (organization: { id: string; name: string }): ConfirmConfig => {
+    // A member chosen in another organization must never carry into this confirmation.
+    choice.current = { ...choice.current, targetUserId: "none" };
+    return {
     title: `Support session in ${organization.name}`,
-    description: "Your platform permission lets you start the session; only the profile below grants tenant authority, and only until it expires.",
-    scope: [`Act in ${organization.name} as yourself`, "Every request and change records this session and your reason"],
+    description: "Your platform permission lets you start the session. Choose a member only if you need the read-only customer-app view; no customer login or write authority is granted.",
+    scope: [`View ${organization.name} as yourself`, "Support reads record you as the actor and end when this session expires"],
     confirmLabel: "Start support session",
     successMessage: `Support session started in ${organization.name}`,
     fields: <SupportSessionFields organizationId={organization.id} choice={choice} />,
     onConfirm: (reason) => {
-      const { profile, duration, ticket } = choice.current;
-      return startSupportSession({ organizationId: organization.id, profile, durationMinutes: duration, ...(ticket.trim() ? { ticket: ticket.trim() } : {}) }, reason);
+      const { profile, duration, ticket, targetUserId } = choice.current;
+      return startSupportSession({ organizationId: organization.id, profile, durationMinutes: duration, ...(targetUserId !== "none" ? { targetUserId } : {}), ...(ticket.trim() ? { ticket: ticket.trim() } : {}) }, reason);
     },
-  });
+    };
+  };
   return { config };
 }

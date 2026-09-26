@@ -42,9 +42,11 @@ Overrides are never deleted; removal is a tombstone with its own reason. Tenant 
 
 ## Support sessions
 
-An operator with `platform.support_sessions.use` starts a session in one organization, giving a reason and a duration of 5 to 240 minutes. For its duration, the operator can read that organization's profile, members, plan, and recent audit history.
+An operator with `platform.support_sessions.use` starts a session in one organization, giving a reason and a duration of 5 to 240 minutes. For its duration, the operator can read that organization's profile, members, plan, and recent audit history. Optionally choose a current member to use **View as member in app**. An organization-only session cannot create an app handoff.
 
-A session never signs the operator in as a customer and grants no tenant-application authority. Entry, each view, and exit are recorded on the organization's audit log with the session ID.
+The button creates a single-use handoff valid for at most 60 seconds. It opens `/support/view` on `APP_URL`; the URL fragment is removed before the app exchanges it. The app uses a separate HttpOnly support cookie, **never** a Better Auth session for the member. Its persistent banner names the operator and viewed member, shows a countdown, and offers Exit. Exit ends the platform session as well as the app view. Each context request rechecks the live session, operator role, and viewed member's organization membership. Ending the session, revoking the role, removing the member, or expiration closes the view. Handoff creation and app views are audited on the organization with the operator as actor.
+
+This first app slice deliberately offers only the generated read-only support page. The support cookie is refused by all ordinary application and Better Auth routes, including GETs; it does not confer domain-resource access or pretend to render custom pages as Alice. An application that wants its own pages in support mode needs an explicit, reviewed read-only route and UI integration with separate actor/effective-user context. Do not remove this deny-by-default boundary merely to make a page render.
 
 An operator holds at most one open session. An expired session is closed, and that close is audited, before the next one starts.
 
@@ -88,6 +90,7 @@ Each GitHub environment needs these variables:
 | --- | --- |
 | `ADMIN_URL` | The admin SPA origin, the only browser origin the admin API trusts |
 | `ADMIN_API_URL` | The admin Worker's public URL. Better Auth on the admin origin uses it, so customer cookies never apply here |
+| `APP_URL` | The customer app origin for the one-time View-as-member handoff; HTTPS is required outside local development |
 | `DATABASE_ADMIN_RUNTIME_ROLE` | The login role in `DATABASE_ADMIN_URL`, granted only `trestle_platform` |
 
 Previews do not deploy the admin.

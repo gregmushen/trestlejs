@@ -12,7 +12,7 @@ export type AdminContextValue = Readonly<{
   /** The active support session, if any. Tenant-bound views follow its tenant. */
   supportSession: SupportSession | null;
   tenantContext: TenantContext | null;
-  startSupportSession: (input: { organizationId: string; profile: string; durationMinutes: number; ticket?: string }, reason: string) => Promise<SupportSession>;
+  startSupportSession: (input: { organizationId: string; targetUserId?: string; profile: string; durationMinutes: number; ticket?: string }, reason: string) => Promise<SupportSession>;
   exitSupportSession: () => Promise<void>;
   capabilities: readonly CapabilityStatus[];
   capability: (id: CapabilityId) => CapabilityStatus | undefined;
@@ -72,7 +72,7 @@ export function AdminProvider(props: { session: AdminSession; registry: AdminReg
     }
   }, [environment, queryClient, tenantContext?.organizationId]);
 
-  const startSupportSession = useCallback(async (input: { organizationId: string; profile: string; durationMinutes: number; ticket?: string }, reason: string) => {
+  const startSupportSession = useCallback(async (input: { organizationId: string; targetUserId?: string; profile: string; durationMinutes: number; ticket?: string }, reason: string) => {
     const { session: started } = await api.startSupportSession(input, reason);
     await queryClient.invalidateQueries({ queryKey: sessionQueryKey });
     return started;

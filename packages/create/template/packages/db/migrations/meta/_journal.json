@@ -239,6 +239,13 @@
       "when": 1790316985968,
       "tag": "0033_jazzy_lilith",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790375486756,
+      "tag": "0034_zippy_silver_samurai",
+      "breakpoints": true
     }
   ]
 }

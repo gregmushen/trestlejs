@@ -36,6 +36,7 @@ function OrganizationSwitcher() {
 }
 
 function Shell() {
+  if (window.location.pathname.startsWith("/support/")) return <Outlet />;
   return <main className="mx-auto max-w-4xl px-6 py-12">
     <nav className="mb-10 flex items-center justify-between">
       <Link to="/" className="text-lg font-bold tracking-tight">TrestleJS</Link>
@@ -49,6 +50,60 @@ function Shell() {
     </nav>
     <OrganizationSwitcher />
     <Outlet />
+  </main>;
+}
+
+type SupportViewContext = {
+  sessionId: string;
+  organization: { id: string; name: string };
+  operator: { id: string; email: string };
+  viewedUser: { id: string; name: string; email: string };
+  expiresAt: string;
+  readOnly: true;
+};
+
+/** A distinct support plane in the customer app, never an Alice Better Auth session. */
+function SupportViewPage() {
+  const [exchange, setExchange] = useState<"pending" | "ready" | "failed">(() => window.location.hash.startsWith("#handoff=") ? "pending" : "ready");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    const handoff = new URLSearchParams(window.location.hash.slice(1)).get("handoff");
+    if (!handoff) return;
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    void fetch(api("/api/support/exchange"), {
+      method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ handoff }),
+    }).then((response) => setExchange(response.ok ? "ready" : "failed")).catch(() => setExchange("failed"));
+  }, []);
+  const view = useQuery({
+    queryKey: ["support", "context"], enabled: exchange === "ready", retry: false, refetchInterval: 2_000,
+    queryFn: async () => {
+      const response = await fetch(api("/api/support/context"), { credentials: "include", cache: "no-store" });
+      if (!response.ok) throw new Error("This support view has ended or is no longer available");
+      return await response.json() as SupportViewContext;
+    },
+  });
+  const remaining = view.data ? Math.max(0, Date.parse(view.data.expiresAt) - now) : 0;
+  const active = exchange === "ready" && view.isSuccess && remaining > 0;
+  const exit = async () => {
+    await fetch(api("/api/support/exit"), { method: "POST", credentials: "include" }).catch(() => undefined);
+    window.location.assign("/");
+  };
+  if (!active) return <main className="mx-auto max-w-xl px-6 py-16"><section className="card p-8"><h1 className="text-2xl font-semibold">Support view</h1><p className="mt-3 text-slate-600">{exchange === "failed" ? "This handoff has expired or was already used." : exchange === "pending" || view.isPending ? "Opening the read-only view…" : "This support view has ended or is no longer available."}</p><button className="button mt-6" onClick={() => void exit()}>Leave support view</button></section></main>;
+  const seconds = Math.ceil(remaining / 1_000);
+  return <main className="mx-auto max-w-4xl px-6 py-8">
+    <div role="region" aria-label="Read-only support view" className="sticky top-0 z-20 rounded-xl border-2 border-amber-600 bg-amber-50 p-4 text-amber-950 shadow-sm">
+      <strong>Viewing as {view.data.viewedUser.name} — read only</strong>
+      <p className="text-sm">Operator {view.data.operator.email} remains the actor. {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")} left.</p>
+      <button className="mt-2 text-sm font-semibold underline" onClick={() => void exit()}>Exit support view</button>
+    </div>
+    <section className="card mt-8 p-8"><p className="eyebrow">Customer application</p><h1 className="mt-2 text-3xl font-semibold">Hello, {view.data.viewedUser.name}</h1>
+      <p className="mt-2 text-slate-600">{view.data.viewedUser.email} · {view.data.organization.name}</p>
+      <p className="mt-6 text-sm text-slate-600">This is a read-only customer-app view. No customer login or mutation controls are available in support mode.</p>
+    </section>
   </main>;
 }
 
@@ -196,13 +251,14 @@ const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", com
 const signInRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sign-in", component: () => <AuthForm mode="sign-in" /> });
 const signUpRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sign-up", component: () => <AuthForm mode="sign-up" /> });
 const dashboardRoute = createRoute({ getParentRoute: () => rootRoute, path: "/dashboard", component: Dashboard });
+const supportViewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/support/view", component: SupportViewPage });
 const checkEmailRoute = createRoute({ getParentRoute: () => rootRoute, path: "/check-email", component: CheckEmail });
 const forgotPasswordRoute = createRoute({ getParentRoute: () => rootRoute, path: "/forgot-password", component: ForgotPassword });
 const resetPasswordRoute = createRoute({ getParentRoute: () => rootRoute, path: "/reset-password", component: ResetPassword });
 const acceptInvitationRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accept-invitation", component: AcceptInvitation });
 const billingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings/billing", component: BillingSettings });
 const webhookInspectionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings/webhooks", component: WebhookInspection });
-const routeTree = rootRoute.addChildren([indexRoute, signInRoute, signUpRoute, dashboardRoute, checkEmailRoute, forgotPasswordRoute, resetPasswordRoute, acceptInvitationRoute, billingRoute, webhookInspectionRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, signInRoute, signUpRoute, dashboardRoute, supportViewRoute, checkEmailRoute, forgotPasswordRoute, resetPasswordRoute, acceptInvitationRoute, billingRoute, webhookInspectionRoute]);
 const router = createRouter({ routeTree });
 const queryClient = new QueryClient();
 

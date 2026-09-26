@@ -167,7 +167,7 @@ jobs:
           accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           packageManager: pnpm
           workingDirectory: apps/admin
-          command: deploy --env staging --var ADMIN_ORIGIN:${{ vars.ADMIN_URL }} --var ADMIN_API_URL:${{ vars.ADMIN_API_URL }} --var API_URL:${{ vars.API_URL }}
+          command: deploy --env staging --var ADMIN_ORIGIN:${{ vars.ADMIN_URL }} --var ADMIN_API_URL:${{ vars.ADMIN_API_URL }} --var API_URL:${{ vars.API_URL }} --var APP_URL:${{ vars.APP_URL }}
       - if: steps.admin.outputs.enabled == 'true'
         run: VITE_ADMIN_API_ORIGIN="${{ vars.ADMIN_API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/admin build
       - if: steps.admin.outputs.enabled == 'true'
@@ -354,7 +354,7 @@ jobs:
           accountId: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
           packageManager: pnpm
           workingDirectory: apps/admin
-          command: deploy --env production --var ADMIN_ORIGIN:${{ vars.ADMIN_URL }} --var ADMIN_API_URL:${{ vars.ADMIN_API_URL }} --var API_URL:${{ vars.API_URL }}
+          command: deploy --env production --var ADMIN_ORIGIN:${{ vars.ADMIN_URL }} --var ADMIN_API_URL:${{ vars.ADMIN_API_URL }} --var API_URL:${{ vars.API_URL }} --var APP_URL:${{ vars.APP_URL }}
       - if: steps.admin.outputs.enabled == 'true'
         run: VITE_ADMIN_API_ORIGIN="${{ vars.ADMIN_API_URL }}" pnpm --filter @__TRESTLE_PROJECT_NAME__/admin build
       - if: steps.admin.outputs.enabled == 'true'
