@@ -4,12 +4,13 @@ import path from "node:path";
 import YAML from "yaml";
 
 import { TRESTLEJS_VERSION } from "./core.js";
+import { applyMigrationCorrections, findMigrationCorrections } from "./upgrade-migrations.js";
 
 export const FRAMEWORK_METADATA_VERSION = 1;
 export const MANAGED_GUIDANCE_VERSION = 1;
 
 export type UpgradeOperation = Readonly<{
-  id: "template-source" | "framework-metadata" | "managed-guidance" | "cli-version" | "authority-model" | "database-runtime" | "backup-verify-experimental";
+  id: "template-source" | "framework-metadata" | "managed-guidance" | "cli-version" | "authority-model" | "database-runtime" | "backup-verify-experimental" | "migration-corrections";
   classification: "already-correct" | "update" | "manual-review";
   description: string;
 }>;
@@ -58,6 +59,7 @@ export async function planUpgrade(root: string): Promise<UpgradePlan> {
     && /trestle\s+backup(\s+verify)?/u.test(backupVerifyWorkflow)
     && !backupVerifyWorkflow.includes('TRESTLE_EXPERIMENTAL: "1"'),
   );
+  const migrationCorrections = await findMigrationCorrections(root);
   const marker = `<!-- trestle-managed-guidance:${MANAGED_GUIDANCE_VERSION} -->`;
   return {
     installedVersion,
@@ -70,6 +72,7 @@ export async function planUpgrade(root: string): Promise<UpgradePlan> {
       { id: "authority-model", classification: authorityCurrent ? "already-correct" : "manual-review", description: "review application/organization authority separation and its database migration" },
       { id: "database-runtime", classification: runtimeCurrent ? "already-correct" : "manual-review", description: "review Neon transactional transport, restricted grants, tenant billing, and unpooled preview URLs" },
       { id: "backup-verify-experimental", classification: backupVerifyMissingOptIn ? "manual-review" : "already-correct", description: 'add TRESTLE_EXPERIMENTAL: "1" to the env: of the trestle backup verify step in .github/workflows/backup-verify.yml so the scheduled backup verify run keeps working after upgrading the CLI' },
+      { id: "migration-corrections", classification: migrationCorrections.length ? "update" : "already-correct", description: `replace published migrations with their reviewed corrections before deploying${migrationCorrections.length ? ` (${migrationCorrections.join(", ")})` : ""}` },
     ],
   };
 }
@@ -91,12 +94,19 @@ export async function applyUpgrade(root: string): Promise<UpgradePlan> {
   const marker = `<!-- trestle-managed-guidance:${MANAGED_GUIDANCE_VERSION} -->`;
   if (!skill.includes(marker)) await writeFile(skillPath, `${skill.trimEnd()}\n\n${marker}\n`, "utf8");
 
+  const corrected = await applyMigrationCorrections(root);
+  if (baseline?.schemaVersion === 1 && baseline.files) {
+    for (const relative of corrected) {
+      const key = relative.split(path.sep).join("/");
+      if (baseline.files[key]) baseline.files[key] = createHash("sha256").update(await readFile(path.join(root, relative))).digest("hex");
+    }
+  }
+
   const markerSource = `${JSON.stringify({ schemaVersion: FRAMEWORK_METADATA_VERSION, templateVersion: TRESTLEJS_VERSION, managedGuidanceVersion: MANAGED_GUIDANCE_VERSION, upgradedAt: new Date().toISOString() }, null, 2)}\n`;
   await writeFile(path.join(root, ".trestle", "framework.json"), markerSource, "utf8");
-  if (baseline?.schemaVersion === 1 && baseline.templateVersion === TRESTLEJS_VERSION && baseline.files?.[".trestle/framework.json"]) {
-    baseline.files[".trestle/framework.json"] = createHash("sha256").update(markerSource).digest("hex");
-    await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
-  }
+  const markerRecorded = baseline?.schemaVersion === 1 && baseline.templateVersion === TRESTLEJS_VERSION && Boolean(baseline.files?.[".trestle/framework.json"]);
+  if (markerRecorded) baseline!.files![".trestle/framework.json"] = createHash("sha256").update(markerSource).digest("hex");
+  if (markerRecorded || (corrected.length && baseline?.schemaVersion === 1)) await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
   await writeFile(path.join(root, ".trestle", "upgrade-state.json"), `${JSON.stringify({ schemaVersion: 1, from: before.installedVersion, to: TRESTLEJS_VERSION, operations: before.operations.filter(({ classification }) => classification === "update").map(({ id }) => id), completedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
   return before;
 }

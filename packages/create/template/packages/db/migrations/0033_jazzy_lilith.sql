@@ -124,11 +124,12 @@ BEGIN
   ALTER FUNCTION public.trestle_count_prunable_outbox_provenance(timestamptz) OWNER TO trestle_retention;
   ALTER FUNCTION public.trestle_prune_outbox_provenance(timestamptz, integer) OWNER TO trestle_retention;
   REVOKE CREATE ON SCHEMA public FROM trestle_retention;
+  -- Grant EXECUTE while the membership still lets a non-superuser act for the owner.
+  EXECUTE format('GRANT EXECUTE ON FUNCTION public.trestle_count_prunable_outbox_provenance(timestamptz) TO %I', current_user);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION public.trestle_prune_outbox_provenance(timestamptz, integer) TO %I', current_user);
   IF NOT v_superuser THEN
     EXECUTE format('REVOKE trestle_retention FROM %I', current_user);
   END IF;
-  EXECUTE format('GRANT EXECUTE ON FUNCTION public.trestle_count_prunable_outbox_provenance(timestamptz) TO %I', current_user);
-  EXECUTE format('GRANT EXECUTE ON FUNCTION public.trestle_prune_outbox_provenance(timestamptz, integer) TO %I', current_user);
 END
 $$;--> statement-breakpoint
 -- A replayed delivery reverifies its committed source event, so platform replay

@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { auditMigrations, formatMigrationAudit } from "../src/upgrade-migrations.js";
+import { applyMigrationCorrections, auditMigrations, findMigrationCorrections, formatMigrationAudit, REVIEWED_MIGRATION_CORRECTIONS } from "../src/upgrade-migrations.js";
 
 const first = "0000_first";
 const second = "0001_second";
@@ -59,6 +60,36 @@ describe("read-only migration journal audit", () => {
       expect(report).toMatchObject({ classification: "diverged", commonPrefix: 1, firstDifference: { index: 1, application: custom, target: second, reason: "tag" }, applicationTail: [custom], targetTail: [second] });
       expect(formatMigrationAudit(report)).toContain("never rewrites journal history or proves schema equivalence");
     } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("accepts only the exact published bytes of a reviewed corrected migration, then replaces them", async () => {
+    const { parent, application, target } = await fixture();
+    const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+    const corrections = { [second]: { published: sha("SELECT 20;\n"), corrected: sha("SELECT 2;\n"), reason: "fixture" } };
+    const applicationFile = path.join(application, "packages/db/migrations", `${second}.sql`);
+    try {
+      await writeFile(applicationFile, "SELECT 20;\n");
+      expect(await auditMigrations(application, target, corrections)).toMatchObject({ classification: "matching", corrections: [second], requiresReview: false });
+      expect(await findMigrationCorrections(application, corrections)).toEqual([second]);
+      expect(await applyMigrationCorrections(application, target, corrections)).toEqual([path.join("packages", "db", "migrations", `${second}.sql`)]);
+      expect(await readFile(applicationFile, "utf8")).toBe("SELECT 2;\n");
+      expect(await auditMigrations(application, target, corrections)).toMatchObject({ classification: "matching", corrections: [] });
+      await writeFile(applicationFile, "SELECT 21;\n");
+      expect(await auditMigrations(application, target, corrections)).toMatchObject({ classification: "diverged", firstDifference: { reason: "sql" } });
+      expect(await findMigrationCorrections(application, corrections)).toEqual([]);
+      await writeFile(applicationFile, "SELECT 20;\n");
+      await writeFile(path.join(target, "packages/db/migrations", `${second}.sql`), "SELECT 22;\n");
+      await expect(applyMigrationCorrections(application, target, corrections)).rejects.toThrow("corrected migration");
+      expect(await readFile(applicationFile, "utf8")).toBe("SELECT 20;\n");
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
+  it("pins the shipped correction of published migration 0033 to the template", async () => {
+    const template = path.resolve("packages/create/template");
+    const entry = REVIEWED_MIGRATION_CORRECTIONS["0033_jazzy_lilith"];
+    expect(entry?.published).toBe("ec5220b73db0f2a8350fefaba29ccdebb27174d0ad9b55f267042a534eadd026");
+    const current = createHash("sha256").update(await readFile(path.join(template, "packages/db/migrations/0033_jazzy_lilith.sql"))).digest("hex");
+    expect(current).toBe(entry?.corrected);
   });
 
   it("detects SQL changes and timestamp changes even when migration tags match", async () => {

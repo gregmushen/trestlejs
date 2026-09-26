@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +8,22 @@ const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const bundledTemplateRoot = path.join(moduleDirectory, "template");
 const defaultTemplateRoot = existsSync(bundledTemplateRoot) ? bundledTemplateRoot : path.join(moduleDirectory, "..", "..", "create", "template");
 const migrationPath = path.join("packages", "db", "migrations");
+
+export type MigrationCorrection = Readonly<{ published: string; corrected: string; reason: string }>;
+
+/**
+ * Published migrations are never rewritten, except for a reviewed correction
+ * whose old bytes could only have been applied with the same resulting database
+ * state. The audit accepts exactly those published bytes as the corrected file,
+ * and `trestle upgrade apply` replaces them so later deploys use the fix.
+ */
+export const REVIEWED_MIGRATION_CORRECTIONS: Readonly<Record<string, MigrationCorrection>> = {
+  "0033_jazzy_lilith": {
+    published: "ec5220b73db0f2a8350fefaba29ccdebb27174d0ad9b55f267042a534eadd026",
+    corrected: "620ec2f75f5c1ca917b3731a28c78be0c94ba35b4cee6da804a7353f4740252a",
+    reason: "0.1.0-beta.3 granted EXECUTE on the retention functions after revoking the migration role's temporary membership, so a non-superuser migration role (such as Neon's database owner) could not apply it; a superuser applying it reaches the same state as the correction",
+  },
+};
 
 type Migration = Readonly<{ index: number; tag: string; when: number; version: string; checksum: string }>;
 type Journal = Readonly<{ version: string; dialect: string; migrations: readonly Migration[] }>;
@@ -19,6 +35,8 @@ export type MigrationAudit = Readonly<{
   firstDifference: Readonly<{ index: number; application: string | null; target: string | null; reason: "tag" | "timestamp" | "version" | "sql" | "append" }> | null;
   applicationTail: readonly string[];
   targetTail: readonly string[];
+  /** Application migrations still carrying published bytes that have a reviewed correction. */
+  corrections: readonly string[];
   issues: readonly string[];
   requiresReview: boolean;
 }>;
@@ -67,7 +85,7 @@ async function loadJournal(root: string): Promise<Journal> {
 
 /** Read-only journal and SQL identity audit. It cannot prove that two different
  * migration chains produce the same physical database schema. */
-export async function auditMigrations(applicationRoot: string, templateRoot = defaultTemplateRoot): Promise<MigrationAudit> {
+export async function auditMigrations(applicationRoot: string, templateRoot = defaultTemplateRoot, reviewedCorrections = REVIEWED_MIGRATION_CORRECTIONS): Promise<MigrationAudit> {
   const issues: string[] = [];
   let application: Journal | undefined;
   let target: Journal | undefined;
@@ -77,16 +95,20 @@ export async function auditMigrations(applicationRoot: string, templateRoot = de
   catch (error) { issues.push(`target: ${error instanceof Error ? error.message : String(error)}`); }
   if (!application || !target) {
     return { classification: "invalid", commonPrefix: 0, applicationCount: application?.migrations.length ?? 0, targetCount: target?.migrations.length ?? 0,
-      firstDifference: null, applicationTail: [], targetTail: [], issues, requiresReview: true };
+      firstDifference: null, applicationTail: [], targetTail: [], corrections: [], issues, requiresReview: true };
   }
   if (application.version !== target.version || application.dialect !== target.dialect) {
     issues.push("journal format version or dialect differs");
   }
   let commonPrefix = 0;
+  const corrections: string[] = [];
   while (commonPrefix < application.migrations.length && commonPrefix < target.migrations.length) {
     const left = application.migrations[commonPrefix]!;
     const right = target.migrations[commonPrefix]!;
-    if (left.tag !== right.tag || left.when !== right.when || left.version !== right.version || left.checksum !== right.checksum) break;
+    const correction = reviewedCorrections[right.tag];
+    const corrected = left.tag === right.tag && correction?.published === left.checksum && correction.corrected === right.checksum;
+    if (left.tag !== right.tag || left.when !== right.when || left.version !== right.version || (left.checksum !== right.checksum && !corrected)) break;
+    if (corrected) corrections.push(left.tag);
     commonPrefix += 1;
   }
   const applicationTail = application.migrations.slice(commonPrefix).map(({ tag }) => tag);
@@ -98,7 +120,32 @@ export async function auditMigrations(applicationRoot: string, templateRoot = de
     : !applicationTail.length ? "target-ahead" : !targetTail.length ? "application-ahead" : "diverged";
   return { classification, commonPrefix, applicationCount: application.migrations.length, targetCount: target.migrations.length,
     firstDifference: !applicationTail.length && !targetTail.length ? null : { index: commonPrefix, application: applicationTail[0] ?? null, target: targetTail[0] ?? null, reason },
-    applicationTail, targetTail, issues, requiresReview: classification !== "matching" };
+    applicationTail, targetTail, corrections, issues, requiresReview: classification !== "matching" };
+}
+
+/** Application migrations whose bytes are exactly a reviewed correction's published version. */
+export async function findMigrationCorrections(applicationRoot: string, reviewedCorrections = REVIEWED_MIGRATION_CORRECTIONS): Promise<string[]> {
+  const found: string[] = [];
+  for (const [tag, correction] of Object.entries(reviewedCorrections)) {
+    const source = await safeFile(applicationRoot, path.join(migrationPath, `${tag}.sql`)).catch(() => undefined);
+    if (source && createHash("sha256").update(source).digest("hex") === correction.published) found.push(tag);
+  }
+  return found;
+}
+
+/** Replace published bytes with the reviewed correction, verifying both hashes first. */
+export async function applyMigrationCorrections(applicationRoot: string, templateRoot = defaultTemplateRoot, reviewedCorrections = REVIEWED_MIGRATION_CORRECTIONS): Promise<string[]> {
+  const replacements: Array<{ relative: string; source: Buffer }> = [];
+  for (const tag of await findMigrationCorrections(applicationRoot, reviewedCorrections)) {
+    const relative = path.join(migrationPath, `${tag}.sql`);
+    const source = await safeFile(templateRoot, relative);
+    if (createHash("sha256").update(source).digest("hex") !== reviewedCorrections[tag]!.corrected) {
+      throw new Error(`The template's corrected migration ${tag} does not match its reviewed checksum`);
+    }
+    replacements.push({ relative, source });
+  }
+  for (const { relative, source } of replacements) await writeFile(path.join(applicationRoot, relative), source);
+  return replacements.map(({ relative }) => relative);
 }
 
 export function formatMigrationAudit(report: MigrationAudit): string {
