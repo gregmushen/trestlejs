@@ -2,7 +2,9 @@ import { createLogger, loggerSecretsFromEnvironment, type Logger } from "@__TRES
 import { createTenantDatabase, flushDueLocalWebhookDeliveries, loadCurrentWebhookSigningSecret, nextLocalWebhookRetry, PostgresOutboxStore, type Database } from "@__TRESTLE_PROJECT_NAME__/db";
 import { safeErrorCategory } from "@__TRESTLE_PROJECT_NAME__/events";
 
-import { dispatchQueuedOutbox } from "./async-runtime.js";
+import { dispatchOutbox } from "@__TRESTLE_PROJECT_NAME__/events";
+
+import { jobRuntime } from "./job-runtime.js";
 import { scheduledJobs } from "./jobs.js";
 import { scheduledJobName } from "./scheduled-jobs.js";
 import { frameworkDueWork, scheduleDueWork, type DueWorkItem, type DueWorkOutcome } from "./scheduler.js";
@@ -18,19 +20,20 @@ function schedulerLog(environment: WorkerEnvironment, fields: Record<string, unk
 }
 
 /**
- * Publish due outbox rows to the Queue, bounded, and report when the outbox
+ * Publish due outbox rows to the selected job runtime, bounded, and report when the outbox
  * is next due: immediately when the bound was reached, at the earliest retry
  * or expiring lease otherwise, or never when it is empty.
  */
 export async function drainOutbox(environment: WorkerEnvironment, clock: { now(): Date } = { now: () => new Date() }): Promise<{ sent: number; failed: number; next: Date | null }> {
-  if (!environment.TRESTLE_EVENTS) return { sent: 0, failed: 0, next: null };
+  const publisher = jobRuntime(environment).publisher(environment);
+  if (!publisher) return { sent: 0, failed: 0, next: null };
   const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
   try {
     let sent = 0;
     let failed = 0;
     let saturated = false;
     for (let batch = 0; batch < outboxBatchesPerDrain; batch++) {
-      const result = await dispatchQueuedOutbox(store, environment.TRESTLE_EVENTS);
+      const result = await dispatchOutbox(store, publisher);
       sent += result.sent;
       failed += result.failed;
       saturated = result.sent + result.failed >= outboxBatchSize;
@@ -97,7 +100,7 @@ export async function runDueWork(key: string, dueAt: Date, environment: WorkerEn
  */
 export async function runSafetySweep(environment: WorkerEnvironment, log: Logger): Promise<void> {
   const due: DueWorkItem[] = [];
-  if (environment.TRESTLE_EVENTS) {
+  if (jobRuntime(environment).publisher(environment)) {
     const result = await drainOutbox(environment);
     log.info("outbox.dispatch.completed", { sent: result.sent, failed: result.failed });
     if (result.next) due.push({ key: frameworkDueWork.outbox, dueAt: result.next });
@@ -125,7 +128,7 @@ export async function runSafetySweep(environment: WorkerEnvironment, log: Logger
  */
 export function wakeOutboxDispatch(context: { env: unknown; readonly executionCtx: { waitUntil(promise: Promise<unknown>): void } }): void {
   const environment = context.env as WorkerEnvironment;
-  if (!environment.TRESTLE_SCHEDULER || !environment.TRESTLE_EVENTS) return;
+  if (!environment.TRESTLE_SCHEDULER || !jobRuntime(environment).publisher(environment)) return;
   const wake = scheduleDueWork(environment.TRESTLE_SCHEDULER, [{ key: frameworkDueWork.outbox, dueAt: new Date() }])
     .catch((error: unknown) => { schedulerLog(environment).warn("scheduler.wake.failed", { errorCategory: safeErrorCategory(error) }); });
   try { context.executionCtx.waitUntil(wake); }

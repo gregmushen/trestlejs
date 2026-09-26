@@ -144,6 +144,11 @@ try {
   if (!articleScreen.includes('session?.user.id, organizationId') || !articleScreen.includes('enabled: Boolean(session?.user.id && organizationId)')) {
     throw new Error("Generated resource query is not scoped to both the current user and organization");
   }
+  // Job inventory: consumers and scheduled jobs are read from code.
+  const jobInventory = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "jobs", "list", "--json"], { cwd: project, encoding: "utf8" })).data;
+  if (jobInventory.runtime.runtime !== "cloudflare" || !jobInventory.consumers.some((consumer) => consumer.event === "resource.article.updated" && consumer.authority === "tenant")) {
+    throw new Error("Job inventory does not list the generated resource consumers");
+  }
   // API contracts: the generated document covers generated resources, and drift is detected.
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "api", "spec", "--out", "openapi/app.json"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "api", "spec", "--out", "openapi/app.json", "--check"], project);
@@ -168,6 +173,18 @@ try {
       "rotates a verified account without email or extra users",
     ]);
     await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    // The job runtime conformance suite, against the default Cloudflare runtime.
+    await requireScenarios(project, "./apps/worker", ["src/job-conformance.cloudflare.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "runs a committed event exactly once under its tenant",
+      "retries a transient failure and completes once",
+      "runs a duplicate delivery once",
+      "resends after a lost dispatch acknowledgement without running twice",
+      "skips a handler whose entitlement was revoked before it ran",
+      "rejects expired provenance permanently without retrying",
+      "fans out to several tenants, each under its own authority",
+      "recovers accepted work across an executor restart",
+      "runs in-flight work with the newly deployed code",
+    ]);
     // Development accounts and the additive seed lifecycle.
     await requireScenarios(project, "./packages/auth", ["src/dev-account.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "creates a verified account once and converges on repeated runs",
@@ -356,7 +373,7 @@ try {
   await run("pnpm", ["install"], adminProject);
   const adminDiff = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "diff", "--json"], { cwd: adminProject, encoding: "utf8" }));
   if (!adminDiff.data.baselineTrusted || adminDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) {
-    throw new Error("Fresh admin-enabled project did not match its bundled target template");
+    throw new Error(`Fresh admin-enabled project did not match its bundled target template: ${JSON.stringify(adminDiff.data.entries.filter((entry) => entry.classification !== "same" && entry.path !== "package.json"))}`);
   }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], adminProject);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], adminProject);

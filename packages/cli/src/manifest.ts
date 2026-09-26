@@ -58,6 +58,25 @@ export const providerDeclarationSchema = z
   })
   .strict();
 
+/**
+ * Where committed events and scheduled work run. `cloudflare` (the default)
+ * uses Queues, Workflows, and the scheduler Durable Object; `trigger` and
+ * `inngest` hand the same committed events to trigger.dev or Inngest, hosted
+ * (`cloud`) or self-hosted at `endpoint`.
+ */
+export const jobsDeclarationSchema = z
+  .object({
+    runtime: z.enum(["cloudflare", "trigger", "inngest"]).default("cloudflare"),
+    hosting: z.enum(["cloud", "self-hosted"]).default("cloud"),
+    endpoint: z.string().url().refine((value) => value.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/u.test(value), "self-hosted endpoints must use https (http only for localhost)").optional(),
+  })
+  .strict()
+  .superRefine((jobs, context) => {
+    if (jobs.runtime === "cloudflare" && (jobs.hosting !== "cloud" || jobs.endpoint)) context.addIssue({ code: "custom", path: ["hosting"], message: "the cloudflare runtime has no hosting or endpoint setting" });
+    if (jobs.hosting === "self-hosted" && !jobs.endpoint) context.addIssue({ code: "custom", path: ["endpoint"], message: "self-hosted job runtimes need an endpoint" });
+    if (jobs.hosting === "cloud" && jobs.endpoint) context.addIssue({ code: "custom", path: ["endpoint"], message: "hosted job runtimes use the provider's endpoint; set hosting: self-hosted to use your own" });
+  });
+
 export const projectManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -100,6 +119,7 @@ export const projectManifestSchema = z
     environments: z.array(environmentNameSchema).min(1),
     secrets: z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/u), secretDeclarationSchema).optional(),
     providers: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/u), providerDeclarationSchema).optional(),
+    jobs: jobsDeclarationSchema.optional(),
   })
   .strict()
   .superRefine((manifest, context) => {

@@ -12,4 +12,6 @@ export type WorkerEnvironment = AuthEnvironment & {
   TRESTLE_WORKFLOWS_ENABLED?: string;
   /** The due-time scheduler Durable Object (class TrestleScheduler). */
   TRESTLE_SCHEDULER?: DueWorkSchedulerBinding;
+  /** The job runtime: cloudflare (default), trigger, or inngest. */
+  TRESTLE_JOB_RUNTIME?: string;
 };

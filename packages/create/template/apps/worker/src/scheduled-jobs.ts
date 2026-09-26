@@ -121,6 +121,10 @@ export class ScheduledJobRegistry<Environment extends ScheduledJobEnvironment = 
   }
 
   names(): string[] { return [...this.jobs.keys()]; }
+  /** The registered jobs, for `trestle jobs list`. */
+  describe(): Array<{ name: string; leaseMs: number; limit: number; requires?: string }> {
+    return [...this.jobs.entries()].map(([name, job]) => ({ name, leaseMs: job.leaseMs ?? 120_000, limit: job.limit ?? 50, ...(job.requires ? { requires: job.requires.capability } : {}) }));
+  }
   has(name: string): boolean { return this.jobs.has(name); }
 
   /** Record a job's due time with the scheduler, after committing the work that makes it due. */

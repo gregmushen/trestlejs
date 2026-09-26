@@ -60,3 +60,17 @@ describe("provider readiness", () => {
     expect(() => projectManifestSchema.parse({ ...manifest, providers: { bad: { description: "x", setup: "y", health: { url: "http://example.test" } } } })).toThrow("https");
   });
 });
+
+describe("jobs declaration", () => {
+  const withJobs = (jobs: unknown) => projectManifestSchema.safeParse({ ...manifest, jobs });
+  it("accepts the default, hosted, and self-hosted runtimes and rejects inconsistent settings", () => {
+    expect(withJobs({}).success).toBe(true);
+    expect(withJobs({ runtime: "trigger" }).success).toBe(true);
+    expect(withJobs({ runtime: "inngest", hosting: "self-hosted", endpoint: "https://inngest.example.com" }).success).toBe(true);
+    expect(withJobs({ runtime: "trigger", hosting: "self-hosted", endpoint: "http://localhost:3040" }).success).toBe(true);
+    expect(withJobs({ runtime: "trigger", hosting: "self-hosted" }).success).toBe(false);
+    expect(withJobs({ runtime: "inngest", endpoint: "https://inngest.example.com" }).success).toBe(false);
+    expect(withJobs({ runtime: "cloudflare", hosting: "self-hosted", endpoint: "https://x.example" }).success).toBe(false);
+    expect(withJobs({ runtime: "inngest", hosting: "self-hosted", endpoint: "http://inngest.example.com" }).success).toBe(false);
+  });
+});
