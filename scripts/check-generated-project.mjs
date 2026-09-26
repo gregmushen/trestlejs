@@ -121,6 +121,9 @@ try {
   }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Author"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article", "--field", "summary:text?", "published:boolean?", "authorId:relation?:Author:set-null", "--webhook-event", "created", "updated"], project);
+  // Shared reference data, and a tenant resource that references it.
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Crop", "--shared", "--field", "family:string?"], project);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Planting", "--field", "cropId:relation?:Crop:restrict"], project);
   await assertMonotonicJournal();
   const workerEntry = await readFile(path.join(project, "apps", "worker", "src", "index.ts"), "utf8");
   const eventCatalog = await readFile(path.join(project, "packages", "events", "src", "application-catalog.ts"), "utf8");
@@ -157,6 +160,12 @@ try {
       "rotates a verified account without email or extra users",
     ]);
     await run("pnpm", ["--filter", "./packages/db", "exec", "vitest", "run"], project, { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL });
+    await requireScenarios(project, "./packages/db", ["src/crop-rls.integration.test.ts", "src/crop-editor.integration.test.ts", "src/planting-rls.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "is readable by every tenant and writable by none",
+      "lets only the platform role write",
+      "audits each change and rejects stale revisions",
+      "lets every tenant reference shared Crop rows through cropId",
+    ]);
     await requireScenarios(project, "./packages/db", ["src/support-view.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "exchanges once, keeps actor separate from Alice, audits reads, and fails closed on exit",
       "revoking the operator role or Alice's membership immediately ends the view",
@@ -331,6 +340,10 @@ try {
   }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], adminProject);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], adminProject);
+  // A shared resource's platform editor: permission, admin Worker routes, view registry entry, and view.
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Crop", "--shared"], adminProject);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], adminProject);
+  await run("pnpm", ["typecheck"], adminProject);
   await run("pnpm", ["--filter", "./apps/admin", "build"], adminProject);
   await run("pnpm", ["--filter", "./apps/admin", "exec", "wrangler", "deploy", "--dry-run", "--env", "production"], adminProject);
   await run("pnpm", ["--filter", "./apps/admin", "exec", "vitest", "run"], adminProject, process.env.TRESTLE_GENERATED_DATABASE_URL ? { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL } : {});

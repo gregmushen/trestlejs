@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { AdminViewError, adminViews, defineAdminViews, stepUpExemptRoutes } from "./api-registry";
+import { applicationAdminViews } from "./application-views";
 
 describe("admin view registry", () => {
   it("requires unique views guarded by registered platform permissions", () => {
-    expect(adminViews.map((view) => view.id)).toEqual(["overview", "health", "async", "webhooks", "organizations", "users", "audit", "platform-roles", "organization-roles", "application-roles", "permissions", "service-accounts", "email", "plans", "entitlements", "support-workspace", "support-sessions", "subscriptions", "api-keys", "artifacts", "account-security"]);
+    // Application views (application-views.ts) follow the core views and are the application's own.
+    expect(adminViews.filter((view) => !applicationAdminViews.includes(view)).map((view) => view.id)).toEqual(["overview", "health", "async", "webhooks", "organizations", "users", "audit", "platform-roles", "organization-roles", "application-roles", "permissions", "service-accounts", "email", "plans", "entitlements", "support-workspace", "support-sessions", "subscriptions", "api-keys", "artifacts", "account-security"]);
     const view = { id: "x", path: "/x", label: "X", group: "G", permission: "platform.overview.read", api: [] };
     expect(() => defineAdminViews([view, { ...view, path: "/y" }])).toThrow(AdminViewError);
     expect(() => defineAdminViews([{ ...view, permission: "organization.read" }])).toThrow("must require a platform permission");

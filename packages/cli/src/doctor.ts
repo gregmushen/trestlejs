@@ -198,7 +198,7 @@ export async function runDoctor(
     }
     const relations = await inspectResourceRelations(root, manifest);
     for (const resource of [...new Set(relations.map(({ resource: name }) => name))]) {
-      const unsafe = relations.filter((relation) => relation.resource === resource && relation.state !== "composite");
+      const unsafe = relations.filter((relation) => relation.resource === resource && relation.state !== "composite" && relation.state !== "shared");
       checks.push({
         id: `resources.${resource.toLowerCase()}.relations.tenant_safe`,
         group: "architecture",
