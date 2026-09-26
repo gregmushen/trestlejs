@@ -348,7 +348,10 @@ try {
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], adminProject);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], adminProject);
   // A shared resource's platform editor: permission, admin Worker routes, view registry entry, and view.
-  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Crop", "--shared"], adminProject);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Crop", "--shared", "--field", "kind:enum(fruit|vegetable)?", "perennial:boolean?", "spacing:integer?"], adminProject);
+  // Explicit, read-only platform access to a tenant resource.
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "generate", "resource", "Article"], adminProject);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "resource", "admin-read", "Article", "--yes"], adminProject);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], adminProject);
   await run("pnpm", ["typecheck"], adminProject);
   await run("pnpm", ["--filter", "./apps/admin", "build"], adminProject);
@@ -389,6 +392,17 @@ try {
       "leaves a rotated session without assurance when its prior session had none",
       "keeps an enrollment session at its prior assurance, then records MFA only for a second-factor sign-in",
       "upgrades a signed-in operator who steps up with an enrolled second factor",
+    ]);
+    // The admin canary's generated resources migrate into their own database.
+    const adminDatabaseUrl = new URL(process.env.TRESTLE_GENERATED_DATABASE_URL);
+    adminDatabaseUrl.pathname = "/trestle_admin_canary";
+    await run(process.execPath, ["-e", `const postgres = require("postgres"); const sql = postgres(${JSON.stringify(process.env.TRESTLE_GENERATED_DATABASE_URL)}, { max: 1 }); (async () => { await sql.unsafe("drop database if exists trestle_admin_canary with (force)"); await sql.unsafe("create database trestle_admin_canary"); await sql.end(); })().catch((error) => { console.error(error); process.exit(1); });`], path.join(adminProject, "packages", "db"));
+    await run("pnpm", ["db:migrate"], adminProject, { DATABASE_URL: adminDatabaseUrl.toString() });
+    await requireScenarios(adminProject, "./packages/db", ["src/article-platform.integration.test.ts", "src/crop-editor.integration.test.ts", "src/crop-rls.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: adminDatabaseUrl.toString() }, [
+      "lets the platform role read every organization's rows and change none",
+      "audits opening a record on its organization",
+      "audits each change and rejects stale revisions",
+      "is readable by every tenant and writable by none",
     ]);
     await requireScenarios(adminProject, "./packages/db", ["src/assurance.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "records, upgrades, and cascades how a session was authenticated",

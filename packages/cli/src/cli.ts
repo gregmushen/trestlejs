@@ -22,6 +22,7 @@ import { generateEmail } from "./generate-email.js";
 import { generateAdminModule } from "./generate-admin-module.js";
 import { addResourceField, generateResource, generateResourceMigration, names, parseResourceField } from "./generate-resource.js";
 import { sharedEditorPermission } from "./generate-shared-resource.js";
+import { adminReadPermission, enableAdminRead } from "./generate-admin-read.js";
 import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
@@ -341,6 +342,17 @@ export function createProgram(runtime: CliRuntime): Command {
       const field = parseResourceField(fieldDefinition);
       const changed = await addResourceField(context.root, context.manifest, resourceName, field);
       runtime.stdout(`Added ${field.name} to ${resourceName}\n${changed.map((file) => `  ${file}`).join("\n")}\n`);
+    });
+
+  resource.command("admin-read")
+    .description("explicitly grant the platform admin read-only access to a tenant resource across organizations")
+    .argument("<resource>", "existing PascalCase tenant resource")
+    .option("--yes", "confirm the permission, RLS policy, SELECT grant, admin view, and migration")
+    .action(async (resourceName: string, options: { yes?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      if (!options.yes) throw new CliFailure(`resource admin-read registers ${adminReadPermission(names(resourceName))}, adds a trestle_platform select policy and SELECT grant, and generates an audited admin view; rerun with --yes to apply`);
+      const changed = await enableAdminRead(context.root, context.manifest, resourceName);
+      runtime.stdout(`Granted the platform admin read access to ${resourceName}\n${changed.map((file) => `  ${file}`).join("\n")}\nNo platform role includes ${adminReadPermission(names(resourceName))} yet; add it to one in packages/authz/src/role-definitions.ts.\n`);
     });
 
   resource.command("migrate-relations")

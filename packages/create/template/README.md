@@ -653,6 +653,17 @@ shared resource (`cropId:relation?:Crop:restrict`) with a plain foreign key,
 because the shared parent has no tenant to match. Shared resources cannot
 reference tenant resources.
 
+The platform admin cannot read tenant resources by default. To let operators
+browse one across organizations, declare it with
+`trestle resource admin-read Article --yes`. That registers
+`platform.articles.read` and adds an RLS select policy and a `SELECT` grant for
+`trestle_platform` only; it never grants writes. It also generates admin Worker
+routes and a list/detail view (filter by organization, cursor pagination).
+Opening a record writes `platform.article.viewed` to that organization's audit
+history. Changes to tenant data stay in the customer application's own
+operations. As with shared resources, add the permission to a platform role
+before anyone can use it.
+
 `pnpm db:generate` preserves a strictly increasing migration journal timestamp,
 including when an older checked-in migration was future-dated. A generated
 release canary checks that running it without schema changes creates no drift.

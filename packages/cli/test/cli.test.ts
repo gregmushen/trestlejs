@@ -716,5 +716,12 @@ export const applicationEventCatalog = defineEventCatalog([
     const sharedToTenant = capture(root);
     expect(await executeCli(["generate", "resource", "Variety", "--shared", "--field", "plantingId:relation?:Planting:restrict"], sharedToTenant.runtime)).toBe(1);
     expect(sharedToTenant.stderr()).toContain("shared resources cannot reference tenant resource Planting");
+
+    const unconfirmed = capture(root);
+    expect(await executeCli(["resource", "admin-read", "Article"], unconfirmed.runtime)).toBe(1);
+    expect(unconfirmed.stderr()).toContain("platform.articles.read");
+    const noAdmin = capture(root);
+    expect(await executeCli(["resource", "admin-read", "Article", "--yes"], noAdmin.runtime)).toBe(1);
+    expect(noAdmin.stderr()).toContain("enable the platform admin");
   });
 });
