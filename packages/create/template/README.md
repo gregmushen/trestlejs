@@ -588,7 +588,7 @@ manual review, so add `TRESTLE_EXPERIMENTAL: "1"` to the `env:` of the
 Upgrading a project generated before durable billing reconciliation: billing
 source is application-owned, so `trestle upgrade` does not rewrite it. Copy the
 template's `packages/db/src/billing-schema.ts`, `billing-events.ts` and
-`outbox.ts`, migration `0035` (with its snapshot and journal entry),
+`outbox.ts`, migration `0036` (with its snapshot and journal entry),
 `packages/billing/src/reconciliation.ts` and its export,
 `packages/integrations/src/payments/adapters/local.ts` and `events.ts`, and
 the Worker's `billing-reconciliation.ts`, `services.ts`, Stripe route and
