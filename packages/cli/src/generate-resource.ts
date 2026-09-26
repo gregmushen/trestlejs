@@ -279,6 +279,37 @@ function sharedRelationIntegrationTest(resource: ResourceNames, field: ResourceF
 `;
 }
 
+/** Operation contracts for a generated resource's routes, appended to its contract module. */
+export function resourceApiOperationsSource(resource: ResourceNames, routePath: string, permissions: { read: string; write?: string }, tag: string): string {
+  const params = "params: z.object({ id: z.string().uuid() })";
+  const list = `{ method: "GET", path: "${routePath}", operationId: "list${resource.className}Records", summary: "List ${resource.className} records", classification: "browser-internal", tags: ["${tag}"], permission: "${permissions.read}", query: z.object({ cursor: z.string().uuid().optional(), limit: z.coerce.number().int().optional() }), responses: { 200: z.object({ ${resource.camel}s: z.array(${resource.camel}Schema), nextCursor: z.string().uuid().optional() }) } }`;
+  const get = `{ method: "GET", path: "${routePath}/:id", operationId: "get${resource.className}", summary: "Read one ${resource.className}", classification: "browser-internal", tags: ["${tag}"], permission: "${permissions.read}", ${params}, responses: { 200: z.object({ ${resource.camel}: ${resource.camel}Schema }) }, errors: [404] }`;
+  const writes = permissions.write ? [
+    `{ method: "POST", path: "${routePath}", operationId: "create${resource.className}", summary: "Create a ${resource.className}", classification: "browser-internal", tags: ["${tag}"], permission: "${permissions.write}", body: ${resource.camel}CreateSchema, responses: { 201: z.object({ ${resource.camel}: ${resource.camel}Schema }) } }`,
+    `{ method: "PATCH", path: "${routePath}/:id", operationId: "update${resource.className}", summary: "Update a ${resource.className}; send If-Match with the loaded revision to reject concurrent changes", classification: "browser-internal", tags: ["${tag}"], permission: "${permissions.write}", ${params}, body: ${resource.camel}UpdateSchema, responses: { 200: z.object({ ${resource.camel}: ${resource.camel}Schema }) }, errors: [404, 409] }`,
+    `{ method: "DELETE", path: "${routePath}/:id", operationId: "delete${resource.className}", summary: "Delete a ${resource.className}", classification: "browser-internal", tags: ["${tag}"], permission: "${permissions.write}", ${params}, responses: { 204: null }, errors: [404, 409] }`,
+  ] : [];
+  return `
+/** Route contracts for the generated OpenAPI document (packages/contracts/src/api.ts). */
+export const ${resource.camel}ApiOperations = [
+${[list, get, ...writes].map((entry) => `  ${entry},`).join("\n")}
+] as const satisfies readonly ApiOperation[];
+`;
+}
+
+/** Registers a resource's operations in the project's API operation list, when the project has one. */
+export async function registerApiOperations(root: string, contractsPath: string, resource: ResourceNames): Promise<string | undefined> {
+  const apiPath = path.join(root, contractsPath, "src", "api.ts");
+  const source = await readFile(apiPath, "utf8").catch(() => undefined);
+  if (source === undefined || !source.includes("  // trestle:api-operations")) return undefined;
+  const importLine = `import { ${resource.camel}ApiOperations } from "./resources/${resource.kebab}.js";`;
+  const entry = `  ...${resource.camel}ApiOperations,`;
+  if (source.includes(entry)) return undefined;
+  const withImport = source.includes(importLine) ? source : source.replace(/(\nimport [^\n]*;\n)(?!import )/u, `$1${importLine}\n`);
+  await writeFile(apiPath, withImport.replace("  // trestle:api-operations", `${entry}\n  // trestle:api-operations`), "utf8");
+  return path.relative(root, apiPath);
+}
+
 export async function generateResource(root: string, manifest: ProjectManifest, resource: SetupResource): Promise<string[]> {
   if (resource.tenant === false) return await generateSharedResource(root, manifest, resource);
   const contextSource = await readFile(path.join(root, manifest.packages.context ?? "packages/context", "src", "index.ts"), "utf8").catch(() => undefined);
@@ -392,6 +423,8 @@ export async function generateResource(root: string, manifest: ProjectManifest, 
 
   await writeGenerated(targets[1]!, `import { z } from "zod";
 
+import type { ApiOperation } from "../api.js";
+
 export const ${n.camel}CreateSchema = z.object({
 ${resource.fields.map((field) => `  ${field.name}: ${zodExpression(field)},`).join("\n")}
 });
@@ -407,7 +440,7 @@ ${resource.fields.map((field) => `  ${field.name}: ${field.required ? zodExpress
 export type ${n.className} = z.infer<typeof ${n.camel}Schema>;
 export type Create${n.className} = z.infer<typeof ${n.camel}CreateSchema>;
 export type Update${n.className} = z.infer<typeof ${n.camel}UpdateSchema>;
-`);
+${resourceApiOperationsSource(n, routePath, { read: readPermission, write: writePermission }, n.pluralKebab)}`);
 
   await writeGenerated(targets[2]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
 
@@ -922,6 +955,8 @@ ${relations.filter((field) => !sharedTargets.has(field.references!.resource)).sl
 `);
 
   await appendExport(path.join(root, contractsPath, "src", "index.ts"), `export * from "./resources/${n.kebab}.js";`);
+  const apiRegistry = await registerApiOperations(root, contractsPath, n);
+  if (apiRegistry) created.push(apiRegistry);
   await appendExport(path.join(root, domainPath, "src", "index.ts"), `export * from "./resources/${n.kebab}.js";`);
   await appendExport(path.join(root, dataPath, "src", "index.ts"), `export * from "./resources/${n.kebab}-repository.js";`);
   await appendExport(path.join(root, dbPath, "src", "index.ts"), `export * from "./${n.kebab}-schema.js";`);

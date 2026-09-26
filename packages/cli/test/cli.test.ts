@@ -680,6 +680,10 @@ export const applicationEventCatalog = defineEventCatalog([
     expect(articleRoutes).toContain('expectedRevision(context.req.header("if-match"))');
     expect(articleRoutes).toContain('error: "revision_conflict"');
     expect(articleRoutes).toContain(", 409)");
+    const articleContract = await readFile(path.join(root, "packages/contracts/src/resources/article.ts"), "utf8");
+    expect(articleContract).toContain("export const articleApiOperations = [");
+    expect(articleContract).toContain('operationId: "updateArticle"');
+    expect(articleContract).toContain("errors: [404, 409]");
     const articleApi = await readFile(path.join(root, "apps/app/src/api/article.ts"), "utf8");
     expect(articleApi).toContain('"if-match": `"${options.expectedRevision}"`');
     const articleEvents = await readFile(path.join(root, "packages/data/src/resources/article-events.integration.test.ts"), "utf8");

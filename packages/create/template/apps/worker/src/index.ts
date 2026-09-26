@@ -1,3 +1,4 @@
+import { apiReferencePage, customerOpenApi } from "./openapi.js";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
@@ -515,6 +516,10 @@ app.get("/api/me", async (context) => {
 
   return context.json({ user: session.user, session: session.session });
 });
+
+// Local development documents every route; elsewhere only public and machine routes are published.
+app.get("/api/openapi.json", (context) => context.json(customerOpenApi(context.env.APP_ENV).document));
+app.get("/api/docs", (context) => context.env.APP_ENV === "local" ? context.html(apiReferencePage("/api/openapi.json")) : context.json({ error: "not_found" }, 404));
 
 app.get("/api/health", (context) =>
   context.json(

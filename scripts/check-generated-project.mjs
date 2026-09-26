@@ -143,6 +143,13 @@ try {
   if (!articleScreen.includes('session?.user.id, organizationId') || !articleScreen.includes('enabled: Boolean(session?.user.id && organizationId)')) {
     throw new Error("Generated resource query is not scoped to both the current user and organization");
   }
+  // API contracts: the generated document covers generated resources, and drift is detected.
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "api", "spec", "--out", "openapi/app.json"], project);
+  await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "api", "spec", "--out", "openapi/app.json", "--check"], project);
+  const apiDocument = JSON.parse(await readFile(path.join(project, "openapi", "app.json"), "utf8"));
+  if (apiDocument.paths["/api/articles/{id}"]?.patch?.operationId !== "updateArticle" || !apiDocument.paths["/api/crops"]?.get || apiDocument.paths["/api/crops"]?.post) {
+    throw new Error("Generated OpenAPI document does not describe the generated resources");
+  }
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "ci", "validate"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "architecture", "check"], project);
   await run(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "resource", "add-field", "Article", "archived:boolean?", "--yes"], project);
