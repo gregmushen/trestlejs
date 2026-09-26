@@ -42,6 +42,13 @@ alpha.5. The existing-project admin enablement and SetupPlan fixes are in the
 published CLI, but a successful upgrade of the alpha.90 admin canary to
 beta.3 has **not** been demonstrated.
 
+The `check:beta-upgrade` CI gate separately creates a pristine project from
+published beta.1, installs published beta.3, reviews the exact append-only
+migration tail and backup-verify opt-in, then checks source parity, two
+unchanged tenant records, and forced PostgreSQL RLS. This is published-package
+upgrade evidence for that clean project; it is not evidence that an edited
+alpha.90 admin canary can be upgraded automatically.
+
 ## Separate admin-enabled canary evidence
 
 [Platform canary PR #1](https://github.com/gregmushen/trestlejs-platform-canary/pull/1)
@@ -73,7 +80,7 @@ hosting or the newer read-only support-view handoff merged in
 | **Known defect** | Intermittent Cloudflare Pages 522s | Isolated preview runs observed transient 522 responses soon after deployment. A bounded smoke retry mitigates startup transients but does not establish sustained reliability or remove the underlying intermittent response. |
 | **Not tested** | Sustained Worker reliability | Repeated/concurrent deployed requests, including auth and database operations under load, have not been measured long enough to establish reliability. |
 | **Not tested** | Authenticated admin and support-view staging | The alpha.90 admin canary has passed hosted anonymous-denial checks, but no deployed operator sign-in, privileged action, support-session entry/exit, or read-only customer-app support view has passed. Upgrade or regenerate an isolated admin canary from the published beta, bootstrap an operator, and test those paths without a real-user email send. |
-| **Not tested** | Production promotion and published beta upgrade | Both canary PRs are merged; neither is an open promotion PR. Exact-commit production promotion remains blocked by the production prerequisites above. A published generated-project upgrade to beta.3, including the alpha.90 admin canary's `template-source` manual-review outcome, remains to be rehearsed or repaired. |
+| **Not tested** | Production promotion and older admin-canary upgrade | Both canary PRs are merged; neither is an open promotion PR. Exact-commit production promotion remains blocked by the production prerequisites above. The clean published beta.1 → beta.3 upgrade has a PostgreSQL-backed gate; the alpha.90 admin canary still reports `template-source` manual review and has not been migrated to beta.3. |
 
 ## Release interpretation
 
