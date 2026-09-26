@@ -20,6 +20,9 @@ import { executeCommittedEventById } from "../job-runtime.js";
  * Enable with TRESTLE_INNGEST_CONFORMANCE=1.
  */
 const devPort = 18_288;
+/** Set to run against an existing self-hosted Inngest server instead of the Dev Server. */
+const selfHosted = process.env.TRESTLE_INNGEST_URL ? { url: process.env.TRESTLE_INNGEST_URL.replace(/\/$/u, ""), signingKey: process.env.TRESTLE_INNGEST_SIGNING_KEY!, eventKey: process.env.TRESTLE_INNGEST_EVENT_KEY!, serveOrigin: process.env.TRESTLE_INNGEST_SERVE_ORIGIN ?? `http://127.0.0.1:${13_939}` } : undefined;
+const inngestUrl = selfHosted?.url ?? `http://127.0.0.1:${devPort}`;
 const appPort = 13_939;
 const quiet = { info() {}, warn() {}, error() {}, debug() {}, child() { return quiet; } } as never;
 const finished = new Set(["Completed", "Failed", "Cancelled"]);
@@ -35,12 +38,14 @@ function listen(app: Hono): Promise<Server> {
     response.writeHead(result.status, Object.fromEntries(result.headers));
     response.end(Buffer.from(await result.arrayBuffer()));
   });
-  return new Promise((resolve) => server.listen(appPort, "127.0.0.1", () => resolve(server)));
+  return new Promise((resolve) => server.listen(appPort, process.env.TRESTLE_INNGEST_LISTEN_HOST ?? "127.0.0.1", () => resolve(server)));
 }
 
 async function inngestHarness(connectionString: string): Promise<ConformanceHarness> {
   let version = "v1";
-  const inngest = new Inngest({ id: "trestle-conformance", isDev: true, baseUrl: `http://127.0.0.1:${devPort}` });
+  const inngest = selfHosted
+    ? new Inngest({ id: "trestle-conformance", baseUrl: selfHosted.url, signingKey: selfHosted.signingKey, eventKey: selfHosted.eventKey })
+    : new Inngest({ id: "trestle-conformance", isDev: true, baseUrl: inngestUrl });
   const probe = inngest.createFunction(
     { id: "trestle-conformance-event", retries: 5, triggers: [{ event: inngestEventName }] },
     async ({ event, step, runId }) => {
@@ -50,23 +55,30 @@ async function inngestHarness(connectionString: string): Promise<ConformanceHarn
     },
   );
   const app = new Hono();
-  app.on(["GET", "POST", "PUT"], "/api/jobs/inngest", serve({ client: inngest, functions: [probe] }));
+  app.on(["GET", "POST", "PUT"], "/api/jobs/inngest", serve({ client: inngest, functions: [probe], ...(selfHosted ? { serveOrigin: selfHosted.serveOrigin } : {}) }));
   let server = await listen(app);
-  const dev: ChildProcess = spawn("npx", ["--yes", "inngest-cli@1.45.1", "dev", "--port", String(devPort), "-u", `http://127.0.0.1:${appPort}/api/jobs/inngest`, "--no-discovery", "--no-poll"], { stdio: "ignore", detached: true });
-  for (let waited = 0; ; waited += 1_000) {
-    const registered = await fetch(`http://127.0.0.1:${devPort}/dev`).then((response) => response.ok ? response.json() as Promise<{ functions?: unknown[] }> : undefined).catch(() => undefined);
-    if (registered?.functions?.length) break;
-    if (waited > 180_000) throw new Error("the Inngest Dev Server did not register the conformance function");
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  let dev: ChildProcess | undefined;
+  if (selfHosted) {
+    // A self-hosted server learns about the app when the app registers itself.
+    const synced = await fetch(`http://127.0.0.1:${appPort}/api/jobs/inngest`, { method: "PUT" });
+    if (!synced.ok) throw new Error(`registering with the self-hosted Inngest server failed (HTTP ${synced.status})`);
+  } else {
+    dev = spawn("npx", ["--yes", "inngest-cli@1.45.1", "dev", "--port", String(devPort), "-u", `http://127.0.0.1:${appPort}/api/jobs/inngest`, "--no-discovery", "--no-poll"], { stdio: "ignore", detached: true });
+    for (let waited = 0; ; waited += 1_000) {
+      const registered = await fetch(`http://127.0.0.1:${devPort}/dev`).then((response) => response.ok ? response.json() as Promise<{ functions?: unknown[] }> : undefined).catch(() => undefined);
+      if (registered?.functions?.length) break;
+      if (waited > 180_000) throw new Error("the Inngest Dev Server did not register the conformance function");
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
   }
   const events = new Map<string, string[]>();
   // A run between retries is reported "Failed" with no ended_at; only ended_at marks a finished run.
-  const runsFor = async (id: string) => ((await (await fetch(`http://127.0.0.1:${devPort}/v1/events/${id}/runs`)).json()) as { data: Array<{ status: string; run_started_at: string; ended_at: string | null }> }).data;
+  const runsFor = async (id: string) => ((await (await fetch(`${inngestUrl}/v1/events/${id}/runs`, selfHosted ? { headers: { authorization: `Bearer ${selfHosted.signingKey}` } } : {})).json()) as { data: Array<{ status: string; run_started_at: string; ended_at: string | null }> }).data;
   const latest = async (eventId: string) => (await Promise.all((events.get(eventId) ?? []).map(runsFor))).flat().sort((left, right) => right.run_started_at.localeCompare(left.run_started_at))[0];
   const publisher: ConformanceHarness["publisher"] = {
     send: async (envelope, delivery) => {
       // The Worker's own send, to the Dev Server.
-      const ids = await sendCommittedEventToInngest({ environment: { INNGEST_DEV: "1", INNGEST_BASE_URL: `http://127.0.0.1:${devPort}` }, eventId: envelope.id, generation: delivery?.generation ?? 0 });
+      const ids = await sendCommittedEventToInngest({ environment: selfHosted ? { INNGEST_EVENT_KEY: selfHosted.eventKey, INNGEST_BASE_URL: selfHosted.url } : { INNGEST_DEV: "1", INNGEST_BASE_URL: inngestUrl }, eventId: envelope.id, generation: delivery?.generation ?? 0 });
       events.set(envelope.id, [...(events.get(envelope.id) ?? []), ...ids]);
     },
   };
@@ -104,7 +116,7 @@ async function inngestHarness(connectionString: string): Promise<ConformanceHarn
     },
     async close() {
       await new Promise((resolve) => server.close(resolve));
-      try { process.kill(-dev.pid!, "SIGTERM"); } catch { /* already stopped */ }
+      if (dev) { try { process.kill(-dev.pid!, "SIGTERM"); } catch { /* already stopped */ } }
     },
   };
 }

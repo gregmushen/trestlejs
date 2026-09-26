@@ -323,6 +323,28 @@ describe("TrestleJS CLI", () => {
     expect(push.stderr()).toContain("does not use trigger.dev");
   });
 
+  it("scaffolds self-hosted job runtimes, gating the undeployed Cloudflare Container profile", async () => {
+    const root = await fixture();
+    const docker = capture(root);
+    expect(await executeCli(["jobs", "self-host", "inngest"], docker.runtime), docker.stderr()).toBe(0);
+    const compose = await readFile(path.join(root, "infra/inngest/docker-compose.yml"), "utf8");
+    expect(compose).toContain("image: inngest/inngest:v1.45.1");
+    expect(compose).toContain("INNGEST_REDIS_URI");
+    expect(compose).toContain("127.0.0.1:8288:8288");
+    expect(await readFile(path.join(root, "infra/inngest/README.md"), "utf8")).toContain("Redis** (`INNGEST_REDIS_URI`) is required");
+    const gated = capture(root);
+    expect(await executeCli(["jobs", "self-host", "inngest", "--target", "cloudflare-container"], gated.runtime)).toBe(1);
+    expect(gated.stderr()).toContain("--experimental");
+    expect(await executeCli(["--experimental", "jobs", "self-host", "inngest", "--target", "cloudflare-container"], capture(root).runtime)).toBe(0);
+    expect(await readFile(path.join(root, "infra/inngest/cloudflare/wrangler.jsonc"), "utf8")).toContain('"max_instances": 1');
+    await writeFile(path.join(root, "infra/inngest/README.md"), "edited\n");
+    const collision = capture(root);
+    expect(await executeCli(["jobs", "self-host", "inngest"], collision.runtime)).toBe(1);
+    expect(collision.stderr()).toContain("already exists");
+    expect(await executeCli(["jobs", "self-host", "trigger"], capture(root).runtime)).toBe(0);
+    expect(await readFile(path.join(root, "infra/trigger/README.md"), "utf8")).toContain("TRIGGER_IMAGE_TAG=v4.6.4");
+  });
+
   it("requires an explicit console authority plane", async () => {
     const root = await fixture();
     const output = capture(root);

@@ -11,7 +11,9 @@
   "dependencies": {
     "@__TRESTLE_PROJECT_NAME__/context": "workspace:*",
     "@__TRESTLE_PROJECT_NAME__/db": "workspace:*",
-    "@trigger.dev/sdk": "4.6.4"
+    "@trigger.dev/python": "4.6.4",
+    "@trigger.dev/sdk": "4.6.4",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@trigger.dev/build": "4.6.4",
