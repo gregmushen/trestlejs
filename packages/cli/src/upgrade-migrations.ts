@@ -155,3 +155,94 @@ export function formatMigrationAudit(report: MigrationAudit): string {
   lines.push(report.requiresReview ? "Review the application migration chain and replay it against an isolated database. This audit never rewrites journal history or proves schema equivalence." : "Journal entries and SQL checksums match. This audit does not prove deployed migration state.");
   return `${lines.join("\n")}\n`;
 }
+
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+
+/**
+ * Three-way merge of Drizzle schema snapshots: application changes since the
+ * common base are laid over the target. Both sides changing the same value
+ * differently is a conflict, reported by path; nothing is guessed.
+ */
+export function mergeSnapshots(base: JsonValue | undefined, application: JsonValue | undefined, target: JsonValue | undefined, at = "$", conflicts: string[] = []): JsonValue | undefined {
+  if (same(application, target)) return application;
+  if (same(base, application)) return target;
+  if (same(base, target)) return application;
+  const isObject = (value: unknown): value is Record<string, JsonValue> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  if (isObject(application) && isObject(target) && (base === undefined || isObject(base))) {
+    const merged: Record<string, JsonValue> = {};
+    for (const key of new Set([...Object.keys(application), ...Object.keys(target)])) {
+      const value = mergeSnapshots((base as Record<string, JsonValue> | undefined)?.[key], application[key], target[key], `${at}.${key}`, conflicts);
+      if (value !== undefined) merged[key] = value;
+    }
+    return merged;
+  }
+  conflicts.push(at);
+  return application;
+}
+
+export type MigrationRebase = Readonly<{ adopted: readonly string[]; moved: ReadonlyArray<Readonly<{ from: string; to: string }>> }>;
+
+const pad = (index: number) => String(index).padStart(4, "0");
+
+/**
+ * Resolves a diverged journal where the application generated migrations after
+ * the last shared release and the target added its own: adopts the target's new
+ * migrations unchanged, then renumbers the application's after them. SQL bytes
+ * and journal timestamps are kept, so a database that already applied an
+ * application migration still recognizes it; snapshots are three-way merged so
+ * the next `db:generate` diffs against the combined schema. Databases that
+ * applied application migrations before the target's are caught up with
+ * `pnpm db:migrate -- --apply-skipped`, never silently.
+ */
+export async function rebaseMigrations(applicationRoot: string, templateRoot = defaultTemplateRoot): Promise<MigrationRebase> {
+  const audit = await auditMigrations(applicationRoot, templateRoot);
+  if (audit.classification === "matching" || audit.classification === "application-ahead") return { adopted: [], moved: [] };
+  if (audit.classification !== "diverged" && audit.classification !== "target-ahead") throw new Error(`The migration journal is ${audit.classification}; resolve it manually: ${audit.issues.join("; ")}`);
+  const directory = path.join(applicationRoot, migrationPath);
+  const templateDirectory = path.join(templateRoot, migrationPath);
+  const readJson = async (root: string, relative: string) => JSON.parse((await safeFile(root, path.join(migrationPath, relative))).toString("utf8")) as Record<string, JsonValue>;
+  const applicationJournal = await readJson(applicationRoot, "meta/_journal.json") as { entries: Array<Record<string, JsonValue>> } & Record<string, JsonValue>;
+  const targetJournal = await readJson(templateRoot, "meta/_journal.json") as { entries: Array<Record<string, JsonValue>> };
+  const prefix = audit.commonPrefix;
+  const targetCount = targetJournal.entries.length;
+  const tail = applicationJournal.entries.slice(prefix);
+  const base = prefix > 0 ? await readJson(applicationRoot, `meta/${pad(prefix - 1)}_snapshot.json`) : undefined;
+  const targetLast = await readJson(templateRoot, `meta/${pad(targetCount - 1)}_snapshot.json`);
+
+  const moved: Array<{ from: string; to: string; entry: Record<string, JsonValue>; sql: Buffer; snapshot: Record<string, JsonValue> }> = [];
+  let previousId = targetLast.id as string;
+  const conflicts: string[] = [];
+  for (const [offset, entry] of tail.entries()) {
+    const from = entry.tag as string;
+    const index = targetCount + offset;
+    const to = `${pad(index)}_${from.slice(from.indexOf("_") + 1)}`;
+    const snapshot = await readJson(applicationRoot, `meta/${pad(prefix + offset)}_snapshot.json`);
+    // Snapshot identity is rewritten below; only the schema is merged.
+    const schema = ({ id: _id, prevId: _prevId, ...rest }: Record<string, JsonValue>) => rest;
+    const merged = mergeSnapshots(base ? schema(base) : undefined, schema(snapshot), schema(targetLast), `${from}`, conflicts) as Record<string, JsonValue>;
+    moved.push({ from, to, entry: { ...entry, idx: index, tag: to }, sql: await safeFile(applicationRoot, path.join(migrationPath, `${from}.sql`)), snapshot: { ...merged, id: snapshot.id!, prevId: previousId } });
+    previousId = snapshot.id as string;
+  }
+  if (conflicts.length) throw new Error(`Application and framework migrations change the same schema values; resolve by hand: ${conflicts.slice(0, 10).join(", ")}`);
+
+  const adopted: string[] = [];
+  for (const entry of targetJournal.entries.slice(prefix)) {
+    const tag = entry.tag as string;
+    const index = entry.idx as number;
+    await writeFile(path.join(directory, `${tag}.sql`), await safeFile(templateRoot, path.join(migrationPath, `${tag}.sql`)));
+    await writeFile(path.join(directory, "meta", `${pad(index)}_snapshot.json`), await readFile(path.join(templateDirectory, "meta", `${pad(index)}_snapshot.json`)));
+    adopted.push(tag);
+  }
+  const { rm } = await import("node:fs/promises");
+  for (const migration of moved) if (!adopted.includes(migration.from)) await rm(path.join(directory, `${migration.from}.sql`));
+  for (const migration of moved) {
+    await writeFile(path.join(directory, `${migration.to}.sql`), migration.sql);
+    await writeFile(path.join(directory, "meta", `${pad(migration.entry.idx as number)}_snapshot.json`), `${JSON.stringify(migration.snapshot, null, 2)}\n`);
+  }
+  applicationJournal.entries = [...applicationJournal.entries.slice(0, prefix), ...targetJournal.entries.slice(prefix), ...moved.map(({ entry }) => entry)];
+  await writeFile(path.join(directory, "meta", "_journal.json"), `${JSON.stringify(applicationJournal, null, 2)}\n`);
+  const after = await auditMigrations(applicationRoot, templateRoot);
+  if (after.classification !== "application-ahead" && after.classification !== "matching") throw new Error(`Rebase left the journal ${after.classification}`);
+  return { adopted, moved: moved.map(({ from, to }) => ({ from, to })) };
+}

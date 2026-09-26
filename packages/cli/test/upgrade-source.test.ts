@@ -171,7 +171,7 @@ describe("adjacent-release source apply", () => {
     try {
       await writeFile(path.join(template, "package.json"), JSON.stringify({ name: "sample-app", devDependencies: { foo: "1", trestlejs: TRESTLEJS_VERSION } }));
       await writeFile(path.join(root, "package.json"), JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION, foo: "1" }, name: "sample-app" }));
-      expect((await planSourceDiff(root, "sample-app", template)).entries.find(({ path: relative }) => relative === "package.json")?.classification).toBe("modified");
+      expect((await planSourceDiff(root, "sample-app", template)).entries.find(({ path: relative }) => relative === "package.json")?.classification).toBe("same");
       expect(await applySourceUpgrade(root, "sample-app", template)).toEqual(["added.txt", "changed.txt"]);
       const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
       manifest.scripts = { unsafe: "changed by application" };
@@ -250,18 +250,58 @@ describe("adjacent-release source apply", () => {
     } finally { await rm(parent, { recursive: true, force: true }); }
   });
 
-  it("fails before writing when an application edit or protected configuration would change", async () => {
+  it("fails before writing when a merge has no previous template or protected configuration would change", async () => {
     const { parent, root, template } = await fixture();
+    const previousOverride = process.env.TRESTLE_UPGRADE_SOURCE_TEMPLATE;
+    process.env.TRESTLE_UPGRADE_SOURCE_TEMPLATE = path.join(parent, "missing-template");
     try {
       await writeFile(path.join(root, "changed.txt"), "my edit\n");
-      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("manual review");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("TRESTLE_UPGRADE_SOURCE_TEMPLATE");
       await expect(readFile(path.join(root, "added.txt"))).rejects.toThrow();
       await writeFile(path.join(root, "changed.txt"), "old sample-app\n");
       await mkdir(path.join(template, ".github", "workflows"), { recursive: true });
       await writeFile(path.join(template, ".github", "workflows", "deploy.yml"), "new deployment\n");
-      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("deploy.yml");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("--accept .github/workflows/deploy.yml");
       await expect(readFile(path.join(root, "added.txt"))).rejects.toThrow();
-    } finally { await rm(parent, { recursive: true, force: true }); }
+      expect(await applySourceUpgrade(root, "sample-app", template, { accept: [".github/workflows/deploy.yml"] })).toContain(".github/workflows/deploy.yml");
+      await expect(applySourceUpgrade(root, "sample-app", template, { accept: ["changed.txt"] })).rejects.toThrow("not protected template files");
+    } finally {
+      if (previousOverride === undefined) delete process.env.TRESTLE_UPGRADE_SOURCE_TEMPLATE; else process.env.TRESTLE_UPGRADE_SOURCE_TEMPLATE = previousOverride;
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps application-only edits and three-way merges files both sides changed", async () => {
+    const { parent, root, template } = await fixture();
+    const previous = path.join(parent, "previous-template");
+    const previousOverride = process.env.TRESTLE_UPGRADE_SOURCE_TEMPLATE;
+    process.env.TRESTLE_UPGRADE_SOURCE_TEMPLATE = previous;
+    try {
+      await mkdir(previous, { recursive: true });
+      await writeFile(path.join(previous, "changed.txt"), "old __TRESTLE_PROJECT_NAME__\n");
+      await writeFile(path.join(template, "changed.txt"), "new sample-app\nframework line\n");
+      await writeFile(path.join(template, "stable.txt"), "stable\n");
+      await writeFile(path.join(root, "stable.txt"), "stable\napplication line\n");
+      const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+      const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+      baseline.files["stable.txt"] = hash("stable\n");
+      await writeFile(baselinePath, JSON.stringify(baseline));
+      await writeFile(path.join(root, "changed.txt"), "old sample-app\napplication note\n");
+      const report = await planSourceDiff(root, "sample-app", template);
+      expect(report.entries.find(({ path: relative }) => relative === "stable.txt")?.classification).toBe("kept");
+      expect(report.entries.find(({ path: relative }) => relative === "changed.txt")?.classification).toBe("modified");
+      await applySourceUpgrade(root, "sample-app", template);
+      expect(await readFile(path.join(root, "changed.txt"), "utf8")).toBe("new sample-app\nframework line\napplication note\n");
+      expect(await readFile(path.join(root, "stable.txt"), "utf8")).toBe("stable\napplication line\n");
+      expect(JSON.parse(await readFile(path.join(root, ".trestle", "upgrade-state.json"), "utf8")).merged).toEqual(["changed.txt"]);
+
+      await writeFile(path.join(root, "changed.txt"), "rewritten by the application\n");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("conflicts marked with <<<<<<<");
+      expect(await readFile(path.join(root, "changed.txt"), "utf8")).toContain("<<<<<<< application");
+    } finally {
+      if (previousOverride === undefined) delete process.env.TRESTLE_UPGRADE_SOURCE_TEMPLATE; else process.env.TRESTLE_UPGRADE_SOURCE_TEMPLATE = previousOverride;
+      await rm(parent, { recursive: true, force: true });
+    }
   });
 
   it("refuses symlinked parent directories", async () => {
@@ -271,7 +311,7 @@ describe("adjacent-release source apply", () => {
       await writeFile(path.join(template, "nested", "thing.txt"), "target\n");
       await symlink(parent, path.join(root, "nested"));
       expect((await planSourceDiff(root, "sample-app", template)).entries.find(({ path: relative }) => relative === "nested/thing.txt")?.classification).toBe("unsafe");
-      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("manual review");
+      await expect(applySourceUpgrade(root, "sample-app", template)).rejects.toThrow("nested/thing.txt (unsafe)");
       await expect(readFile(path.join(root, "added.txt"))).rejects.toThrow();
     } finally { await rm(parent, { recursive: true, force: true }); }
   });

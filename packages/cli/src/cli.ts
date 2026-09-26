@@ -38,8 +38,8 @@ import { stripeDeploymentIssues, stripeServerKeyMatchesMode } from "./stripe-dep
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
-import { applySourceUpgrade, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
-import { auditMigrations, formatMigrationAudit } from "./upgrade-migrations.js";
+import { applySourceUpgrade, sourceFileDiff, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
+import { auditMigrations, formatMigrationAudit, rebaseMigrations } from "./upgrade-migrations.js";
 import {
   adminSecretValues,
   credentialsPaths,
@@ -191,8 +191,14 @@ export function createProgram(runtime: CliRuntime): Command {
   upgrade.command("diff")
     .description("inspect target-template paths without changing application-owned source")
     .option("--json", "emit versioned structured output")
-    .action(async (options: { json?: boolean }, command: Command) => {
+    .option("--path <file>", "print the unified diff from the application's file to the target template's")
+    .action(async (options: { json?: boolean; path?: string }, command: Command) => {
       const context = await projectContext(command, runtime);
+      if (options.path) {
+        const diff = await sourceFileDiff(context.root, context.manifest.project.name, options.path);
+        runtime.stdout(diff || `${options.path} already matches the target template.\n`);
+        return;
+      }
       const report = await planSourceDiff(context.root, context.manifest.project.name);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatSourceDiff(report));
     });
@@ -200,21 +206,33 @@ export function createProgram(runtime: CliRuntime): Command {
     .description("audit application and target migration journals without changing either chain")
     .option("--json", "emit versioned structured output")
     .option("--check", "fail when migration history differs or is invalid")
-    .action(async (options: { json?: boolean; check?: boolean }, command: Command) => {
+    .option("--rebase", "adopt the target's new migrations and renumber the application's after them, keeping SQL and timestamps")
+    .option("--yes", "confirm --rebase")
+    .action(async (options: { json?: boolean; check?: boolean; rebase?: boolean; yes?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
+      if (options.rebase) {
+        if (!options.yes) throw new CliFailure("migrations --rebase renames application migration files and rewrites the journal and snapshots; rerun with --yes after committing your work");
+        const rebased = await rebaseMigrations(context.root);
+        if (options.json) { runtime.stdout(`${JSON.stringify(structuredOutput(rebased), null, 2)}\n`); return; }
+        runtime.stdout(rebased.adopted.length || rebased.moved.length
+          ? `Adopted ${rebased.adopted.join(", ") || "no framework migrations"}.\n${rebased.moved.map(({ from, to }) => `Renumbered ${from} → ${to}`).join("\n")}\nDatabases that already applied the renumbered migrations need \`pnpm db:migrate -- --apply-skipped\` once, which applies the framework migrations Drizzle would otherwise skip.\n`
+          : "The migration journal already contains the target's migrations; nothing to rebase.\n");
+        return;
+      }
       const report = await auditMigrations(context.root);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatMigrationAudit(report));
       if (report.classification === "invalid") throw new CliFailure("migration journal audit is invalid");
       if (options.check && report.requiresReview) throw new CliFailure("migration history requires review");
     });
   upgrade.command("source-apply")
-    .description("apply only pristine adjacent-alpha application source; does not certify the upgrade")
+    .description("apply the adjacent release's template source: update pristine files, keep application-only edits, and three-way merge files both sides changed; does not certify the upgrade")
     .option("--yes", "confirm the reviewed source diff")
-    .action(async (options: { yes?: boolean }, command: Command) => {
+    .option("--accept <file...>", "apply these deployment or configuration files after reviewing each with trestle upgrade diff --path")
+    .action(async (options: { yes?: boolean; accept?: string[] }, command: Command) => {
       if (!options.yes) throw new CliFailure("upgrade source-apply requires --yes after reviewing trestle upgrade diff");
       const context = await projectContext(command, runtime);
-      const changed = await applySourceUpgrade(context.root, context.manifest.project.name);
-      runtime.stdout(`Applied ${changed.length} pristine source paths. Application edits were preserved. The framework version was not advanced; review migrations and run all checks before certification.\n`);
+      const changed = await applySourceUpgrade(context.root, context.manifest.project.name, undefined, { accept: options.accept ?? [] });
+      runtime.stdout(`Applied ${changed.length} source paths: pristine files updated, and files both you and the framework changed merged three ways. Application-only edits were kept. The framework version was not advanced; review migrations and run all checks before certification.\n`);
     });
   upgrade.command("source-finalize")
     .description("verify pristine adjacent-alpha source and run local checks before advancing its version")
@@ -224,7 +242,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const context = await projectContext(command, runtime);
       await finalizeSourceUpgrade(context.root, context.manifest.project.name,
         async () => { await runCommand("pnpm", ["check"], { cwd: context.root, env: process.env }); });
-      runtime.stdout("Local checks passed and application source matches the target template. The source version and baseline were advanced; deployed provider readiness remains unverified.\n");
+      runtime.stdout("Local checks passed and application source incorporates the target template; application-owned edits were kept. The source version and baseline were advanced; deployed provider readiness remains unverified.\n");
     });
   async function reportUpgradeCompatibility(root: string, json: boolean | undefined): Promise<void> {
     const report = await planUpgrade(root);
