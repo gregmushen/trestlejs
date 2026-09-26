@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TRESTLEJS_VERSION } from "../src/core.js";
 import { applyUpgrade, planUpgrade } from "../src/upgrade.js";
+import { applyMigrationCorrections } from "../src/upgrade-migrations.js";
 
 const roots: string[] = [];
 afterEach(async () => await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true }))));
@@ -98,6 +99,27 @@ describe("versioned project upgrades", () => {
       classification: "manual-review",
       description: expect.stringContaining('add TRESTLE_EXPERIMENTAL: "1" to the env: of the trestle backup verify step in .github/workflows/backup-verify.yml'),
     }));
+  });
+
+  it("replaces published migration 0033 with its reviewed correction", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-upgrade-0033-")); roots.push(root);
+    const relative = path.join("packages", "db", "migrations", "0033_jazzy_lilith.sql");
+    const corrected = await readFile(path.join("packages", "create", "template", relative), "utf8");
+    const grants = corrected.match(/  -- Grant EXECUTE while the membership still lets a non-superuser act for the owner\.\n((?:  EXECUTE format\('GRANT EXECUTE [^\n]+\n){2})/u);
+    expect(grants).not.toBeNull();
+    const revoke = "  IF NOT v_superuser THEN\n    EXECUTE format('REVOKE trestle_retention FROM %I', current_user);\n  END IF;\n";
+    const published = corrected.replace(grants![0], "").replace(revoke, `${revoke}${grants![1]}`);
+    expect(createHash("sha256").update(published).digest("hex")).toBe("ec5220b73db0f2a8350fefaba29ccdebb27174d0ad9b55f267042a534eadd026");
+    await mkdir(path.join(root, "packages", "db", "migrations"), { recursive: true });
+    await writeFile(path.join(root, relative), published);
+    await writeFile(path.join(root, "package.json"), `${JSON.stringify({ devDependencies: { trestlejs: TRESTLEJS_VERSION } })}\n`);
+    expect((await planUpgrade(root)).operations).toContainEqual(expect.objectContaining({ id: "migration-corrections", classification: "update" }));
+    expect(await readFile(path.join(root, relative), "utf8")).toBe(published);
+    await expect(applyUpgrade(root)).rejects.toThrow("Upgrade requires manual review");
+    expect(await readFile(path.join(root, relative), "utf8")).toBe(published);
+    expect(await applyMigrationCorrections(root)).toEqual([relative]);
+    expect(await readFile(path.join(root, relative), "utf8")).toBe(corrected);
+    expect((await planUpgrade(root)).operations).toContainEqual(expect.objectContaining({ id: "migration-corrections", classification: "already-correct" }));
   });
 
   it("does not flag a freshly generated project's backup-verify workflow, which already opts in", async () => {

@@ -56,8 +56,9 @@ suite("outbox retention and failure redaction", () => {
       { name: "trestle_prune_outbox_provenance", owner: "trestle_retention", definer: true, config: ["search_path=pg_catalog, pg_temp"] },
     ]);
     const [role] = await admin!<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; members: number }[]>`
-      select rolcanlogin, rolsuper, rolbypassrls, (select count(*)::int from pg_auth_members where roleid = r.oid) as members from pg_roles r where rolname = 'trestle_retention'`;
+      select rolcanlogin, rolsuper, rolbypassrls, (select count(*)::int from pg_auth_members where roleid = r.oid and (inherit_option or set_option)) as members from pg_roles r where rolname = 'trestle_retention'`;
     // No login can assume the role: its access is reachable only through the functions.
+    // A creator's ADMIN-only membership (no INHERIT, no SET) cannot use the role's privileges.
     expect(role).toEqual({ rolcanlogin: false, rolsuper: false, rolbypassrls: false, members: 0 });
     for (const signature of functions) {
       const [execute] = await admin!.unsafe<{ app: boolean; platform: boolean }[]>(`select has_function_privilege('trestle_app', '${signature}', 'EXECUTE') as app, has_function_privilege('trestle_platform', '${signature}', 'EXECUTE') as platform`);
