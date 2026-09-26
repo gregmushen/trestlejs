@@ -375,6 +375,12 @@ describe("TrestleJS CLI", () => {
     const unsafeFinalize = capture(root);
     expect(await executeCli(["upgrade", "source-finalize", "--yes"], unsafeFinalize.runtime)).toBe(1);
     expect(unsafeFinalize.stderr()).toContain("matching baseline");
+    const check = capture(root);
+    expect(await executeCli(["upgrade", "plan", "--check"], check.runtime)).toBe(1);
+    expect(check.stderr()).toContain("requires a reviewed upgrade");
+    const removedAlias = capture(root);
+    expect(await executeCli(["upgrade", "check"], removedAlias.runtime)).toBe(1);
+    expect(removedAlias.stderr()).toContain("unknown command 'check'");
   });
 
   it("plans the platform admin as a scaffold, and never disables it automatically", async () => {

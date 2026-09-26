@@ -237,14 +237,6 @@ export function createProgram(runtime: CliRuntime): Command {
       const report = await planUpgrade(context.root);
       runtime.stdout(options.json ? `${JSON.stringify(structuredOutput(report), null, 2)}\n` : formatUpgradePlan(report));
     });
-  // Hidden alias for `upgrade plan --check`, kept only until scripts/check-adjacent-upgrade.mjs
-  // runs a previously published CLI that ships --check; see "Not in this plan" in the subtraction-3 plan.
-  upgrade.command("check", { hidden: true })
-    .option("--json", "emit versioned structured output")
-    .action(async (options: { json?: boolean }, command: Command) => {
-      const context = await projectContext(command, runtime);
-      await reportUpgradeCompatibility(context.root, options.json);
-    });
   upgrade.command("apply")
     .option("--yes", "confirm the reviewed upgrade plan")
     .action(async (options: { yes?: boolean }, command: Command) => {

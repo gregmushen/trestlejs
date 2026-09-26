@@ -221,7 +221,8 @@ try {
       { TRESTLE_RLS_TEST_DATABASE_URL: databaseUrl });
   }
   await run("pnpm", ["exec", "trestle", "upgrade", "source-finalize", "--yes"], project);
-  await run("pnpm", ["exec", "trestle", "upgrade", "check"], project);
+  // `upgrade plan --check` first shipped in beta.3; earlier published CLIs only have `upgrade check`.
+  await run("pnpm", ["exec", "trestle", "upgrade", ...(/^0\.1\.0-(?:alpha\.\d+|beta\.1)$/u.test(after) ? ["check"] : ["plan", "--check"])], project);
   await run("pnpm", ["exec", "trestle", "ci", "validate"], project);
   if (await readFile(customPath, "utf8") !== customContent) throw new Error("Upgrade modified application-owned content");
   if (JSON.parse(await readFile(markerPath, "utf8")).templateVersion !== after
