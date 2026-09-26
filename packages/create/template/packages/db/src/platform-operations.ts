@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 
 import { artifactMetadata } from "./artifact-schema.js";
+import { outsideReplayWindow } from "./event-provenance.js";
 import { member, organization } from "./auth-schema.js";
 import { recordAuditEvent } from "./audit.js";
 import type { Database } from "./index.js";
@@ -117,10 +118,18 @@ export async function disableWebhookEndpoint(database: Database, input: Readonly
   });
 }
 
-export type FailedWebhookDelivery = Readonly<{ id: string; organizationId: string; endpointId: string; eventType: string; state: string; attemptCount: number; terminalReason: string | null; completedAt: Date | null; replayable: boolean; activeReplayId: string | null; successfulReplayId: string | null; replayUnavailableReason: "payload_expired" | "endpoint_inactive" | "replay_pending" | "resolved" | null }>;
+export type FailedWebhookDelivery = Readonly<{ id: string; organizationId: string; endpointId: string; eventType: string; state: string; attemptCount: number; terminalReason: string | null; completedAt: Date | null; replayable: boolean; activeReplayId: string | null; successfulReplayId: string | null; replayUnavailableReason: "payload_expired" | "endpoint_inactive" | "replay_pending" | "resolved" | "provenance_expired" | null }>;
 
-/** Dead and exhausted deliveries, newest first. A delivery is replayable while its message payload is retained. */
-export async function listFailedWebhookDeliveries(database: Database, options: Readonly<{ limit?: number }> = {}): Promise<FailedWebhookDelivery[]> {
+/**
+ * Dead and exhausted deliveries, newest first. A delivery is replayable while
+ * its message payload is retained and its source event is inside the 14-day
+ * replay window at `now` (default: the current time). The source event's age
+ * decides eligibility but is not returned. trestle_replay_webhook_delivery
+ * remains the authority and measures the window on the database clock.
+ */
+export async function listFailedWebhookDeliveries(database: Database, options: Readonly<{ limit?: number; now?: Date }> = {}): Promise<FailedWebhookDelivery[]> {
+  const now = options.now ?? new Date();
+  if (!Number.isFinite(now.getTime())) throw new PlatformOperationError("invalid", "Invalid replay eligibility time");
   const rows = await database.select({
     id: webhookDelivery.id, organizationId: webhookDelivery.organizationId, endpointId: webhookDelivery.endpointId, eventType: webhookMessage.publicEventType,
     state: webhookDelivery.state, attemptCount: webhookDelivery.attemptCount, terminalReason: webhookDelivery.terminalReason, completedAt: webhookDelivery.completedAt,
@@ -128,13 +137,15 @@ export async function listFailedWebhookDeliveries(database: Database, options: R
     endpointState: webhookEndpoint.state, endpointDeletedAt: webhookEndpoint.deletedAt,
     activeReplayId: sql<string | null>`(select replay.id from webhook_delivery replay where replay.replay_of_delivery_id = coalesce(${webhookDelivery.replayOfDeliveryId}, ${webhookDelivery.id}) and replay.state in ('pending', 'leased', 'retry') limit 1)`,
     successfulReplayId: sql<string | null>`(select replay.id from webhook_delivery replay where replay.replay_of_delivery_id = coalesce(${webhookDelivery.replayOfDeliveryId}, ${webhookDelivery.id}) and replay.state = 'succeeded' limit 1)`,
+    sourceOccurredAt: sql<Date | null>`(select source.occurred_at from outbox_message source where source.id = ${webhookMessage.sourceEventId}::text and source.organization_id = ${webhookDelivery.organizationId})`.mapWith(outboxMessage.occurredAt),
   }).from(webhookDelivery)
     .innerJoin(webhookMessage, and(eq(webhookMessage.id, webhookDelivery.messageId), eq(webhookMessage.organizationId, webhookDelivery.organizationId)))
     .innerJoin(webhookEndpoint, and(eq(webhookEndpoint.id, webhookDelivery.endpointId), eq(webhookEndpoint.organizationId, webhookDelivery.organizationId)))
     .where(inArray(webhookDelivery.state, ["dead", "exhausted"]))
     .orderBy(desc(webhookDelivery.completedAt), asc(webhookDelivery.id)).limit(pageSize(options.limit));
-  return rows.map(({ messageStatus, payloadDeletedAt, endpointState, endpointDeletedAt, ...row }) => {
-    const replayUnavailableReason = messageStatus !== "ready" || payloadDeletedAt !== null ? "payload_expired" : row.successfulReplayId ? "resolved" : endpointState !== "active" || endpointDeletedAt !== null ? "endpoint_inactive" : row.activeReplayId ? "replay_pending" : null;
+  return rows.map(({ messageStatus, payloadDeletedAt, endpointState, endpointDeletedAt, sourceOccurredAt, ...row }) => {
+    const replayUnavailableReason = messageStatus !== "ready" || payloadDeletedAt !== null ? "payload_expired" : row.successfulReplayId ? "resolved" : endpointState !== "active" || endpointDeletedAt !== null ? "endpoint_inactive" : row.activeReplayId ? "replay_pending"
+      : sourceOccurredAt === null || outsideReplayWindow(sourceOccurredAt, now) ? "provenance_expired" : null;
     return { ...row, replayable: replayUnavailableReason === null, replayUnavailableReason };
   });
 }

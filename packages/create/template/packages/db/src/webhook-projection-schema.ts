@@ -38,6 +38,9 @@ export const webhookMessage = pgTable("webhook_message", {
   // NOLOGIN role no login is a member of, with column grants limited to
   // (id, organization_id, source_event_id).
   pgPolicy("webhook_message_retention_select", { for: "select", to: "trestle_retention", using: sql`true` }),
+  // Platform replay (see webhook_delivery_replay_select) sees only messages whose
+  // payload is still retained. The envelope is tested here and never granted.
+  pgPolicy("webhook_message_replay_select", { for: "select", to: "trestle_webhook_replay", using: sql`${table.status} = 'ready' AND ${table.payloadDeletedAt} IS NULL AND ${table.envelope} IS NOT NULL` }),
 ]).enableRLS();
 
 /** One logical endpoint delivery; attempts and transport remain separate. */
@@ -62,6 +65,8 @@ export const webhookDelivery = pgTable("webhook_delivery", {
   uniqueIndex("webhook_delivery_active_replay_uidx").on(table.replayOfDeliveryId).where(sql`${table.replayOfDeliveryId} IS NOT NULL AND ${table.state} IN ('pending', 'leased', 'retry')`),
   index("webhook_delivery_organization_state_idx").on(table.organizationId, table.state, table.nextAttemptAt),
   index("webhook_delivery_lease_recovery_idx").on(table.state, table.leasedUntil),
+  // Every execution of a message, replays included; the unique index above excludes replays.
+  index("webhook_delivery_message_idx").on(table.messageId),
   foreignKey({ columns: [table.messageId, table.organizationId], foreignColumns: [webhookMessage.id, webhookMessage.organizationId], name: "webhook_delivery_message_tenant_fk" }),
   foreignKey({ columns: [table.endpointId, table.organizationId], foreignColumns: [webhookEndpoint.id, webhookEndpoint.organizationId], name: "webhook_delivery_endpoint_tenant_fk" }),
   foreignKey({ columns: [table.replayOfDeliveryId, table.organizationId], foreignColumns: [table.id, table.organizationId], name: "webhook_delivery_replay_tenant_fk" }),
@@ -73,4 +78,11 @@ export const webhookDelivery = pgTable("webhook_delivery", {
   pgPolicy("webhook_delivery_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
   // See webhook_message_retention_select; column grants are (message_id, organization_id, state).
   pgPolicy("webhook_delivery_retention_select", { for: "select", to: "trestle_retention", using: sql`true` }),
+  // Platform replay's SECURITY DEFINER function runs as trestle_webhook_replay, a
+  // NOLOGIN role no login is a member of. It reads delivery metadata, locks the
+  // source row (FOR UPDATE needs an UPDATE policy; WITH CHECK false forbids any
+  // actual update), and inserts only a fresh pending replay.
+  pgPolicy("webhook_delivery_replay_select", { for: "select", to: "trestle_webhook_replay", using: sql`true` }),
+  pgPolicy("webhook_delivery_replay_lock", { for: "update", to: "trestle_webhook_replay", using: sql`true`, withCheck: sql`false` }),
+  pgPolicy("webhook_delivery_replay_insert", { for: "insert", to: "trestle_webhook_replay", withCheck: sql`${table.replayOfDeliveryId} IS NOT NULL AND ${table.state} = 'pending' AND ${table.attemptCount} = 0` }),
 ]).enableRLS();

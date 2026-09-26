@@ -246,6 +246,13 @@
       "when": 1790375486756,
       "tag": "0034_zippy_silver_samurai",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1790390919018,
+      "tag": "0035_romantic_energizer",
+      "breakpoints": true
     }
   ]
 }

@@ -26,6 +26,10 @@ export const webhookEndpoint = pgTable("webhook_endpoint", {
   // The platform admin reads endpoint metadata (never destinations) and may only disable an endpoint.
   pgPolicy("webhook_endpoint_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
   pgPolicy("webhook_endpoint_platform_disable", { for: "update", to: "trestle_platform", using: sql`true`, withCheck: sql`${table.state} = 'disabled'` }),
+  // Platform replay's SECURITY DEFINER function runs as trestle_webhook_replay, a
+  // NOLOGIN role no login is a member of. It sees only live active endpoints,
+  // through column grants limited to (id, organization_id, state, deleted_at).
+  pgPolicy("webhook_endpoint_replay_select", { for: "select", to: "trestle_webhook_replay", using: sql`${table.state} = 'active' AND ${table.deletedAt} IS NULL` }),
 ]).enableRLS();
 
 /** One row per accepted public event version; provider filters are never authoritative. */

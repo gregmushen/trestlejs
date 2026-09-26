@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { authClient } from "./auth-client";
+import { DeliveryReplayAction, type ReplayUnavailableReason } from "./webhook-replay-action";
 
 const apiOrigin = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.replace(/\/$/u, "") ?? "";
 
@@ -38,7 +39,7 @@ type Delivery = {
   activeReplayId: string | null;
   successfulReplayId: string | null;
   replayable: boolean;
-  replayUnavailableReason: "not_failed" | "payload_expired" | "resolved" | "endpoint_inactive" | "provider_unavailable" | "replay_pending" | null;
+  replayUnavailableReason: ReplayUnavailableReason | null;
   correlationId: string | null;
 };
 
@@ -259,12 +260,7 @@ export function WebhookInspection() {
 
       {deliveryId && <div className="mt-8 border-t border-slate-200 pt-6"><h2 className="text-xl font-semibold">Attempts</h2><p className="mt-1 text-sm text-slate-500">Showing up to 50 most recent attempts.</p>
         {selectedDelivery?.replayOfDeliveryId && <p className="mt-2 text-sm text-slate-600">Replay of {selectedDelivery.replayOfDeliveryId}. The original delivery and its attempts remain unchanged.</p>}
-        {selectedDelivery?.replayable && <button type="button" className="mt-3 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium" disabled={replay.isPending} onClick={() => void replay.mutateAsync(deliveryId).catch(() => undefined)}>{replay.isPending ? "Queuing replay…" : "Replay failed delivery"}</button>}
-        {selectedDelivery?.replayUnavailableReason === "replay_pending" && <p className="mt-2 text-sm text-slate-600">A replay is already queued.</p>}
-        {selectedDelivery?.replayUnavailableReason === "resolved" && <p className="mt-2 text-sm text-slate-600">A replay of this message has succeeded.</p>}
-        {selectedDelivery?.replayUnavailableReason === "payload_expired" && <p className="mt-2 text-sm text-slate-600">The payload is no longer retained, so this delivery cannot be replayed.</p>}
-        {selectedDelivery?.replayUnavailableReason === "endpoint_inactive" && <p className="mt-2 text-sm text-slate-600">Activate this endpoint before replaying.</p>}
-        {selectedDelivery?.replayUnavailableReason === "provider_unavailable" && <p className="mt-2 text-sm text-slate-600">Webhook delivery is unavailable in this environment.</p>}
+        {selectedDelivery && <DeliveryReplayAction delivery={selectedDelivery} pending={replay.isPending} onReplay={() => void replay.mutateAsync(deliveryId).catch(() => undefined)} />}
         {replay.error && <p className="mt-2 text-sm text-red-700" role="alert">{replay.error.message}</p>}
         {replay.isSuccess && <p className="mt-2 text-sm text-green-700" role="status">Replay queued. This does not mean it has reached the destination.</p>}
         {attempts.isPending ? <p className="mt-3">Loading attempts…</p> : attempts.error ? <p className="mt-3 text-red-700" role="alert">{attempts.error.message}</p> : attempts.data?.attempts?.length ? <ol className="mt-3 space-y-2">{attempts.data.attempts.map((attempt) => <li className="rounded-xl border border-slate-200 p-4" key={attempt.id}>

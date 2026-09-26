@@ -404,6 +404,8 @@ suite("local product path", () => {
           if (!createdMessage || !createDelivery) throw new Error("Created article webhook delivery missing");
           await database.update(webhookDelivery).set({ state: "dead", terminalReason: "system_test_failure", completedAt: new Date() }).where(eq(webhookDelivery.id, createDelivery.id));
           await database.update(outboxMessage).set({ occurredAt: new Date(Date.now() - 15 * 86_400_000) }).where(eq(outboxMessage.id, createdMessage.sourceEventId));
+          const expiredInspection = await app.request(`http://localhost:8787/api/developer/webhooks/endpoints/${webhookEndpointId}/deliveries`, { headers }, webhookEnvironment);
+          expect(await expiredInspection.json()).toMatchObject({ deliveries: expect.arrayContaining([expect.objectContaining({ id: createDelivery.id, replayable: false, replayUnavailableReason: "provenance_expired" })]) });
           const expiredReplay = await app.request(`http://localhost:8787/api/developer/webhooks/deliveries/${createDelivery.id}/replay`, { method: "POST", headers }, webhookEnvironment);
           expect(expiredReplay.status).toBe(409);
           expect(await expiredReplay.json()).toEqual({ error: "The source event is outside the 14-day replay window or no longer retained" });

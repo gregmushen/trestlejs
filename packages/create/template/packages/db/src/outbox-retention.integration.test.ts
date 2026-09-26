@@ -239,13 +239,16 @@ suite("outbox retention and failure redaction", () => {
         return [...messages, ...deliveries].map((row) => row.organization_id);
       });
       expect(visible).toEqual(["org-isolation-a", "org-isolation-a"]);
-      // Only the platform admin and the retention owner hold unconditional
-      // read policies; no policy names the migration role or any login.
+      // Only the platform admin and the NOLOGIN retention and replay function
+      // owners hold unconditional policies; no policy names the migration role
+      // or any login. The replay lock policy's WITH CHECK (false) permits no update.
       const unconditional = await admin!<{ table: string; policy: string; roles: string[] }[]>`
         select tablename as table, policyname as policy, roles::text[] as roles from pg_policies
          where tablename in ('webhook_message', 'webhook_delivery') and qual = 'true' order by tablename, policyname`;
       expect(unconditional).toEqual([
         { table: "webhook_delivery", policy: "webhook_delivery_platform_select", roles: ["trestle_platform"] },
+        { table: "webhook_delivery", policy: "webhook_delivery_replay_lock", roles: ["trestle_webhook_replay"] },
+        { table: "webhook_delivery", policy: "webhook_delivery_replay_select", roles: ["trestle_webhook_replay"] },
         { table: "webhook_delivery", policy: "webhook_delivery_retention_select", roles: ["trestle_retention"] },
         { table: "webhook_message", policy: "webhook_message_platform_select", roles: ["trestle_platform"] },
         { table: "webhook_message", policy: "webhook_message_retention_select", roles: ["trestle_retention"] },

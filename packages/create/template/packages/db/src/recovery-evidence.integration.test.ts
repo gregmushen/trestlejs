@@ -29,5 +29,7 @@ suite("isolated restore evidence", () => {
     } finally {
       await sql!`delete from artifact_metadata where id = ${artifactId}`;
     }
-  });
+  // The verifier runs as a child process with its own 30-second limit; it
+  // needs more than the default test timeout when other suites load the database.
+  }, 45_000);
 });
