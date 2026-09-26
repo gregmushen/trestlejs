@@ -20,6 +20,9 @@ export const customerRoutePolicies = defineRoutePolicies(permissions, [
   { method: "GET", path: "/api/dev/emails/:id", public: true, audience: "public" },
   { method: "DELETE", path: "/api/dev/emails", public: true, audience: "public" },
   { method: "POST", path: "/api/dev/emails/flush", public: true, audience: "public" },
+  // Local only (404 elsewhere): the due-time scheduler's own state and a no-op alarm probe.
+  { method: "GET", path: "/api/dev/scheduler", public: true, audience: "public" },
+  { method: "POST", path: "/api/dev/scheduler/probe", public: true, audience: "public" },
   // Signed, expiring artifact downloads; the signature is the authority.
   { method: "GET", path: "/artifacts/:id", public: true, audience: "public" },
   { method: "GET", path: "/api/me", audience: "session" },
