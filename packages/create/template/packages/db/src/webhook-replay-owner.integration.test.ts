@@ -1,6 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,12 +24,6 @@ import { replayWebhookDelivery } from "./platform-operations.js";
  * on the roles whose membership a later migration grants itself for an
  * ownership transfer. Migrations run inside `migrate`, whose failures fail
  * the suite.
- *
- * Published migration 0033 cannot be applied by a non-superuser: it grants
- * EXECUTE on the retention functions after giving them away and dropping the
- * temporary membership. That migration is immutable, so this harness applies
- * it alone with the owner briefly made superuser, then removes the attribute
- * before every later migration, including the one under test.
  */
 const adminUrl = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
 const suite = adminUrl ? describe : describe.skip;
@@ -40,13 +32,10 @@ const suffix = randomBytes(6).toString("hex");
 const owner = `trestle_owner_${suffix}`;
 const ownerPassword = `owner-${randomBytes(12).toString("hex")}`;
 const databaseName = `trestle_owner_db_${suffix}`;
-// 0033's trestle_retention transfer runs as superuser below, so that role is
-// left untouched; other suites assert it has no members at all.
-const transferRoles = ["trestle_platform", "trestle_webhook_replay"];
+const transferRoles = ["trestle_platform", "trestle_retention", "trestle_webhook_replay"];
 const replaySignature = "trestle_replay_webhook_delivery(text, text, timestamp with time zone, text, text, text, text, text)";
 const tenants = { a: `owner-${suffix}-a`, b: `owner-${suffix}-b` };
 const day = 86_400_000;
-const superuserOnly = new Set(["0033_jazzy_lilith"]);
 
 let maintenance: postgres.Sql | undefined;
 let admin: postgres.Sql | undefined;
@@ -95,29 +84,13 @@ suite("webhook replay under a migration owner without BYPASSRLS", () => {
     await maintenance.unsafe(`create database "${databaseName}" owner "${owner}"`);
     adminDatabaseUrl = withDatabase(adminUrl!, databaseName);
     ownerUrl = withDatabase(adminUrl!, databaseName, { user: owner, password: ownerPassword });
-    const journal = JSON.parse(await readFile(path.join(migrationsFolder, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }> };
-    const staged = await mkdtemp(path.join(tmpdir(), "trestle-owner-migrations-"));
+    const migrator = postgres(ownerUrl, { max: 1, prepare: false, onnotice: () => undefined });
     try {
-      await cp(migrationsFolder, staged, { recursive: true });
-      // Apply the journal in prefixes so the superuser-only migration runs alone.
-      const stops = journal.entries.flatMap((entry, index) => superuserOnly.has(entry.tag) ? [index, index + 1] : []).concat(journal.entries.length).filter((stop) => stop > 0);
-      for (const stop of stops) {
-        const tag = journal.entries[stop - 1]!.tag;
-        const elevated = superuserOnly.has(tag);
-        await writeFile(path.join(staged, "meta", "_journal.json"), JSON.stringify({ ...journal, entries: journal.entries.slice(0, stop) }));
-        if (elevated) await maintenance.unsafe(`alter role "${owner}" superuser`);
-        const migrator = postgres(ownerUrl, { max: 1, prepare: false, onnotice: () => undefined });
-        try {
-          const [role] = await migrator<{ rolsuper: boolean; rolbypassrls: boolean }[]>`select rolsuper, rolbypassrls from pg_roles where rolname = current_user`;
-          expect(role, tag).toEqual({ rolsuper: elevated, rolbypassrls: false });
-          await migrate(drizzle(migrator), { migrationsFolder: staged });
-        } finally {
-          await migrator.end();
-          if (elevated) await maintenance.unsafe(`alter role "${owner}" nosuperuser`);
-        }
-      }
+      const [role] = await migrator<{ rolsuper: boolean; rolbypassrls: boolean }[]>`select rolsuper, rolbypassrls from pg_roles where rolname = current_user`;
+      expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+      await migrate(drizzle(migrator), { migrationsFolder });
     } finally {
-      await rm(staged, { recursive: true, force: true });
+      await migrator.end();
     }
     admin = postgres(adminDatabaseUrl, { max: 1, prepare: false });
   }, 120_000);

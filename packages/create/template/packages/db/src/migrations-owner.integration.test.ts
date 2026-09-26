@@ -26,7 +26,6 @@ export const MIGRATION_OWNER_PREFIX = "trestle_owner_";
 const owner = `${MIGRATION_OWNER_PREFIX}${suffix}`;
 const ownerPassword = `owner-${randomBytes(12).toString("hex")}`;
 const databaseName = `trestle_migrate_owner_${suffix}`;
-const createdRoles = ["trestle_app", "trestle_platform", "trestle_retention"];
 
 function withDatabase(url: string, database: string, credentials?: { user: string; password: string }): string {
   const address = new URL(url);
@@ -50,10 +49,9 @@ suite("migrations as a non-superuser database owner", () => {
 
   it("applies every migration and leaves the retention functions executable by the owner", async () => {
     await maintenance!.unsafe(`create role "${owner}" login password '${ownerPassword}' nosuperuser createrole nocreatedb inherit nobypassrls`);
-    for (const role of createdRoles) {
-      const [existing] = await maintenance!<{ exists: boolean }[]>`select exists (select 1 from pg_roles where rolname = ${role}) as exists`;
-      if (existing?.exists) await maintenance!.unsafe(`grant "${role}" to "${owner}" with admin option, inherit false, set false`);
-    }
+    // Every NOLOGIN trestle_* role a migration creates, whichever suite created it first in this cluster.
+    const roles = await maintenance!<{ rolname: string }[]>`select rolname from pg_roles where rolname like 'trestle\\_%' and not rolcanlogin`;
+    for (const { rolname } of roles) await maintenance!.unsafe(`grant "${rolname}" to "${owner}" with admin option, inherit false, set false`);
     await maintenance!.unsafe(`create database "${databaseName}" owner "${owner}"`);
     const migrator = postgres(withDatabase(adminUrl!, databaseName, { user: owner, password: ownerPassword }), { max: 1, prepare: false, onnotice: () => undefined });
     try {
