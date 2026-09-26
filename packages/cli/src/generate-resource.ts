@@ -366,12 +366,22 @@ export type Update${n.className} = z.infer<typeof ${n.camel}UpdateSchema>;
 
   await writeGenerated(targets[2]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
 
+/** Optimistic concurrency: when set, a write succeeds only against this revision. */
+export type ${n.className}WriteOptions = { expectedRevision?: number };
+
+export class ${n.className}RevisionConflictError extends Error {
+  constructor(readonly currentRevision: number) {
+    super("${n.className} was changed by another request");
+    this.name = "${n.className}RevisionConflictError";
+  }
+}
+
 export interface ${n.className}Repository {
   list(input: { cursor?: string; limit: number }): Promise<{ items: ${n.className}[]; nextCursor?: string }>;
   get(id: string): Promise<${n.className} | null>;
   create(input: Create${n.className}): Promise<${n.className}>;
-  update(id: string, input: Update${n.className}): Promise<${n.className} | null>;
-  remove(id: string): Promise<boolean>;
+  update(id: string, input: Update${n.className}, options?: ${n.className}WriteOptions): Promise<${n.className} | null>;
+  remove(id: string, options?: ${n.className}WriteOptions): Promise<boolean>;
 }
 
 export class ${n.className}Service {
@@ -379,14 +389,14 @@ export class ${n.className}Service {
   list(input: { cursor?: string; limit: number }) { return this.repository.list(input); }
   get(id: string) { return this.repository.get(id); }
   create(input: Create${n.className}) { return this.repository.create(input); }
-  update(id: string, input: Update${n.className}) { return this.repository.update(id, input); }
-  remove(id: string) { return this.repository.remove(id); }
+  update(id: string, input: Update${n.className}, options?: ${n.className}WriteOptions) { return this.repository.update(id, input, options); }
+  remove(id: string, options?: ${n.className}WriteOptions) { return this.repository.remove(id, options); }
 }
 `);
 
   await writeGenerated(targets[3]!, `import type { ${n.className}, Create${n.className}, Update${n.className} } from "@${project}/contracts";
 import { ${n.camel}, type Database } from "@${project}/db";
-import type { ${n.className}Repository } from "@${project}/domain";
+import { ${n.className}RevisionConflictError, type ${n.className}Repository, type ${n.className}WriteOptions } from "@${project}/domain";
 import { and, asc, eq, gt, or, sql, type SQL } from "drizzle-orm";
 
 type ResourceEvents = { statement(name: string, payload: unknown, options: { schemaVersion?: number; idempotencyKey: string }): SQL };
@@ -413,21 +423,19 @@ export class Postgres${n.className}Repository implements ${n.className}Repositor
       return record;
     });
   }
-  async update(id: string, input: Update${n.className}): Promise<${n.className} | null> {
+  async update(id: string, input: Update${n.className}, options: ${n.className}WriteOptions = {}): Promise<${n.className} | null> {
     return this.database.transaction(async (transaction) => {
       const changed = or(
 ${resource.fields.map((field) => `        ${changedExpression(n, field)}`).join("\n")}
       );
-      if (!changed) {
-        const [record] = await transaction.select().from(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).limit(1);
-        return record ?? null;
-      }
-      const [record] = await transaction.update(${n.camel})
+      const expected = options.expectedRevision === undefined ? undefined : eq(${n.camel}.revision, options.expectedRevision);
+      const [record] = changed ? await transaction.update(${n.camel})
         .set({ ...input, revision: sql\`\${${n.camel}.revision} + 1\`, updatedAt: this.clock.now() })
-        .where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId), changed)).returning();
+        .where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId), expected, changed)).returning() : [];
       if (!record) {
-        const [current] = await transaction.select().from(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).limit(1);
-        return current ?? null;
+        const current = await this.current(transaction, id);
+        if (current && options.expectedRevision !== undefined && current.revision !== options.expectedRevision) throw new ${n.className}RevisionConflictError(current.revision);
+        return current;
       }
       await transaction.execute(this.events.statement("${updatedEventName}", { resourceId: record.id, revision: record.revision }, {
         schemaVersion: 1, idempotencyKey: "${updatedEventName}:" + record.id + ":" + record.revision,
@@ -435,15 +443,24 @@ ${resource.fields.map((field) => `        ${changedExpression(n, field)}`).join(
       return record;
     });
   }
-  async remove(id: string): Promise<boolean> {
+  async remove(id: string, options: ${n.className}WriteOptions = {}): Promise<boolean> {
     return this.database.transaction(async (transaction) => {
-      const [record] = await transaction.delete(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).returning();
-      if (!record) return false;
+      const expected = options.expectedRevision === undefined ? undefined : eq(${n.camel}.revision, options.expectedRevision);
+      const [record] = await transaction.delete(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId), expected)).returning();
+      if (!record) {
+        const current = options.expectedRevision === undefined ? null : await this.current(transaction, id);
+        if (current) throw new ${n.className}RevisionConflictError(current.revision);
+        return false;
+      }
       await transaction.execute(this.events.statement("${deletedEventName}", { resourceId: record.id, revision: record.revision }, {
         schemaVersion: 1, idempotencyKey: "${deletedEventName}:" + record.id,
       }));
       return true;
     });
+  }
+  private async current(transaction: Parameters<Parameters<Database["transaction"]>[0]>[0], id: string): Promise<${n.className} | null> {
+    const [record] = await transaction.select().from(${n.camel}).where(and(eq(${n.camel}.id, id), eq(${n.camel}.organizationId, this.organizationId))).limit(1);
+    return record ?? null;
   }
 }
 `);
@@ -484,7 +501,7 @@ ${relations.map((field) => `${relationKeyExpression(n, field)}\n`).join("")}${re
   await writeGenerated(targets[5]!, `import { type AuthEnvironment } from "@${project}/auth";
 import { ${n.camel}CreateSchema, ${n.camel}UpdateSchema } from "@${project}/contracts";
 import { Postgres${n.className}Repository } from "@${project}/data";
-import { ${n.className}Service } from "@${project}/domain";
+import { ${n.className}RevisionConflictError, ${n.className}Service, type ${n.className}WriteOptions } from "@${project}/domain";
 import { Hono } from "hono";
 
 import { requireExecutionContext, type AppVariables } from "../execution-context.js";
@@ -506,6 +523,17 @@ async function operation<T>(execution: AppVariables["execution"], event: string,
     execution.log.error(event + ".failed", { durationMs: execution.clock.now().getTime() - started, errorName: error instanceof Error ? error.name : "UnknownError" });
     throw error;
   }
+}
+/** Reads an optional \`If-Match\` revision; \`null\` means the header is malformed. */
+function expectedRevision(header: string | undefined): ${n.className}WriteOptions | null {
+  if (header === undefined || header.trim() === "*") return {};
+  const match = /^\\s*(?:W\\/)?"?([1-9]\\d{0,8})"?\\s*$/u.exec(header);
+  return match ? { expectedRevision: Number(match[1]) } : null;
+}
+function revisionConflict(error: unknown) {
+  return error instanceof ${n.className}RevisionConflictError
+    ? { error: "revision_conflict", message: "This ${n.className} changed since it was loaded. Reload and try again.", currentRevision: error.currentRevision } as const
+    : undefined;
 }
 ${n.camel}Routes.get("${routePath}", async (context) => {
   const execution = context.get("execution");
@@ -533,15 +561,31 @@ ${n.camel}Routes.get("${routePath}/:id", async (context) => {
 ${n.camel}Routes.patch("${routePath}/:id", async (context) => {
   const parsed = ${n.camel}UpdateSchema.safeParse(await context.req.json());
   if (!parsed.success) return context.json({ error: "validation_failed", issues: parsed.error.issues }, 400);
+  const options = expectedRevision(context.req.header("if-match"));
+  if (!options) return context.json({ error: "validation_failed", message: "If-Match must be a positive revision" }, 400);
   const execution = context.get("execution");
   execution.access.require({ permission: "${writePermission}" });
-  const updated = await operation(execution, "resource.${n.kebab}.update", () => service(execution).update(context.req.param("id"), parsed.data));
-  return updated ? context.json({ ${n.camel}: updated }) : context.json({ error: "Not found" }, 404);
+  try {
+    const updated = await operation(execution, "resource.${n.kebab}.update", () => service(execution).update(context.req.param("id"), parsed.data, options));
+    return updated ? context.json({ ${n.camel}: updated }) : context.json({ error: "Not found" }, 404);
+  } catch (error) {
+    const conflict = revisionConflict(error);
+    if (conflict) return context.json(conflict, 409);
+    throw error;
+  }
 });
 ${n.camel}Routes.delete("${routePath}/:id", async (context) => {
+  const options = expectedRevision(context.req.header("if-match"));
+  if (!options) return context.json({ error: "validation_failed", message: "If-Match must be a positive revision" }, 400);
   const execution = context.get("execution");
   execution.access.require({ permission: "${writePermission}" });
-  return await operation(execution, "resource.${n.kebab}.delete", () => service(execution).remove(context.req.param("id"))) ? context.body(null, 204) : context.json({ error: "Not found" }, 404);
+  try {
+    return await operation(execution, "resource.${n.kebab}.delete", () => service(execution).remove(context.req.param("id"), options)) ? context.body(null, 204) : context.json({ error: "Not found" }, 404);
+  } catch (error) {
+    const conflict = revisionConflict(error);
+    if (conflict) return context.json(conflict, 409);
+    throw error;
+  }
 });
 `);
 
@@ -570,10 +614,10 @@ export function ${n.className}Screen() {
   const create = useMutation({ mutationFn: async (input: unknown) => {
     return await api!.create(${n.camel}CreateSchema.parse(input));
   }, onSuccess: async () => await queryClient.invalidateQueries({ queryKey: key }) });
-  const update = useMutation({ mutationFn: async (input: { id: string; name: string }) => {
-    return await api!.update(input.id, ${n.camel}UpdateSchema.parse({ name: input.name }));
-  }, onSuccess: async () => { setEditing(null); await queryClient.invalidateQueries({ queryKey: key }); } });
-  const remove = useMutation({ mutationFn: async (id: string) => await api!.remove(id), onSuccess: async () => await queryClient.invalidateQueries({ queryKey: key }) });
+  const update = useMutation({ mutationFn: async (input: { record: ${n.className}; name: string }) => {
+    return await api!.update(input.record.id, ${n.camel}UpdateSchema.parse({ name: input.name }), { expectedRevision: input.record.revision });
+  }, onSuccess: async () => { setEditing(null); await queryClient.invalidateQueries({ queryKey: key }); }, onError: async () => await queryClient.invalidateQueries({ queryKey: key }) });
+  const remove = useMutation({ mutationFn: async (record: ${n.className}) => await api!.remove(record.id, { expectedRevision: record.revision }), onSettled: async () => await queryClient.invalidateQueries({ queryKey: key }) });
   const form = useForm({ defaultValues: { name: "" }, onSubmit: async ({ value }) => { await create.mutateAsync(value); form.reset(); } });
   const error = query.error ?? create.error ?? update.error ?? remove.error;
   if (!session?.user.id || !organizationId) return <section className="card p-8"><h1 className="text-3xl font-semibold">${n.className}</h1><p className="mt-4 text-slate-600">Sign in and select an organization before managing ${n.pluralKebab}.</p></section>;
@@ -584,7 +628,7 @@ export function ${n.className}Screen() {
       <button className="button" disabled={create.isPending} type="submit">{create.isPending ? "Creating…" : "Create"}</button>
     </form>
     {error && <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700" role="alert">{error.message}</p>}
-    {query.isPending ? <p className="mt-6 text-slate-600">Loading…</p> : query.data?.length === 0 ? <p className="mt-6 text-slate-600">No ${n.pluralKebab} yet.</p> : <ul className="mt-6 space-y-2">{query.data?.map((record) => <li className="rounded-xl border p-4" key={record.id}>{editing?.id === record.id ? <div className="flex gap-3"><input aria-label="Edit ${n.className} name" className="min-w-0 flex-1 rounded-lg border px-3 py-2" value={editingName} onChange={(event) => setEditingName(event.target.value)} /><button className="button" onClick={() => void update.mutateAsync({ id: record.id, name: editingName })}>Save</button><button className="text-sm font-semibold" onClick={() => setEditing(null)}>Cancel</button></div> : <div className="flex items-center justify-between gap-4"><span>{record.name}</span><span className="flex gap-3"><button className="text-sm font-semibold text-brand-500" onClick={() => { setEditing(record); setEditingName(record.name); }}>Edit</button><button className="text-sm font-semibold text-red-600" onClick={() => void remove.mutateAsync(record.id)}>Delete</button></span></div>}</li>)}</ul>}
+    {query.isPending ? <p className="mt-6 text-slate-600">Loading…</p> : query.data?.length === 0 ? <p className="mt-6 text-slate-600">No ${n.pluralKebab} yet.</p> : <ul className="mt-6 space-y-2">{query.data?.map((record) => <li className="rounded-xl border p-4" key={record.id}>{editing?.id === record.id ? <div className="flex gap-3"><input aria-label="Edit ${n.className} name" className="min-w-0 flex-1 rounded-lg border px-3 py-2" value={editingName} onChange={(event) => setEditingName(event.target.value)} /><button className="button" onClick={() => void update.mutateAsync({ record, name: editingName })}>Save</button><button className="text-sm font-semibold" onClick={() => setEditing(null)}>Cancel</button></div> : <div className="flex items-center justify-between gap-4"><span>{record.name}</span><span className="flex gap-3"><button className="text-sm font-semibold text-brand-500" onClick={() => { setEditing(record); setEditingName(record.name); }}>Edit</button><button className="text-sm font-semibold text-red-600" onClick={() => void remove.mutateAsync(record)}>Delete</button></span></div>}</li>)}</ul>}
   </section>;
 }
 `);
@@ -599,6 +643,10 @@ async function request<T>(organizationId: string, pathname: string, init?: Reque
   return body as T;
 }
 
+function revisionHeaders(options: { expectedRevision?: number }): Record<string, string> {
+  return options.expectedRevision === undefined ? {} : { "if-match": \`"\${options.expectedRevision}"\` };
+}
+
 export function create${n.className}Api(organizationId: string) {
   return {
     async list(input: { cursor?: string; limit?: number } = {}): Promise<{ items: ${n.className}[]; nextCursor?: string }> {
@@ -610,8 +658,9 @@ export function create${n.className}Api(organizationId: string) {
     },
     async get(id: string): Promise<${n.className}> { const result = await request<{ ${n.camel}: unknown }>(organizationId, \`${routePath}/\${id}\`); return ${n.camel}Schema.parse(result.${n.camel}); },
     async create(input: Create${n.className}): Promise<${n.className}> { const result = await request<{ ${n.camel}: unknown }>(organizationId, "${routePath}", { method: "POST", body: JSON.stringify(${n.camel}CreateSchema.parse(input)) }); return ${n.camel}Schema.parse(result.${n.camel}); },
-    async update(id: string, input: Update${n.className}): Promise<${n.className}> { const result = await request<{ ${n.camel}: unknown }>(organizationId, \`${routePath}/\${id}\`, { method: "PATCH", body: JSON.stringify(${n.camel}UpdateSchema.parse(input)) }); return ${n.camel}Schema.parse(result.${n.camel}); },
-    async remove(id: string): Promise<void> { await request<void>(organizationId, \`${routePath}/\${id}\`, { method: "DELETE" }); },
+    /** Pass the revision you loaded as expectedRevision to reject a concurrent change with 409. */
+    async update(id: string, input: Update${n.className}, options: { expectedRevision?: number } = {}): Promise<${n.className}> { const result = await request<{ ${n.camel}: unknown }>(organizationId, \`${routePath}/\${id}\`, { method: "PATCH", body: JSON.stringify(${n.camel}UpdateSchema.parse(input)), headers: revisionHeaders(options) }); return ${n.camel}Schema.parse(result.${n.camel}); },
+    async remove(id: string, options: { expectedRevision?: number } = {}): Promise<void> { await request<void>(organizationId, \`${routePath}/\${id}\`, { method: "DELETE", headers: revisionHeaders(options) }); },
   };
 }
 `);
@@ -666,6 +715,7 @@ export async function handle${n.className}Deleted(payload: ${n.className}Deleted
   if (emitsChangeEvents) await writeGenerated(targets[11]!, `import { ${n.camel}, createDatabase, createTenantDatabase } from "@${project}/db";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { ${n.className}RevisionConflictError } from "@${project}/domain";
 import { Postgres${n.className}Repository } from "./${n.kebab}-repository.js";
 
 const connectionString = process.env.TRESTLE_RLS_TEST_DATABASE_URL;
@@ -692,6 +742,28 @@ suite("${n.className} change-event atomicity", () => {
       await expect(repository.remove(deleteId)).rejects.toThrow("select 1 / 0");
       const [undeleted] = await admin.select().from(${n.camel}).where(eq(${n.camel}.id, deleteId));
       expect(undeleted).toMatchObject({ name: "Delete original", revision: 1 });
+    } finally {
+      await admin.delete(${n.camel}).where(eq(${n.camel}.organizationId, organizationId));
+    }
+  });
+
+  it("rejects stale revisions without writing", async () => {
+    const organizationId = "revision-" + crypto.randomUUID();
+    const admin = createDatabase(connectionString!, "postgres-js");
+    const tenant = createTenantDatabase(connectionString!, "postgres-js", organizationId);
+    const repository = new Postgres${n.className}Repository(tenant, organizationId, { statement: () => sql\`select 1\` });
+    const [record] = await admin.insert(${n.camel}).values({ organizationId, name: "Revision original" }).returning();
+    try {
+      const first = await repository.update(record!.id, { name: "First writer" }, { expectedRevision: 1 });
+      expect(first).toMatchObject({ name: "First writer", revision: 2 });
+      await expect(repository.update(record!.id, { name: "Second writer" }, { expectedRevision: 1 })).rejects.toBeInstanceOf(${n.className}RevisionConflictError);
+      await expect(repository.update(record!.id, { name: "First writer" }, { expectedRevision: 1 })).rejects.toMatchObject({ currentRevision: 2 });
+      await expect(repository.remove(record!.id, { expectedRevision: 1 })).rejects.toBeInstanceOf(${n.className}RevisionConflictError);
+      const [current] = await admin.select().from(${n.camel}).where(eq(${n.camel}.id, record!.id));
+      expect(current).toMatchObject({ name: "First writer", revision: 2 });
+      expect(await repository.update(record!.id, { name: "Unconditional" })).toMatchObject({ revision: 3 });
+      expect(await repository.remove(record!.id, { expectedRevision: 3 })).toBe(true);
+      expect(await repository.remove(record!.id, { expectedRevision: 3 })).toBe(false);
     } finally {
       await admin.delete(${n.camel}).where(eq(${n.camel}.organizationId, organizationId));
     }

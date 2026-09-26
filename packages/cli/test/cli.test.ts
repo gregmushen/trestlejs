@@ -668,5 +668,21 @@ export const applicationEventCatalog = defineEventCatalog([
     const productRepository = await readFile(path.join(root, "packages/data/src/resources/product-repository.ts"), "utf8");
     expect(productRepository).toContain("${JSON.stringify(input.meta)}::jsonb");
     expect(productRepository).toContain("updatedAt: this.clock.now()");
+
+    const articleDomain = await readFile(path.join(root, "packages/domain/src/resources/article.ts"), "utf8");
+    expect(articleDomain).toContain("export class ArticleRevisionConflictError extends Error");
+    expect(articleDomain).toContain("update(id: string, input: UpdateArticle, options?: ArticleWriteOptions): Promise<Article | null>;");
+    expect(articleDomain).toContain("remove(id: string, options?: ArticleWriteOptions): Promise<boolean>;");
+    const articleRepository = await readFile(path.join(root, "packages/data/src/resources/article-repository.ts"), "utf8");
+    expect(articleRepository).toContain("eq(article.revision, options.expectedRevision)");
+    expect(articleRepository).toContain("throw new ArticleRevisionConflictError(current.revision)");
+    const articleRoutes = await readFile(path.join(root, "apps/worker/src/resources/article-routes.ts"), "utf8");
+    expect(articleRoutes).toContain('expectedRevision(context.req.header("if-match"))');
+    expect(articleRoutes).toContain('error: "revision_conflict"');
+    expect(articleRoutes).toContain(", 409)");
+    const articleApi = await readFile(path.join(root, "apps/app/src/api/article.ts"), "utf8");
+    expect(articleApi).toContain('"if-match": `"${options.expectedRevision}"`');
+    const articleEvents = await readFile(path.join(root, "packages/data/src/resources/article-events.integration.test.ts"), "utf8");
+    expect(articleEvents).toContain("rejects stale revisions without writing");
   });
 });
