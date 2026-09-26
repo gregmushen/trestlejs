@@ -67,8 +67,9 @@ Steps 2 to 8 of the
 [admin roadmap](superpowers/plans/2026-09-23-admin-roadmap.md) plan most of
 the admin items below.
 
-- The step-by-step setup wizard, provider connection tests, and the
-  `deployed` and `verified` capability states (§4, §5).
+- Provider connection tests and the `deployed` and `verified` capability
+  states (§4, §5). No setup wizard is planned; guided setup is the agent setup
+  skill plus `trestle plan` and `trestle apply`.
 - Organization permissions for member invitation, removal, and role
   assignment, and a Billing administrator organization role (§7.2).
 - Custom and resource-scoped application roles (§7.3; roadmap step 6).
@@ -121,7 +122,7 @@ application is made of. The generated admin application controls and observes th
 administration remains in the customer application. All three use shared,
 typed capability metadata, but they do not share authority.
 
-Optional Webhooks, Notifications, and Support Sessions views are defined in the
+Optional Webhooks and Support Sessions views are defined in the
 [Admin Additions Specification](ADMIN_ADDITIONS_SPEC.md).
 
 ## 2. Governing Principles
@@ -283,34 +284,11 @@ trestle plan init                 write a starter SetupPlan
   -> trestle doctor --env <env>   verify
 ```
 
-**Deferred:** capability selection as a guided step, provider connection
-tests, and recording non-secret evidence. Today the operator edits the
-SetupPlan JSON directly.
-
-The 12-step wizard below is **Deferred**. It remains the target outline:
-
-1. application identity, domains, and environments;
-2. public site, customer application, and platform admin surfaces;
-3. authentication and organization behavior;
-4. email disabled, local capture, or Resend;
-5. payments disabled, local, Stripe, or Lago;
-6. plan and entitlement support;
-7. PostgreSQL and remote Neon configuration;
-8. outbox, Queues, Workflows, schedules, and DLQ;
-9. local or R2 artifact storage and retention;
-10. roles, permissions, service accounts, and API keys;
-11. GitHub and Cloudflare deployment environments; and
-12. review, apply, and verification.
-
-Apply is safe to rerun; `trestle plan status` reports recorded progress:
-
-```bash
-pnpm exec trestle plan init
-pnpm exec trestle plan diff .trestle/setup.json
-pnpm exec trestle apply .trestle/setup.json --yes
-pnpm exec trestle plan status .trestle/setup.json
-pnpm exec trestle doctor --env staging
-```
+Apply is safe to rerun, and `trestle plan status` reports recorded progress.
+The project's agent setup skill (TRESTLEJS_SPEC §33) conducts the
+conversation that produces the SetupPlan; there is no separate setup console
+or wizard. **Deferred:** provider connection tests and recording non-secret
+evidence.
 
 `trestle plan`, `trestle apply`, and `trestle doctor` are the reviewable
 planning, mutation, and verification engines.
@@ -1463,39 +1441,18 @@ cross-environment cache tests, and deployed-system evidence for the admin.
 
 ## 18. Delivery Sequence
 
-The subsystem shipped in these slices (see `docs/ADMIN_INTEGRATION_PLAN.md`):
+The subsystem's shipped history is in the
+[Admin Integration Plan](ADMIN_INTEGRATION_PLAN.md) and
+[Release History](RELEASE_HISTORY.md). `pnpm check:generated` requires the
+admin canary scenarios (admin disabled and enabled, apply parity, platform
+sign-in, cross-plane denial, support sessions, step-up, and API key
+revocation) to pass.
 
-1. Security fixes: organization authority never implies application authority;
-   new members get no application role; override reasons are excluded from
-   customer provenance.
-2. Permission registry and central route policy across three planes.
-3. Persisted, redacted `audit_event`.
-4. Platform plane persistence and `trestle admin`; then the optional admin
-   shell, apply scaffolding, admin secrets, and conditional deploy.
-5. Operations views: outbox redrive, webhook disable and replay, artifact
-   totals.
-6. Commercial controls (overrides), then machine access (service accounts and
-   API keys).
-7. Support sessions and organization regional settings.
-8. The Kumo admin UI on the admin Worker: file-discovered views, the command
-   palette, and the directory, audit, access-catalog, and plan views (§11);
-   then operator account security and step-up (§7.6). The
-   [admin roadmap](superpowers/plans/2026-09-23-admin-roadmap.md) plans the
-   write actions that follow.
+**Pending:** the first deployed run of the admin staging path against an
+admin-enabled staging project with isolated resources.
 
-9. Generated canary: with a database, `pnpm check:generated` requires named
-   scenarios to pass. It covers the admin disabled and enabled, `trestle
-   apply` parity, platform sign-in, cross-plane denial, support-session entry
-   and exit, step-up for platform actions and factor changes, session
-   assurance recording, and a scoped API key before and after revocation.
-
-**Pending:** the first deployed run of the admin staging path. It needs an
-admin-enabled staging project with isolated resources, listed in
-`docs/ADMIN_INTEGRATION_PLAN.md`.
-
-**Deferred:** the setup wizard, identity and SSO, stored plans and
-versioning, allowances and usage, Lago and OpenMeter adapters, and the admin
-write actions in roadmap steps 2 to 8.
+**Deferred:** see the Implementation status list above and the
+[admin roadmap](superpowers/plans/2026-09-23-admin-roadmap.md).
 
 ## 19. Acceptance Criteria
 
@@ -1503,8 +1460,8 @@ The administration and access-control system is beta-ready when a clean
 generated application can, without manual source repair:
 
 1. run `trestle plan init`, enter environment credentials, review a SetupPlan
-   diff (`trestle plan diff`), apply it (`trestle apply --yes`), and pass Doctor checks (capability selection as a wizard
-   step is **Deferred**);
+   diff (`trestle plan diff`), apply it (`trestle apply --yes`), and pass
+   Doctor checks;
 2. deploy public, customer, admin, and Worker surfaces with distinct origins
    and policies (implemented for staging and production; not yet verified
    against isolated staging resources);

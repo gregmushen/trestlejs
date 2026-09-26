@@ -25,9 +25,9 @@ This plan lands the optional platform admin on `main` in small slices, next to t
 | 7b | Regional settings, re-targeted from #57: organization defaults for language, locale, time zone, and currency, resolved per setting with its source; tenant read and audited change; shown in support sessions (0027). User preferences, i18n configuration, and the #57 setup wizard steps are deferred | Merged (#121) |
 | 7c | Identity and SSO (SAML/OIDC connections, domain verification, enforced sign-in) | Deferred: spec only |
 | 8 | Generated canary requires named admin scenarios to pass rather than be skipped when a database is set: admin enabled and disabled, `trestle apply` parity, platform sign-in, cross-plane denial, support-session entry and exit, and a scoped API key before and after revocation. An older alpha.90 admin canary now passes isolated staging deployment and anonymous-denial checks; authenticated hosted scenarios remain open (see below) | Merged (#122); hosted proof partial |
-| 9 | `ADMIN_SPEC.md` and `ADMIN_ADDITIONS_SPEC.md` on `main`, corrected against the implementation, with unbuilt features marked Deferred; roadmap updated; hardening found in the spec review | In review |
+| 9 | `ADMIN_SPEC.md` and `ADMIN_ADDITIONS_SPEC.md` on `main`, corrected against the implementation, with unbuilt features marked Deferred; roadmap updated; hardening found in the spec review | Merged |
 
-Out of scope: merging #57 wholesale, the 12-step setup wizard, Lago and OpenMeter adapters, and user impersonation.
+Out of scope: merging #57 wholesale and user impersonation. Remaining deferred admin scope is listed in [`ADMIN_SPEC.md`](ADMIN_SPEC.md#deferred).
 
 ## Deployed admin gate: first run and remaining proof
 
