@@ -696,3 +696,40 @@ export async function enableJobRuntime(root: string, projectName: string, runtim
   }
   return [...written, ".trestle/project.yaml", ...rendered.keys()];
 }
+
+/**
+ * Returns the dispatch owner to the default Cloudflare runtime. The previous
+ * runtime's code (apps/jobs or the Inngest endpoint) is kept so in-flight runs
+ * can finish and the switch can be reversed; it becomes application-owned.
+ */
+export async function useCloudflareRuntime(root: string, projectName: string, templateRoot = defaultTemplateRoot): Promise<readonly string[]> {
+  const manifestPath = path.join(root, ".trestle", "project.yaml");
+  if (!(await safeApplicationPath(root, ".trestle/project.yaml"))) throw new Error("Unsafe application path: .trestle/project.yaml");
+  const manifestSource = await readFile(manifestPath, "utf8");
+  const manifest = parseProjectManifest(manifestSource);
+  const previous = manifest.jobs?.runtime ?? "cloudflare";
+  if (previous === "cloudflare") return [];
+  const updatedManifest = manifestSource.replace(/^jobs:\n(?: {2}.*\n)*/mu, "jobs:\n  runtime: cloudflare\n");
+  if (parseProjectManifest(updatedManifest).jobs?.runtime !== "cloudflare") throw new Error("Unable to select the Cloudflare runtime in the project manifest");
+  const wranglerPath = path.join(root, "apps", "worker", "wrangler.jsonc");
+  const wranglerSource = await readFile(wranglerPath, "utf8");
+  const updatedWrangler = wranglerSource.replaceAll(/"TRESTLE_JOB_RUNTIME": "(trigger|inngest)"/gu, '"TRESTLE_JOB_RUNTIME": "cloudflare"');
+  await writeFile(manifestPath, updatedManifest, "utf8");
+  await writeFile(wranglerPath, updatedWrangler, "utf8");
+
+  const baselinePath = path.join(root, ".trestle", "template-baseline.json");
+  const baselineSource = await safeApplicationPath(root, ".trestle/template-baseline.json") ? await optionalText(baselinePath) : undefined;
+  if (baselineSource) {
+    const baseline = JSON.parse(baselineSource) as { schemaVersion?: number; templateVersion?: string; files?: Record<string, string> };
+    if (baseline.schemaVersion === 1 && baseline.templateVersion === TRESTLEJS_VERSION && validBaselineFiles(baseline.files)) {
+      const enabled = await enabledCapabilities(root);
+      const baselineFiles: Record<string, string> = {};
+      // The previous runtime's files are now the application's own; the baseline tracks today's template.
+      for (const [relative, hash] of Object.entries(baseline.files)) if (templatePathCapability(relative) !== previous) baselineFiles[relative] = hash;
+      for (const relative of [".trestle/project.yaml", ...capabilityRenderedFiles]) baselineFiles[relative] = digest(await targetContent(templateRoot, relative, projectName, enabled));
+      const sorted = Object.fromEntries(Object.entries(baselineFiles).sort(([left], [right]) => left.localeCompare(right)));
+      await writeFile(baselinePath, `${JSON.stringify({ ...baseline, files: sorted }, null, 2)}\n`, "utf8");
+    }
+  }
+  return [".trestle/project.yaml", "apps/worker/wrangler.jsonc"];
+}

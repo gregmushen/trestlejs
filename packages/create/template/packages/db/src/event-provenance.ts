@@ -1,6 +1,10 @@
 import { EVENT_REPLAY_WINDOW_DAYS, PermanentEventError, type EventEnvelope, type OutboxEntry } from "@__TRESTLE_PROJECT_NAME__/events";
 
-export type CommittedEventStore = { findCommitted(id: string): Promise<OutboxEntry | null> };
+export type CommittedEventStore = {
+  findCommitted(id: string): Promise<OutboxEntry | null>;
+  /** Dead-letters a committed event a runtime rejected permanently, so settlement never re-dispatches it. */
+  reject?(id: string, reason: string): Promise<void>;
+};
 
 const dayMs = 24 * 60 * 60 * 1_000;
 

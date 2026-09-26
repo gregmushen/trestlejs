@@ -86,6 +86,9 @@ export class PostgresOutboxStore implements OutboxStore {
     const rows = await this.sql<{ id: string }[]>`with stale as (select o.id from outbox_message o where o.status='succeeded' and o.processed_at <= now() - (${options.olderThanMs} * interval '1 millisecond') and o.occurred_at > now() - interval '14 days' and o.attempts + 1 < ${options.maxAttempts ?? 5} and not exists (select 1 from event_inbox i where i.idempotency_key = o.idempotency_key and i.status = 'completed') order by o.processed_at for update of o skip locked limit ${options.limit ?? 100}) update outbox_message set status='pending', available_at=now(), attempts=attempts+1, processed_at=null from stale where outbox_message.id = stale.id returning outbox_message.id`;
     return rows.map((row) => row.id);
   }
+  async reject(id: string, reason: string): Promise<void> {
+    await this.sql`update outbox_message set status='dead', leased_until=null, last_error=${`rejected:${reason}`.slice(0, 120)} where id=${id} and status in ('pending','leased','succeeded')`;
+  }
   async listDead(): Promise<OutboxEntry[]> { return (await this.sql<Row[]>`select * from outbox_message where status='dead' order by available_at,id`).map(entry); }
   async redrive(id: string): Promise<OutboxEntry> { const [row] = await this.sql<Row[]>`update outbox_message set status='pending',available_at=now(),leased_until=null,last_error=null where id=${id} and status='dead' returning *`; if (!row) throw new Error(`Outbox entry ${id} is not dead-lettered`); return entry(row); }
   /**
