@@ -1080,6 +1080,24 @@ export function createProgram(runtime: CliRuntime): Command {
     await runCommand("docker", ["compose", "down", "--volumes"], { cwd: context.root, env: composeEnvironment });
   });
 
+  const api = program.command("api").description("inspect the application's API contracts");
+  api.command("spec")
+    .description("print, write, or check the OpenAPI document generated from route policies and operation contracts")
+    .option("--out <file>", "write the document to this file (for example openapi/app.json)")
+    .option("--check", "with --out, fail when the file differs from the current contracts (drift detection)")
+    .option("--published", "document only public and machine routes, as served outside local development")
+    .option("--report", "print routes without schemas, excluded routes, and contracts without routes instead of the document")
+    .action(async (options: { out?: string; check?: boolean; published?: boolean; report?: boolean }, command: Command) => {
+      if (options.check && !options.out) throw new CliFailure("--check compares against a file; pass --out <file>");
+      const context = await projectContext(command, runtime);
+      try {
+        await access(path.join(context.root, "scripts", "openapi.ts"));
+      } catch {
+        throw new CliFailure("this project has no scripts/openapi.ts; run trestle upgrade to adopt generated API contracts");
+      }
+      await runCommand("pnpm", ["exec", "tsx", "scripts/openapi.ts"], { cwd: context.root, env: { ...process.env, TRESTLE_OPENAPI_OUT: options.out ?? "", TRESTLE_OPENAPI_CHECK: options.check ? "1" : "", TRESTLE_OPENAPI_EXPOSURE: options.published ? "published" : "all", TRESTLE_OPENAPI_REPORT: options.report ? "1" : "" } });
+    });
+
   experimental(program.command("console").description("open an application-aware TypeScript console"), runtime)
     .option("--env <environment>", "console environment", environment, "local")
     .option("--tenant <tenant>", "tenant id or slug")

@@ -5,7 +5,7 @@ import type { ProjectManifest, SetupResource } from "./core.js";
 
 import {
   appendExport, assertRelationTargets, columnExpression, ensureJsonValueType, exampleExpression, exists, fieldCheckExpression, jsonValueImport, names,
-  pgCoreImports, sharedRelationKeyExpression, zodExpression, type ResourceNames,
+  pgCoreImports, registerApiOperations, resourceApiOperationsSource, sharedRelationKeyExpression, zodExpression, type ResourceNames,
 } from "./generate-resource.js";
 import { CliFailure } from "./runtime.js";
 
@@ -127,6 +127,8 @@ export async function generateSharedResource(root: string, manifest: ProjectMani
 
   await writeGenerated(targets.contracts, `import { z } from "zod";
 
+import type { ApiOperation } from "../api.js";
+
 /** Values an editor supplies; shared ${n.className} records are changed only through the platform admin. */
 export const ${n.camel}ValuesSchema = z.object({
 ${resource.fields.map((field) => `  ${field.name}: ${zodExpression(field)},`).join("\n")}
@@ -140,7 +142,7 @@ ${resource.fields.map((field) => `  ${field.name}: ${field.required ? zodExpress
 });
 export type ${n.className} = z.infer<typeof ${n.camel}Schema>;
 export type ${n.className}Values = z.infer<typeof ${n.camel}ValuesSchema>;
-`);
+${resourceApiOperationsSource(n, routePath, { read: readPermission }, n.pluralKebab)}`);
   await writeGenerated(targets.contractsTest, `import { describe, expect, it } from "vitest";
 import { ${n.camel}ValuesSchema } from "./${n.kebab}.js";
 
@@ -461,6 +463,8 @@ export function ${n.className}Screen() {
 `);
 
   await appendExport(path.join(root, contractsPath, "src", "index.ts"), `export * from "./resources/${n.kebab}.js";`);
+  const apiRegistry = await registerApiOperations(root, contractsPath, n);
+  if (apiRegistry) created.push(apiRegistry);
   await appendExport(path.join(root, domainPath, "src", "index.ts"), `export * from "./resources/${n.kebab}.js";`);
   await appendExport(path.join(root, dataPath, "src", "index.ts"), `export * from "./resources/${n.kebab}-repository.js";`);
   await appendExport(path.join(root, dbPath, "src", "index.ts"), `export * from "./${n.kebab}-schema.js";`);

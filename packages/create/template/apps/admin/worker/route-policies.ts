@@ -27,6 +27,8 @@ const basePolicies: RoutePolicy[] = [
   { method: "POST", path: "/api/auth/passkey/delete-passkey", public: true, audience: "public" },
   { method: "GET", path: "/api/admin/health/live", public: true, audience: "public" },
   { method: "GET", path: "/api/admin/session", audience: "session" },
+  // The admin API document is operator-only: it describes platform operations.
+  { method: "GET", path: "/api/admin/openapi.json", audience: "platform", permission: "platform.overview.read" },
 ];
 const viewPolicies = adminViews.flatMap((view) => view.api.map((route): RoutePolicy => ({ method: route.method, path: route.path, audience: "platform", permission: route.permission ?? view.permission })));
 

@@ -657,6 +657,35 @@ reference tenant resources.
 including when an older checked-in migration was future-dated. A generated
 release canary checks that running it without schema changes creates no drift.
 
+### API contracts
+
+The OpenAPI documents are generated from the route policies in
+`packages/authz/src/routes.ts` and the operation contracts in
+`packages/contracts/src/api.ts`, not maintained separately. Generated
+resources register their operations there automatically. Each operation
+declares its Zod params, query, body, and responses, a stable
+`operationId`, and a classification: `public`, `browser-internal`,
+`admin-internal`, `webhook`, or `machine`. The route policy supplies
+authentication, the permission, and the standard 401 and 403 errors.
+
+- Locally, `GET /api/openapi.json` documents every route and `/api/docs` is an
+  interactive reference. Elsewhere only `public` and `machine` routes are
+  published, and `/api/docs` is not served.
+- The admin document is at `GET /api/admin/openapi.json`. It requires
+  `platform.overview.read`.
+- `pnpm exec trestle api spec --out openapi/app.json` writes the document.
+  `--check` fails when a committed copy has drifted, and `--report` lists
+  routes without schemas, excluded routes, and contracts with no route.
+- `validateApiResponse(operation, status, body)` checks a real response
+  against its contract in tests. Generating the document does not validate
+  runtime output.
+- Better Auth's `/api/auth/*` handler is excluded; see the Better Auth API
+  reference.
+
+External consumers can generate a typed client with
+`pnpm dlx openapi-typescript openapi/app.json -o openapi/app.d.ts`. In-repo
+screens import the Zod contracts directly.
+
 Generated screens use application-owned typed API clients rather than local
 unvalidated fetch helpers. List endpoints use bounded cursor pagination, and
 every generated operation declares its application permission before reaching

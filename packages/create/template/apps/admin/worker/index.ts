@@ -12,13 +12,14 @@ import {
   listPlatformApiKeys, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   sessionAssurance, type Database, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
 } from "@__TRESTLE_PROJECT_NAME__/db";
+import { buildOpenApi } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 
 import { adminViews, stepUpExemptRoutes, type AdminCapability } from "../src/api-registry.js";
 import { databaseReachable, enrolledFactors, overview, platformRolesFor, strongestEnrolledFactor } from "./data.js";
 import { adminFactorPlugins } from "./factors.js";
-import { adminPolicyFor } from "./route-policies.js";
+import { adminPolicyFor, adminRoutePolicies } from "./route-policies.js";
 
 export type AdminEnvironment = {
   DATABASE_URL: string;
@@ -270,6 +271,8 @@ admin.get("/api/admin/session", async (context) => {
     views: adminViews.map((view) => ({ id: view.id, path: view.path, label: view.label, group: view.group, capability: view.capability ?? null, allowed: access.check({ permission: view.permission }) })),
   });
 });
+
+admin.get("/api/admin/openapi.json", (context) => context.json(buildOpenApi(adminRoutePolicies, [], { title: "__TRESTLE_PROJECT_NAME__ platform admin API", version: "1.0.0", exposure: "all" }).document));
 
 admin.get("/api/admin/overview", async (context) => context.json(await overview(platformDatabase(context.env), { includeAudit: context.get("access").check({ permission: "platform.audit.read" }) })));
 

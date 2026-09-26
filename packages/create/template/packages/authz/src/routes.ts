@@ -11,6 +11,8 @@ import { defineRoutePolicies, type HttpMethod, type RoutePolicy } from "./route-
 export const customerRoutePolicies = defineRoutePolicies(permissions, [
   { method: "GET", path: "/api/health", public: true, audience: "public" },
   { method: "GET", path: "/api/health/operational", public: true, audience: "public" },
+  { method: "GET", path: "/api/openapi.json", public: true, audience: "public" },
+  { method: "GET", path: "/api/docs", public: true, audience: "public" },
   { method: "GET", path: "/api/auth/*", public: true, audience: "public" },
   { method: "POST", path: "/api/auth/*", public: true, audience: "public" },
   { method: "POST", path: "/api/webhooks/resend", public: true, audience: "public" },
