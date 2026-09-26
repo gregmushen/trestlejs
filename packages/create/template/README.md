@@ -668,6 +668,27 @@ before anyone can use it.
 including when an older checked-in migration was future-dated. A generated
 release canary checks that running it without schema changes creates no drift.
 
+### Development accounts and seed data
+
+`pnpm exec trestle dev-account dev@example.test --password-stdin --organization acme --app-role editor --platform-role platform_operator`
+creates or finds a verified local account. Pipe the password on standard input;
+it is never printed or logged. The command also creates or joins the
+organization (`--org-role owner|admin|member`), grants application roles
+(tenant authority), and grants platform roles (operator authority in the
+platform admin). It is idempotent: rerun it to add roles, and it never removes
+anything. It refuses non-local databases.
+
+The data commands are separate:
+
+- `trestle db seed --scenario <name>` is additive. It upserts only the
+  scenario's own fixed rows and keeps your development accounts and
+  application data.
+- `trestle db reset --yes` deletes the local database volume.
+- `trestle dev --fresh --yes` removes declared project-local state before
+  startup.
+- `trestle dev` migrates and applies the additive default seed on every start,
+  so it never deletes data.
+
 ### API contracts
 
 The OpenAPI documents are generated from the route policies in

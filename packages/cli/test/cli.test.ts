@@ -292,6 +292,13 @@ describe("TrestleJS CLI", () => {
     expect(output.stderr()).toContain("requires --cookie-stdin");
   });
 
+  it("points projects without the development account script at trestle upgrade", async () => {
+    const root = await fixture();
+    const output = capture(root);
+    expect(await executeCli(["dev-account", "dev@example.test"], output.runtime)).toBe(1);
+    expect(output.stderr()).toContain("run trestle upgrade to adopt development accounts");
+  });
+
   it("requires an explicit console authority plane", async () => {
     const root = await fixture();
     const output = capture(root);
