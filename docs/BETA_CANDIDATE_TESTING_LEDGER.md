@@ -1,15 +1,18 @@
 # Beta candidate testing ledger
 
-**Candidate:** `0.1.0-beta.1`
+**Candidate:** `0.1.0-beta.3` for `trestlejs` and `create-trestlejs`
 
-**Basis:** published `0.1.0-alpha.135` framework and merged canary PR #14
+**Basis:** published `0.1.0-beta.3` CLI/creator, the standard canary at its
+earlier alpha.135 basis, and a separate admin-enabled canary at alpha.90
 
 **Decision:** prerelease for evaluation, not a production-readiness claim
 
 This ledger describes observed evidence, not the full intended v1 architecture.
 Passing local tests do not prove a hosted integration. `not tested` means there
 is no end-to-end evidence for the named path; it does not mean the path is broken.
-The beta prerelease remains on the npm `next` channel, not `latest`.
+The CLI and creator beta prerelease remain on npm `next`, not `latest`.
+`@trestlejs/core` remains at `0.1.0-beta.1` on `next`; do not infer that all
+packages share the CLI's beta.3 version.
 
 ## Verified at the alpha.135 basis
 
@@ -21,7 +24,7 @@ The beta prerelease remains on the npm `next` channel, not `latest`.
 | Isolated preview | [Canary PR #14](https://github.com/gregmushen/trestlejs-canary/pull/14) was **merged**. Its [preview run](https://github.com/gregmushen/trestlejs-canary/actions/runs/36083135433) passed site and authenticated product browser tests without sending email. |
 | Hosted staging | The [post-merge staging run](https://github.com/gregmushen/trestlejs-canary/actions/runs/36083495603) deployed the site, app, and Worker and passed two non-sending browser tests. That workflow subsequently stopped in production readiness; it is not a successful production deployment. |
 
-## Beta.1 release evidence
+## Beta release evidence
 
 The [beta release workflow](https://github.com/gregmushen/trestlejs/actions/runs/36084890295)
 passed framework tests, PostgreSQL-backed `alpha.134` → `alpha.135`
@@ -31,6 +34,33 @@ and `create-trestlejs` at `0.1.0-beta.1` on the `next` dist-tag; `latest`
 was unchanged. The published `npx create-trestlejs@next --help` entry point
 ran successfully. This is package/release evidence, not a beta.1 hosted
 deployment or a published `alpha.135` → `beta.1` upgrade rehearsal.
+
+The [beta.3 publish run](https://github.com/gregmushen/trestlejs/actions/runs/36167302856)
+passed its verification and npm publish jobs. npm metadata confirms
+`trestlejs` and `create-trestlejs` at beta.3 on `next`, with `latest` still at
+alpha.5. The existing-project admin enablement and SetupPlan fixes are in the
+published CLI, but a successful upgrade of the alpha.90 admin canary to
+beta.3 has **not** been demonstrated.
+
+## Separate admin-enabled canary evidence
+
+[Platform canary PR #1](https://github.com/gregmushen/trestlejs-platform-canary/pull/1)
+was merged. Its [isolated preview run](https://github.com/gregmushen/trestlejs-platform-canary/actions/runs/36209362117)
+deployed an isolated Worker, Pages projects, and a Neon branch, then passed
+non-sending smoke and site-browser checks. The
+[post-merge staging run](https://github.com/gregmushen/trestlejs-platform-canary/actions/runs/36209805920)
+passed database-role checks, admin Worker and Pages deployment, operational
+smoke, and two browser tests. The admin browser test proved that the sign-in
+screen loads, an anonymous request cannot read the platform session, admin
+sign-up is absent, and a protected page redirects to sign-in. It did **not**
+authenticate an operator or test a support session. Production was skipped by
+the workflow's explicit promotion gate. Automatic staging checks sent no
+Resend email.
+
+That canary's generated source still uses alpha.90. These runs prove a hosted
+admin deployment and anonymous access boundary for that version, not beta.3
+hosting or the newer read-only support-view handoff merged in
+[TrestleJS PR #192](https://github.com/gregmushen/trestlejs/pull/192).
 
 ## Open items
 
@@ -42,14 +72,16 @@ deployment or a published `alpha.135` → `beta.1` upgrade rehearsal.
 | **Not tested** | Deployed async and recovery | The deployed outbox → Queue → consumer, Workflow retry, R2 signed access, and restore/reconciliation scenarios lack complete end-to-end evidence. Unit and generated local tests do not close this gap. |
 | **Known defect** | Intermittent Cloudflare Pages 522s | Isolated preview runs observed transient 522 responses soon after deployment. A bounded smoke retry mitigates startup transients but does not establish sustained reliability or remove the underlying intermittent response. |
 | **Not tested** | Sustained Worker reliability | Repeated/concurrent deployed requests, including auth and database operations under load, have not been measured long enough to establish reliability. |
-| **Not tested** | Optional admin staging deployment | The optional admin path has not had its first isolated hosted deployment and access-control run. It is not covered by the standard canary's successful browser checks. |
-| **Not tested** | Production promotion and beta upgrade | Canary PR #14 is merged, so it is **not** an open promotion PR. Exact-commit production promotion is blocked by the production prerequisites above. The final published `alpha.135` → `beta.1` generated-project upgrade must be rehearsed after beta.1 is published; prepublication CI cannot install an unpublished beta package from npm. |
+| **Not tested** | Authenticated admin and support-view staging | The alpha.90 admin canary has passed hosted anonymous-denial checks, but no deployed operator sign-in, privileged action, support-session entry/exit, or read-only customer-app support view has passed. Upgrade or regenerate an isolated admin canary from the published beta, bootstrap an operator, and test those paths without a real-user email send. |
+| **Not tested** | Production promotion and published beta upgrade | Both canary PRs are merged; neither is an open promotion PR. Exact-commit production promotion remains blocked by the production prerequisites above. A published generated-project upgrade to beta.3, including the alpha.90 admin canary's `template-source` manual-review outcome, remains to be rehearsed or repaired. |
 
 ## Release interpretation
 
-`0.1.0-beta.1` is suitable for opt-in evaluation of its tested local,
-preview, and staging paths. It is **not** evidence that production providers,
-hosted Article isolation, live email, async/recovery, admin hosting, or
-sustained availability have passed. Do not promote the `next` dist-tag to
+`0.1.0-beta.3` is suitable for opt-in evaluation of the CLI/creator and their
+tested paths. The separate alpha.90 admin canary establishes limited hosted
+admin evidence; it does **not** validate beta.3 admin operation. Neither is
+evidence that production providers, hosted Article isolation, live email,
+async/recovery, authenticated admin support access, or sustained availability
+have passed. Do not promote the `next` dist-tag to
 `latest`, or describe this candidate as production-ready, until those gaps are
 resolved or explicitly accepted for a narrower release.

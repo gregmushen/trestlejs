@@ -18,8 +18,8 @@ release.
 | Alpha 9 | Production integrations and end-to-end observability | Partly shipped: `trestle logs`, Resend, Stripe, and local-capture outbound webhooks shipped; remote webhook delivery and production provider evidence remain |
 | Alpha 10 | Recovery, operational tooling, deterministic data, and safe remote access | Partly shipped: `backup`, `restore`, `console`, Queue/DLQ and Workflow operations, seed scenarios, and `dev --fresh` shipped; deployed recovery evidence remains |
 | Alpha 11 | Resource evolution and framework upgrade lifecycle | Partly shipped: `resource add-field`, `upgrade` (including `source-*`), and `architecture check` shipped; generated typed API clients and codemods remain |
-| Alpha 12 | Optional admin, enforcement, full-system hardening, and beta preparation | Admin and access control shipped (see [ADMIN_SPEC.md](ADMIN_SPEC.md)); deployed admin evidence and beta hardening remain |
-| Beta candidate | Published prerelease with an explicit evidence ledger; production and several hosted paths remain open | `0.1.0-beta.1` shipped on npm `next`. The `beta.2` tag passed verification but its publish job failed before npm upload; `beta.3` carries the supported existing-project admin enablement path and SetupPlan self-validation. Hosted admin evidence remains open in the [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md) |
+| Alpha 12 | Optional admin, enforcement, full-system hardening, and beta preparation | Admin and access control shipped (see [ADMIN_SPEC.md](ADMIN_SPEC.md)); an alpha.90 admin canary passed hosted anonymous-access checks, but authenticated admin/support-view staging and beta hardening remain |
+| Beta candidate | Published prerelease with an explicit evidence ledger; production and several hosted paths remain open | `trestlejs` and `create-trestlejs` beta.3 shipped on npm `next` with the existing-project admin enablement path and SetupPlan self-validation. Hosted admin proof is partial and comes from an older alpha.90 canary; see the [testing ledger](BETA_CANDIDATE_TESTING_LEDGER.md) |
 | Beta completion | Stable conventions, migration compatibility, upgrade rehearsals, and production evidence from real applications | Planned |
 | v1 | Supported end-to-end product-development and deployment path with documented compatibility guarantees | Planned |
 
@@ -1472,5 +1472,6 @@ with application crons using P3's rules.
 ### Housekeeping
 
 - Close #54 and #57; the merged admin slices supersede them.
-- Run the admin staging path for the first time once an admin-enabled staging
-  project has isolated resources (see `ADMIN_INTEGRATION_PLAN.md`).
+- Extend the first successful isolated admin staging run beyond anonymous
+  denial to authenticated operator and support-view scenarios, using a canary
+  upgraded to the published beta (see `ADMIN_INTEGRATION_PLAN.md`).
