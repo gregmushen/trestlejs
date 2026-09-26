@@ -330,6 +330,7 @@ trestle upgrade migrations          compare journal order and SQL identities wit
 trestle upgrade source-apply --yes  apply pristine adjacent-alpha source only
 trestle upgrade source-finalize --yes  run local checks and certify source parity
 trestle resource add-field ...      add an optional field and tracked migration
+trestle resource migrate-relations [--yes]  preflight and adopt tenant-safe relation keys
 ```
 
 Commands labelled `[experimental]` in `--help` (`queue`, `workflow`, `backup`,

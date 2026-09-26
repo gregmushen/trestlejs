@@ -7,7 +7,7 @@ import type { ProjectManifest, SetupResource } from "./core.js";
 import { runCommand } from "./processes.js";
 import { CliFailure } from "./runtime.js";
 
-type ResourceNames = {
+export type ResourceNames = {
   className: string;
   camel: string;
   kebab: string;
@@ -15,7 +15,7 @@ type ResourceNames = {
   pluralKebab: string;
 };
 
-type ResourceField = SetupResource["fields"][number];
+export type ResourceField = SetupResource["fields"][number];
 
 export function parseResourceField(value: string): ResourceField {
   const [name, type = "string", reference, onDelete = "restrict"] = value.split(":");
@@ -37,7 +37,7 @@ function zodExpression(field: ResourceField): string {
   return field.required ? base : `${base}.optional()`;
 }
 
-function columnName(field: ResourceField): string {
+export function columnName(field: ResourceField): string {
   return field.name.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase();
 }
 
@@ -80,11 +80,11 @@ function constraintName(value: string): string {
   return `${value.slice(0, 63 - digest.length - 1).replace(/_+$/u, "")}_${digest}`;
 }
 
-function tenantKeyName(resource: ResourceNames): string {
+export function tenantKeyName(resource: ResourceNames): string {
   return constraintName(`${resource.snake}_tenant_key`);
 }
 
-function relationKeyName(resource: ResourceNames, field: ResourceField): string {
+export function relationKeyName(resource: ResourceNames, field: ResourceField): string {
   return constraintName(`${resource.snake}_${columnName(field)}_tenant_fk`);
 }
 
@@ -93,7 +93,7 @@ function relationKeyName(resource: ResourceNames, field: ResourceField): string 
  * point at a parent in its own tenant. set-null is narrowed to the relation
  * column in the migration (generateResourceMigration) so it never nulls tenant identity.
  */
-function relationKeyExpression(resource: ResourceNames, field: ResourceField): string {
+export function relationKeyExpression(resource: ResourceNames, field: ResourceField): string {
   const related = names(field.references!.resource);
   const action = field.references!.onDelete === "set-null" ? "set null" : field.references!.onDelete;
   return `  foreignKey({ name: "${relationKeyName(resource, field)}", columns: [table.organizationId, table.${field.name}], foreignColumns: [${related.camel}.organizationId, ${related.camel}.id] }).onDelete("${action}"),`;
@@ -112,7 +112,7 @@ async function assertRelationTargets(root: string, dbPath: string, resourceName:
   }
 }
 
-function withPgCoreImports(source: string, required: readonly string[]): string {
+export function withPgCoreImports(source: string, required: readonly string[]): string {
   return source.replace(/import \{([^}]*)\} from "drizzle-orm\/pg-core";/u, (_line, imported: string) => {
     const list = [...new Set([...imported.split(",").map((name) => name.trim()).filter(Boolean), ...required])].sort((a, b) => a.localeCompare(b));
     return `import { ${list.join(", ")} } from "drizzle-orm/pg-core";`;
@@ -120,7 +120,7 @@ function withPgCoreImports(source: string, required: readonly string[]): string 
 }
 
 /** Gives a parent generated before tenant keys existed the (organization_id, id) key its children reference. */
-async function ensureTenantKey(schemaPath: string, parent: ResourceNames): Promise<boolean> {
+export async function ensureTenantKey(schemaPath: string, parent: ResourceNames): Promise<boolean> {
   const source = await readFile(schemaPath, "utf8");
   if (source.includes(`"${tenantKeyName(parent)}"`)) return false;
   const anchor = `  index("${parent.snake}_organization_idx").on(table.organizationId),`;
@@ -775,11 +775,13 @@ ${relations.slice(0, 1).map((field) => relationIntegrationTest(n, field)).join("
   return created;
 }
 
-export async function generateResourceMigration(root: string, manifest: ProjectManifest, resources: SetupResource[]): Promise<string[]> {
-  if (resources.length === 0) return [];
+export type GeneratedMigration = { migrationPath: string; files: string[] };
+
+/** Runs the project's db:generate and returns the single migration it created, with its new metadata files. */
+export async function runDatabaseGenerate(root: string, manifest: ProjectManifest): Promise<GeneratedMigration | undefined> {
   const dbPath = manifest.packages.db ?? "packages/db";
   const packagePath = path.join(root, dbPath, "package.json");
-  if (!(await exists(packagePath))) return [];
+  if (!(await exists(packagePath))) return undefined;
   const migrationDirectory = path.join(root, dbPath, "migrations");
   const before = new Set((await readdir(migrationDirectory)).filter((entry) => entry.endsWith(".sql")));
   const metaDirectory = path.join(migrationDirectory, "meta");
@@ -791,25 +793,48 @@ export async function generateResourceMigration(root: string, manifest: ProjectM
     throw new CliFailure(`unable to generate the Drizzle migration: ${error instanceof Error ? error.message : String(error)}`);
   }
   const created = (await readdir(migrationDirectory)).filter((entry) => entry.endsWith(".sql") && !before.has(entry));
+  const metaCreated = (await readdir(metaDirectory)).filter((entry) => !metaBefore.has(entry));
   if (created.length !== 1) throw new CliFailure(`expected Drizzle to generate one migration, generated ${created.length}`);
   const migrationPath = path.join(migrationDirectory, created[0]!);
-  let sqlSource = await readFile(migrationPath, "utf8");
-  // Drizzle adds foreign keys before unique constraints on existing tables, but a composite relation
-  // needs its parent's tenant key first. Tenant keys added this way are always on existing tables.
-  const statements = sqlSource.split("--> statement-breakpoint").map((statement) => statement.trim()).filter(Boolean);
-  const tenantKeys = statements.filter((statement) => /^ALTER TABLE "[^"]+" ADD CONSTRAINT "[^"]+" UNIQUE\("organization_id","id"\);$/u.test(statement));
-  if (tenantKeys.length) sqlSource = `${[...tenantKeys, ...statements.filter((statement) => !tenantKeys.includes(statement))].join("--> statement-breakpoint\n")}\n`;
+  return { migrationPath, files: [path.relative(root, migrationPath), ...metaCreated.map((entry) => path.relative(root, path.join(metaDirectory, entry)))] };
+}
+
+export function migrationStatements(sqlSource: string): string[] {
+  return sqlSource.split("--> statement-breakpoint").map((statement) => statement.trim()).filter(Boolean);
+}
+
+export function isTenantKeyStatement(statement: string): boolean {
+  return /^ALTER TABLE "[^"]+" ADD CONSTRAINT "[^"]+" UNIQUE\("organization_id","id"\);$/u.test(statement);
+}
+
+/**
+ * Drizzle adds foreign keys before unique constraints on existing tables, but a composite relation
+ * needs its parent's tenant key first. Tenant keys added this way are always on existing tables.
+ */
+export function tenantKeysFirst(sqlSource: string): string {
+  const statements = migrationStatements(sqlSource);
+  const tenantKeys = statements.filter(isTenantKeyStatement);
+  return tenantKeys.length ? `${[...tenantKeys, ...statements.filter((statement) => !tenantKeys.includes(statement))].join("--> statement-breakpoint\n")}\n` : sqlSource;
+}
+
+/** Drizzle cannot express a column list; without it SET NULL would also null organization_id. */
+export function narrowSetNull(sqlSource: string, resource: ResourceNames, field: ResourceField): string {
+  if (field.type !== "relation" || field.references?.onDelete !== "set-null") return sqlSource;
+  return sqlSource.replace(new RegExp(`(CONSTRAINT "${relationKeyName(resource, field)}" FOREIGN KEY [^;]*? ON DELETE) set null`, "u"), `$1 SET NULL ("${columnName(field)}")`);
+}
+
+export async function generateResourceMigration(root: string, manifest: ProjectManifest, resources: SetupResource[]): Promise<string[]> {
+  if (resources.length === 0) return [];
+  const generated = await runDatabaseGenerate(root, manifest);
+  if (!generated) return [];
+  let sqlSource = tenantKeysFirst(await readFile(generated.migrationPath, "utf8"));
   for (const resource of resources) {
-    for (const field of resource.fields.filter((candidate) => candidate.type === "relation" && candidate.references?.onDelete === "set-null")) {
-      // Drizzle cannot express a column list; without it SET NULL would also null organization_id.
-      sqlSource = sqlSource.replace(new RegExp(`(CONSTRAINT "${relationKeyName(names(resource.name), field)}" FOREIGN KEY [^;]*? ON DELETE) set null`, "u"), `$1 SET NULL ("${columnName(field)}")`);
-    }
+    for (const field of resource.fields) sqlSource = narrowSetNull(sqlSource, names(resource.name), field);
     const table = names(resource.name).snake;
     sqlSource = `${sqlSource.trimEnd()}\n--> statement-breakpoint\nALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;\n--> statement-breakpoint\nREVOKE ALL ON "${table}" FROM PUBLIC;\n--> statement-breakpoint\nGRANT SELECT, INSERT, UPDATE, DELETE ON "${table}" TO trestle_app;\n`;
   }
-  await writeFile(migrationPath, sqlSource, "utf8");
-  const metaCreated = (await readdir(metaDirectory)).filter((entry) => !metaBefore.has(entry));
-  return [path.relative(root, migrationPath), ...metaCreated.map((entry) => path.relative(root, path.join(metaDirectory, entry)))];
+  await writeFile(generated.migrationPath, sqlSource, "utf8");
+  return generated.files;
 }
 
 export async function addResourceField(root: string, manifest: ProjectManifest, resourceName: string, field: ResourceField): Promise<string[]> {

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -24,6 +24,7 @@ import { addResourceField, generateResource, generateResourceMigration, parseRes
 import { assertLocalDatabaseUrl, freshDevelopmentPlan } from "./fresh.js";
 import { formatEnvironmentStatus, inspectEnvironmentStatus } from "./environment-status.js";
 import { inspectResources, inspectRoutes } from "./inspect.js";
+import { inspectResourceRelations, migrateLegacyRelations, relationPreflightSql, runRelationPreflight, type ResourceRelation } from "./legacy-relations.js";
 import { applySetupPlan, diffSetupPlan, formatPlanDiff, formatPlanJson, initSetupPlan, readApplyState, readSetupPlan } from "./plan.js";
 import { assertOutboxRetentionCutoff, formatOutboxRetentionSummary, type OutboxRetentionSummary } from "./outbox-retention.js";
 import { runCommand, runDevelopment } from "./processes.js";
@@ -339,6 +340,49 @@ export function createProgram(runtime: CliRuntime): Command {
       const field = parseResourceField(fieldDefinition);
       const changed = await addResourceField(context.root, context.manifest, resourceName, field);
       runtime.stdout(`Added ${field.name} to ${resourceName}\n${changed.map((file) => `  ${file}`).join("\n")}\n`);
+    });
+
+  resource.command("migrate-relations")
+    .description("move relations generated with ID-only foreign keys to tenant-safe composite keys")
+    .option("--env <environment>", "environment whose database the read-only preflight checks", environment, "local")
+    .option("--yes", "after a clean preflight, rewrite the schemas and generate the staged constraint migration")
+    .action(async (options: { env: ReturnType<typeof environment>; yes?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const relations = await inspectResourceRelations(context.root, context.manifest);
+      const legacy = relations.filter(({ state }) => state === "legacy");
+      const unrecognized = relations.filter(({ state }) => state === "unrecognized");
+      const describe = (relation: ResourceRelation) => `  ${relation.resource}.${relation.field} -> ${relation.parent} (${relation.table}.${relation.column}, on delete ${relation.onDelete})  ${relation.schema}`;
+      if (unrecognized.length) runtime.stdout(`Relations without a recognizable foreign key (not rewritten; declare the composite key by hand):\n${unrecognized.map(describe).join("\n")}\n\n`);
+      if (!legacy.length) {
+        if (unrecognized.length) throw new CliFailure("no generated ID-only relations to migrate, but some relations have no composite key");
+        runtime.stdout("All generated relations use tenant-safe composite keys.\n");
+        return;
+      }
+      const preflight = relationPreflightSql(legacy);
+      runtime.stdout(`ID-only relations (${legacy.length}):\n${legacy.map(describe).join("\n")}\n\nPreflight SQL (read-only; run it against every environment before applying the migration):\n${preflight}\n\n`);
+      let connection: string | undefined;
+      if (await access(credentialsPaths(context.root, options.env).encrypted).then(() => true, () => false)) {
+        const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+        // Generated tables force RLS; the migration role is the one expected to bypass it.
+        connection = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
+      }
+      if (connection) {
+        const rows = await runRelationPreflight(context.root, context.manifest, connection, preflight);
+        runtime.stdout(`Preflight (${options.env}):\n${rows.map((row) => `  ${row.relation}: cross-tenant=${row.cross_tenant} missing-parent=${row.missing_parents}`).join("\n")}\n`);
+        const invalid = rows.filter((row) => row.cross_tenant > 0 || row.missing_parents > 0);
+        if (invalid.length) {
+          runtime.stdout(`\nThe composite keys would reject ${invalid.reduce((total, row) => total + row.cross_tenant + row.missing_parents, 0)} existing reference(s). Nothing was written.\nDecide which tenant owns each affected row and correct it in application-owned code or SQL (for example clear the reference or link a parent in the row's own tenant). TrestleJS never repairs, reassigns or deletes rows. Rerun this preflight until every count is 0.\n`);
+          throw new CliFailure(`relation preflight found invalid rows in ${options.env}`);
+        }
+      } else {
+        runtime.stdout(`No DATABASE_MIGRATION_URL or DATABASE_URL is configured for ${options.env}; the preflight did not run. Run it against every environment (--env) before applying the migration; VALIDATE CONSTRAINT still fails safely on invalid rows.\n`);
+      }
+      if (!options.yes) {
+        runtime.stdout("\nDry run; nothing was written. Rerun with --yes to rewrite the schemas and generate the constraint migration.\n");
+        return;
+      }
+      const changed = await migrateLegacyRelations(context.root, context.manifest, legacy);
+      runtime.stdout(`\nMigrated ${legacy.length} relation(s) to tenant-safe composite keys:\n${changed.map((file) => `  ${file}`).join("\n")}\nReview the migration, apply it locally with trestle db migrate, and before each deployment run trestle resource migrate-relations --env <environment> to preflight that database.\n`);
     });
 
   const secrets = program.command("secrets").description("manage encrypted application credentials");
