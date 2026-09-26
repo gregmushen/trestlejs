@@ -42,6 +42,7 @@ import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { formatProviderStatuses, providerStatuses } from "./providers.js";
 import { evidenceReport, formatEvidenceReport, readLedger, recordEvidence, starterLedger, writeLedger } from "./evidence.js";
 import { enableJobRuntime } from "./upgrade-source.js";
+import { scaffoldSelfHostedInngest, scaffoldSelfHostedTrigger } from "./job-self-host.js";
 import { applySourceUpgrade, sourceFileDiff, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { auditMigrations, formatMigrationAudit, rebaseMigrations } from "./upgrade-migrations.js";
 import {
@@ -1363,6 +1364,26 @@ export function createProgram(runtime: CliRuntime): Command {
         ? "Next: pnpm install; set TRIGGER_SECRET_KEY per environment (trestle secrets set TRIGGER_SECRET_KEY --env <env>); trestle jobs env push --env <env>; deploy apps/jobs with pnpm --filter ./apps/jobs deploy."
         : "Next: pnpm install; set INNGEST_EVENT_KEY and INNGEST_SIGNING_KEY per deployed environment (trestle secrets set … --env <env>) and deploy the Worker; register https://<worker>/api/jobs/inngest as the app URL in Inngest. Locally, trestle dev runs the Inngest Dev Server.";
       runtime.stdout(`${changed.length ? `Selected ${runtimeName}.\n${changed.map((file) => `  ${file}`).join("\n")}` : `${runtimeName} is already selected.`}\n${next}\n`);
+    });
+
+  jobs.command("self-host")
+    .description("scaffold application-owned deployment files for a self-hosted trigger.dev or Inngest (infra/)")
+    .argument("<runtime>", "trigger or inngest")
+    .option("--target <target>", "inngest only: docker (default) or cloudflare-container (experimental)", "docker")
+    .action(async (runtimeName: string, options: { target: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      if (runtimeName !== "trigger" && runtimeName !== "inngest") throw new CliFailure("jobs self-host supports trigger or inngest");
+      if (runtimeName === "inngest" && options.target !== "docker" && options.target !== "cloudflare-container") throw new CliFailure("--target must be docker or cloudflare-container");
+      if (options.target === "cloudflare-container" && command.optsWithGlobals<{ experimental?: boolean }>().experimental !== true && runtimeValue(runtime, "TRESTLE_EXPERIMENTAL") !== "1") {
+        throw new CliFailure("the Cloudflare Container profile has no deployed evidence yet; rerun with --experimental or set TRESTLE_EXPERIMENTAL=1");
+      }
+      let written: string[];
+      try {
+        written = runtimeName === "inngest"
+          ? await scaffoldSelfHostedInngest(context.root, context.manifest.project.name, options.target as "docker" | "cloudflare-container")
+          : await scaffoldSelfHostedTrigger(context.root, context.manifest.project.name);
+      } catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
+      runtime.stdout(`Wrote\n${written.map((file) => `  ${file}`).join("\n")}\nThese files are yours to edit; read ${written[0]} for requirements (Inngest needs a persistent Redis).\n`);
     });
 
   jobs.command("env")

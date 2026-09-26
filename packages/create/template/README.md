@@ -865,6 +865,24 @@ How it behaves:
   inbox still prevents a second completion.
 - **Deploys:** a run finishes on the task version it started on.
 
+**Approved Python scripts.** trigger.dev projects can run Python on
+trigger.dev's machines or your own (self-hosted trigger.dev):
+
+1. Put scripts under `apps/jobs/python/` (with an optional `requirements.txt`).
+2. Register each one by name in `apps/jobs/src/scripts.ts` with a Zod input
+   schema.
+3. Trigger `trestle-script` with `{ script, input }`.
+
+A payload can only name a registered script and pass validated input, as one
+JSON argument. It can never pass a path or a command.
+
+**Self-hosting.** `pnpm exec trestle jobs self-host trigger` or
+`pnpm exec trestle jobs self-host inngest` writes `infra/` files, pinned to the
+engine versions TrestleJS tested. Self-hosted Inngest needs a persistent Redis.
+See the
+[job runtime guide](https://github.com/gregmushen/trestlejs/blob/main/docs/JOB_RUNTIMES.md)
+for the support matrix and its evidence.
+
 **Inngest.** Start with `create-trestlejs <dir> --jobs inngest`, or switch
 with `pnpm exec trestle jobs use inngest [--endpoint https://your-inngest.example] --yes`.
 Inngest calls the Worker's signed endpoint, `/api/jobs/inngest`, so functions
@@ -880,8 +898,8 @@ documents.
 As with trigger.dev, only the event ID is sent, and each step re-verifies the
 event and rechecks entitlements on every attempt. Unlike trigger.dev, a run in
 flight during a deploy continues on the new code. A self-hosted Inngest is
-selected with `--endpoint`; see `docs/JOB_RUNTIMES.md` for its supported
-topology.
+selected with `--endpoint`; see the [job runtime guide](https://github.com/gregmushen/trestlejs/blob/main/docs/JOB_RUNTIMES.md)
+for its supported topology.
 
 ### API contracts
 

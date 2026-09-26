@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "@trigger.dev/sdk";
 import { esbuildPlugin } from "@trigger.dev/build/extensions";
+import { pythonExtension } from "@trigger.dev/python/extension";
 
 /**
  * trigger.dev runs this project's background work (jobs.runtime: trigger).
@@ -28,6 +30,8 @@ export default defineConfig({
           build.onResolve({ filter: /^cloudflare:(workers|workflows)$/u }, () => ({ path: cloudflareShim }));
         },
       }),
+      // Approved Python scripts (src/scripts.ts) ship only when apps/jobs/python exists.
+      ...(existsSync(new URL("./python", import.meta.url)) ? [pythonExtension({ scripts: ["./python/**/*.py"], ...(existsSync(new URL("./python/requirements.txt", import.meta.url)) ? { requirementsFile: "./python/requirements.txt" } : {}), devPythonBinaryPath: process.env.TRESTLE_PYTHON ?? "python3" })] : []),
     ],
   },
 });

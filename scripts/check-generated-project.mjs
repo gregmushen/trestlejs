@@ -372,6 +372,7 @@ try {
   const triggerDiff = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "upgrade", "diff", "--json"], { cwd: triggerProject, encoding: "utf8" }));
   if (triggerDiff.data.entries.some((entry) => entry.classification !== "same" && entry.path !== "package.json")) throw new Error(`Fresh trigger.dev project did not match its bundled template: ${JSON.stringify(triggerDiff.data.entries.filter((entry) => entry.classification !== "same"))}`);
   await run("pnpm", ["--filter", "./apps/jobs", "typecheck"], triggerProject);
+  await run("pnpm", ["--filter", "./apps/jobs", "test"], triggerProject);
   const triggerJobs = JSON.parse(execFileSync(process.execPath, [path.join(root, "packages/cli/dist/bin.js"), "jobs", "list", "--json"], { cwd: triggerProject, encoding: "utf8" })).data;
   if (triggerJobs.runtime.runtime !== "trigger") throw new Error("A --jobs trigger project does not select trigger.dev");
   await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "src/job-runtime-trigger.test.ts"], triggerProject);
