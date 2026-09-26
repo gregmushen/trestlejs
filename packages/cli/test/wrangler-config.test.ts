@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { wranglerCapabilityBinding, wranglerEnvironmentBlock, wranglerStringVariable } from "../src/wrangler-config.js";
+import { wranglerCapabilityBinding, wranglerEnvironmentBlock, wranglerSchedulerBinding, wranglerSchedulerMigration, wranglerStringVariable } from "../src/wrangler-config.js";
 
 describe("Wrangler environment inspection", () => {
   const source = '{"vars":{"MODE":"local"},"env":{"staging":{"vars":{"EMAIL_FROM":"CHANGE_ME","MODE":"test"}},"production":{"vars":{"EMAIL_FROM":"sender@example.com","MODE":"live"}}}}';
@@ -34,5 +34,21 @@ describe("Wrangler environment inspection", () => {
     expect(wranglerCapabilityBinding('{"queues":{"producers":[{"binding":"TRESTLE_EVENTS","queue":"events"}]}}', "queues")).toBe(false);
     expect(wranglerCapabilityBinding('{"queues":{"producers":[{"binding":"TRESTLE_EVENTS","queue":"events"}],"consumers":[]}}', "queues")).toBe(false);
     expect(wranglerCapabilityBinding('{"queues":{"producers":[{"binding":"TRESTLE_EVENTS","queue":"events"}],"consumers":[{"queue":"events"}]}}', "queues")).toBe(false);
+  });
+
+  it("recognizes the due-time scheduler's Durable Object binding and additive migration", () => {
+    const rendered = JSON.stringify({ env: {
+      staging: { durable_objects: { bindings: [{ name: "ROOMS", class_name: "Room" }, { name: "TRESTLE_SCHEDULER", class_name: "TrestleScheduler" }] }, migrations: [{ tag: "v1", new_sqlite_classes: ["Room"] }, { tag: "trestle-scheduler-v1", new_sqlite_classes: ["TrestleScheduler"] }] },
+      production: { durable_objects: { bindings: [{ name: "TRESTLE_SCHEDULER", class_name: "SomethingElse" }] }, migrations: [{ tag: "trestle-scheduler-v1", new_classes: ["TrestleScheduler"] }] },
+    } });
+    const staging = wranglerEnvironmentBlock(rendered, "staging");
+    expect(wranglerSchedulerBinding(staging)).toBe(true);
+    expect(wranglerSchedulerMigration(staging)).toBe(true);
+    const production = wranglerEnvironmentBlock(rendered, "production");
+    expect(wranglerSchedulerBinding(production)).toBe(false);
+    // A key-value class cannot be migrated to SQLite later; the scheduler needs a SQLite class.
+    expect(wranglerSchedulerMigration(production)).toBe(false);
+    expect(wranglerSchedulerBinding("{}")).toBe(false);
+    expect(wranglerSchedulerMigration("{}")).toBe(false);
   });
 });

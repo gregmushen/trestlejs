@@ -13,6 +13,8 @@
     ,"STRIPE_MODE": "local"
   },
   "secrets": { "required": ["DATABASE_URL", "DATABASE_DRIVER", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"] },
+  "durable_objects": { "bindings": [{ "name": "TRESTLE_SCHEDULER", "class_name": "TrestleScheduler" }] },
+  "migrations": [{ "tag": "trestle-scheduler-v1", "new_sqlite_classes": ["TrestleScheduler"] }],
   "env": {
     "preview": {
       "name": "__TRESTLE_PROJECT_NAME__-worker-preview",

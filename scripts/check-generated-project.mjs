@@ -163,6 +163,11 @@ try {
       "refuses an expired handoff even while the support session remains active",
       "does not grant the app role direct access to support credentials",
     ]);
+    await requireScenarios(project, "./packages/db", ["src/scheduled-jobs.integration.test.ts"], { TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "lets exactly one of many overlapping runs hold a job's lease",
+      "fences completion by lease token and never re-runs a completed due slot",
+      "reclaims an expired lease and rejects the stale holder's completion",
+    ]);
     await requireScenarios(project, "./packages/db", ["src/webhook-replay.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "creates one linked execution, signs a local attempt, and never alters the original",
       "rejects non-failed, expired, and inactive deliveries without an audit row",
@@ -215,7 +220,14 @@ try {
       "orders local adapter changes by durable generation even if a stale local lookup is slow",
     ]);
     const workerSystemEnvironment = { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" };
-    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "--exclude", "src/system.integration.test.ts"], project, workerSystemEnvironment);
+    // The scale-to-zero canary drains pending outbox rows, so it runs on its own after the parallel suites.
+    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "--exclude", "src/system.integration.test.ts", "--exclude", "src/scheduler.integration.test.ts"], project, workerSystemEnvironment);
+    await requireScenarios(project, "./apps/worker", ["src/scheduler.integration.test.ts"], workerSystemEnvironment, [
+      "dispatches a created event on commit, without waiting for a cron",
+      "fires a scheduled webhook retry at its due time",
+      "runs a registered application job when due, once, then sleeps",
+      "makes zero database queries over a sampled idle window",
+    ]);
     await requireScenarios(project, "./apps/worker", ["src/system.integration.test.ts"], workerSystemEnvironment, [
       "verifies email, signs in, selects an organization, and reads tenant billing",
     ]);
@@ -295,7 +307,7 @@ try {
   await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);
   await run(process.execPath, ["scripts/queue-config.mjs", "render", "preview", "release-canary-worker-pr-1", "--without-cron"], project);
   const cronFreePreview = JSON.parse(await readFile(path.join(project, "apps/worker/.trestle-queues.wrangler.jsonc"), "utf8"));
-  if (cronFreePreview.env.preview.triggers || !cronFreePreview.env.preview.queues || !cronFreePreview.env.preview.r2_buckets || !cronFreePreview.env.preview.workflows) {
+  if (cronFreePreview.env.preview.triggers || !cronFreePreview.env.preview.durable_objects || !cronFreePreview.env.preview.queues || !cronFreePreview.env.preview.r2_buckets || !cronFreePreview.env.preview.workflows) {
     throw new Error("Explicit cron-free preview lost required bindings or kept a cron trigger");
   }
   await run("pnpm", ["--filter", "./apps/worker", "exec", "wrangler", "deploy", "--dry-run", "--config", ".trestle-queues.wrangler.jsonc", "--env", "preview"], project);

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, min } from "drizzle-orm";
 
 import type { Database } from "./index.js";
 import { webhookAttempt } from "./webhook-attempt-schema.js";
@@ -154,4 +154,22 @@ export async function flushDueLocalWebhookDeliveries(input: {
     else skipped++;
   }
   return { captured, skipped };
+}
+
+/** When the organization's next local webhook retry is due, or null when none is pending. */
+export async function nextLocalWebhookRetry(input: {
+  organizationId: string;
+  tenantDatabase: (organizationId: string) => Database;
+}): Promise<Date | null> {
+  const [row] = await input.tenantDatabase(input.organizationId).select({ next: min(webhookDelivery.nextAttemptAt) }).from(webhookDelivery)
+    .innerJoin(webhookEndpoint, and(eq(webhookEndpoint.id, webhookDelivery.endpointId), eq(webhookEndpoint.organizationId, webhookDelivery.organizationId)))
+    .where(and(
+      eq(webhookDelivery.organizationId, input.organizationId),
+      inArray(webhookDelivery.state, ["pending", "retry"]),
+      eq(webhookEndpoint.provider, "local"),
+      eq(webhookEndpoint.environment, "local"),
+      eq(webhookEndpoint.state, "active"),
+      isNull(webhookEndpoint.deletedAt),
+    ));
+  return row?.next ?? null;
 }

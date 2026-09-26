@@ -137,18 +137,19 @@ permissions in each GitHub deployment environment; an interactive
 Wrangler OAuth access token is not a durable CI credential.
 If `capabilities.queues` is enabled, grant `Queues Write` on that same account.
 The deployment workflows then provision per-environment Queues, render a
-producer/consumer binding with a dead-letter queue and cron dispatcher, and
-isolate preview Queue names by pull request. Preview cleanup deletes only its
+producer/consumer binding with a dead-letter queue and the due-time scheduler
+(see "Scheduling"), and isolate preview Queue names by pull request. Preview cleanup deletes only its
 own Queues after deleting its Worker. Queues remain opt-in until this hosted
 path has been verified against a real account.
 If a Cloudflare account has exhausted its cron-trigger quota, a preview-only
 Worker can be rendered with
 `node scripts/queue-config.mjs render preview <worker-name> --without-cron`.
-This keeps Queue, R2, and Workflow bindings for deployment and browser checks,
-but scheduled dispatch and maintenance do not run in that preview. Use the
-same rendered config for secret uploads and deployment. Staging and production
-still require the cron trigger; a cron-free preview does not verify scheduled
-behavior or establish production readiness.
+This keeps Queue, R2, Workflow and scheduler bindings for deployment and browser
+checks: committed events still dispatch and due work still runs, but the
+safety sweep and hourly maintenance do not. Use the same rendered config for
+secret uploads and deployment. Staging and production still require the cron
+triggers; a cron-free preview does not verify them or establish production
+readiness.
 Staging and production check account-wide cron capacity before provisioning,
 database migration, or Worker upload. The check assumes the Cloudflare Workers
 Free plan (five triggers) unless the deployment environment sets
@@ -157,11 +158,94 @@ an existing trigger on the target Worker during redeployment; it does not
 change or remove other Workers' schedules. A full account must gain capacity
 before the cron-enabled deployment can proceed.
 Application crons declared under an environment's `triggers.crons` in
-`apps/worker/wrangler.jsonc` are kept, in order, and the framework's minute
-tick is appended only when Queues or R2 need it. Each application cron counts
-toward the capacity check. The Worker's `scheduled` handler runs framework
-maintenance only on that minute tick; add your own schedules' handling
-there, keyed on `event.cron`. Preview Workers still receive no crons.
+`apps/worker/wrangler.jsonc` are kept, in order, and the framework's two crons
+(the `*/15 * * * *` safety sweep and `7 * * * *` hourly maintenance) are
+appended only when Queues or R2 need them. Each cron counts toward the
+capacity check; the framework's two per environment leave one Free-plan
+trigger for staging and production together. The Worker's `scheduled` handler
+runs framework work only on those two expressions; handle your own crons
+there, keyed on `event.cron`, or better, register due work (see
+"Scheduling"). Preview Workers still receive no crons.
+
+### Scheduling
+
+An idle project makes no database queries. Nothing polls PostgreSQL on a short
+timer: work runs when it is due, through one Durable Object, `TrestleScheduler`
+(`apps/worker/src/scheduler-object.ts`), bound as `TRESTLE_SCHEDULER`.
+
+- **Dispatch on commit.** When a request commits outbox rows (through
+  `ctx.events`), the Worker makes the outbox due immediately and the scheduler
+  publishes it to the Queue within milliseconds. The outbox stays the durable
+  source; the wake-up is only an optimization.
+- **Due-time alarms.** Code that creates future work records its due time with
+  the scheduler. The object keeps one alarm for the earliest due time; the
+  alarm runs what is due and re-arms only while work remains. With nothing
+  pending there is no alarm and no database connection. Outbox publish
+  retries, local webhook retries and application jobs all run this way.
+- **Safety sweep.** Every 15 minutes a cron drains the outbox, repairs native
+  webhook handoffs, and re-records every job's next due time, so a lost
+  notification is late by at most one sweep, never dropped. Artifact and
+  webhook-payload maintenance runs hourly.
+
+`wrangler.jsonc` binds the scheduler for local development, so its alarms run
+under `wrangler dev`; `GET /api/dev/scheduler` shows what it holds (local
+only). `scripts/queue-config.mjs` adds the binding and its SQLite class
+migration, `trestle-scheduler-v1`, to every deployed environment that enables
+Queues or R2, preview included. Durable Object migrations are append-only:
+never edit or remove one after it is deployed.
+
+Register application due work in `apps/worker/src/jobs.ts` instead of adding
+a cron:
+
+```ts
+import { dailyAt, every } from "./scheduler.js";
+
+// "Every 15 minutes": pure arithmetic, no query to decide when it is due.
+scheduledJobs.register("weather.refresh", {
+  requires: { capability: "queues" },  // skipped, never run, without a Queue
+  next: every({ minutes: 15 }),
+  limit: 50,                           // items per run
+  run: async (job) => {
+    for (const garden of await dueGardens(job.limit)) {
+      if (job.signal.aborted) return { more: true };  // the lease is ending
+      const { data, events } = job.tenant(garden.organizationId);
+      await data.transaction(async (transaction) => {
+        await transaction.execute(events.statement("weather.evaluation.requested",
+          { gardenId: garden.id }, { idempotencyKey: `weather:${garden.id}:${job.dueAt.toISOString()}` }));
+      });
+    }
+  },
+});
+
+// "At 07:00 local time", or "whenever my own table says": next() may read one indexed row.
+scheduledJobs.register("digests.daily", {
+  next: async ({ environment }) => await earliestDigestDueAt(environment),  // Date | null
+  run: async (job) => { /* claim due digests, send, record; bounded by job.limit */ },
+});
+```
+
+- `next()` returns when the job is next due, or `null` when nothing is
+  pending. It runs after every run and on the safety sweep; keep it to one
+  indexed query or to `every()` / `dailyAt({ hour, minute, timeZone })`.
+- `run()` is bounded: process at most `job.limit` items, stop when
+  `job.signal` aborts, and return `{ more: true }` to continue immediately.
+- Runs are lease-safe. A PostgreSQL lease (`scheduled_job`) lets one run of a
+  job proceed at a time, fenced by `job.lease.token`, and a due slot that
+  completed is never run again, so an overlapping or repeated trigger is a
+  no-op. A crash mid-run repeats the slot, so derive item idempotency keys from
+  `job.dueAt`.
+- Emit events only through `job.tenant(organizationId).events` inside a
+  `data.transaction`. They take the committed-event path: the outbox,
+  verification and the 14-day replay window, like any request's events. Never
+  send to the Queue directly.
+- When a request creates future work, commit it first, then call
+  `await scheduledJobs.notify(context.env, "digests.daily", dueAt)`. Notifying
+  before the commit can wake the job before the work is visible.
+- `requires: { capability }` (`queues`, `r2` or `workflows`) skips the job when
+  that binding is absent. A deployed environment with registered jobs and no
+  scheduler binding fails its safety sweep loudly.
+- As with event handlers, `job.environment` is the raw Worker environment:
+  the job context is the supported seam, not a sandbox.
 The automatic preview browser gate checks deployed sign-in, organization
 isolation, test-mode Checkout, and signed Stripe webhook entitlements without
 sending email. It creates a verified credential fixture directly in the
@@ -343,7 +427,7 @@ authoritative. Platform replay runs through a SECURITY DEFINER function owned
 by `trestle_webhook_replay`, a NOLOGIN role that no login is a member of and
 that can read and write only the webhook columns replay needs. A native delivery whose source event passes the 14-day window, or whose
 outbox record is gone, is settled as `exhausted` with the terminal reason
-`provenance_expired` (by its Queue consumer, or by the recovery cron) instead
+`provenance_expired` (by its Queue consumer, or by the safety sweep's recovery) instead
 of waiting in retry.
 If `capabilities.workflows` is enabled, the deployment config binds the
 application-owned `TrestleWorkflow` class. Queue delivery starts a Workflow

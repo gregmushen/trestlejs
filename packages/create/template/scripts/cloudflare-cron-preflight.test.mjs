@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { verifyCronCapacity } from "./cloudflare-cron-preflight.mjs";
+import { FRAMEWORK_CRONS } from "./queue-config.mjs";
 
 const accountId = "a".repeat(32);
 
-async function fixture(work, crons = ["* * * * *"]) {
+async function fixture(work, crons = [...FRAMEWORK_CRONS]) {
   const dir = await mkdtemp(join(tmpdir(), "trestle-cron-"));
   const configPath = join(dir, "wrangler.jsonc");
   await writeFile(configPath, JSON.stringify({ env: { staging: { name: "new-worker", triggers: { crons } } } }));
@@ -35,7 +36,7 @@ test("cron preflight blocks a full Free account without mutating it or leaking c
 
 test("cron preflight credits existing target schedules when redeploying", async () => {
   await fixture(async (configPath) => {
-    const result = await verifyCronCapacity({ token: "secret-token", accountId, configPath, environment: "staging", request: api({ tidal: 4, "new-worker": 1 }, []) });
+    const result = await verifyCronCapacity({ token: "secret-token", accountId, configPath, environment: "staging", request: api({ tidal: 3, "new-worker": 2 }, []) });
     assert.deepEqual({ used: result.used, projected: result.projected, limit: result.limit }, { used: 5, projected: 5, limit: 5 });
   });
 });
@@ -46,7 +47,7 @@ test("paid cron capacity requires an explicit plan declaration", async () => {
     await assert.rejects(verifyCronCapacity(options), /capacity insufficient/u);
     const result = await verifyCronCapacity({ ...options, plan: "paid" });
     assert.equal(result.limit, 250);
-    assert.equal(result.projected, 6);
+    assert.equal(result.projected, 5 + FRAMEWORK_CRONS.length);
     await assert.rejects(verifyCronCapacity({ ...options, plan: "unknown" }), /must be free or paid/u);
   });
 });
@@ -84,6 +85,17 @@ test("cron preflight includes every page of Workers in the account total", async
     const result = await verifyCronCapacity({ token: "secret-token", accountId, configPath, environment: "staging", request });
     assert.deepEqual(pages, [1, 2]);
     assert.equal(result.used, 2);
-    assert.equal(result.projected, 3);
+    assert.equal(result.projected, 2 + FRAMEWORK_CRONS.length);
+  });
+});
+
+test("the framework's two crons fit staging and production on a Free account, with one trigger to spare", async () => {
+  assert.equal(FRAMEWORK_CRONS.length, 2);
+  await fixture(async (configPath) => {
+    // Production already holds its two framework crons; staging adds two more.
+    const result = await verifyCronCapacity({ token: "secret-token", accountId, configPath, environment: "staging", request: api({ "example-worker": 2 }, []) });
+    assert.deepEqual({ desired: result.desired, projected: result.projected, limit: result.limit }, { desired: 2, projected: 4, limit: 5 });
+    // Two application crons on top no longer fit.
+    await assert.rejects(verifyCronCapacity({ token: "secret-token", accountId, configPath, environment: "staging", request: api({ "example-worker": 4 }, []) }), /capacity insufficient/u);
   });
 });

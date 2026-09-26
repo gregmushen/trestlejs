@@ -10,6 +10,14 @@ export type EventPublisher = Readonly<{
   statement(name: string, payload: unknown, options: { schemaVersion?: number; idempotencyKey: string; causationId?: string }): SQL;
 }>;
 
+const statementCounts = new WeakMap<EventPublisher, () => number>();
+
+/** How many outbox statements a publisher has produced. After the work that
+ * executed them commits, a nonzero count means outbox dispatch should wake. */
+export function eventStatementCount(publisher: EventPublisher): number {
+  return statementCounts.get(publisher)?.() ?? 0;
+}
+
 /** A tenant-bound, catalog-validated source of transactional outbox inserts.
  * Queue publishing happens only after the resulting transaction commits. */
 export function createEventPublisher(input: {
@@ -21,7 +29,8 @@ export function createEventPublisher(input: {
   const catalog = input.catalog ?? applicationEventCatalog;
   if (!/^[A-Za-z0-9_-]+$/u.test(input.organizationId)) throw new Error("Invalid event organization identifier");
   if (!input.correlationId.trim()) throw new Error("Event correlation identifier is required");
-  return {
+  let produced = 0;
+  const publisher: EventPublisher = {
     statement(name, payload, options) {
       if (!options.idempotencyKey || options.idempotencyKey !== options.idempotencyKey.trim() || options.idempotencyKey.length > 256) {
         throw new Error("Event idempotency key must be trimmed and at most 256 characters");
@@ -41,7 +50,11 @@ export function createEventPublisher(input: {
         idempotencyKey: `${input.organizationId}:${options.idempotencyKey}`,
         payload: parsed,
       });
-      return outboxStatement(envelope, input.organizationId);
+      const statement = outboxStatement(envelope, input.organizationId);
+      produced += 1;
+      return statement;
     },
   };
+  statementCounts.set(publisher, () => produced);
+  return publisher;
 }

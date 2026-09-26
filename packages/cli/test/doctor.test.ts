@@ -129,6 +129,52 @@ describe("remote provider preflight", () => {
     }
   });
 
+  it("requires the due-time scheduler Durable Object when Queues or R2 run framework work", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const disabled = await runDoctor(templateRoot, manifest, "preview");
+    expect(disabled.checks.some((check) => check.id.startsWith("cloudflare.scheduler."))).toBe(false);
+    const queues = { ...manifest, capabilities: { ...manifest.capabilities, queues: true } };
+    const unrendered = await runDoctor(templateRoot, queues, "preview");
+    expect(unrendered.checks).toContainEqual(expect.objectContaining({ id: "cloudflare.scheduler.binding", status: "fail", remediation: expect.stringContaining("queue-config.mjs render") }));
+    expect(unrendered.checks).toContainEqual(expect.objectContaining({ id: "cloudflare.scheduler.migration", status: "fail" }));
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-scheduler-doctor-"));
+    try {
+      await mkdir(path.join(root, "apps", "worker", "src"), { recursive: true });
+      await writeFile(path.join(root, "apps", "worker", "src", "worker-entry.ts"), 'export { TrestleScheduler } from "./scheduler-object.js";\n');
+      await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ env: { preview: {
+        durable_objects: { bindings: [{ name: "TRESTLE_SCHEDULER", class_name: "TrestleScheduler" }] },
+        migrations: [{ tag: "trestle-scheduler-v1", new_sqlite_classes: ["TrestleScheduler"] }],
+      } } }));
+      const r2 = await runDoctor(root, { ...manifest, capabilities: { ...manifest.capabilities, r2: true } }, "preview");
+      expect(r2.checks).toContainEqual(expect.objectContaining({ id: "cloudflare.scheduler.binding", status: "pass" }));
+      expect(r2.checks).toContainEqual(expect.objectContaining({ id: "cloudflare.scheduler.migration", status: "pass" }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("checks that local development binds the scheduler a Worker exports", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const report = await runDoctor(templateRoot, manifest, "local");
+    expect(report.checks).toContainEqual(expect.objectContaining({ id: "cloudflare.scheduler.local", status: "pass" }));
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-scheduler-local-doctor-"));
+    try {
+      await mkdir(path.join(root, "apps", "worker", "src"), { recursive: true });
+      await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), JSON.stringify({ vars: {} }));
+      // A project still on the legacy minute tick has not adopted the scheduler and is not checked.
+      await writeFile(path.join(root, "apps", "worker", "src", "worker-entry.ts"), 'export { default } from "./index.js";\n');
+      const legacy = await runDoctor(root, manifest, "local");
+      expect(legacy.checks.some((check) => check.id.startsWith("cloudflare.scheduler."))).toBe(false);
+      const legacyQueues = await runDoctor(root, { ...manifest, capabilities: { ...manifest.capabilities, queues: true } }, "preview");
+      expect(legacyQueues.checks.some((check) => check.id.startsWith("cloudflare.scheduler."))).toBe(false);
+      await writeFile(path.join(root, "apps", "worker", "src", "worker-entry.ts"), 'export { default } from "./index.js";\nexport { TrestleScheduler } from "./scheduler-object.js";\n');
+      const missing = await runDoctor(root, manifest, "local");
+      expect(missing.checks).toContainEqual(expect.objectContaining({ id: "cloudflare.scheduler.local", status: "fail" }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports disabled and invalid ready-object retention without silently enabling deletion", async () => {
     const manifest = await loadProjectManifest(templateRoot);
     const enabled = { ...manifest, capabilities: { ...manifest.capabilities, r2: true } };

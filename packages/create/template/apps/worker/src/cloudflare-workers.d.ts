@@ -9,6 +9,22 @@ declare module "cloudflare:workers" {
     protected readonly env: Environment;
     abstract run(event: WorkflowEvent<Params>, step: WorkflowStep): Promise<unknown>;
   }
+  /** The Durable Object storage surface the scheduler uses. */
+  export type DurableObjectStorage = {
+    get<T>(key: string): Promise<T | undefined>;
+    put<T>(key: string, value: T): Promise<void>;
+    delete(key: string): Promise<boolean>;
+    list<T>(options: { prefix: string }): Promise<Map<string, T>>;
+    getAlarm(): Promise<number | null>;
+    setAlarm(scheduledTime: number | Date): Promise<void>;
+    deleteAlarm(): Promise<void>;
+  };
+  export type DurableObjectState = { readonly id: unknown; readonly storage: DurableObjectStorage };
+  export abstract class DurableObject<Environment = unknown> {
+    protected readonly ctx: DurableObjectState;
+    protected readonly env: Environment;
+    constructor(ctx: DurableObjectState, env: Environment);
+  }
 }
 
 declare module "cloudflare:workflows" {

@@ -128,15 +128,15 @@ Move the verification out of the webhook code into a shared primitive, and use i
 
 **Required behavior**
 - Keep the environment's existing cron expressions, in order.
-- Append the framework's minute expression only when Queues or R2 need it and it isn't already there.
+- Append the framework's expressions only when Queues or R2 need them and they aren't already there.
 - Remove duplicates without reordering the rest.
 - Keep other trigger properties and all unrelated configuration.
 - When no capability needs maintenance, add nothing and remove nothing.
 - Rendering is idempotent and never mutates its input.
 - A malformed trigger list is reported as a configuration error, never replaced.
-- The `scheduled` handler runs framework maintenance only on the framework tick, which is `controller.cron === "* * * * *"`. Every other cron dispatches to the application.
+- The `scheduled` handler runs framework work only on the framework's own crons (originally the `* * * * *` tick; now the sweep and maintenance crons below). Every other cron dispatches to the application.
 
-**Relationship to the planned scheduler.** The roadmap backlog replaces the minute tick with a due-time Durable Object scheduler plus slower maintenance crons. Those crons must merge with the application's crons by the same rules, so this fix stays needed.
+**Relationship to the scheduler.** The due-time Durable Object scheduler (ROADMAP Selected item 1) replaced the minute tick. The framework's crons are now `FRAMEWORK_CRONS` in `queue-config.mjs`: the `*/15 * * * *` safety sweep and `7 * * * *` hourly maintenance. They merge with the application's crons by the rules above: application crons keep their order, the framework's are appended once, nothing is dropped, and preview Workers stay cron-free. A former `* * * * *` entry is now an ordinary application cron and is kept. The `scheduled` handler routes by `controller.cron`: the sweep expression runs the sweep, the maintenance expression runs maintenance, a local invocation that names no cron runs both, and every other cron is the application's. The same render adds the `TRESTLE_SCHEDULER` Durable Object binding and its append-only `trestle-scheduler-v1` SQLite class migration, keeping any application Durable Objects and migrations in order.
 
 **Acceptance.** Test:
 - missing and empty lists;

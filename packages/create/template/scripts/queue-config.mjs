@@ -39,17 +39,57 @@ export function artifactBucketName(workerName) {
   return resourceName(`${workerName}-artifacts`);
 }
 
-/** The minute tick that drives outbox dispatch and artifact maintenance. apps/worker/src/index.ts gates on the same expression. */
-export const FRAMEWORK_MAINTENANCE_CRON = "* * * * *";
+/**
+ * The framework's crons, in order: a safety sweep that catches missed
+ * due-time notifications, and hourly maintenance. Everything else runs when
+ * due through the TrestleScheduler Durable Object, so an idle project makes
+ * no database queries between sweeps. apps/worker/src/index.ts routes by the
+ * same expressions.
+ */
+export const FRAMEWORK_SWEEP_CRON = "*/15 * * * *";
+export const FRAMEWORK_MAINTENANCE_CRON = "7 * * * *";
+export const FRAMEWORK_CRONS = Object.freeze([FRAMEWORK_SWEEP_CRON, FRAMEWORK_MAINTENANCE_CRON]);
 
-/** Keeps the application's crons in order and appends the framework tick when a capability needs it. */
-function mergeCrons(declared, frameworkTick) {
+/** The due-time scheduler's Durable Object binding and its additive class migration. */
+export const SCHEDULER_BINDING = Object.freeze({ name: "TRESTLE_SCHEDULER", class_name: "TrestleScheduler" });
+export const SCHEDULER_MIGRATION = Object.freeze({ tag: "trestle-scheduler-v1", new_sqlite_classes: Object.freeze(["TrestleScheduler"]) });
+
+/** Keeps the application's crons in order and appends the framework crons when a capability needs them. */
+function mergeCrons(declared, frameworkCrons) {
   if (declared !== undefined && (!Array.isArray(declared) || declared.some((cron) => typeof cron !== "string" || !cron.trim()))) {
     throw new Error("triggers.crons must be a list of cron expressions");
   }
   const crons = [];
-  for (const cron of [...(declared ?? []), ...(frameworkTick ? [FRAMEWORK_MAINTENANCE_CRON] : [])]) if (!crons.includes(cron)) crons.push(cron);
+  for (const cron of [...(declared ?? []), ...(frameworkCrons ? FRAMEWORK_CRONS : [])]) if (!crons.includes(cron)) crons.push(cron);
   return crons;
+}
+
+const sameJson = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+
+/** Keeps the application's Durable Object bindings and appends the scheduler binding once. */
+function mergeDurableObjects(declared) {
+  if (declared !== undefined && (typeof declared !== "object" || declared === null || Array.isArray(declared) || (declared.bindings !== undefined && !Array.isArray(declared.bindings)))) {
+    throw new Error("durable_objects.bindings must be a list of Durable Object bindings");
+  }
+  const bindings = [...(declared?.bindings ?? [])];
+  const existing = bindings.find((binding) => binding?.name === SCHEDULER_BINDING.name);
+  if (existing && (existing.class_name !== SCHEDULER_BINDING.class_name || existing.script_name !== undefined)) {
+    throw new Error(`${SCHEDULER_BINDING.name} is reserved for the ${SCHEDULER_BINDING.class_name} Durable Object in this Worker`);
+  }
+  if (!existing) bindings.push({ ...SCHEDULER_BINDING });
+  return { ...declared, bindings };
+}
+
+/** Durable Object migrations are append-only: keep every declared migration and append the scheduler's once. */
+function mergeMigrations(declared) {
+  if (declared !== undefined && (!Array.isArray(declared) || declared.some((migration) => typeof migration?.tag !== "string" || !migration.tag))) {
+    throw new Error("migrations must be a list of tagged Durable Object migrations");
+  }
+  const migrations = [...(declared ?? [])];
+  const existing = migrations.find((migration) => migration.tag === SCHEDULER_MIGRATION.tag);
+  if (existing && !sameJson(existing, SCHEDULER_MIGRATION)) throw new Error(`Durable Object migration ${SCHEDULER_MIGRATION.tag} differs from the framework's; migrations must not be edited after deployment`);
+  if (!existing) migrations.push({ ...SCHEDULER_MIGRATION, new_sqlite_classes: [...SCHEDULER_MIGRATION.new_sqlite_classes] });
+  return migrations;
 }
 
 export function renderQueueConfig(source, environment, workerName, capabilities = { queues: true, r2: false, workflows: false }, options = {}) {
@@ -65,11 +105,19 @@ export function renderQueueConfig(source, environment, workerName, capabilities 
     };
   }
   if (capabilities.r2) target.r2_buckets = [{ binding: "TRESTLE_ARTIFACTS", bucket_name: artifactBucketName(workerName) }];
+  const frameworkWork = Boolean(capabilities.queues || capabilities.r2);
+  if (frameworkWork) {
+    // Every environment gets the scheduler, including cron-free previews:
+    // it dispatches committed events and runs due work without any cron.
+    // Durable Object bindings and migrations are not inherited from the top level.
+    target.durable_objects = mergeDurableObjects(config.env[environment].durable_objects);
+    target.migrations = mergeMigrations(config.env[environment].migrations ?? config.migrations);
+  }
   // Ephemeral PR Workers must not consume account-wide cron capacity.
   if (environment === "preview" || options.cron === false) delete target.triggers;
   else {
     const declared = config.env[environment].triggers;
-    const crons = mergeCrons(declared?.crons, capabilities.queues || capabilities.r2);
+    const crons = mergeCrons(declared?.crons, frameworkWork);
     if (crons.length) target.triggers = { ...declared, crons };
   }
   if (capabilities.workflows) {
