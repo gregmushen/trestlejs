@@ -15,8 +15,10 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # greg-ci: a self-hosted VM shared with other repositories' runners, so
+    # PostgreSQL takes a random host port instead of 5432.
+    runs-on: [self-hosted, greg-ci, trestlejs]
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17-alpine
@@ -24,7 +26,7 @@ jobs:
           POSTGRES_DB: trestle_generated
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-        ports: [5432:5432]
+        ports: ["5432"]
         options: >-
           --health-cmd "pg_isready -U postgres -d trestle_generated"
           --health-interval 2s
@@ -45,18 +47,18 @@ jobs:
       - name: Rehearse a published adjacent-version upgrade
         run: pnpm check:upgrade
         env:
-          TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres
       - name: Rehearse the published beta.1 to beta.3 upgrade
         run: pnpm check:beta-upgrade
         env:
-          TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres
       - name: Rehearse upgrading a customized project from the latest published beta
         run: pnpm check:customized-upgrade
         env:
-          TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          TRESTLE_ADJACENT_DATABASE_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres
       - name: Install browser test runtime
         run: npx --yes playwright@1.63.0 install --with-deps --only-shell chromium
       - run: pnpm check:generated
         env:
           DEBUG: pw:webserver
-          TRESTLE_GENERATED_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trestle_generated
+          TRESTLE_GENERATED_DATABASE_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/trestle_generated
