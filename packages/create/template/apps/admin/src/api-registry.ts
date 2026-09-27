@@ -80,6 +80,7 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "GET", path: "/api/admin/operations/outbox" },
     { method: "POST", path: "/api/admin/operations/outbox/:id/redrive", permission: "platform.outbox.redrive" },
   ] },
+  { id: "jobs", path: "/operations/jobs", label: "Jobs", group: "Operations", permission: "platform.operations.read", api: [{ method: "GET", path: "/api/admin/operations/jobs" }] },
   { id: "webhooks", path: "/integrations/webhooks", label: "Webhooks", group: "Integrations", permission: "platform.operations.read", api: [
     { method: "GET", path: "/api/admin/operations/webhooks" },
     { method: "POST", path: "/api/admin/operations/webhooks/:organizationId/endpoints/:endpointId/disable", permission: "platform.webhooks.manage" },

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { adminViews } from "../src/api-registry.js";
-import { admin, adminAuthEnvironment, adminDependencies, capabilityGuidance, type AdminEnvironment } from "./index.js";
+import { admin, adminAuthEnvironment, adminDependencies, capabilityGuidance, jobsDashboardUrl, type AdminEnvironment } from "./index.js";
 import { adminRoutePolicies } from "./route-policies.js";
 
 const environment: AdminEnvironment = { DATABASE_URL: "postgres://user:password@127.0.0.1:1/unused", DATABASE_DRIVER: "postgres-js", BETTER_AUTH_SECRET: "test-secret-at-least-32-characters", APP_ENV: "local" };
@@ -364,5 +364,35 @@ describe("platform admin Worker", () => {
     for (const view of adminViews) for (const route of view.api) {
       expect(adminRoutePolicies.find((policy) => policy.method === route.method && policy.path === route.path)?.permission).toBe(route.permission ?? view.permission);
     }
+  });
+
+  it("reports the jobs engine to operations readers only, with dispatch health and no credentials", async () => {
+    const dispatch = { pending: 3, unconsumed: 1, dead: 2 };
+    let asked = "";
+    adminDependencies.jobRuntime = async (_environment, name) => { asked = name; return { config: { runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123", source: "declared", declaredAt: new Date("2026-09-01T00:00:00Z") }, dispatch }; };
+    state.roles = ["security_admin"];
+    expect(await call("GET", "/api/admin/operations/jobs")).toMatchObject({ status: 403, body: { reason: "permission_missing" } });
+    state.roles = ["platform_operator"];
+    const response = await call("GET", "/api/admin/operations/jobs");
+    expect(asked).toBe("local");
+    expect(response).toEqual({ status: 200, body: { runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123", source: "declared", declaredAt: "2026-09-01T00:00:00.000Z", supportStatus: "experimental", dashboardUrl: "https://cloud.trigger.dev/projects/v3/proj_abc123", dispatch, migration: null } });
+    adminDependencies.jobRuntime = async () => ({ config: { runtime: "inngest", hosting: "self-hosted", endpoint: "javascript:alert(1)", project: null, source: "override", declaredAt: new Date() }, dispatch });
+    expect((await call("GET", "/api/admin/operations/jobs")).body).toMatchObject({ endpoint: null, dashboardUrl: null, source: "override", supportStatus: "experimental" });
+    adminDependencies.jobRuntime = async () => ({ config: null, dispatch: { pending: 0, unconsumed: 0, dead: 0 } });
+    expect((await call("GET", "/api/admin/operations/jobs")).body).toMatchObject({ runtime: null, source: "unknown", supportStatus: "unknown", dashboardUrl: null, declaredAt: null });
+  });
+
+  it("links each engine to its own dashboard, and only over http(s)", () => {
+    const link = (runtime: string, hosting: string, endpoint: string | null = null, project: string | null = null) => jobsDashboardUrl({ runtime, hosting, endpoint, project });
+    expect(link("cloudflare", "cloudflare")).toBeNull();
+    expect(link("trigger", "cloud", null, "proj_1")).toBe("https://cloud.trigger.dev/projects/v3/proj_1");
+    expect(link("trigger", "cloud")).toBeNull();
+    expect(link("trigger", "cloud", null, "../evil")).toBeNull();
+    expect(link("trigger", "self-hosted", "https://jobs.example.com")).toBe("https://jobs.example.com/");
+    expect(link("trigger", "self-hosted", "ftp://jobs.example.com")).toBeNull();
+    expect(link("inngest", "cloud")).toBe("https://app.inngest.com");
+    expect(link("inngest", "self-hosted", "http://inngest.internal:8288")).toBe("http://inngest.internal:8288/");
+    expect(link("inngest", "self-hosted", "javascript:alert(1)")).toBeNull();
+    expect(link("inngest", "self-hosted", "not a url")).toBeNull();
   });
 });

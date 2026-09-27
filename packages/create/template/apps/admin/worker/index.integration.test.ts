@@ -1,5 +1,5 @@
 import { createAuth } from "@__TRESTLE_PROJECT_NAME__/auth";
-import { createDatabase, grantPlatformRole } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createDatabase, grantPlatformRole, recordDeclaredJobRuntime } from "@__TRESTLE_PROJECT_NAME__/db";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -129,6 +129,29 @@ suite("platform admin Worker against PostgreSQL", () => {
     await expect((await enable()).json()).resolves.toMatchObject({ error: "step_up_required", required: "mfa", scope: "session" });
     expect((await admin.request("/api/admin/session", { headers: { cookie: cookie! } }, environment)).status).toBe(428);
     expect((await admin.request("/api/auth/sign-up/email", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x", email: `${run}-new@example.test`, password }) }, environment)).status).toBe(404);
+  });
+
+  it("reads the declared jobs engine and outbox dispatch health on the trestle_platform connection", async () => {
+    signedIn = operator;
+    // The sign-in test above restores the real session lookup.
+    adminDependencies.session = async () => ({ user: { id: signedIn, email: `${signedIn}@example.test` }, session: { id: `${signedIn}-session` } });
+    adminDependencies.assurance = async () => ({ sessionId: `${signedIn}-session`, userId: signedIn, level: "password", method: "password", verifiedAt: new Date() });
+    try {
+      await sql!`delete from job_runtime_config where environment = 'local'`;
+      expect(await (await admin.request("/api/admin/operations/jobs", undefined, environment)).json()).toMatchObject({ runtime: null, source: "unknown" });
+      await recordDeclaredJobRuntime(connectionString!, "local", { runtime: "inngest", hosting: "self-hosted", endpoint: "https://inngest.example.test", project: null });
+      const eventId = crypto.randomUUID();
+      await sql!`insert into outbox_message (id, event_name, schema_version, occurred_at, resource_type, resource_id, organization_id, correlation_id, idempotency_key, payload, status, attempts, available_at)
+        values (${eventId}, 'article.published', 1, now(), 'article', 'a1', ${`${run}-org`}, 'jobs-corr', ${`${run}-jobs`}, ${sql!.json({})}, 'pending', 0, now())`;
+      const response = await admin.request("/api/admin/operations/jobs", undefined, environment);
+      expect(response.status).toBe(200);
+      const body = await response.json() as { dispatch: { pending: number } };
+      expect(body).toMatchObject({ runtime: "inngest", hosting: "self-hosted", endpoint: "https://inngest.example.test/", source: "declared", supportStatus: "experimental", dashboardUrl: "https://inngest.example.test/", migration: null });
+      expect(body.dispatch.pending).toBeGreaterThanOrEqual(1);
+    } finally {
+      await sql!`delete from outbox_message where idempotency_key = ${`${run}-jobs`}`;
+      await sql!`delete from job_runtime_config where environment = 'local'`;
+    }
   });
 });
 
