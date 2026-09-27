@@ -901,6 +901,12 @@ flight during a deploy continues on the new code. A self-hosted Inngest is
 selected with `--endpoint`; see the [job runtime guide](https://github.com/gregmushen/trestlejs/blob/main/docs/JOB_RUNTIMES.md)
 for its supported topology.
 
+**Switching runtimes.** `pnpm exec trestle jobs migrate --to <runtime> --env <env>`
+prints the outbox inventory and the ordered switch: select the runtime, deploy,
+let the old runtime drain, run `--settle --yes`, and remove the old runtime only
+once `--check` passes. `jobs use cloudflare --yes` returns to the default. Each
+event completes exactly once in either direction.
+
 ### API contracts
 
 The OpenAPI documents are generated from the route policies in

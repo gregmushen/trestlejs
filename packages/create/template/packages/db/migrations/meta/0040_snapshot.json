@@ -1,6 +1,6 @@
 {
-  "id": "88d63f9a-ed98-4c8b-83c7-ce35fbd36e97",
-  "prevId": "9f84c019-65b8-4ba6-a016-2a96affb0075",
+  "id": "b6c5e33c-913c-469d-ba6b-03ba852fe13f",
+  "prevId": "0ba66714-5c20-47ae-b74f-48ed8582e3a1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2100,6 +2100,490 @@
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
+    },
+    "public.integration_authorization_attempt": {
+      "name": "integration_authorization_attempt",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "backend": {
+          "name": "backend",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_config_key": {
+          "name": "provider_config_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "initiated_by": {
+          "name": "initiated_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failure_category": {
+          "name": "failure_category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_authorization_attempt_organization_idx": {
+          "name": "integration_authorization_attempt_organization_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "integration_authorization_attempt_tenant": {
+          "name": "integration_authorization_attempt_tenant",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "trestle_app"
+          ],
+          "using": "\"integration_authorization_attempt\".\"organization_id\" = current_setting('app.organization_id', true)",
+          "withCheck": "\"integration_authorization_attempt\".\"organization_id\" = current_setting('app.organization_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "integration_authorization_attempt_status_check": {
+          "name": "integration_authorization_attempt_status_check",
+          "value": "\"integration_authorization_attempt\".\"status\" IN ('pending', 'completed', 'failed')"
+        },
+        "integration_authorization_attempt_backend_check": {
+          "name": "integration_authorization_attempt_backend_check",
+          "value": "\"integration_authorization_attempt\".\"backend\" IN ('local', 'nango')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.integration_connection": {
+      "name": "integration_connection",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "backend": {
+          "name": "backend",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_config_key": {
+          "name": "provider_config_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "backend_connection_id": {
+          "name": "backend_connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "cleanup_pending": {
+          "name": "cleanup_pending",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_by": {
+          "name": "updated_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connected_at": {
+          "name": "connected_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_connection_backend_ref_uidx": {
+          "name": "integration_connection_backend_ref_uidx",
+          "columns": [
+            {
+              "expression": "backend",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "environment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_config_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "backend_connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_connection_organization_idx": {
+          "name": "integration_connection_organization_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "environment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "integration_connection_tenant": {
+          "name": "integration_connection_tenant",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "trestle_app"
+          ],
+          "using": "\"integration_connection\".\"organization_id\" = current_setting('app.organization_id', true)",
+          "withCheck": "\"integration_connection\".\"organization_id\" = current_setting('app.organization_id', true)"
+        },
+        "integration_connection_platform_select": {
+          "name": "integration_connection_platform_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "trestle_platform"
+          ],
+          "using": "true"
+        }
+      },
+      "checkConstraints": {
+        "integration_connection_state_check": {
+          "name": "integration_connection_state_check",
+          "value": "\"integration_connection\".\"state\" IN ('disconnected', 'authorizing', 'connected', 'degraded', 'reauthorization_required', 'revoked')"
+        },
+        "integration_connection_backend_check": {
+          "name": "integration_connection_backend_check",
+          "value": "\"integration_connection\".\"backend\" IN ('local', 'nango')"
+        },
+        "integration_connection_generation_check": {
+          "name": "integration_connection_generation_check",
+          "value": "\"integration_connection\".\"generation\" >= 1"
+        },
+        "integration_connection_cleanup_check": {
+          "name": "integration_connection_cleanup_check",
+          "value": "\"integration_connection\".\"cleanup_pending\" IS NULL OR \"integration_connection\".\"cleanup_pending\" IN ('backend_delete')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.integration_provider_event": {
+      "name": "integration_provider_event",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "backend": {
+          "name": "backend",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_key": {
+          "name": "event_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_config_key": {
+          "name": "provider_config_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "backend_connection_id": {
+          "name": "backend_connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_provider_event_key_uidx": {
+          "name": "integration_provider_event_key_uidx",
+          "columns": [
+            {
+              "expression": "backend",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "environment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "event_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_provider_event_outcome_idx": {
+          "name": "integration_provider_event_outcome_idx",
+          "columns": [
+            {
+              "expression": "outcome",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "received_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "integration_provider_event_platform_select": {
+          "name": "integration_provider_event_platform_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "trestle_platform"
+          ],
+          "using": "true"
+        }
+      },
+      "checkConstraints": {
+        "integration_provider_event_outcome_check": {
+          "name": "integration_provider_event_outcome_check",
+          "value": "\"integration_provider_event\".\"outcome\" IN ('applied', 'duplicate', 'quarantined', 'ignored')"
+        },
+        "integration_provider_event_key_check": {
+          "name": "integration_provider_event_key_check",
+          "value": "\"integration_provider_event\".\"event_key\" ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": true
     },
     "public.job_runtime_config": {
       "name": "job_runtime_config",

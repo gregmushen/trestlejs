@@ -1,5 +1,5 @@
 import type { Logger } from "@__TRESTLE_PROJECT_NAME__/context";
-import { PostgresEventInbox, PostgresOutboxStore, type CommittedEventStore } from "@__TRESTLE_PROJECT_NAME__/db";
+import { PostgresEventInbox, PostgresOutboxStore, recordDeclaredJobRuntime, type CommittedEventStore, type DeclaredJobRuntime } from "@__TRESTLE_PROJECT_NAME__/db";
 import { CloudflareQueuePublisher, PermanentEventError, safeErrorCategory, type EventEnvelope, type EventInboxStore, type QueuePublisher } from "@__TRESTLE_PROJECT_NAME__/events";
 
 import { handleEventWithInbox, type EventConsumerRegistry, type PostCommitEffect } from "./async-runtime.js";
@@ -82,6 +82,9 @@ export async function consumeCommittedEvent<Environment, Data = unknown>(input: 
   } catch (error) {
     if (error instanceof PermanentEventError) {
       input.log.warn(`${prefix}.event.rejected`, { ...fields, reason: error.reason });
+      // Like a Queue rejection, a permanent failure dead-letters the committed event: visible and redrivable, never settled.
+      // A failed write must not turn the permanent failure into a retry; settlement dead-letters the event at the attempt cap instead.
+      await input.outbox.reject?.(input.envelope.id, error.reason).catch((rejectError: unknown) => input.log.error(`${prefix}.event.reject_failed`, { ...fields, errorCategory: safeErrorCategory(rejectError) }));
       throw input.permanent(`Event rejected: ${error.reason}`);
     }
     input.log.warn(`${prefix}.event.retrying`, { ...fields, errorCategory: safeErrorCategory(error) });
@@ -119,3 +122,53 @@ export async function executeCommittedEventById<Environment, Data>(input: {
     await Promise.all([inbox.close(), outbox.close()]);
   }
 }
+
+/** An http(s) origin and path with no credentials, query, or fragment; anything else is not recorded. */
+function publicEndpoint(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    return `${url.origin}${url.pathname}`.replace(/\/$/u, "");
+  } catch { return null; }
+}
+
+/**
+ * The runtime this Worker was deployed with, for the admin Jobs view. Hosting
+ * is inferred from the configured endpoint: none (or the vendor's own API)
+ * means the vendor's cloud. Secrets are never read into it.
+ */
+export function declaredJobRuntime(environment: WorkerEnvironment): DeclaredJobRuntime {
+  const name = jobRuntime(environment).name;
+  const variables = environment as WorkerEnvironment & Readonly<{ TRIGGER_API_URL?: string; TRIGGER_PROJECT_REF?: string; INNGEST_BASE_URL?: string }>;
+  if (name === "trigger") {
+    const endpoint = publicEndpoint(variables.TRIGGER_API_URL);
+    const project = variables.TRIGGER_PROJECT_REF && /^[A-Za-z0-9_-]{1,64}$/u.test(variables.TRIGGER_PROJECT_REF) ? variables.TRIGGER_PROJECT_REF : null;
+    return endpoint && new URL(endpoint).hostname !== "api.trigger.dev" ? { runtime: name, hosting: "self-hosted", endpoint, project } : { runtime: name, hosting: "cloud", endpoint: null, project };
+  }
+  if (name === "inngest") {
+    const endpoint = publicEndpoint(variables.INNGEST_BASE_URL);
+    return endpoint ? { runtime: name, hosting: "self-hosted", endpoint, project: null } : { runtime: name, hosting: "cloud", endpoint: null, project: null };
+  }
+  return { runtime: "cloudflare", hosting: "cloudflare", endpoint: null, project: null };
+}
+
+let lastDeclared: string | undefined;
+
+/**
+ * Records `declaredJobRuntime` for this environment from the safety sweep.
+ * Once recorded, an isolate skips the database until the declaration
+ * changes, and the database write itself is skipped when the row matches.
+ */
+export async function declareJobRuntime(environment: WorkerEnvironment, record: typeof recordDeclaredJobRuntime = recordDeclaredJobRuntime): Promise<boolean> {
+  const declared = declaredJobRuntime(environment);
+  const scope = environment.APP_ENV ?? "local";
+  const fingerprint = JSON.stringify([scope, declared]);
+  if (fingerprint === lastDeclared) return false;
+  const written = await record(environment.DATABASE_URL, scope, declared);
+  lastDeclared = fingerprint;
+  return written;
+}
+
+/** Tests only: forget what this isolate already recorded. */
+export function resetJobRuntimeDeclaration(): void { lastDeclared = undefined; }

@@ -10,7 +10,7 @@ import {
   activeSupportSession, endSupportSession, listSupportSessions, mintSupportHandoff, startSupportSession, supportableOrganizations, supportOrganizationView,
   grantPlatformRole, listPlatformAuditEvents, listPlatformEmailEvents, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
   listPlatformApiKeys, listPlatformIntegrationConnections, listPlatformOrganizations, listPlatformQuarantinedEvents, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
-  sessionAssurance, type Database, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
+  effectiveJobRuntime, jobDispatchHealth, sessionAssurance, type Database, type EffectiveJobRuntime, type JobDispatchHealth, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { buildOpenApi } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { Hono, type Context } from "hono";
@@ -56,6 +56,11 @@ export const adminDependencies = {
     const response = await fetch(new URL("/api/health/operational", environment.API_URL ?? "http://127.0.0.1:8787"), { headers: { accept: "application/json" } });
     if (!response.ok) throw new Error(`status ${response.status}`);
     return await response.json();
+  },
+  jobRuntime: async (environment: AdminEnvironment, name: string): Promise<{ config: EffectiveJobRuntime | null; dispatch: JobDispatchHealth }> => {
+    const database = platformDatabase(environment);
+    const [config, dispatch] = await Promise.all([effectiveJobRuntime(database, name), jobDispatchHealth(database)]);
+    return { config, dispatch };
   },
 };
 
@@ -563,6 +568,36 @@ admin.post("/api/admin/security/api-keys/:organizationId/:keyId/revoke", async (
 admin.get("/api/admin/operations/artifacts", async (context) => {
   // Pending uploads older than a day are stale; the artifact maintenance job cleans them up.
   return context.json(await artifactOperations(platformDatabase(context.env), { staleBefore: new Date(Date.now() - 86_400_000) }));
+});
+
+/** An operator-facing link only when it is http(s); anything else in a stored endpoint is dropped. */
+function webUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try { const url = new URL(value); return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null; } catch { return null; }
+}
+
+/**
+ * Where to inspect runs for an engine. Cloudflare has no external dashboard:
+ * the Jobs view links to the async operations view instead.
+ */
+export function jobsDashboardUrl(config: Readonly<{ runtime: string; hosting: string; endpoint: string | null; project: string | null }>): string | null {
+  if (config.runtime === "trigger") return config.hosting === "cloud" ? config.project && /^[A-Za-z0-9_-]{1,64}$/u.test(config.project) ? `https://cloud.trigger.dev/projects/v3/${config.project}` : null : webUrl(config.endpoint);
+  if (config.runtime === "inngest") return config.hosting === "cloud" ? "https://app.inngest.com" : webUrl(config.endpoint);
+  return null;
+}
+
+/** Cloudflare is the supported default. Other engines stay experimental here: the evidence ledger is CLI-only until Phase 2 carries verified evidence. */
+export function jobsSupportStatus(runtime: string | null): "supported" | "experimental" | "unknown" {
+  return runtime === null ? "unknown" : runtime === "cloudflare" ? "supported" : "experimental";
+}
+
+admin.get("/api/admin/operations/jobs", async (context) => {
+  const { config, dispatch } = await adminDependencies.jobRuntime(context.env, adminEnvironment(context.env));
+  return context.json({
+    runtime: config?.runtime ?? null, hosting: config?.hosting ?? null, endpoint: webUrl(config?.endpoint), project: config?.project ?? null,
+    source: config?.source ?? "unknown", declaredAt: iso(config?.declaredAt ?? null), supportStatus: jobsSupportStatus(config?.runtime ?? null),
+    dashboardUrl: config ? jobsDashboardUrl(config) : null, dispatch, migration: null,
+  });
 });
 
 type ShellCapabilityState = "disabled" | "declared" | "configured";

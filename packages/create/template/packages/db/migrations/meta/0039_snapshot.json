@@ -1,6 +1,6 @@
 {
-  "id": "4a3ae2bc-0f0d-4e53-ae5c-db3d95d72275",
-  "prevId": "1b502f13-65a0-4d2e-9b7e-ba269080fb5b",
+  "id": "0ba66714-5c20-47ae-b74f-48ed8582e3a1",
+  "prevId": "88d63f9a-ed98-4c8b-83c7-ce35fbd36e97",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2436,135 +2436,114 @@
       },
       "isRLSEnabled": true
     },
-    "public.integration_provider_event": {
-      "name": "integration_provider_event",
+    "public.job_runtime_config": {
+      "name": "job_runtime_config",
       "schema": "",
       "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "backend": {
-          "name": "backend",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
         "environment": {
           "name": "environment",
           "type": "text",
-          "primaryKey": false,
+          "primaryKey": true,
           "notNull": true
         },
-        "event_key": {
-          "name": "event_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
+        "declared_runtime": {
+          "name": "declared_runtime",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "outcome": {
-          "name": "outcome",
+        "declared_hosting": {
+          "name": "declared_hosting",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "reason": {
-          "name": "reason",
+        "declared_endpoint": {
+          "name": "declared_endpoint",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "provider_config_key": {
-          "name": "provider_config_key",
+        "declared_project": {
+          "name": "declared_project",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "backend_connection_id": {
-          "name": "backend_connection_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "received_at": {
-          "name": "received_at",
+        "declared_at": {
+          "name": "declared_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        }
-      },
-      "indexes": {
-        "integration_provider_event_key_uidx": {
-          "name": "integration_provider_event_key_uidx",
-          "columns": [
-            {
-              "expression": "backend",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "environment",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "event_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         },
-        "integration_provider_event_outcome_idx": {
-          "name": "integration_provider_event_outcome_idx",
-          "columns": [
-            {
-              "expression": "outcome",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "received_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
+        "override_runtime": {
+          "name": "override_runtime",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "override_hosting": {
+          "name": "override_hosting",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "override_endpoint": {
+          "name": "override_endpoint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "override_project": {
+          "name": "override_project",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "override_settings": {
+          "name": "override_settings",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "override_version": {
+          "name": "override_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "overridden_by": {
+          "name": "overridden_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "overridden_at": {
+          "name": "overridden_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {
-        "integration_provider_event_platform_select": {
-          "name": "integration_provider_event_platform_select",
+        "job_runtime_config_app_declare": {
+          "name": "job_runtime_config_app_declare",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "trestle_app"
+          ],
+          "using": "true",
+          "withCheck": "true"
+        },
+        "job_runtime_config_platform_select": {
+          "name": "job_runtime_config_platform_select",
           "as": "PERMISSIVE",
           "for": "SELECT",
           "to": [
@@ -2574,13 +2553,21 @@
         }
       },
       "checkConstraints": {
-        "integration_provider_event_outcome_check": {
-          "name": "integration_provider_event_outcome_check",
-          "value": "\"integration_provider_event\".\"outcome\" IN ('applied', 'duplicate', 'quarantined', 'ignored')"
+        "job_runtime_config_declared_runtime_check": {
+          "name": "job_runtime_config_declared_runtime_check",
+          "value": "\"job_runtime_config\".\"declared_runtime\" IN ('cloudflare', 'trigger', 'inngest')"
         },
-        "integration_provider_event_key_check": {
-          "name": "integration_provider_event_key_check",
-          "value": "\"integration_provider_event\".\"event_key\" ~ '^[0-9a-f]{64}$'"
+        "job_runtime_config_declared_hosting_check": {
+          "name": "job_runtime_config_declared_hosting_check",
+          "value": "\"job_runtime_config\".\"declared_hosting\" IN ('cloud', 'self-hosted', 'cloudflare')"
+        },
+        "job_runtime_config_override_runtime_check": {
+          "name": "job_runtime_config_override_runtime_check",
+          "value": "\"job_runtime_config\".\"override_runtime\" IS NULL OR \"job_runtime_config\".\"override_runtime\" IN ('cloudflare', 'trigger', 'inngest')"
+        },
+        "job_runtime_config_override_hosting_check": {
+          "name": "job_runtime_config_override_hosting_check",
+          "value": "\"job_runtime_config\".\"override_hosting\" IS NULL OR \"job_runtime_config\".\"override_hosting\" IN ('cloud', 'self-hosted', 'cloudflare')"
         }
       },
       "isRLSEnabled": true

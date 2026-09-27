@@ -130,6 +130,26 @@ Record hosted and deployed runs as `deployed` claims with
 
 ## Switching runtimes
 
-`trestle jobs migrate --to <runtime>` plans and performs a switch without
-losing or duplicating events. See the command's help for its drain, switch,
-and rollback steps.
+`trestle jobs migrate --to <runtime> --env <env>` prints the outbox inventory
+(pending, dispatched but not completed, dead-lettered) and the ordered steps:
+
+1. Switch the source (`trestle jobs use <runtime> --yes`).
+2. Configure the new runtime's secrets (trigger.dev: deploy `apps/jobs` first).
+3. Deploy the Worker. The dispatcher is the only sender, so this deploy moves
+   dispatch to the new runtime atomically.
+4. Let the old runtime drain the runs it already accepted. Its code and
+   bindings stay deployed.
+5. `--settle --yes` re-dispatches events the old runtime accepted but no
+   consumer completed (for example a cancelled run). The safety sweep does the
+   same after 30 minutes; `--older-than` controls the age.
+6. Remove the old runtime only when `--check` passes.
+
+A permanently rejected event (for example, expired provenance) is
+dead-lettered, not counted as unconsumed, so it never blocks `--check`.
+Redrive it explicitly if it should run.
+
+The migration test (`apps/worker/src/inngest/migration.integration.test.ts`)
+checks this against the real Inngest engine: Cloudflare → Inngest → Cloudflare
+with in-flight, pending, and lost work, asserting that every event completes
+exactly once. It is required in CI. Rolling back is the same procedure in the
+other direction.

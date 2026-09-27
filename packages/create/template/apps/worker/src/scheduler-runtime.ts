@@ -4,7 +4,7 @@ import { safeErrorCategory } from "@__TRESTLE_PROJECT_NAME__/events";
 
 import { dispatchOutbox } from "@__TRESTLE_PROJECT_NAME__/events";
 
-import { jobRuntime } from "./job-runtime.js";
+import { declareJobRuntime, jobRuntime } from "./job-runtime.js";
 import { scheduledJobs } from "./jobs.js";
 import { scheduledJobName } from "./scheduled-jobs.js";
 import { frameworkDueWork, scheduleDueWork, type DueWorkItem, type DueWorkOutcome } from "./scheduler.js";
@@ -97,11 +97,15 @@ export async function runDueWork(key: string, dueAt: Date, environment: WorkerEn
 /**
  * The safety sweep (every 15 minutes). It catches what a lost notification
  * missed: it drains the outbox, repairs native webhook handoffs, and
- * re-records every due time with the scheduler. It is the only periodic
+ * re-records every due time with the scheduler, and records the deployed
+ * job runtime for the admin Jobs view when it changed. It is the only periodic
  * database access an idle project has.
  */
 export async function runSafetySweep(environment: WorkerEnvironment, log: Logger): Promise<void> {
   const due: DueWorkItem[] = [];
+  // The admin Jobs view reads what this deploy runs on; a failed record never blocks dispatch.
+  try { if (await declareJobRuntime(environment)) log.info("jobs.runtime.declared", { runtime: jobRuntime(environment).name }); }
+  catch (error) { log.warn("jobs.runtime.declare_failed", { errorCategory: safeErrorCategory(error) }); }
   if (jobRuntime(environment).name !== "cloudflare" && jobRuntime(environment).publisher(environment)) {
     // External runtimes can end a run without success; re-dispatch what no consumer completed.
     const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });

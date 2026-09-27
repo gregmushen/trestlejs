@@ -324,6 +324,22 @@ describe("TrestleJS CLI", () => {
     expect(push.stderr()).toContain("does not use trigger.dev");
   });
 
+  it("validates jobs migrate before touching a database", async () => {
+    const root = await fixture();
+    const unknown = capture(root);
+    expect(await executeCli(["jobs", "migrate", "--to", "celery"], unknown.runtime)).toBe(1);
+    expect(unknown.stderr()).toContain("--to must be");
+    const unconfirmed = capture(root);
+    expect(await executeCli(["jobs", "migrate", "--to", "inngest", "--settle"], unconfirmed.runtime)).toBe(1);
+    expect(unconfirmed.stderr()).toContain("rerun with --yes");
+    const age = capture(root);
+    expect(await executeCli(["jobs", "migrate", "--to", "inngest", "--settle", "--yes", "--older-than", "-1"], age.runtime)).toBe(1);
+    expect(age.stderr()).toContain("--older-than");
+    const cloudflare = capture(root);
+    expect(await executeCli(["jobs", "use", "cloudflare"], cloudflare.runtime)).toBe(1);
+    expect(cloudflare.stderr()).toContain("rerun with --yes");
+  });
+
   it("selects the Nango connection backend only with an experimental opt-in", async () => {
     const shellOptIn = process.env.TRESTLE_EXPERIMENTAL;
     delete process.env.TRESTLE_EXPERIMENTAL;

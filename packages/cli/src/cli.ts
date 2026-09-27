@@ -41,9 +41,10 @@ import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { formatProviderStatuses, providerStatuses } from "./providers.js";
 import { evidenceReport, formatEvidenceReport, readLedger, recordEvidence, starterLedger, writeLedger } from "./evidence.js";
-import { enableJobRuntime } from "./upgrade-source.js";
+import { enableJobRuntime, useCloudflareRuntime } from "./upgrade-source.js";
 import { enableConnectionBackend } from "./integrations.js";
 import { scaffoldSelfHostedInngest, scaffoldSelfHostedTrigger } from "./job-self-host.js";
+import { migrationInventory, migrationSteps, settleForMigration, type JobRuntimeName } from "./job-migrate.js";
 import { applySourceUpgrade, sourceFileDiff, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { auditMigrations, formatMigrationAudit, rebaseMigrations } from "./upgrade-migrations.js";
 import {
@@ -1345,14 +1346,21 @@ export function createProgram(runtime: CliRuntime): Command {
 
   jobs.command("use")
     .description("select the job runtime: trigger adds apps/jobs for trigger.dev; inngest adds the Worker's Inngest endpoint (hosted, or self-hosted with --endpoint)")
-    .argument("<runtime>", "trigger or inngest")
+    .argument("<runtime>", "cloudflare, trigger, or inngest")
     .option("--project <ref>", "the trigger.dev project ref (proj_...)")
     .option("--endpoint <url>", "a self-hosted trigger.dev or Inngest URL; omit for the hosted service")
     .option("--yes", "confirm adding apps/jobs and changing the manifest and Worker configuration")
     .action(async (runtimeName: string, options: { project?: string; endpoint?: string; yes?: boolean }, command: Command) => {
-      if (runtimeName !== "trigger" && runtimeName !== "inngest") throw new CliFailure("jobs use supports trigger or inngest; cloudflare is the default");
+      if (runtimeName !== "trigger" && runtimeName !== "inngest" && runtimeName !== "cloudflare") throw new CliFailure("jobs use supports cloudflare, trigger, or inngest");
       if (!options.yes) throw new CliFailure(`jobs use ${runtimeName} adds the runtime's code and changes .trestle/project.yaml and the Worker configuration; rerun with --yes`);
       const context = await projectContext(command, runtime);
+      if (runtimeName === "cloudflare") {
+        let restored: readonly string[];
+        try { restored = await useCloudflareRuntime(context.root, context.manifest.project.name); }
+        catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
+        runtime.stdout(restored.length ? `Selected cloudflare.\n${restored.map((file) => `  ${file}`).join("\n")}\nThe previous runtime's code stays so accepted runs can finish; follow trestle jobs migrate --to cloudflare for the deploy order.\n` : "cloudflare is already selected.\n");
+        return;
+      }
       let changed: readonly string[];
       try { changed = await enableJobRuntime(context.root, context.manifest.project.name, runtimeName, { hosting: options.endpoint ? "self-hosted" : "cloud", ...(options.endpoint ? { endpoint: options.endpoint } : {}) }); }
       catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
@@ -1367,6 +1375,38 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout(`${changed.length ? `Selected ${runtimeName}.\n${changed.map((file) => `  ${file}`).join("\n")}` : `${runtimeName} is already selected.`}\n${next}\n`);
     });
 
+  jobs.command("migrate")
+    .description("plan a switch between job runtimes without losing or duplicating events; --settle re-dispatches what the old runtime never completed")
+    .requiredOption("--to <runtime>", "cloudflare, trigger, or inngest")
+    .option("--env <environment>", "environment whose database to inventory", environment, "local")
+    .option("--settle", "re-dispatch events a runtime accepted but no consumer completed")
+    .option("--older-than <minutes>", "with --settle: only events dispatched at least this long ago", Number, 30)
+    .option("--check", "exit non-zero while events are pending or unconsumed (gate for removing the old runtime)")
+    .option("--yes", "confirm --settle")
+    .option("--json", "print structured output")
+    .action(async (options: { to: string; env: ReturnType<typeof environment>; settle?: boolean; olderThan: number; check?: boolean; yes?: boolean; json?: boolean }, command: Command) => {
+      if (!["cloudflare", "trigger", "inngest"].includes(options.to)) throw new CliFailure("--to must be cloudflare, trigger, or inngest");
+      if (options.settle && !options.yes) throw new CliFailure("--settle changes the outbox; rerun with --yes");
+      if (!Number.isFinite(options.olderThan) || options.olderThan < 0) throw new CliFailure("--older-than must be a number of minutes");
+      const context = await projectContext(command, runtime);
+      const from = (context.manifest.jobs?.runtime ?? "cloudflare") as JobRuntimeName;
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime)).catch(() => ({} as Record<string, string>));
+      const url = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
+      if (!url) throw new CliFailure(`no DATABASE_MIGRATION_URL or DATABASE_URL in ${options.env} credentials`);
+      if (options.env === "local") assertLocalDatabaseUrl(url);
+      const databasePackage = `@${context.manifest.project.name}/db`;
+      const settled = options.settle ? await settleForMigration(context.root, databasePackage, url, options.olderThan) : undefined;
+      const inventory = await migrationInventory(context.root, databasePackage, url);
+      const steps = migrationSteps(from, options.to as JobRuntimeName, options.env);
+      if (options.json) runtime.stdout(`${JSON.stringify(structuredOutput({ from, to: options.to, environment: options.env, inventory, ...(settled !== undefined ? { settled } : {}), steps }), null, 2)}\n`);
+      else runtime.stdout([
+        `Job runtime ${from} → ${options.to} (${options.env})`,
+        `Outbox: ${inventory.pending} pending, ${inventory.unconsumed} dispatched but not completed, ${inventory.dead} dead-lettered`,
+        ...(settled !== undefined ? [`Settled: ${settled} event(s) returned to pending for the current runtime`] : []),
+        "", ...steps,
+      ].join("\n") + "\n");
+      if (options.check && (inventory.pending > 0 || inventory.unconsumed > 0)) throw new CliFailure(`${inventory.pending + inventory.unconsumed} event(s) still depend on dispatch or completion; keep the old runtime until this reaches 0`);
+    });
   const integrations = program.command("integrations").description("select and inspect the backend that holds tenant integration Connections");
   experimental(integrations.command("use")
     .description("select the connection backend for deployed environments (nango); local development uses the deterministic local backend")

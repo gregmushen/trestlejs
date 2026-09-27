@@ -297,3 +297,30 @@ suite("outbox retention and failure redaction", () => {
     }
   });
 });
+
+suite("outbox settlement at the attempt cap", () => {
+  it("dead-letters an unconsumed event at the cap instead of leaving it stranded, and re-dispatches the rest", async () => {
+    const store = new PostgresOutboxStore(databaseUrl!);
+    const sql = postgres(databaseUrl!, { max: 1, prepare: false });
+    try {
+      const capped = envelope();
+      const retryable = envelope();
+      for (const message of [capped, retryable]) await store.append(message);
+      await sql`update outbox_message set status='succeeded', processed_at=now() - interval '1 hour', attempts=4 where id=${capped.id}`;
+      await sql`update outbox_message set status='succeeded', processed_at=now() - interval '1 hour', attempts=0 where id=${retryable.id}`;
+
+      const settled = await store.settleUnconsumed({ olderThanMs: 0 });
+      expect(settled).toContain(retryable.id);
+      expect(settled).not.toContain(capped.id);
+      expect((await store.findCommitted(retryable.id))?.status).toBe("pending");
+      const dead = await store.findCommitted(capped.id);
+      expect(dead?.status).toBe("dead");
+      expect(dead?.lastError).toBe("unconsumed_after_retries");
+      // Redrivable, so `jobs migrate --check` never waits on it indefinitely.
+      expect((await store.listDead()).map((entry) => entry.id)).toContain(capped.id);
+    } finally {
+      await store.close();
+      await sql.end();
+    }
+  });
+});

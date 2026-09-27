@@ -122,6 +122,9 @@ export function runtimeConformanceSuite(options: { runtime: JobRuntimeName; conn
       await (await open()).settle();
       expect(await count(organizations[0]!, `attempt:${tag("expired")}`)).toBe(0);
       expect(await (await open()).failed()).toContain(envelope.id);
+      // Dead-lettered, so settlement never re-dispatches it and `jobs migrate --check` does not wait on it.
+      const outbox = new PostgresOutboxStore(connectionString);
+      try { expect((await outbox.findCommitted(envelope.id))?.status).toBe("dead"); } finally { await outbox.close(); }
     }, timeoutMs);
 
     it("fans out to several tenants, each under its own authority", async () => {

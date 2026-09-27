@@ -5,7 +5,7 @@ const [operation, argument, limitArgument] = process.argv.slice(2);
 // retention functions (migration 0033), which nothing else may execute.
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required");
-if (!operation || !["list", "redrive", "retention-count", "retention-prune"].includes(operation)) throw new Error("expected list, redrive, retention-count, or retention-prune");
+if (!operation || !["list", "redrive", "retention-count", "retention-prune", "migration-inventory", "migration-settle"].includes(operation)) throw new Error("expected list, redrive, retention-count, retention-prune, migration-inventory, or migration-settle");
 const store = new PostgresOutboxStore(connectionString);
 try {
   if (operation === "list") {
@@ -15,6 +15,15 @@ try {
     if (!argument) throw new Error("redrive requires an outbox entry ID");
     const entry = await store.redrive(argument);
     process.stdout.write(`${JSON.stringify({ id: entry.id, event: `${entry.message.name}@${entry.message.schemaVersion}`, status: entry.status })}\n`);
+  } else if (operation === "migration-inventory") {
+    process.stdout.write(`${JSON.stringify(await store.migrationInventory())}\n`);
+  } else if (operation === "migration-settle") {
+    const olderThanMinutes = Number(argument);
+    if (!Number.isFinite(olderThanMinutes) || olderThanMinutes < 0) throw new Error("migration-settle requires a non-negative age in minutes");
+    // Bounded batches until nothing is left; events at the attempt cap are dead-lettered, not re-dispatched.
+    let settled = 0;
+    for (let batch = await store.settleUnconsumed({ olderThanMs: olderThanMinutes * 60_000 }); batch.length > 0; batch = await store.settleUnconsumed({ olderThanMs: olderThanMinutes * 60_000 })) settled += batch.length;
+    process.stdout.write(`${JSON.stringify({ settled })}\n`);
   } else {
     if (!argument || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(argument)) throw new Error("retention cutoff must be an ISO UTC timestamp");
     const cutoff = new Date(argument);
