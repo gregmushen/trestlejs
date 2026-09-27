@@ -10,6 +10,30 @@ runtime receives the same committed events from the transactional outbox,
 under stable event IDs. Every execution re-verifies provenance, the 14-day
 replay window, and current entitlements before a handler runs.
 
+## Choosing a runtime
+
+| | Cloudflare (default) | trigger.dev | Inngest |
+| --- | --- | --- | --- |
+| Where job code runs | your Worker, Queues, Workflows | trigger.dev machines (Node), or yours when self-hosted | your Worker; Inngest calls a signed endpoint |
+| Best for | no extra vendor, lowest cost, light and frequent work | long or heavy jobs, Node libraries, Python scripts, many sequences | step functions and sequences while keeping Worker bindings (R2, Queues, Durable Objects) |
+| Visibility | outbox and Workflow views in the platform admin | trigger.dev dashboard | Inngest dashboard |
+| Trade-offs | Worker CPU and time limits; basic tooling | a separate `trestle_jobs` database login; secrets, including `RESEND_API_KEY`, synced to the engine; Cloudflare bindings only through a signed internal route | another vendor; a signed endpoint on your Worker |
+
+Frequent schedules alone are not a reason to leave Cloudflare. Due work runs
+on the scheduler Durable Object's alarm, not a per-minute cron, so a job due
+every minute uses no cron triggers and an idle project makes no database
+queries. Each run still costs Worker time, which is where heavy per-minute
+work favors another runtime.
+
+Stripe and Resend webhooks always arrive at the Worker, whichever runtime is
+selected: their verified events go through the outbox to the selected
+runtime. Email sequences (`defineSequence`, see the README) run on all three;
+trigger.dev and Inngest add a per-run dashboard for their waits and exits.
+
+The platform admin's **Jobs** view shows the selected runtime, its hosting and
+dispatch health, links to its dashboard, and switches runtimes (see
+[From the platform admin](#from-the-platform-admin)).
+
 ## Support matrix
 
 A profile is **supported** only when its evidence exists. Anything else is

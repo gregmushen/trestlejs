@@ -1,6 +1,6 @@
 # Jobs admin, engine choice, and email sequences
 
-Status: proposed (Greg, 2026-09-27). Extends [JOB_RUNTIMES.md](JOB_RUNTIMES.md)
+Status: implemented (2026-09-27): Phase 1 #219, Phase 2 #220, Phase 3 #222, Phases 4 and 5 #223. Extends [JOB_RUNTIMES.md](JOB_RUNTIMES.md)
 and the job runtimes plan (PRs #214–#218).
 
 **Goal:** operators see and change the jobs engine and where it is hosted from
