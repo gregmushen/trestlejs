@@ -10,7 +10,8 @@ import {
   activeSupportSession, endSupportSession, listSupportSessions, mintSupportHandoff, startSupportSession, supportableOrganizations, supportOrganizationView,
   grantPlatformRole, listPlatformAuditEvents, listPlatformEmailEvents, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
   listPlatformApiKeys, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
-  effectiveJobRuntime, jobDispatchHealth, sessionAssurance, type Database, type EffectiveJobRuntime, type JobDispatchHealth, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
+  clearJobRuntimeOverride, jobDispatchHealth, JobRuntimeChangeError, jobRuntimeCredentialNames, jobRuntimeState, setJobDispatchPaused, setJobRuntimeOverride, settleUnconsumedJobs, validateJobRuntimeTarget,
+  sessionAssurance, type Database, type JobDispatchHealth, type JobRuntimeState, type JobRuntimeTarget, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { buildOpenApi } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { Hono, type Context } from "hono";
@@ -57,10 +58,17 @@ export const adminDependencies = {
     if (!response.ok) throw new Error(`status ${response.status}`);
     return await response.json();
   },
-  jobRuntime: async (environment: AdminEnvironment, name: string): Promise<{ config: EffectiveJobRuntime | null; dispatch: JobDispatchHealth }> => {
+  jobRuntime: async (environment: AdminEnvironment, name: string): Promise<{ state: JobRuntimeState | null; dispatch: JobDispatchHealth }> => {
     const database = platformDatabase(environment);
-    const [config, dispatch] = await Promise.all([effectiveJobRuntime(database, name), jobDispatchHealth(database)]);
-    return { config, dispatch };
+    const [state, dispatch] = await Promise.all([jobRuntimeState(database, name), jobDispatchHealth(database)]);
+    return { state, dispatch };
+  },
+  /** Job runtime writes; each audits in its own transaction on the trestle_platform connection. */
+  jobChanges: {
+    set: async (environment: AdminEnvironment, name: string, input: Parameters<typeof setJobRuntimeOverride>[2], change: PlatformChangeContext) => await setJobRuntimeOverride(platformDatabase(environment), name, input, change),
+    clear: async (environment: AdminEnvironment, name: string, input: Parameters<typeof clearJobRuntimeOverride>[2], change: PlatformChangeContext) => await clearJobRuntimeOverride(platformDatabase(environment), name, input, change),
+    pause: async (environment: AdminEnvironment, name: string, input: Parameters<typeof setJobDispatchPaused>[2], change: PlatformChangeContext) => await setJobDispatchPaused(platformDatabase(environment), name, input, change),
+    settle: async (environment: AdminEnvironment, name: string, input: Parameters<typeof settleUnconsumedJobs>[2], change: PlatformChangeContext) => await settleUnconsumedJobs(platformDatabase(environment), name, input, change),
   },
 };
 
@@ -564,13 +572,117 @@ export function jobsSupportStatus(runtime: string | null): "supported" | "experi
   return runtime === null ? "unknown" : runtime === "cloudflare" ? "supported" : "experimental";
 }
 
+/** An engine switch is shown as migrating for 14 days (the replay window) while events it dispatched are still unconsumed. */
+const jobsMigrationWindowMs = 14 * 86_400_000;
+
+/** The CLI command that sets a Worker secret; the admin never edits secrets. */
+const secretCommand = (name: string, environment: string) => `pnpm exec trestle secrets set ${name} --env ${environment}`;
+
+function jobsCredentials(state: JobRuntimeState | null, runtime: string | null, environment: string) {
+  const names = runtime && Object.hasOwn(jobRuntimeCredentialNames, runtime) ? jobRuntimeCredentialNames[runtime as keyof typeof jobRuntimeCredentialNames] : [];
+  // Presence only; null means the Worker has not reported it.
+  return names.map((name) => ({ name, present: state?.credentials ? state.credentials[name] === true : null, command: secretCommand(name, environment) }));
+}
+
 admin.get("/api/admin/operations/jobs", async (context) => {
-  const { config, dispatch } = await adminDependencies.jobRuntime(context.env, adminEnvironment(context.env));
+  const environment = adminEnvironment(context.env);
+  const { state, dispatch } = await adminDependencies.jobRuntime(context.env, environment);
+  const config = state?.effective ?? null;
+  const migrating = state && state.switchedFrom && state.switchedAt && state.switchedFrom !== config?.runtime && Date.now() - state.switchedAt.getTime() < jobsMigrationWindowMs && dispatch.unconsumed > 0;
   return context.json({
     runtime: config?.runtime ?? null, hosting: config?.hosting ?? null, endpoint: webUrl(config?.endpoint), project: config?.project ?? null,
     source: config?.source ?? "unknown", declaredAt: iso(config?.declaredAt ?? null), supportStatus: jobsSupportStatus(config?.runtime ?? null),
-    dashboardUrl: config ? jobsDashboardUrl(config) : null, dispatch, migration: null,
+    dashboardUrl: config ? jobsDashboardUrl(config) : null, dispatch,
+    declared: state ? { ...state.declared, endpoint: webUrl(state.declared.endpoint) } : null,
+    override: state?.override ? { ...state.override, endpoint: webUrl(state.override.endpoint), by: state.overriddenBy, at: iso(state.overriddenAt) } : null,
+    overrideVersion: state?.overrideVersion ?? 0,
+    settings: state?.settings ?? { dispatchPaused: false },
+    available: state?.available ?? [],
+    credentials: jobsCredentials(state, config?.runtime ?? null, environment),
+    migration: migrating ? { from: state.switchedFrom, to: config!.runtime, since: iso(state.switchedAt), unconsumed: dispatch.unconsumed } : null,
   });
+});
+
+type JobsTargetBody = { runtime?: unknown; hosting?: unknown; endpoint?: unknown; project?: unknown };
+
+function jobsTarget(body: JobsTargetBody): JobRuntimeTarget {
+  if (typeof body.runtime !== "string" || typeof body.hosting !== "string") throw new PlatformOperationError("invalid", "Choose an engine and its hosting");
+  if (body.endpoint !== undefined && body.endpoint !== null && typeof body.endpoint !== "string") throw new PlatformOperationError("invalid", "The endpoint must be a URL");
+  if (body.project !== undefined && body.project !== null && typeof body.project !== "string") throw new PlatformOperationError("invalid", "The project must be a trigger.dev project reference");
+  return { runtime: body.runtime, hosting: body.hosting, endpoint: typeof body.endpoint === "string" && body.endpoint.trim() ? body.endpoint.trim() : null, project: typeof body.project === "string" && body.project.trim() ? body.project.trim() : null };
+}
+
+function expectedVersion(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new PlatformOperationError("invalid", "expectedVersion must be the override version you reviewed");
+  return value;
+}
+
+/** The reviewable switch, as the admin runs it: the same ordering as `trestle jobs migrate`, with the override in place of a deploy. */
+export function jobsSwitchSteps(from: string, to: string, environment: string): { steps: string[]; rollback: string[] } {
+  const prepare = to === "trigger" ? [`Deploy the trigger.dev tasks before confirming: pnpm exec trestle jobs env push --env ${environment}, then pnpm --filter ./apps/jobs deploy.`]
+    : to === "inngest" ? ["Register https://<worker>/api/jobs/inngest as the app URL in Inngest before confirming."]
+      : ["Cloudflare Queues (and Workflows, if enabled) must be provisioned for this environment."];
+  return {
+    steps: [
+      ...prepare,
+      `Confirm the switch. Within 30 seconds every Worker isolate dispatches pending events only to ${to}; event IDs are kept, so nothing runs twice.`,
+      `Let ${from} drain what it already accepted. Keep its bindings and code deployed; its consumer keeps completing accepted runs.`,
+      `After its runs have ended (30 minutes or more), use Settle now to re-dispatch anything ${from} accepted but never completed.`,
+      `To make the switch permanent, run pnpm exec trestle jobs use ${to} --yes and deploy, then Revert to deploy config. Remove ${from}'s bindings only when pnpm exec trestle jobs migrate --to ${to} --env ${environment} --check passes.`,
+    ],
+    rollback: [`Switch back to ${from} here, or Revert to deploy config, while ${from}'s bindings are still deployed. The inbox guarantees no event completes twice, whichever runtime delivers it.`],
+  };
+}
+
+admin.post("/api/admin/operations/jobs/plan", async (context) => {
+  const environment = adminEnvironment(context.env);
+  const target = jobsTarget(await context.req.json().catch(() => ({})) as JobsTargetBody);
+  const { state, dispatch } = await adminDependencies.jobRuntime(context.env, environment);
+  if (!state) throw new PlatformOperationError("not_found", "The Worker has not declared its job runtime for this environment yet");
+  const validated = validateJobRuntimeTarget(target, state);
+  const current = state.effective;
+  const kind = current.runtime !== validated.target.runtime || current.hosting !== validated.target.hosting ? "switch"
+    : current.endpoint !== validated.target.endpoint || current.project !== validated.target.project ? "settings" : "unchanged";
+  const { steps, rollback } = kind === "switch" ? jobsSwitchSteps(current.runtime, validated.target.runtime, environment)
+    : { steps: ["Confirm the change. The Worker applies it within 30 seconds."], rollback: ["Change it back here, or Revert to deploy config."] };
+  return context.json({
+    current: { runtime: current.runtime, hosting: current.hosting, endpoint: webUrl(current.endpoint), project: current.project, source: current.source },
+    target: validated.target, kind, allowed: validated.problems.length === 0 && kind !== "unchanged",
+    problems: validated.problems,
+    credentials: jobsCredentials(state, validated.target.runtime, environment),
+    dispatch, experimental: jobsSupportStatus(validated.target.runtime) === "experimental",
+    overrideVersion: state.overrideVersion, steps, rollback,
+  });
+});
+
+admin.put("/api/admin/operations/jobs", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as JobsTargetBody & { expectedVersion?: unknown; acknowledgeExperimental?: unknown; reason?: unknown };
+  const change = await actionContext(context, body);
+  const result = await adminDependencies.jobChanges.set(context.env, adminEnvironment(context.env), { ...jobsTarget(body), expectedVersion: expectedVersion(body.expectedVersion), acknowledgeExperimental: body.acknowledgeExperimental === true }, change);
+  return context.json({ overrideVersion: result.version, correlationId: context.get("correlationId") });
+});
+
+admin.put("/api/admin/operations/jobs/settings", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { dispatchPaused?: unknown; expectedVersion?: unknown; reason?: unknown };
+  const change = await actionContext(context, body);
+  if (typeof body.dispatchPaused !== "boolean") throw new PlatformOperationError("invalid", "Choose whether dispatch is paused");
+  const result = await adminDependencies.jobChanges.pause(context.env, adminEnvironment(context.env), { paused: body.dispatchPaused, expectedVersion: expectedVersion(body.expectedVersion) }, change);
+  return context.json({ overrideVersion: result.version, correlationId: context.get("correlationId") });
+});
+
+admin.delete("/api/admin/operations/jobs/override", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { expectedVersion?: unknown; reason?: unknown };
+  const change = await actionContext(context, body);
+  const result = await adminDependencies.jobChanges.clear(context.env, adminEnvironment(context.env), { expectedVersion: expectedVersion(body.expectedVersion) }, change);
+  return context.json({ overrideVersion: result.version, correlationId: context.get("correlationId") });
+});
+
+admin.post("/api/admin/operations/jobs/settle", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { olderThanMinutes?: unknown; reason?: unknown };
+  const change = await actionContext(context, body);
+  if (typeof body.olderThanMinutes !== "number") throw new PlatformOperationError("invalid", "olderThanMinutes must be a whole number of minutes");
+  const result = await adminDependencies.jobChanges.settle(context.env, adminEnvironment(context.env), { olderThanMinutes: body.olderThanMinutes }, change);
+  return context.json({ ...result, correlationId: context.get("correlationId") });
 });
 
 type ShellCapabilityState = "disabled" | "declared" | "configured";
@@ -643,6 +755,7 @@ const operationStatus = { invalid: 400, not_found: 404, conflict: 409 } as const
 
 admin.onError((error, context) => {
   if (error instanceof AdminConfigurationError) return context.json({ error: "not_configured", message: error.message, repair: `pnpm exec trestle doctor --env ${adminEnvironment(context.env)}` }, 503);
+  if (error instanceof JobRuntimeChangeError) return context.json({ error: error.code, codes: error.problems.map((problem) => problem.code), problems: error.problems, message: error.message, correlationId: context.get("correlationId") }, 422);
   if (error instanceof PlatformOperationError || error instanceof MachineAccessError || error instanceof PlatformRoleError) return context.json({ error: error.code, message: error.message, correlationId: context.get("correlationId") }, operationStatus[error.code as keyof typeof operationStatus] ?? 400);
   createLogger({ correlationId: context.get("correlationId"), surface: "admin" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) }).error("admin.request.failed", { errorName: error.name });
   return context.json({ error: "internal_error", message: "The request could not be completed" }, 500);

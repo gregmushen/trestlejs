@@ -4,7 +4,7 @@ import { safeErrorCategory } from "@__TRESTLE_PROJECT_NAME__/events";
 
 import { dispatchOutbox } from "@__TRESTLE_PROJECT_NAME__/events";
 
-import { declareJobRuntime, jobRuntime } from "./job-runtime.js";
+import { cachedDispatchJobRuntime, declareJobRuntime, dispatchJobRuntime, jobRuntime, jobRuntimeOverrideCacheMs, type DispatchJobRuntime } from "./job-runtime.js";
 import { scheduledJobs } from "./jobs.js";
 import { scheduledJobName } from "./scheduled-jobs.js";
 import { frameworkDueWork, scheduleDueWork, type DueWorkItem, type DueWorkOutcome } from "./scheduler.js";
@@ -26,11 +26,15 @@ function schedulerLog(environment: WorkerEnvironment, fields: Record<string, unk
  * is next due: immediately when the bound was reached, at the earliest retry
  * or expiring lease otherwise, or never when it is empty.
  */
-export async function drainOutbox(environment: WorkerEnvironment, clock: { now(): Date } = { now: () => new Date() }): Promise<{ sent: number; failed: number; next: Date | null }> {
-  const publisher = jobRuntime(environment).publisher(environment);
+export async function drainOutbox(environment: WorkerEnvironment, clock: { now(): Date } = { now: () => new Date() }, runtime?: DispatchJobRuntime): Promise<{ sent: number; failed: number; next: Date | null; paused?: boolean }> {
+  const target = runtime ?? await dispatchJobRuntime(environment, schedulerLog(environment));
+  const publisher = target.adapter.publisher(target.environment);
   if (!publisher) return { sent: 0, failed: 0, next: null };
   const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
   try {
+    // Paused from admin: nothing is sent and committed events stay pending (the Jobs view counts them).
+    // While work is waiting, check again after the override cache expires so resuming takes effect.
+    if (target.paused) return { sent: 0, failed: 0, next: await store.nextDue() ? new Date(clock.now().getTime() + jobRuntimeOverrideCacheMs) : null, paused: true };
     let sent = 0;
     let failed = 0;
     let saturated = false;
@@ -76,7 +80,7 @@ async function retryLocalWebhooks(environment: WorkerEnvironment, organizationId
 export async function runDueWork(key: string, dueAt: Date, environment: WorkerEnvironment, clock: { now(): Date } = { now: () => new Date() }): Promise<DueWorkOutcome> {
   if (key === frameworkDueWork.outbox) {
     const result = await drainOutbox(environment, clock);
-    schedulerLog(environment).info("outbox.dispatch.completed", { sent: result.sent, failed: result.failed });
+    schedulerLog(environment).info(result.paused ? "outbox.dispatch.paused" : "outbox.dispatch.completed", { sent: result.sent, failed: result.failed });
     return { next: result.next };
   }
   if (key.startsWith(frameworkDueWork.probe(""))) {
@@ -106,7 +110,10 @@ export async function runSafetySweep(environment: WorkerEnvironment, log: Logger
   // The admin Jobs view reads what this deploy runs on; a failed record never blocks dispatch.
   try { if (await declareJobRuntime(environment)) log.info("jobs.runtime.declared", { runtime: jobRuntime(environment).name }); }
   catch (error) { log.warn("jobs.runtime.declare_failed", { errorCategory: safeErrorCategory(error) }); }
-  if (jobRuntime(environment).name !== "cloudflare" && jobRuntime(environment).publisher(environment)) {
+  // The admin override (when set and installed) chooses where dispatch goes; see dispatchJobRuntime.
+  const runtime = await dispatchJobRuntime(environment, log);
+  const publishing = Boolean(runtime.adapter.publisher(runtime.environment));
+  if (runtime.adapter.name !== "cloudflare" && publishing && !runtime.paused) {
     // External runtimes can end a run without success; re-dispatch what no consumer completed.
     const store = new PostgresOutboxStore(environment.DATABASE_URL, { assumeApplicationRole: true });
     try {
@@ -114,9 +121,9 @@ export async function runSafetySweep(environment: WorkerEnvironment, log: Logger
       if (settled.length) log.warn("outbox.settlement.redispatched", { count: settled.length });
     } finally { await store.close(); }
   }
-  if (jobRuntime(environment).publisher(environment)) {
-    const result = await drainOutbox(environment);
-    log.info("outbox.dispatch.completed", { sent: result.sent, failed: result.failed });
+  if (publishing) {
+    const result = await drainOutbox(environment, undefined, runtime);
+    log.info(result.paused ? "outbox.dispatch.paused" : "outbox.dispatch.completed", { sent: result.sent, failed: result.failed });
     if (result.next) due.push({ key: frameworkDueWork.outbox, dueAt: result.next });
   }
   if (environment.WEBHOOK_DELIVERY_MODE === "native") {
@@ -142,7 +149,8 @@ export async function runSafetySweep(environment: WorkerEnvironment, log: Logger
  */
 export function wakeOutboxDispatch(context: { env: unknown; readonly executionCtx: { waitUntil(promise: Promise<unknown>): void } }): void {
   const environment = context.env as WorkerEnvironment;
-  if (!environment.TRESTLE_SCHEDULER || !jobRuntime(environment).publisher(environment)) return;
+  const target = cachedDispatchJobRuntime(environment);
+  if (!environment.TRESTLE_SCHEDULER || !target.adapter.publisher(target.environment)) return;
   const wake = scheduleDueWork(environment.TRESTLE_SCHEDULER, [{ key: frameworkDueWork.outbox, dueAt: new Date() }])
     .catch((error: unknown) => { schedulerLog(environment).warn("scheduler.wake.failed", { errorCategory: safeErrorCategory(error) }); });
   try { context.executionCtx.waitUntil(wake); }
