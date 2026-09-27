@@ -5,8 +5,9 @@ import { AdminDetailDrawer, AdminFacts, useSelectedDetail } from "../../shell/re
 import { Select } from "../../shell/kumo";
 import { AdminCode, AdminCopy, AdminDataTable, AdminEmpty, AdminFilter, AdminPageHeader, AdminQueryState, AdminStatus, formatDate } from "../../shell/ui";
 import { useViewSearch } from "../../shell/url-state";
+import { EmailDeliverabilityPanel } from "./deliverability";
 
-const statuses = ["captured", "accepted", "delivered", "bounced", "complained", "failed"];
+const statuses = ["captured", "accepted", "delivered", "delivery_delayed", "bounced", "complained", "failed"];
 
 /** Operational history for one send: status timeline, attempts, and correlation. Content is never stored here. */
 function DeliveryDrawer(props: { id: string; open: boolean; onClose: () => void }) {
@@ -31,9 +32,11 @@ export default function EmailView() {
   const q = (search.q ?? "").toLowerCase();
   const rows = (deliveries.data?.deliveries ?? []).filter((row) => !q || row.id.toLowerCase().includes(q));
   const selected = useSelectedDetail(rows, (row) => row.id);
-  useAdminCommands({ "email.refresh": { run: () => void deliveries.refetch() } });
+  const deliverability = useAdminQuery(["email-deliverability"], () => api.emailDeliverability(), { refetchInterval: 60_000 });
+  useAdminCommands({ "email.refresh": { run: () => { void deliveries.refetch(); void deliverability.refetch(); } } });
   return <>
     <AdminPageHeader title="Email delivery" description="Delivery status reported by the email provider, grouped by provider message. Recipients, templates, bodies, links, and tokens are never recorded here." />
+    <AdminQueryState query={deliverability}>{(data) => <EmailDeliverabilityPanel data={data} />}</AdminQueryState>
     <div className="mb-4 flex flex-wrap items-end gap-3">
       <div className="w-full sm:w-48"><Select label="Status" hideLabel={false} value={search.status ?? "all"} onValueChange={(value) => update({ status: String(value ?? "all") === "all" ? undefined : String(value) })}>
         <Select.Option value="all">All statuses</Select.Option>{statuses.map((status) => <Select.Option key={status} value={status}>{status}</Select.Option>)}

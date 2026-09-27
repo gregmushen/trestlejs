@@ -73,7 +73,8 @@ fresh runs. The inbox still guarantees a handler never completes twice.
 - **trigger.dev tasks run outside Workers** with the Worker's restricted
   runtime database login. Tenant work stays under forced RLS. Push it with
   `trestle jobs env push`, which sends only secrets marked
-  `shareWith: [jobs]`. Cloudflare-only bindings (R2, Queues, Durable Objects)
+  `shareWith: [jobs]`, plus `RESEND_API_KEY` wherever email delivery requires
+  it, since tasks send email themselves. Cloudflare-only bindings (R2, Queues, Durable Objects)
   are not available in tasks.
 - **Inngest runs inside the Worker** through `/api/jobs/inngest`, verified with
   `INNGEST_SIGNING_KEY`. That endpoint is never published in OpenAPI.

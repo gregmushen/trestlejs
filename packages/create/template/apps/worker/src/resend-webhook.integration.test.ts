@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 
-import { createDatabase, emailDeliveryEvent } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createDatabase, emailDeliveryEvent, emailSuppression, outboxMessage } from "@__TRESTLE_PROJECT_NAME__/db";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
@@ -21,12 +21,12 @@ const environment = {
   RESEND_WEBHOOK_SECRET: webhookSecret,
 };
 
-function signedEvent(options: { timestamp?: number; extra?: Record<string, unknown> } = {}) {
+function signedEvent(options: { timestamp?: number; type?: string; extra?: Record<string, unknown> } = {}) {
   const id = `msg_${randomUUID()}`;
   const emailDeliveryId = `email_${randomUUID()}`;
   const timestamp = options.timestamp ?? Math.floor(Date.now() / 1000);
   const rawBody = JSON.stringify({
-    type: "email.delivered",
+    type: options.type ?? "email.delivered",
     created_at: new Date().toISOString(),
     data: { email_id: emailDeliveryId, to: ["private@example.test"], ...options.extra },
   });
@@ -80,6 +80,28 @@ suite("signed Resend delivery webhook against PostgreSQL", () => {
       expect((await post(event)).status).toBe(202);
       expect(await database.select().from(emailDeliveryEvent).where(eq(emailDeliveryEvent.id, event.id))).toHaveLength(1);
     } finally {
+      await database.delete(emailDeliveryEvent).where(eq(emailDeliveryEvent.id, event.id));
+    }
+  });
+
+  it("publishes a tagged hard bounce to the tenant outbox and suppresses the recipient in the same commit", async () => {
+    const organizationId = `resend_${randomUUID().replaceAll("-", "")}`;
+    const event = signedEvent({ type: "email.bounced", extra: { to: ["Bounced@Example.test"], bounce: { type: "Permanent", subType: "General" }, tags: { trestle_organization: organizationId } } });
+    const database = createDatabase(databaseUrl!, "postgres-js");
+    try {
+      const first = await post(event);
+      expect(first.status).toBe(202);
+      expect(await first.text()).not.toContain("Bounced@Example.test");
+      expect((await post(event)).status).toBe(200);
+      const outbox = await database.select().from(outboxMessage).where(eq(outboxMessage.idempotencyKey, `email:resend:${event.id}`));
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0]).toMatchObject({ eventName: "email.bounced", organizationId, payload: { organizationId, emailDeliveryId: event.emailDeliveryId, bounceType: "Permanent" } });
+      expect(JSON.stringify(outbox[0]?.payload).toLowerCase()).not.toContain("bounced@example.test");
+      expect(await database.select({ address: emailSuppression.address, reason: emailSuppression.reason }).from(emailSuppression).where(eq(emailSuppression.organizationId, organizationId)))
+        .toEqual([{ address: "bounced@example.test", reason: "bounced" }]);
+    } finally {
+      await database.delete(outboxMessage).where(eq(outboxMessage.idempotencyKey, `email:resend:${event.id}`));
+      await database.delete(emailSuppression).where(eq(emailSuppression.organizationId, organizationId));
       await database.delete(emailDeliveryEvent).where(eq(emailDeliveryEvent.id, event.id));
     }
   });

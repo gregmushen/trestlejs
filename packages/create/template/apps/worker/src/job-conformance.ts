@@ -1,5 +1,5 @@
 import { createDatabase, createTenantDatabase, PostgresEventInbox, PostgresOutboxStore, tenantRecord, type Database } from "@__TRESTLE_PROJECT_NAME__/db";
-import type { EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
+import { applicationEventCatalog, type EventEnvelope } from "@__TRESTLE_PROJECT_NAME__/events";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
@@ -18,6 +18,8 @@ export const conformanceEntitledEvent = { name: "trestle.conformance.entitled", 
 const payloadSchema = z.object({ tag: z.string().min(1), failTimes: z.number().int().min(0).default(0) });
 export type ConformancePayload = z.infer<typeof payloadSchema>;
 export const conformanceEntitlement = "conformance.probe";
+/** Provider events the Worker commits after verifying a Stripe or Resend webhook. */
+export const conformanceProviderEvents = [{ name: "billing.invoice.paid", schemaVersion: 1 }, { name: "email.bounced", schemaVersion: 1 }] as const;
 
 export async function countRecords(database: Database, organizationId: string, name: string): Promise<number> {
   return (await database.select({ id: tenantRecord.id }).from(tenantRecord).where(and(eq(tenantRecord.organizationId, organizationId), eq(tenantRecord.name, name)))).length;
@@ -48,6 +50,13 @@ export function conformanceRegistry(connectionString: string, version = "v1"): E
   };
   registry.register({ ...conformanceEvent, parse: (payload) => payloadSchema.parse(payload) }, handler, { authority: "tenant" });
   registry.register({ ...conformanceEntitledEvent, parse: (payload) => payloadSchema.parse(payload) }, handler, { authority: "tenant", requires: { entitlement: conformanceEntitlement } });
+  // A verified provider event reaches its handler under the organization it was committed for.
+  for (const definition of conformanceProviderEvents) {
+    registry.register({ ...definition, parse: (payload) => applicationEventCatalog.parse(definition.name, definition.schemaVersion, payload) },
+      async (_payload: unknown, envelope: EventEnvelope, _environment: unknown, context: { organizationId?: string; data?: Database }) => {
+        await context.data!.insert(tenantRecord).values({ organizationId: context.organizationId!, name: `provider:${envelope.name}:${envelope.causationId}:${version}` });
+      }, { authority: "tenant" });
+  }
   return registry;
 }
 

@@ -8,6 +8,7 @@ export default defineAdminView({
   navigation: { label: "Email Delivery", group: "Communications", order: 20, icon: EnvelopeSimpleIcon },
   permission: "platform.operations.read",
   capability: "email",
+  overviewCard: { title: "Email deliverability", order: 30, component: () => import("./card") },
   component: () => import("./view"),
   commands: [
     { id: "email.open", label: "Go to Email Delivery", hotkey: "g l", keywords: ["mail", "delivery", "bounce"] },

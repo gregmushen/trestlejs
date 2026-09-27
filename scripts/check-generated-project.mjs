@@ -182,6 +182,7 @@ try {
       "skips a handler whose entitlement was revoked before it ran",
       "rejects expired provenance permanently without retrying",
       "fans out to several tenants, each under its own authority",
+      "delivers verified Stripe billing and Resend delivery events to their tenant handlers",
       "recovers accepted work across an executor restart",
       "completes in-flight work exactly once across a deploy",
     ]);
@@ -227,6 +228,11 @@ try {
     await requireScenarios(project, "./packages/db", ["src/webhook-claims.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "bounds simultaneous leases per endpoint across competing workers",
       "bounds one tenant across competing endpoints without throttling another tenant",
+    ]);
+    await requireScenarios(project, "./packages/db", ["src/email-delivery.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "commits the receipt, the tenant outbox event and a hard-bounce suppression together, once",
+      "publishes soft bounces and delays without suppressing, and suppresses complaints",
+      "keeps suppressions tenant-scoped under row-level security",
     ]);
     await requireScenarios(project, "./packages/db", ["src/billing-events.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "commits the receipt, subscription, and entitlements together and ignores a duplicate",
@@ -294,6 +300,7 @@ try {
       "persists a verified event once and acknowledges a signed duplicate",
       "rejects a tampered raw body and an expired signature before persistence",
       "returns a retryable response during a database outage and records redelivery",
+      "publishes a tagged hard bounce to the tenant outbox and suppresses the recipient in the same commit",
     ]);
     await requireScenarios(project, "./apps/worker", ["src/billing-webhook.integration.test.ts"], { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "activates entitlements from a signed subscription once and acknowledges duplicates",
@@ -412,6 +419,7 @@ try {
       "skips a handler whose entitlement was revoked before it ran",
       "rejects expired provenance permanently without retrying",
       "fans out to several tenants, each under its own authority",
+      "delivers verified Stripe billing and Resend delivery events to their tenant handlers",
       "recovers accepted work across an executor restart",
       "completes in-flight work exactly once across a deploy",
     ]);
@@ -461,6 +469,8 @@ try {
       // Jobs: an engine switch from admin is planned, step-up gated, audited, and never exposes secrets.
       "plans, switches, reverts, and settles the jobs engine over HTTP with audit and no secrets",
       "plans, applies, reverts, pauses, and settles job runtime changes under platform.jobs.manage with step-up, a reason, and optimistic concurrency",
+      "lists, filters, and removes an email suppression over HTTP with an audit row; the platform role cannot add one",
+      "reports email deliverability to operations readers and removes a suppression only under platform.email.manage with step-up and a reason",
       // Step-up: fresh assurance for platform actions, factor changes gated at the strongest enrolled factor, operators only, and fail-closed environments.
       "requires fresh assurance for platform actions and reports it in the session",
       ...["POST /api/auth/two-factor/enable", "POST /api/auth/two-factor/disable", "POST /api/auth/two-factor/generate-backup-codes", "GET /api/auth/passkey/generate-register-options", "POST /api/auth/passkey/verify-registration", "POST /api/auth/passkey/delete-passkey"]

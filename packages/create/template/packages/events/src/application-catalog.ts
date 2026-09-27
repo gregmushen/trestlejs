@@ -44,6 +44,21 @@ function billingInvoiceEvent(name: string, description: string) {
 export const billingInvoicePaidEvent = billingInvoiceEvent("billing.invoice.paid", "A subscription invoice was paid");
 export const billingInvoicePaymentFailedEvent = billingInvoiceEvent("billing.invoice.payment_failed", "A subscription invoice payment failed");
 
+// Verified Resend delivery outcomes for email sent on behalf of an organization.
+// The recipient is identified by a SHA-256 hash of the lowercase address, never the address.
+const emailDeliveryPayload = z.object({ organizationId: z.string().min(1), emailDeliveryId: z.string().min(1),
+  recipientHash: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
+  bounceType: z.string().min(1).optional(), bounceSubType: z.string().min(1).optional() });
+function emailDeliveryEvent(name: string, description: string) {
+  return defineEvent({ name, schemaVersion: 1, description, sensitivity: "confidential",
+    resource: { type: "organization", id: (payload: z.infer<typeof emailDeliveryPayload>) => payload.organizationId },
+    payload: emailDeliveryPayload });
+}
+export const emailDeliveredEvent = emailDeliveryEvent("email.delivered", "An email reached the recipient's mail server");
+export const emailDeliveryDelayedEvent = emailDeliveryEvent("email.delivery_delayed", "An email delivery was temporarily delayed");
+export const emailBouncedEvent = emailDeliveryEvent("email.bounced", "The recipient's mail server rejected an email");
+export const emailComplainedEvent = emailDeliveryEvent("email.complained", "The recipient marked an email as spam");
+
 // trestle:resource-event-definitions
 export const applicationEventCatalog = defineEventCatalog([
   billingSubscriptionActivatedEvent,
@@ -53,5 +68,9 @@ export const applicationEventCatalog = defineEventCatalog([
   billingCheckoutCompletedEvent,
   billingInvoicePaidEvent,
   billingInvoicePaymentFailedEvent,
+  emailDeliveredEvent,
+  emailDeliveryDelayedEvent,
+  emailBouncedEvent,
+  emailComplainedEvent,
   // trestle:resource-event-list
 ]);

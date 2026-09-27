@@ -400,7 +400,8 @@ describe("platform admin Worker", () => {
     expect(response).toEqual({ status: 200, body: {
       runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123", source: "declared", declaredAt: "2026-09-01T00:00:00.000Z", supportStatus: "experimental", dashboardUrl: "https://cloud.trigger.dev/projects/v3/proj_abc123", dispatch, migration: null,
       declared: { runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123" }, override: null, overrideVersion: 0, settings: { dispatchPaused: false }, available: ["cloudflare", "inngest", "trigger"],
-      credentials: [{ name: "TRIGGER_SECRET_KEY", present: true, command: "pnpm exec trestle secrets set TRIGGER_SECRET_KEY --env local" }],
+      credentials: [{ name: "TRIGGER_SECRET_KEY", present: true, command: "pnpm exec trestle secrets set TRIGGER_SECRET_KEY --env local" },
+        { name: "RESEND_API_KEY", present: false, command: "pnpm exec trestle secrets set RESEND_API_KEY --env local && pnpm exec trestle jobs env push --env local" }],
     } });
     expect(JSON.stringify(response.body)).not.toMatch(/tr_|secret-value/u);
     adminDependencies.jobRuntime = async () => ({ state: jobState({ runtime: "cloudflare", hosting: "cloudflare", endpoint: null, project: null }, { runtime: "inngest", hosting: "self-hosted", endpoint: "javascript:alert(1)", project: null }), dispatch });
@@ -410,6 +411,38 @@ describe("platform admin Worker", () => {
     // A recent switch with unconsumed events reports the migration.
     adminDependencies.jobRuntime = async () => ({ state: { ...jobState({ runtime: "cloudflare", hosting: "cloudflare", endpoint: null, project: null }, { runtime: "trigger", hosting: "cloud", endpoint: null, project: null }), switchedFrom: "cloudflare", switchedAt: new Date(Date.now() - 60_000) }, dispatch });
     expect((await call("GET", "/api/admin/operations/jobs")).body.migration).toMatchObject({ from: "cloudflare", to: "trigger", unconsumed: 1 });
+  });
+
+  it("reports email deliverability to operations readers and removes a suppression only under platform.email.manage with step-up and a reason", async () => {
+    const removed: Array<[unknown, string]> = [];
+    adminDependencies.operationalStatus = async () => ({ capabilities: { email: { configured: true, mode: "resend", webhookConfigured: false } } });
+    adminDependencies.email = {
+      events: async () => [{ id: "msg_1", emailDeliveryId: "email_1", status: "bounced", occurredAt: new Date("2026-09-01T00:00:00Z"), receivedAt: new Date("2026-09-01T00:00:01Z"), organizationId: "org-1", bounceType: "Permanent", bounceSubType: "General" }],
+      summary: async () => ({ lastReceivedAt: new Date("2026-09-01T00:00:01Z"), last24h: { delivered: 3, delivery_delayed: 0, bounced: 1, complained: 0 }, last7d: { delivered: 9, delivery_delayed: 1, bounced: 2, complained: 1 } }),
+      suppressions: async (_environment, filters) => [{ organizationId: filters?.organizationId ?? "org-1", organizationName: "Acme", address: "p***@example.test", reason: "complained", sourceEventId: "msg_1", createdAt: new Date("2026-09-01T00:00:00Z") }],
+      remove: async (_environment, input, change) => { removed.push([input, change.reason]); return { reason: "complained" }; },
+    };
+    state.roles = ["commercial_admin"];
+    expect(await call("GET", "/api/admin/email")).toMatchObject({ status: 403 });
+    expect(await call("GET", "/api/admin/email/suppressions")).toMatchObject({ status: 403 });
+    state.roles = ["platform_operator"];
+    const read = await call("GET", "/api/admin/email");
+    expect(read).toMatchObject({ status: 200, body: { webhook: { secretConfigured: false, mode: "resend", lastReceivedAt: "2026-09-01T00:00:01.000Z", command: expect.stringContaining("trestle email webhook configure --env local") },
+      counts: { last24h: { bounced: 1 }, last7d: { complained: 1 } }, events: [{ id: "msg_1", organizationId: "org-1", bounceSubType: "General" }] } });
+    expect(await call("GET", "/api/admin/email/suppressions?organizationId=org-1")).toMatchObject({ status: 200, body: { suppressions: [{ organizationId: "org-1", address: "p***@example.test", reason: "complained" }] } });
+    const body = { organizationId: "org-1", address: "person@example.test", reason: "recipient asked in ticket 42" };
+    // Operations readers without platform.email.manage cannot remove.
+    state.roles = ["security_admin"];
+    expect(await call("DELETE", "/api/admin/email/suppressions", { body })).toMatchObject({ status: 403 });
+    state.roles = ["platform_operator"];
+    assured(null);
+    expect(await call("DELETE", "/api/admin/email/suppressions", { body })).toMatchObject({ status: 428, body: { error: "step_up_required" } });
+    assured("password");
+    expect(await call("DELETE", "/api/admin/email/suppressions", { body: { organizationId: "org-1", address: "person@example.test" } })).toMatchObject({ status: 400, body: { error: "invalid" } });
+    expect(await call("DELETE", "/api/admin/email/suppressions", { body: { reason: "x" } })).toMatchObject({ status: 400, body: { error: "invalid" } });
+    expect(removed).toEqual([]);
+    expect(await call("DELETE", "/api/admin/email/suppressions", { body })).toMatchObject({ status: 200, body: { removed: true, suppressionReason: "complained" } });
+    expect(removed).toEqual([[{ organizationId: "org-1", address: "person@example.test" }, "recipient asked in ticket 42"]]);
   });
 
   it("plans, applies, reverts, pauses, and settles job runtime changes under platform.jobs.manage with step-up, a reason, and optimistic concurrency", async () => {

@@ -497,7 +497,7 @@ The shipped registry:
 | --- | --- |
 | Organization | `organization.read`, `organization.members.read`, `organization.audit.read`, `organization.billing.read`, `organization.billing.manage`, `organization.webhooks.read`, `organization.webhooks.manage`, `organization.webhooks.deliveries.read`, `organization.webhooks.replay`, `organization.settings.manage` |
 | Application | `resource.read`, `resource.write` (both admit API keys), `application.roles.read`, `application.roles.assign`, `application.service_accounts.read`, `application.service_accounts.manage` |
-| Platform | `platform.overview.read`, `platform.organizations.read`, `platform.users.read`, `platform.audit.read`, `platform.roles.read`, `platform.roles.manage`, `platform.operations.read`, `platform.outbox.redrive`, `platform.jobs.manage`, `platform.webhooks.manage`, `platform.subscriptions.read`, `platform.entitlements.manage`, `platform.machine_access.read`, `platform.api_keys.revoke`, `platform.support_sessions.use` |
+| Platform | `platform.overview.read`, `platform.organizations.read`, `platform.users.read`, `platform.audit.read`, `platform.roles.read`, `platform.roles.manage`, `platform.operations.read`, `platform.outbox.redrive`, `platform.jobs.manage`, `platform.email.manage`, `platform.webhooks.manage`, `platform.subscriptions.read`, `platform.entitlements.manage`, `platform.machine_access.read`, `platform.api_keys.revoke`, `platform.support_sessions.use` |
 
 New permission meaning enters the system through reviewed source. Runtime admin
 cannot invent a permission that application code does not recognize. The
@@ -1049,6 +1049,7 @@ Integrations
 
 Communications
   Email Delivery
+  Suppressions
 
 Operations
   Async Operations
@@ -1115,9 +1116,26 @@ The shipped views, with their paths, permissions, and capabilities:
   `platform.webhooks.manage`. Destinations, secrets, and payloads are never
   shown.
 - **Email Delivery** (`/communications/email`, `platform.operations.read`;
-  capability `email`): provider delivery-status events grouped by provider
+  capability `email`): Resend webhook readiness (whether the Worker reports
+  `RESEND_WEBHOOK_SECRET` set, and when the last verified event arrived, with
+  the `trestle email webhook configure` command when it is missing; the admin
+  never calls Resend), delivered, delayed, bounced, and complained counts over
+  24 hours and 7 days, recent verified events with their organization and
+  bounce type, and provider delivery-status events grouped by provider
   message, filterable by status. Recipients, templates, and bodies are not
-  recorded.
+  recorded. Its overview card shows webhook status and the day's bounces and
+  complaints.
+- **Suppressions** (`/communications/suppressions`,
+  `platform.operations.read`; capability `email`): addresses each organization
+  no longer emails (permanent bounces and complaints from verified webhooks,
+  and unsubscribes), filterable by organization and by an exact address, with
+  reason, source event, and date. Addresses are masked. With
+  `platform.email.manage` (granted to `platform_operator`; step-up, reason,
+  audit as `platform.email_suppression.removed`, which names the recipient
+  only by hash) an operator removes one found by its full address; removing a
+  complaint or unsubscribe warns that it may violate the recipient's consent.
+  `trestle_platform` has `SELECT` and `DELETE` on `email_suppression` (a
+  delete-only policy) and no `INSERT` or `UPDATE`.
 - **Async Operations** (`/operations/async`, `platform.operations.read`;
   capability `queues`): outbox counts and dead-lettered events. Redrive
   requires `platform.outbox.redrive`.

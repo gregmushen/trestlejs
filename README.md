@@ -224,6 +224,23 @@ React Email components, and production uses the Resend adapter. Preview and
 staging require recipient redirection so test traffic does not silently reach
 real users.
 
+Create the Resend delivery webhook and store its signing secret in encrypted
+credentials the same way as Stripe's (review first, then `--apply`; production
+also needs `--yes`):
+
+```bash
+printf %s "$RESEND_FULL_ACCESS_KEY" | pnpm exec trestle email webhook configure \
+  --env staging --url https://api.example.com/api/webhooks/resend --api-key-stdin
+pnpm exec trestle email doctor --env staging --webhook-url https://api.example.com/api/webhooks/resend
+```
+
+Email sent with an `organizationId` carries a Resend tag, so its verified
+delivery webhooks commit `email.delivered`, `email.delivery_delayed`,
+`email.bounced` and `email.complained` to the outbox under that organization
+(the recipient appears only as a SHA-256 hash). Permanent bounces and
+complaints add the address to the organization's `email_suppression` list in
+the same transaction; check it with `isSuppressed(db, organizationId, address)`.
+
 ## Billing without a Stripe account
 
 Local billing is deterministic and writes to the same canonical PostgreSQL
