@@ -21,7 +21,7 @@ describe("admin view registry", () => {
   });
 
   it("exempts only declared low-risk actions from fresh step-up, consistently across views", () => {
-    expect([...stepUpExemptRoutes].sort()).toEqual(["POST /api/admin/access/explain", "POST /api/admin/support/sessions/:id/end"]);
+    expect([...stepUpExemptRoutes].sort()).toEqual(["POST /api/admin/access/explain", "POST /api/admin/operations/jobs/plan", "POST /api/admin/support/sessions/:id/end"]);
     const view = { id: "x", path: "/x", label: "X", group: "G", permission: "platform.overview.read", api: [] };
     expect(() => defineAdminViews([{ ...view, api: [{ method: "GET", path: "/api/admin/x", stepUp: false }] }])).toThrow("only actions declare stepUp: false");
     expect(() => defineAdminViews([

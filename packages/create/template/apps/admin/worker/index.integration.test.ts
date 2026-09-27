@@ -153,5 +153,39 @@ suite("platform admin Worker against PostgreSQL", () => {
       await sql!`delete from job_runtime_config where environment = 'local'`;
     }
   });
+
+  it("plans, switches, reverts, and settles the jobs engine over HTTP with audit and no secrets", async () => {
+    signedIn = operator;
+    adminDependencies.session = async () => ({ user: { id: signedIn, email: `${signedIn}@example.test` }, session: { id: `${signedIn}-session` } });
+    adminDependencies.assurance = async () => ({ sessionId: `${signedIn}-session`, userId: signedIn, level: "password", method: "password", verifiedAt: new Date() });
+    const send = async (method: string, path: string, body: unknown) => {
+      const response = await admin.request(`/api/admin/operations/jobs${path}`, { method, headers: { origin: "http://localhost:42070", "content-type": "application/json", "x-correlation-id": `${run}-jobs-corr` }, body: JSON.stringify(body) }, environment);
+      return { status: response.status, body: await response.json() as Record<string, any> };
+    };
+    try {
+      await sql!`delete from job_runtime_config where environment = 'local'`;
+      await recordDeclaredJobRuntime(connectionString!, "local", { runtime: "cloudflare", hosting: "cloudflare", endpoint: null, project: null, available: ["cloudflare", "inngest", "trigger"], credentials: { TRIGGER_SECRET_KEY: true, INNGEST_EVENT_KEY: false, INNGEST_SIGNING_KEY: false } });
+      const plan = await send("POST", "/plan", { runtime: "trigger", hosting: "cloud", project: "proj_abc" });
+      expect(plan).toMatchObject({ status: 200, body: { kind: "switch", allowed: true, experimental: true, overrideVersion: 0, credentials: [{ name: "TRIGGER_SECRET_KEY", present: true }] } });
+      expect((await send("POST", "/plan", { runtime: "inngest", hosting: "cloud" })).body.problems.map((problem: { code: string }) => problem.code)).toEqual(["credentials_missing"]);
+      expect(await send("PUT", "", { runtime: "inngest", hosting: "cloud", expectedVersion: 0, acknowledgeExperimental: true, reason: "try inngest" })).toMatchObject({ status: 422, body: { codes: ["credentials_missing"] } });
+      expect(await send("PUT", "", { runtime: "trigger", hosting: "cloud", project: "proj_abc", expectedVersion: 0, reason: "no ack" })).toMatchObject({ status: 422, body: { codes: ["experimental_not_acknowledged"] } });
+      expect(await send("PUT", "", { runtime: "trigger", hosting: "cloud", project: "proj_abc", expectedVersion: 0, acknowledgeExperimental: true, reason: "move heavy jobs" })).toMatchObject({ status: 200, body: { overrideVersion: 1 } });
+      expect(await send("PUT", "", { runtime: "trigger", hosting: "cloud", project: "proj_abc", expectedVersion: 0, acknowledgeExperimental: true, reason: "stale" })).toMatchObject({ status: 409 });
+      const status = await (await admin.request("/api/admin/operations/jobs", undefined, environment)).json() as Record<string, any>;
+      expect(status).toMatchObject({ runtime: "trigger", source: "override", overrideVersion: 1, override: { runtime: "trigger", by: operator }, declared: { runtime: "cloudflare" }, available: ["cloudflare", "inngest", "trigger"] });
+      expect(await send("PUT", "/settings", { dispatchPaused: true, expectedVersion: 1, reason: "incident" })).toMatchObject({ status: 200, body: { overrideVersion: 2 } });
+      expect(await send("DELETE", "/override", { expectedVersion: 2, reason: "back to deploy" })).toMatchObject({ status: 200, body: { overrideVersion: 3 } });
+      expect(await send("POST", "/settle", { olderThanMinutes: 20_000, reason: "drain trigger" })).toMatchObject({ status: 200, body: { deadLettered: expect.any(Number), requeued: expect.any(Number) } });
+      const events = await sql!<{ name: string; actor_id: string; reason: string; summary: unknown }[]>`select name, actor_id, reason, summary from audit_event where correlation_id = ${`${run}-jobs-corr`} order by occurred_at`;
+      expect(events.map((event) => [event.name, event.actor_id, event.reason])).toEqual([
+        ["platform.job_runtime.overridden", operator, "move heavy jobs"], ["platform.job_dispatch.paused", operator, "incident"],
+        ["platform.job_runtime.override_cleared", operator, "back to deploy"], ["platform.job_dispatch.settled", operator, "drain trigger"],
+      ]);
+      expect(JSON.stringify(events)).not.toMatch(/SECRET_KEY|EVENT_KEY|credentials/u);
+    } finally {
+      await sql!`delete from job_runtime_config where environment = 'local'`;
+    }
+  });
 });
 

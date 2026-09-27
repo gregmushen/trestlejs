@@ -205,6 +205,11 @@ try {
       "refuses an expired handoff even while the support session remains active",
       "does not grant the app role direct access to support credentials",
     ]);
+    await requireScenarios(project, "./packages/db", ["src/job-runtime-config.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "limits the platform role to override columns and the application to declared columns",
+      "sets, pauses, and clears an override under optimistic concurrency, auditing before and after without secrets",
+      "settles unconsumed events through a function only the platform role may run",
+    ]);
     await requireScenarios(project, "./packages/db", ["src/scheduled-jobs.integration.test.ts"], { TRESTLE_INBOX_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_INBOX_TEST_ADMIN_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "lets exactly one of many overlapping runs hold a job's lease",
       "fences completion by lease token and never re-runs a completed due slot",
@@ -266,12 +271,17 @@ try {
     ]);
     const workerSystemEnvironment = { TRESTLE_SYSTEM_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL, TRESTLE_SYSTEM_TEST_ARTICLES: "1", TRESTLE_SYSTEM_TEST_WEBHOOKS: "1" };
     // The scale-to-zero canary drains pending outbox rows, so it runs on its own after the parallel suites.
-    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "--exclude", "src/system.integration.test.ts", "--exclude", "src/scheduler.integration.test.ts"], project, workerSystemEnvironment);
+    await run("pnpm", ["--filter", "./apps/worker", "exec", "vitest", "run", "--exclude", "src/system.integration.test.ts", "--exclude", "src/scheduler.integration.test.ts", "--exclude", "src/job-runtime-dispatch.integration.test.ts"], project, workerSystemEnvironment);
     await requireScenarios(project, "./apps/worker", ["src/scheduler.integration.test.ts"], workerSystemEnvironment, [
       "dispatches a created event on commit, without waiting for a cron",
       "fires a scheduled webhook retry at its due time",
       "runs a registered application job when due, once, then sleeps",
       "makes zero database queries over a sampled idle window",
+    ]);
+    // Pausing holds a pending row, so this runs where no other suite drains the outbox.
+    await requireScenarios(project, "./apps/worker", ["src/job-runtime-dispatch.integration.test.ts"], workerSystemEnvironment, [
+      "reads the override as the application role and dispatches to the override runtime",
+      "holds committed events pending while dispatch is paused",
     ]);
     await requireScenarios(project, "./apps/worker", ["src/system.integration.test.ts"], workerSystemEnvironment, [
       "verifies email, signs in, selects an organization, and reads tenant billing",
@@ -448,6 +458,9 @@ try {
       "requires platform sign-in and a platform role; tenant authority grants nothing",
       "enters and exits a support session over HTTP; tenant reads require the open session",
       "redrives a dead outbox event over HTTP and audits it with the request's correlation ID",
+      // Jobs: an engine switch from admin is planned, step-up gated, audited, and never exposes secrets.
+      "plans, switches, reverts, and settles the jobs engine over HTTP with audit and no secrets",
+      "plans, applies, reverts, pauses, and settles job runtime changes under platform.jobs.manage with step-up, a reason, and optimistic concurrency",
       // Step-up: fresh assurance for platform actions, factor changes gated at the strongest enrolled factor, operators only, and fail-closed environments.
       "requires fresh assurance for platform actions and reports it in the session",
       ...["POST /api/auth/two-factor/enable", "POST /api/auth/two-factor/disable", "POST /api/auth/two-factor/generate-backup-codes", "GET /api/auth/passkey/generate-register-options", "POST /api/auth/passkey/verify-registration", "POST /api/auth/passkey/delete-passkey"]

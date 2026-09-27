@@ -1,8 +1,21 @@
+import { JobRuntimeChangeError, PlatformOperationError, type JobRuntimeState } from "@__TRESTLE_PROJECT_NAME__/db";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { adminViews } from "../src/api-registry.js";
 import { admin, adminAuthEnvironment, adminDependencies, capabilityGuidance, jobsDashboardUrl, type AdminEnvironment } from "./index.js";
 import { adminRoutePolicies } from "./route-policies.js";
+
+type RuntimeFields = { runtime: string; hosting: string; endpoint: string | null; project: string | null };
+
+/** A declared runtime (and optional override) as the Worker reported it: every adapter installed, the Inngest signing key missing. */
+function jobState(declared: RuntimeFields, override: RuntimeFields | null = null): JobRuntimeState {
+  return {
+    effective: { ...(override ?? declared), source: override ? "override" : "declared", declaredAt: new Date("2026-09-01T00:00:00Z") },
+    declared, override, settings: { dispatchPaused: false }, overrideVersion: 0, overriddenBy: null, overriddenAt: null,
+    available: ["cloudflare", "inngest", "trigger"], credentials: { TRIGGER_SECRET_KEY: true, INNGEST_EVENT_KEY: true, INNGEST_SIGNING_KEY: false },
+    switchedFrom: null, switchedAt: null,
+  };
+}
 
 const environment: AdminEnvironment = { DATABASE_URL: "postgres://user:password@127.0.0.1:1/unused", DATABASE_DRIVER: "postgres-js", BETTER_AUTH_SECRET: "test-secret-at-least-32-characters", APP_ENV: "local" };
 const state = { userId: "" as string, roles: [] as string[], forwarded: 0 };
@@ -369,17 +382,72 @@ describe("platform admin Worker", () => {
   it("reports the jobs engine to operations readers only, with dispatch health and no credentials", async () => {
     const dispatch = { pending: 3, unconsumed: 1, dead: 2 };
     let asked = "";
-    adminDependencies.jobRuntime = async (_environment, name) => { asked = name; return { config: { runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123", source: "declared", declaredAt: new Date("2026-09-01T00:00:00Z") }, dispatch }; };
+    adminDependencies.jobRuntime = async (_environment, name) => { asked = name; return { state: jobState({ runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123" }), dispatch }; };
     state.roles = ["security_admin"];
     expect(await call("GET", "/api/admin/operations/jobs")).toMatchObject({ status: 403, body: { reason: "permission_missing" } });
     state.roles = ["platform_operator"];
     const response = await call("GET", "/api/admin/operations/jobs");
     expect(asked).toBe("local");
-    expect(response).toEqual({ status: 200, body: { runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123", source: "declared", declaredAt: "2026-09-01T00:00:00.000Z", supportStatus: "experimental", dashboardUrl: "https://cloud.trigger.dev/projects/v3/proj_abc123", dispatch, migration: null } });
-    adminDependencies.jobRuntime = async () => ({ config: { runtime: "inngest", hosting: "self-hosted", endpoint: "javascript:alert(1)", project: null, source: "override", declaredAt: new Date() }, dispatch });
-    expect((await call("GET", "/api/admin/operations/jobs")).body).toMatchObject({ endpoint: null, dashboardUrl: null, source: "override", supportStatus: "experimental" });
-    adminDependencies.jobRuntime = async () => ({ config: null, dispatch: { pending: 0, unconsumed: 0, dead: 0 } });
-    expect((await call("GET", "/api/admin/operations/jobs")).body).toMatchObject({ runtime: null, source: "unknown", supportStatus: "unknown", dashboardUrl: null, declaredAt: null });
+    expect(response).toEqual({ status: 200, body: {
+      runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123", source: "declared", declaredAt: "2026-09-01T00:00:00.000Z", supportStatus: "experimental", dashboardUrl: "https://cloud.trigger.dev/projects/v3/proj_abc123", dispatch, migration: null,
+      declared: { runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123" }, override: null, overrideVersion: 0, settings: { dispatchPaused: false }, available: ["cloudflare", "inngest", "trigger"],
+      credentials: [{ name: "TRIGGER_SECRET_KEY", present: true, command: "pnpm exec trestle secrets set TRIGGER_SECRET_KEY --env local" }],
+    } });
+    expect(JSON.stringify(response.body)).not.toMatch(/tr_|secret-value/u);
+    adminDependencies.jobRuntime = async () => ({ state: jobState({ runtime: "cloudflare", hosting: "cloudflare", endpoint: null, project: null }, { runtime: "inngest", hosting: "self-hosted", endpoint: "javascript:alert(1)", project: null }), dispatch });
+    expect((await call("GET", "/api/admin/operations/jobs")).body).toMatchObject({ endpoint: null, dashboardUrl: null, source: "override", supportStatus: "experimental", credentials: [{ name: "INNGEST_EVENT_KEY", present: true }, { name: "INNGEST_SIGNING_KEY", present: false }] });
+    adminDependencies.jobRuntime = async () => ({ state: null, dispatch: { pending: 0, unconsumed: 0, dead: 0 } });
+    expect((await call("GET", "/api/admin/operations/jobs")).body).toMatchObject({ runtime: null, source: "unknown", supportStatus: "unknown", dashboardUrl: null, declaredAt: null, override: null, overrideVersion: 0 });
+    // A recent switch with unconsumed events reports the migration.
+    adminDependencies.jobRuntime = async () => ({ state: { ...jobState({ runtime: "cloudflare", hosting: "cloudflare", endpoint: null, project: null }, { runtime: "trigger", hosting: "cloud", endpoint: null, project: null }), switchedFrom: "cloudflare", switchedAt: new Date(Date.now() - 60_000) }, dispatch });
+    expect((await call("GET", "/api/admin/operations/jobs")).body.migration).toMatchObject({ from: "cloudflare", to: "trigger", unconsumed: 1 });
+  });
+
+  it("plans, applies, reverts, pauses, and settles job runtime changes under platform.jobs.manage with step-up, a reason, and optimistic concurrency", async () => {
+    const dispatch = { pending: 4, unconsumed: 2, dead: 0 };
+    adminDependencies.jobRuntime = async () => ({ state: jobState({ runtime: "cloudflare", hosting: "cloudflare", endpoint: null, project: null }), dispatch });
+    const calls: Array<[string, unknown, string]> = [];
+    adminDependencies.jobChanges = {
+      set: async (_environment, _name, input, change) => { calls.push(["set", input, change.reason]); if (input.expectedVersion !== 0) throw new PlatformOperationError("conflict", "changed"); if (input.runtime === "inngest") throw new JobRuntimeChangeError([{ code: "credentials_missing", message: "Set INNGEST_SIGNING_KEY" }]); return { version: 1 }; },
+      clear: async (_environment, _name, input, change) => { calls.push(["clear", input, change.reason]); return { version: 2 }; },
+      pause: async (_environment, _name, input, change) => { calls.push(["pause", input, change.reason]); return { version: 3 }; },
+      settle: async (_environment, _name, input, change) => { calls.push(["settle", input, change.reason]); return { deadLettered: 1, requeued: 5 }; },
+    };
+    const put = { runtime: "trigger", hosting: "cloud", project: "proj_abc", expectedVersion: 0, acknowledgeExperimental: true, reason: "move heavy jobs" };
+    // Operations readers without platform.jobs.manage can read but not plan or change.
+    state.roles = ["security_admin"];
+    for (const [method, path] of [["POST", "/api/admin/operations/jobs/plan"], ["PUT", "/api/admin/operations/jobs"], ["PUT", "/api/admin/operations/jobs/settings"], ["DELETE", "/api/admin/operations/jobs/override"], ["POST", "/api/admin/operations/jobs/settle"]] as const) {
+      expect(await call(method, path, { body: put })).toMatchObject({ status: 403, body: { reason: "permission_missing" } });
+    }
+    state.roles = ["platform_operator"];
+    // Plan is a read: no step-up, no write, and it names every problem.
+    assured(null);
+    const plan = await call("POST", "/api/admin/operations/jobs/plan", { body: { runtime: "inngest", hosting: "self-hosted", endpoint: "http://jobs.example.test" } });
+    expect(plan.status).toBe(200);
+    expect(plan.body).toMatchObject({ kind: "switch", allowed: false, experimental: true, dispatch, overrideVersion: 0, current: { runtime: "cloudflare" } });
+    expect(plan.body.problems.map((problem: { code: string }) => problem.code)).toEqual(["invalid_endpoint", "credentials_missing"]);
+    expect(plan.body.credentials).toEqual([{ name: "INNGEST_EVENT_KEY", present: true, command: "pnpm exec trestle secrets set INNGEST_EVENT_KEY --env local" }, { name: "INNGEST_SIGNING_KEY", present: false, command: "pnpm exec trestle secrets set INNGEST_SIGNING_KEY --env local" }]);
+    const ok = await call("POST", "/api/admin/operations/jobs/plan", { body: { runtime: "trigger", hosting: "cloud", project: "proj_abc" } });
+    expect(ok.body).toMatchObject({ kind: "switch", allowed: true, problems: [], target: { runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc" } });
+    expect(ok.body.steps.join("\n")).toContain("pnpm --filter ./apps/jobs deploy");
+    expect(ok.body.rollback.join("\n")).toContain("Revert to deploy config");
+    expect(calls).toEqual([]);
+    // Every change needs step-up.
+    for (const [method, path] of [["PUT", "/api/admin/operations/jobs"], ["PUT", "/api/admin/operations/jobs/settings"], ["DELETE", "/api/admin/operations/jobs/override"], ["POST", "/api/admin/operations/jobs/settle"]] as const) {
+      expect(await call(method, path, { body: put })).toMatchObject({ status: 428, body: { error: "step_up_required" } });
+    }
+    assured("password");
+    expect(await call("PUT", "/api/admin/operations/jobs", { body: { ...put, reason: undefined } })).toMatchObject({ status: 400, body: { error: "invalid" } });
+    expect(await call("PUT", "/api/admin/operations/jobs", { body: { ...put, expectedVersion: undefined } })).toMatchObject({ status: 400, body: { error: "invalid" } });
+    expect(await call("PUT", "/api/admin/operations/jobs", { body: put })).toMatchObject({ status: 200, body: { overrideVersion: 1 } });
+    expect(await call("PUT", "/api/admin/operations/jobs", { body: { ...put, expectedVersion: 7 } })).toMatchObject({ status: 409, body: { error: "conflict" } });
+    expect(await call("PUT", "/api/admin/operations/jobs", { body: { ...put, runtime: "inngest" } })).toMatchObject({ status: 422, body: { error: "unprocessable", codes: ["credentials_missing"] } });
+    expect(await call("PUT", "/api/admin/operations/jobs/settings", { body: { dispatchPaused: "yes", expectedVersion: 1, reason: "x" } })).toMatchObject({ status: 400 });
+    expect(await call("PUT", "/api/admin/operations/jobs/settings", { body: { dispatchPaused: true, expectedVersion: 1, reason: "incident" } })).toMatchObject({ status: 200, body: { overrideVersion: 3 } });
+    expect(await call("DELETE", "/api/admin/operations/jobs/override", { body: { expectedVersion: 1, reason: "back to deploy" } })).toMatchObject({ status: 200, body: { overrideVersion: 2 } });
+    expect(await call("POST", "/api/admin/operations/jobs/settle", { body: { olderThanMinutes: 30, reason: "drain trigger" } })).toMatchObject({ status: 200, body: { deadLettered: 1, requeued: 5 } });
+    expect(calls.map(([kind, , reason]) => [kind, reason])).toEqual([["set", "move heavy jobs"], ["set", "move heavy jobs"], ["set", "move heavy jobs"], ["pause", "incident"], ["clear", "back to deploy"], ["settle", "drain trigger"]]);
+    expect(calls[0]![1]).toEqual({ runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc", expectedVersion: 0, acknowledgeExperimental: true });
   });
 
   it("links each engine to its own dashboard, and only over http(s)", () => {
