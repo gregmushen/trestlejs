@@ -79,12 +79,23 @@ export class PostgresOutboxStore implements OutboxStore {
    * Settlement for runtimes that can end a run without success (a canceled or
    * crashed run): events dispatched longer ago than `olderThanMs`, still inside
    * the replay window, that no consumer completed, return to pending under the
-   * next generation. Bounded by the dead-letter attempt cap. The inbox still
-   * guarantees a handler never completes twice.
+   * next generation. An event that reached the attempt cap is dead-lettered
+   * instead, so it is visible and redrivable rather than silently stranded. The
+   * inbox still guarantees a handler never completes twice.
    */
   async settleUnconsumed(options: { olderThanMs: number; maxAttempts?: number; limit?: number }): Promise<string[]> {
+    await this.sql`update outbox_message set status='dead', last_error='unconsumed_after_retries' where id in (select o.id from outbox_message o where o.status='succeeded' and o.processed_at <= now() - (${options.olderThanMs} * interval '1 millisecond') and o.occurred_at > now() - interval '14 days' and o.attempts + 1 >= ${options.maxAttempts ?? 5} and not exists (select 1 from event_inbox i where i.idempotency_key = o.idempotency_key and i.status = 'completed') for update of o skip locked)`;
     const rows = await this.sql<{ id: string }[]>`with stale as (select o.id from outbox_message o where o.status='succeeded' and o.processed_at <= now() - (${options.olderThanMs} * interval '1 millisecond') and o.occurred_at > now() - interval '14 days' and o.attempts + 1 < ${options.maxAttempts ?? 5} and not exists (select 1 from event_inbox i where i.idempotency_key = o.idempotency_key and i.status = 'completed') order by o.processed_at for update of o skip locked limit ${options.limit ?? 100}) update outbox_message set status='pending', available_at=now(), attempts=attempts+1, processed_at=null from stale where outbox_message.id = stale.id returning outbox_message.id`;
     return rows.map((row) => row.id);
+  }
+  /** What still depends on dispatch or completion before a job runtime can be removed (`trestle jobs migrate`). */
+  async migrationInventory(): Promise<{ pending: number; unconsumed: number; dead: number }> {
+    const [row] = await this.sql<{ pending: number; unconsumed: number; dead: number }[]>`select
+      count(*) filter (where o.status in ('pending','leased'))::int as pending,
+      count(*) filter (where o.status = 'succeeded' and o.occurred_at > now() - interval '14 days' and not exists (select 1 from event_inbox i where i.idempotency_key = o.idempotency_key and i.status = 'completed'))::int as unconsumed,
+      count(*) filter (where o.status = 'dead')::int as dead
+      from outbox_message o`;
+    return row!;
   }
   async reject(id: string, reason: string): Promise<void> {
     await this.sql`update outbox_message set status='dead', leased_until=null, last_error=${`rejected:${reason}`.slice(0, 120)} where id=${id} and status in ('pending','leased','succeeded')`;

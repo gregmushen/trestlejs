@@ -1393,7 +1393,7 @@ export function createProgram(runtime: CliRuntime): Command {
       const url = values.DATABASE_MIGRATION_URL ?? values.DATABASE_URL;
       if (!url) throw new CliFailure(`no DATABASE_MIGRATION_URL or DATABASE_URL in ${options.env} credentials`);
       if (options.env === "local") assertLocalDatabaseUrl(url);
-      const databasePackage = context.manifest.packages.db ?? "packages/db";
+      const databasePackage = `@${context.manifest.project.name}/db`;
       const settled = options.settle ? await settleForMigration(context.root, databasePackage, url, options.olderThan) : undefined;
       const inventory = await migrationInventory(context.root, databasePackage, url);
       const steps = migrationSteps(from, options.to as JobRuntimeName, options.env);
