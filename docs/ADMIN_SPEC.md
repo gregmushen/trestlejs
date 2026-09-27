@@ -1121,6 +1121,12 @@ The shipped views, with their paths, permissions, and capabilities:
 - **Async Operations** (`/operations/async`, `platform.operations.read`;
   capability `queues`): outbox counts and dead-lettered events. Redrive
   requires `platform.outbox.redrive`.
+- **Jobs** (`/operations/jobs`, `platform.operations.read`): the
+  environment's job engine, hosting, and location as the customer Worker
+  declared it (an admin override takes precedence once editing lands), its
+  support status, pending, unconsumed, and dead outbox counts, an engine
+  comparison, and a link to the engine's dashboard (the async operations view
+  for Cloudflare). Read-only; credentials are never shown.
 - **Artifacts** (`/operations/artifacts`, `platform.operations.read`;
   capability `r2`): counts and bytes per upload state, and stale pending
   uploads.

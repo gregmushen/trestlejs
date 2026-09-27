@@ -78,6 +78,13 @@ export class UnsupportedAction extends Error {
 
 const keyStatus = (key: { revokedAt: string | null; expiresAt: string | null }): string => key.revokedAt ? "revoked" : key.expiresAt && Date.parse(key.expiresAt) <= Date.now() ? "expired" : "active";
 
+/** The environment's job engine and dispatch health (GET /api/admin/operations/jobs). Never credentials. */
+export type JobsStatus = {
+  runtime: string | null; hosting: string | null; endpoint: string | null; project: string | null;
+  source: "declared" | "override" | "unknown"; declaredAt: string | null; supportStatus: "supported" | "experimental" | "unknown";
+  dashboardUrl: string | null; dispatch: { pending: number; unconsumed: number; dead: number }; migration: null;
+};
+
 export function mainBackend(request: Request, reasoned: (reason: string) => { reason: string }) {
   const session = async (): Promise<AdminSession> => {
     const wire = await request<WireSession>("GET", "session");
@@ -336,6 +343,7 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
       await request("POST", `operations/outbox/${encodeURIComponent(id)}/redrive`, reasoned(reason));
       return { succeeded: [id] };
     },
+    jobs: async () => await request<JobsStatus>("GET", "operations/jobs"),
     artifactTotals: async () => await request<{ states: Record<"pending" | "ready" | "cleaning" | "deleted", { count: number; bytes: number }>; stalePending: number }>("GET", "operations/artifacts"),
     webhooks,
     webhook,
