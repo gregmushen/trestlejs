@@ -85,6 +85,26 @@ describe("Worker Queue consumer", () => {
     expect(states).toEqual(["retry", "ack", "ack"]);
   });
   it("rejects duplicate consumer registrations", () => { const registry = new EventConsumerRegistry(); registry.register(definition, async () => undefined); expect(() => registry.register(definition, async () => undefined)).toThrow("already registered"); });
+  it("composes a handler with an existing consumer under one inbox claim, in registration order", async () => {
+    const registry = new EventConsumerRegistry<{ marker: string }>(undefined, { logger: silent() });
+    const handled: string[] = [];
+    registry.register(definition, async (payload) => { handled.push(`app:${payload.title}`); });
+    registry.compose(definition, async (payload) => { handled.push(`sequence:${payload.title}`); });
+    const store = committedStore();
+    const inbox = new InMemoryEventInbox();
+    const committed = store.commit(envelope());
+    await handleEventWithInbox(registry, inbox, store, committed, { marker: "worker" });
+    await handleEventWithInbox(registry, inbox, store, committed, { marker: "worker" });
+    expect(handled).toEqual(["app:Hello", "sequence:Hello"]);
+  });
+  it("composes onto an absent consumer and refuses a mismatched authority or an entitlement gate", () => {
+    const registry = new EventConsumerRegistry();
+    registry.compose(definition, async () => undefined);
+    expect(registry.describe()).toHaveLength(1);
+    const system = new EventConsumerRegistry();
+    system.register(definition, async () => undefined, { authority: "system" });
+    expect(() => system.compose(definition, async () => undefined)).toThrow("needs the same authority and no entitlement gate");
+  });
 
   it("processes catalog-declared events without a bespoke consumer and keeps projection inside the inbox retry boundary", async () => {
     const catalog = defineEventCatalog([defineEvent({

@@ -276,6 +276,10 @@ runtime (Cloudflare Workflows, trigger.dev, Inngest; see
   user) and cancels the engine's waiting run; an exit during a wait prevents
   the next send even if cancellation fails. `email.unsubscribed`, permanent
   `email.bounced`, and `email.complained` end the recipient's marketing runs.
+  A trigger or exit event can also have the application's own consumer:
+  `emailSequences.attach` composes with it (both run under one inbox claim,
+  so they complete exactly once together). Register application consumers
+  first, with `tenant` authority and no entitlement gate.
 - **Suppression.** Marketing sequences check the suppression list before every
   send; transactional sequences ignore unsubscribes but not hard bounces or
   complaints. Every marketing email carries a signed one-click unsubscribe link

@@ -57,7 +57,7 @@ export class EventConsumerRegistry<Environment = unknown, Data = unknown> {
 
   register<T>(definition: EventDefinition<T>, handler: EventHandler<T, Environment, Data>, registration: EventRegistration = {}): void {
     const key = `${definition.name}@${definition.schemaVersion}`;
-    if (this.handlers.has(key)) throw new Error(`Event consumer ${key} is already registered`);
+    if (this.handlers.has(key)) throw new Error(`Event consumer ${key} is already registered; register application consumers before emailSequences.attach, which composes with them`);
     if (registration.authority === "tenant" && !this.dependencies.tenantData) throw new Error(`Event consumer ${key} needs tenant data, but the registry has no tenant data factory`);
     if (registration.requires && !this.dependencies.hasEntitlement) throw new Error(`Event consumer ${key} requires an entitlement, but the registry has no entitlement check`);
     this.definitions.register(definition);
@@ -66,6 +66,24 @@ export class EventConsumerRegistry<Environment = unknown, Data = unknown> {
       authority: registration.authority ?? "verified",
       ...(registration.requires ? { requires: registration.requires } : {}),
     });
+  }
+
+  /**
+   * Adds a handler to an event that may already have a consumer (email
+   * sequences exit on events applications also handle). Composed handlers run
+   * in registration order under the one inbox claim, so together they complete
+   * exactly once. They must share one tenant registration without an
+   * entitlement gate, or a skipped entitlement would silently skip the others.
+   */
+  compose<T>(definition: EventDefinition<T>, handler: EventHandler<T, Environment, Data>, registration: EventRegistration = {}): void {
+    const key = `${definition.name}@${definition.schemaVersion}`;
+    const existing = this.handlers.get(key);
+    if (!existing) return this.register(definition, handler, registration);
+    const authority = registration.authority ?? "verified";
+    if (existing.authority !== authority || existing.requires || registration.requires) throw new Error(`Event consumer ${key} is registered with ${existing.authority} authority${existing.requires ? ` and requires ${existing.requires.entitlement}` : ""}; a composed handler needs the same authority and no entitlement gate`);
+    const first = existing.handler;
+    const next = handler as EventHandler<unknown, Environment, Data>;
+    this.handlers.set(key, { ...existing, handler: async (payload, envelope, environment, context) => { await first(payload, envelope, environment, context); await next(payload, envelope, environment, context); } });
   }
 
   /** The registered consumers, for `trestle jobs list`. */

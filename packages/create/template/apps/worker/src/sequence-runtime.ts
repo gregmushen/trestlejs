@@ -104,7 +104,7 @@ export class SequenceRegistry<Environment> {
     const events = new Set<string>(this.list().flatMap((sequence) => [sequence.trigger, ...sequence.exitOn]));
     if (options.deliveryExits ?? true) for (const name of sequenceDeliveryExitEvents) events.add(name);
     for (const name of events) {
-      consumers.register({ name, schemaVersion: 1, parse: (payload) => this.catalog.parse(name, 1, payload) },
+      consumers.compose({ name, schemaVersion: 1, parse: (payload) => this.catalog.parse(name, 1, payload) },
         async (payload, envelope, environment, context) => await this.consume(payload as Record<string, unknown>, envelope, environment, context, options.deliveryExits ?? true),
         { authority: "tenant" });
     }
