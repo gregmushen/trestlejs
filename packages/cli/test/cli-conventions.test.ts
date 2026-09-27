@@ -25,7 +25,7 @@ describe("CLI conventions", () => {
   });
 
   it("marks experimental commands in their description", () => {
-    for (const command of ["queue dlq list", "workflow list", "backup verify", "restore create", "console", "payments stripe seed"]) {
+    for (const command of ["queue dlq list", "workflow list", "backup verify", "restore create", "console", "payments stripe seed", "integrations use"]) {
       expect(inventory.find((entry) => entry.command === command)?.experimental, command).toBe(true);
     }
     expect(inventory.find((entry) => entry.command === "doctor")?.experimental).toBe(false);

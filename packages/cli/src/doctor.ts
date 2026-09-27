@@ -61,6 +61,38 @@ async function pathCheck(
   }
 }
 
+/**
+ * With the Nango connection backend, each deployed environment needs its own
+ * Nango secret key. Reuse is detected only across environments whose
+ * credentials this machine can decrypt; values are compared, never printed.
+ */
+async function nangoChecks(root: string, manifest: ProjectManifest, environment: EnvironmentName, values: Record<string, string>): Promise<DoctorCheck[]> {
+  const key = values.NANGO_SECRET_KEY?.trim();
+  const checks: DoctorCheck[] = [{
+    id: "integrations.nango.secret_key.configured", group: "architecture", status: key ? "pass" : "fail",
+    message: key ? `the Nango secret key is configured for ${environment}` : `the nango connection backend requires NANGO_SECRET_KEY for ${environment}`,
+    ...(!key ? { remediation: `Set it with trestle secrets set NANGO_SECRET_KEY --env ${environment} (a key from this environment's own Nango environment)` } : {}),
+  }];
+  checks.push({
+    id: "integrations.nango.webhook_secret.configured", group: "architecture", status: values.NANGO_WEBHOOK_SECRET?.trim() ? "pass" : "fail",
+    message: values.NANGO_WEBHOOK_SECRET?.trim() ? "the Nango webhook signing key is configured" : "without NANGO_WEBHOOK_SECRET the Worker refuses Nango connection callbacks, so no Connection completes",
+    ...(!values.NANGO_WEBHOOK_SECRET?.trim() ? { remediation: `Copy the signing key from Nango (Environment Settings > Webhooks) and run trestle secrets set NANGO_WEBHOOK_SECRET --env ${environment}` } : {}),
+  });
+  if (!key) return checks;
+  const reused: string[] = [];
+  for (const other of manifest.environments) {
+    if (other === environment || other === "local") continue;
+    const otherValues = await readSecrets(root, other).catch(() => undefined);
+    if (otherValues?.NANGO_SECRET_KEY?.trim() === key) reused.push(other);
+  }
+  checks.push({
+    id: "integrations.nango.secret_key.distinct", group: "architecture", status: reused.length ? "fail" : "pass",
+    message: reused.length ? `${environment} shares its Nango secret key with ${reused.join(", ")}` : `${environment} has its own Nango secret key among the environments this machine can read`,
+    ...(reused.length ? { remediation: "Give each Trestle environment its own Nango environment and secret key, so tenant credentials never cross environments" } : {}),
+  });
+  return checks;
+}
+
 export async function runDoctor(
   root: string,
   manifest: ProjectManifest,
@@ -394,6 +426,7 @@ export async function runDoctor(
           });
         }
       }
+      if (environment !== "local" && manifest.integrations?.backend === "nango") checks.push(...await nangoChecks(root, manifest, environment, values));
       checks.push({
         id: "configuration.secrets.valid",
         group: "architecture",

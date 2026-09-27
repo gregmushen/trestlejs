@@ -1,5 +1,5 @@
 import { activePlatformRoles, auditEvent, organization, passkey, platformRoleAssignment, user, type Database } from "@__TRESTLE_PROJECT_NAME__/db";
-import { count, countDistinct, desc, eq, isNull, sql } from "drizzle-orm";
+import { count, countDistinct, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 /**
  * Platform reads for the admin, always on the trestle_platform connection.
@@ -45,4 +45,11 @@ export async function strongestEnrolledFactor(database: Database, userId: string
   if (credential) return "phishing_resistant";
   const [person] = await database.select({ twoFactorEnabled: user.twoFactorEnabled }).from(user).where(eq(user.id, userId)).limit(1);
   return person?.twoFactorEnabled ? "mfa" : null;
+}
+
+/** Display names for a bounded set of organizations, on the platform connection. */
+export async function organizationNames(database: Database, ids: readonly string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const rows = await database.select({ id: organization.id, name: organization.name }).from(organization).where(inArray(organization.id, [...ids]));
+  return new Map(rows.map((row) => [row.id, row.name]));
 }

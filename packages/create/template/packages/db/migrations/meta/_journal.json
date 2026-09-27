@@ -267,6 +267,13 @@
       "when": 1790395037488,
       "tag": "0037_clean_bloodstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1790538257601,
+      "tag": "0038_cynical_betty_ross",
+      "breakpoints": true
     }
   ]
 }

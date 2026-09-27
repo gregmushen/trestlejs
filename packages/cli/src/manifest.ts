@@ -79,6 +79,19 @@ export const jobsDeclarationSchema = z
     if (jobs.hosting === "cloud" && jobs.endpoint) context.addIssue({ code: "custom", path: ["endpoint"], message: "hosted job runtimes use the provider's endpoint; set hosting: self-hosted to use your own" });
   });
 
+/**
+ * Who holds tenant Connection credentials in deployed environments (local
+ * development always uses the deterministic local backend). `nango` is
+ * experimental; `host` points at a self-hosted Nango instead of Nango Cloud.
+ */
+export const integrationsDeclarationSchema = z
+  .object({
+    backend: z.enum(["none", "nango"]).default("none"),
+    host: z.string().url().refine((value) => value.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/u.test(value), "a self-hosted Nango must use https (http only for localhost)").optional(),
+  })
+  .strict()
+  .refine((integrations) => integrations.backend === "nango" || !integrations.host, { message: "host applies only to the nango backend", path: ["host"] });
+
 export const projectManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -122,6 +135,7 @@ export const projectManifestSchema = z
     secrets: z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/u), secretDeclarationSchema).optional(),
     providers: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/u), providerDeclarationSchema).optional(),
     jobs: jobsDeclarationSchema.optional(),
+    integrations: integrationsDeclarationSchema.optional(),
   })
   .strict()
   .superRefine((manifest, context) => {

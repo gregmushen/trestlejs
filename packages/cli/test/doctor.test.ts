@@ -200,6 +200,35 @@ describe("remote provider preflight", () => {
     }
   });
 
+  it("requires a distinct Nango secret key per environment when the nango connection backend is selected", async () => {
+    const manifest = await loadProjectManifest(templateRoot);
+    const selected = { ...manifest, integrations: { backend: "nango" as const } };
+    const root = await mkdtemp(path.join(os.tmpdir(), "trestle-nango-doctor-"));
+    const [stagingKey, productionKey] = [randomBytes(32).toString("hex"), randomBytes(32).toString("hex")];
+    const nangoKey = "nango-secret-unique-value-7781";
+    try {
+      await mkdir(path.join(root, "config", "credentials"), { recursive: true });
+      await writeFile(path.join(root, "config", "credentials", "staging.yml.enc"), encryptSecrets({}, "staging", stagingKey));
+      const missing = await runDoctor(root, selected, "staging", stagingKey);
+      expect(missing.checks).toContainEqual(expect.objectContaining({ id: "integrations.nango.secret_key.configured", status: "fail" }));
+      expect(missing.checks).toContainEqual(expect.objectContaining({ id: "integrations.nango.webhook_secret.configured", status: "fail" }));
+      expect((await runDoctor(root, manifest, "staging", stagingKey)).checks.some((check) => check.id.startsWith("integrations.nango"))).toBe(false);
+
+      await writeFile(path.join(root, "config", "credentials", "staging.yml.enc"), encryptSecrets({ NANGO_SECRET_KEY: nangoKey, NANGO_WEBHOOK_SECRET: "signing" }, "staging", stagingKey));
+      await writeFile(path.join(root, "config", "credentials", "production.key"), productionKey);
+      await writeFile(path.join(root, "config", "credentials", "production.yml.enc"), encryptSecrets({ NANGO_SECRET_KEY: nangoKey }, "production", productionKey));
+      const reused = await runDoctor(root, selected, "staging", stagingKey);
+      expect(reused.checks).toContainEqual(expect.objectContaining({ id: "integrations.nango.secret_key.configured", status: "pass" }));
+      expect(reused.checks).toContainEqual(expect.objectContaining({ id: "integrations.nango.secret_key.distinct", status: "fail", message: "staging shares its Nango secret key with production" }));
+      expect(JSON.stringify(reused)).not.toContain(nangoKey);
+
+      await writeFile(path.join(root, "config", "credentials", "production.yml.enc"), encryptSecrets({ NANGO_SECRET_KEY: "another-nango-key" }, "production", productionKey));
+      expect((await runDoctor(root, selected, "staging", stagingKey)).checks).toContainEqual(expect.objectContaining({ id: "integrations.nango.secret_key.distinct", status: "pass" }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("requires a nontrivial encrypted artifact signing key only for remote R2", async () => {
     const manifest = await loadProjectManifest(templateRoot);
     const enabled = { ...manifest, capabilities: { ...manifest.capabilities, r2: true } };

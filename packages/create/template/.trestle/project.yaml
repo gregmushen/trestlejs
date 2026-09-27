@@ -92,6 +92,14 @@ secrets:
   INNGEST_SIGNING_KEY:
     target: worker
     required: []
+  # The Nango connection backend (trestle integrations use nango): one secret key
+  # per environment, and Nango's separate webhook signing key.
+  NANGO_SECRET_KEY:
+    target: worker
+    required: []
+  NANGO_WEBHOOK_SECRET:
+    target: worker
+    required: []
   DATABASE_MIGRATION_URL:
     target: ci
     required: [staging, production]

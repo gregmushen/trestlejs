@@ -17,6 +17,10 @@ export const customerRoutePolicies = defineRoutePolicies(permissions, [
   { method: "POST", path: "/api/auth/*", public: true, audience: "public" },
   { method: "POST", path: "/api/webhooks/resend", public: true, audience: "public" },
   { method: "POST", path: "/webhooks/stripe", public: true, audience: "public" },
+  // Connection-backend callbacks: the backend's signature is the authority; the tenant comes from persisted state.
+  { method: "POST", path: "/webhooks/nango", public: true, audience: "public" },
+  // Local only (404 elsewhere): the local connection backend's signed callback.
+  { method: "POST", path: "/api/dev/connections/callback", public: true, audience: "public" },
   // Local-only email capture; the handlers return 404 outside local capture mode.
   { method: "GET", path: "/api/dev/emails", public: true, audience: "public" },
   { method: "GET", path: "/api/dev/emails/:id", public: true, audience: "public" },
@@ -61,6 +65,10 @@ export const customerRoutePolicies = defineRoutePolicies(permissions, [
   { method: "GET", path: "/api/developer/webhooks/endpoints/:id/deliveries", audience: "tenant", permission: "organization.webhooks.deliveries.read" },
   { method: "GET", path: "/api/developer/webhooks/deliveries/:id/attempts", audience: "tenant", permission: "organization.webhooks.deliveries.read" },
   { method: "POST", path: "/api/developer/webhooks/deliveries/:id/replay", audience: "tenant", permission: "organization.webhooks.replay" },
+
+  { method: "GET", path: "/api/tenant/integrations/connections", audience: "tenant", permission: "organization.integrations.read" },
+  { method: "POST", path: "/api/tenant/integrations/connect-sessions", audience: "tenant", permission: "organization.integrations.manage" },
+  { method: "DELETE", path: "/api/tenant/integrations/connections/:id", audience: "tenant", permission: "organization.integrations.disconnect" },
 
   // Artifacts are product resources: only application-plane authority grants them.
   { method: "POST", path: "/api/artifacts", audience: "tenant", permission: "resource.write" },

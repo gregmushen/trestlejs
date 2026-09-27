@@ -42,6 +42,7 @@ import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { formatProviderStatuses, providerStatuses } from "./providers.js";
 import { evidenceReport, formatEvidenceReport, readLedger, recordEvidence, starterLedger, writeLedger } from "./evidence.js";
 import { enableJobRuntime } from "./upgrade-source.js";
+import { enableConnectionBackend } from "./integrations.js";
 import { scaffoldSelfHostedInngest, scaffoldSelfHostedTrigger } from "./job-self-host.js";
 import { applySourceUpgrade, sourceFileDiff, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
 import { auditMigrations, formatMigrationAudit, rebaseMigrations } from "./upgrade-migrations.js";
@@ -1365,6 +1366,22 @@ export function createProgram(runtime: CliRuntime): Command {
         : "Next: pnpm install; set INNGEST_EVENT_KEY and INNGEST_SIGNING_KEY per deployed environment (trestle secrets set … --env <env>) and deploy the Worker; register https://<worker>/api/jobs/inngest as the app URL in Inngest. Locally, trestle dev runs the Inngest Dev Server.";
       runtime.stdout(`${changed.length ? `Selected ${runtimeName}.\n${changed.map((file) => `  ${file}`).join("\n")}` : `${runtimeName} is already selected.`}\n${next}\n`);
     });
+
+  const integrations = program.command("integrations").description("select and inspect the backend that holds tenant integration Connections");
+  experimental(integrations.command("use")
+    .description("select the connection backend for deployed environments (nango); local development uses the deterministic local backend")
+    .argument("<backend>", "nango")
+    .option("--host <url>", "a self-hosted Nango URL; omit for Nango Cloud")
+    .action(async (backendName: string, options: { host?: string }, command: Command) => {
+      if (backendName !== "nango") throw new CliFailure("integrations use supports nango; none (the default) disables tenant Connections");
+      const context = await projectContext(command, runtime);
+      let changed: readonly string[];
+      try { changed = await enableConnectionBackend(context.root, "nango", options.host ? { host: options.host } : {}); }
+      catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
+      runtime.stdout(`${changed.length ? `Selected nango.\n${changed.map((file) => `  ${file}`).join("\n")}` : "nango is already selected."}\n`
+        + "Next: create one Nango environment per Trestle environment; set its secret key with trestle secrets set NANGO_SECRET_KEY --env <env> (never reuse a key across environments) "
+        + "and its webhook signing key with trestle secrets set NANGO_WEBHOOK_SECRET --env <env>; point the Nango webhook URL at https://<worker>/webhooks/nango; run trestle doctor --env <env>.\n");
+    }), runtime);
 
   jobs.command("self-host")
     .description("scaffold application-owned deployment files for a self-hosted trigger.dev or Inngest (infra/)")

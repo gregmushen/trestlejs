@@ -14,4 +14,6 @@ export type WorkerEnvironment = AuthEnvironment & {
   TRESTLE_SCHEDULER?: DueWorkSchedulerBinding;
   /** The job runtime: cloudflare (default), trigger, or inngest. */
   TRESTLE_JOB_RUNTIME?: string;
+  /** The connection backend: none (default), local, or nango. */
+  TRESTLE_CONNECTION_BACKEND?: string;
 };

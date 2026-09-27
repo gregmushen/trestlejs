@@ -302,6 +302,11 @@ export type OrganizationRegionalJson = {
 };
 export type RegionalResolutionJson = { user: { userId: string; name: string }; configured: Omit<RegionalConfiguredJson, "currency">; effective: RegionalResolvedJson; organization: RegionalResolvedJson };
 
+/** The application Worker's connection backend, as its operational health reports it. Never a secret. */
+export type ConnectionBackendJson = { name: string; configured: boolean; detail: string; webhookForwarding: "available" | "unavailable" | "unknown"; inboundVerification: boolean };
+export type IntegrationConnectionJson = { id: string; organizationId: string; organizationName: string; environment: string; backend: string; providerConfigKey: string; provider: string | null; state: string; generation: number; cleanupPending: boolean; connectedAt: string | null; revokedAt: string | null; createdAt: string; updatedAt: string };
+export type IntegrationConnectionsState = { backend: ConnectionBackendJson | null; counts: Record<string, number>; connections: IntegrationConnectionJson[] };
+
 type Query = Record<string, string | undefined>;
 export type Reasoned = { reason: string };
 
@@ -460,6 +465,7 @@ export function createAdminApi(options: { baseUrl?: string; fetch?: typeof fetch
     audit: (filters: { organizationId?: string; actor?: string; name?: string; correlation?: string; page?: string; pageSize?: string }) => request<{ events: AuditEvent[]; total: number; page: number; pageSize: number }>("GET", "audit", undefined, filters),
     auditEvent: (id: string) => request<{ event: AuditEvent }>("GET", `audit/${segment(id)}`),
     health: () => request<{ checks: HealthCheck[] }>("GET", "health"),
+    connections: () => request<IntegrationConnectionsState>("GET", "integrations/connections"),
   };
   // Views call the Worker through main-backend's adapters wherever the Worker serves them.
   return { ...endpoints, ...mainBackend(request, reasoned) };

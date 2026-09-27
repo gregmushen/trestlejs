@@ -9,7 +9,7 @@ import {
   artifactOperations, createDatabase, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, mintSupportHandoff, startSupportSession, supportableOrganizations, supportOrganizationView,
   grantPlatformRole, listPlatformAuditEvents, listPlatformEmailEvents, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
-  listPlatformApiKeys, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
+  listPlatformApiKeys, listPlatformIntegrationConnections, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   sessionAssurance, type Database, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { buildOpenApi } from "@__TRESTLE_PROJECT_NAME__/contracts";
@@ -17,7 +17,7 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 
 import { adminViews, stepUpExemptRoutes, type AdminCapability } from "../src/api-registry.js";
-import { databaseReachable, enrolledFactors, overview, platformRolesFor, strongestEnrolledFactor } from "./data.js";
+import { databaseReachable, enrolledFactors, organizationNames, overview, platformRolesFor, strongestEnrolledFactor } from "./data.js";
 import { adminFactorPlugins } from "./factors.js";
 import { adminPolicyFor, adminRoutePolicies } from "./route-policies.js";
 
@@ -320,6 +320,31 @@ admin.post("/api/admin/operations/webhooks/:organizationId/endpoints/:endpointId
 admin.post("/api/admin/operations/webhooks/:organizationId/deliveries/:deliveryId/replay", async (context) => {
   const replay = await replayWebhookDelivery(platformDatabase(context.env), { organizationId: context.req.param("organizationId"), deliveryId: context.req.param("deliveryId") }, await actionContext(context));
   return context.json({ replayed: true, replayDeliveryId: replay.deliveryId, created: replay.created, correlationId: context.get("correlationId") });
+});
+
+/** Only the fields the Connections view shows, bounded, from the application Worker's report. */
+export function connectionBackendStatus(report: unknown): { name: string; configured: boolean; detail: string; webhookForwarding: "available" | "unavailable" | "unknown"; inboundVerification: boolean } | null {
+  const entry = (report as { capabilities?: { connectionBackend?: Record<string, unknown> } } | undefined)?.capabilities?.connectionBackend;
+  if (!entry || typeof entry.name !== "string" || !/^[a-z0-9-]{1,32}$/u.test(entry.name)) return null;
+  const forwarding = entry.webhookForwarding === "available" || entry.webhookForwarding === "unavailable" ? entry.webhookForwarding : "unknown";
+  return { name: entry.name, configured: entry.configured === true, detail: typeof entry.detail === "string" ? entry.detail.slice(0, 200) : "", webhookForwarding: forwarding, inboundVerification: entry.inboundVerification === true };
+}
+
+admin.get("/api/admin/integrations/connections", async (context) => {
+  const database = platformDatabase(context.env);
+  const [listed, backend] = await Promise.all([
+    listPlatformIntegrationConnections(database),
+    adminDependencies.operationalStatus(context.env).then(connectionBackendStatus, () => null),
+  ]);
+  const names = await organizationNames(database, [...new Set(listed.connections.map((connection) => connection.organizationId))]);
+  return context.json({
+    backend,
+    counts: listed.counts,
+    connections: listed.connections.map((connection) => ({
+      ...connection, organizationName: names.get(connection.organizationId) ?? connection.organizationId,
+      connectedAt: iso(connection.connectedAt), revokedAt: iso(connection.revokedAt), createdAt: connection.createdAt.toISOString(), updatedAt: connection.updatedAt.toISOString(),
+    })),
+  });
 });
 
 admin.get("/api/admin/commercial/subscriptions", async (context) => {
