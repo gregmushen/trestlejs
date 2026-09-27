@@ -94,6 +94,7 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "POST", path: "/api/admin/operations/webhooks/:organizationId/endpoints/:endpointId/disable", permission: "platform.webhooks.manage" },
     { method: "POST", path: "/api/admin/operations/webhooks/:organizationId/deliveries/:deliveryId/replay", permission: "platform.webhooks.manage" },
   ] },
+  { id: "connections", path: "/integrations/connections", label: "Connections", group: "Integrations", permission: "platform.operations.read", api: [{ method: "GET", path: "/api/admin/integrations/connections" }] },
   { id: "organizations", path: "/organizations", label: "Organizations", group: "Customers", permission: "platform.organizations.read", api: [
     { method: "GET", path: "/api/admin/organizations" },
     { method: "GET", path: "/api/admin/organizations/:organizationId" },

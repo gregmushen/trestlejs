@@ -22,6 +22,9 @@ export const permissions = definePermissions({
   "organization.webhooks.manage": { plane: "organization", description: "Create, pause, and change webhook endpoints and subscriptions" },
   "organization.webhooks.deliveries.read": { plane: "organization", description: "Inspect webhook deliveries and attempts" },
   "organization.webhooks.replay": { plane: "organization", description: "Replay a failed webhook delivery while its payload is retained" },
+  "organization.integrations.read": { plane: "organization", description: "List the organization's integration Connections and their status (never credentials)" },
+  "organization.integrations.manage": { plane: "organization", description: "Start connecting an external account through the connection backend" },
+  "organization.integrations.disconnect": { plane: "organization", description: "Disconnect an integration Connection and delete its backend credential" },
   "organization.settings.manage": { plane: "organization", description: "Change organization settings such as regional defaults" },
 
   "resource.read": { plane: "application", description: "Read tenant-owned application resources", principals: ["user", "api_key"] },

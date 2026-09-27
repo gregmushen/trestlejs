@@ -42,6 +42,7 @@ import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { formatProviderStatuses, providerStatuses } from "./providers.js";
 import { evidenceReport, formatEvidenceReport, readLedger, recordEvidence, starterLedger, writeLedger } from "./evidence.js";
 import { enableJobRuntime, useCloudflareRuntime } from "./upgrade-source.js";
+import { enableConnectionBackend } from "./integrations.js";
 import { scaffoldSelfHostedInngest, scaffoldSelfHostedTrigger } from "./job-self-host.js";
 import { migrationInventory, migrationSteps, settleForMigration, type JobRuntimeName } from "./job-migrate.js";
 import { applySourceUpgrade, sourceFileDiff, finalizeSourceUpgrade, formatSourceDiff, planSourceDiff } from "./upgrade-source.js";
@@ -1406,6 +1407,25 @@ export function createProgram(runtime: CliRuntime): Command {
       ].join("\n") + "\n");
       if (options.check && (inventory.pending > 0 || inventory.unconsumed > 0)) throw new CliFailure(`${inventory.pending + inventory.unconsumed} event(s) still depend on dispatch or completion; keep the old runtime until this reaches 0`);
     });
+  const integrations = program.command("integrations").description("select and inspect the backend that holds tenant integration Connections");
+  experimental(integrations.command("use")
+    .description("select the connection backend for deployed environments (nango); local development uses the deterministic local backend")
+    .argument("<backend>", "nango")
+    .option("--host <url>", "a self-hosted Nango URL; omit for Nango Cloud")
+    .option("--integrations <keys>", "comma-separated Nango integration IDs tenants may connect (replaces the allowlist; empty allows none)")
+    .action(async (backendName: string, options: { host?: string; integrations?: string }, command: Command) => {
+      if (backendName !== "nango") throw new CliFailure("integrations use supports nango; none (the default) disables tenant Connections");
+      const context = await projectContext(command, runtime);
+      let changed: readonly string[];
+      const allowed = options.integrations?.split(",").map((key) => key.trim()).filter(Boolean);
+      if (allowed?.some((key) => !/^[A-Za-z0-9._-]{1,100}$/u.test(key))) throw new CliFailure("--integrations takes Nango integration IDs: letters, digits, dot, underscore, or dash");
+      try { changed = await enableConnectionBackend(context.root, "nango", { ...(options.host ? { host: options.host } : {}), ...(allowed ? { allowed } : {}) }); }
+      catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
+      runtime.stdout(`${changed.length ? `Selected nango.\n${changed.map((file) => `  ${file}`).join("\n")}` : "nango is already selected."}\n`
+        + `${allowed?.length ? "" : "No integrations are allowed yet: rerun with --integrations github,slack (your Nango integration IDs).\n"}`
+        + "Next: create one Nango environment per Trestle environment; set its secret key with trestle secrets set NANGO_SECRET_KEY --env <env> (never reuse a key across environments) "
+        + "and its webhook signing key with trestle secrets set NANGO_WEBHOOK_SECRET --env <env>; point the Nango webhook URL at https://<worker>/webhooks/nango; run trestle doctor --env <env>.\n");
+    }), runtime);
 
   jobs.command("self-host")
     .description("scaffold application-owned deployment files for a self-hosted trigger.dev or Inngest (infra/)")

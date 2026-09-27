@@ -281,6 +281,20 @@
       "when": 1790540190777,
       "tag": "0039_empty_prowler",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790543831144,
+      "tag": "0040_clean_mongoose",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1790543832595,
+      "tag": "0041_bouncy_devos",
+      "breakpoints": true
     }
   ]
 }

@@ -39,6 +39,8 @@ export * from "./support-sessions.js";
 export * from "./support-view.js";
 export * from "./regional-schema.js";
 export * from "./regional.js";
+export * from "./integration-schema.js";
+export * from "./integration-connections.js";
 export * from "./auth-schema.js";
 export * from "./artifact-schema.js";
 export * from "./artifact-maintenance-schema.js";

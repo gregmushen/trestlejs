@@ -1,6 +1,10 @@
 import { jobRuntime, registerJobRuntime } from "./job-runtime.js";
 import { triggerRuntime } from "./job-runtime-trigger.js";
 import { inngestRuntime } from "./job-runtime-inngest.js";
+import { describeConnectionBackend, registerConnectionBackend } from "./connection-backend.js";
+import { localConnectionBackend } from "./connection-backend-local.js";
+import { nangoConnectionBackend } from "./connection-backend-nango.js";
+import { connectionRoutes } from "./connection-routes.js";
 import { apiReferencePage, customerOpenApi } from "./openapi.js";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -512,6 +516,7 @@ app.on(["GET", "POST"], "/api/auth/*", (context) =>
 app.route("/", accessRoutes);
 app.route("/", machineAccessRoutes);
 app.route("/", regionalRoutes);
+app.route("/", connectionRoutes);
 
 app.get("/api/me", async (context) => {
   const session = await createAuth(context.env, { correlationId: context.get("correlationId") }).api.getSession({ headers: context.req.raw.headers });
@@ -544,6 +549,7 @@ app.get("/api/health/operational", (context) => context.json({
     artifacts: { configured: artifactRuntimeReady(context.env), mode: context.env.TRESTLE_ARTIFACTS ? "r2" : context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" : "unavailable" },
     workflows: { enabled: (context.env as WorkerEnvironment).TRESTLE_WORKFLOWS_ENABLED === "true", configured: Boolean((context.env as WorkerEnvironment).TRESTLE_WORKFLOW) },
     scheduler: { configured: Boolean((context.env as WorkerEnvironment).TRESTLE_SCHEDULER), jobs: scheduledJobs.names().length },
+    connectionBackend: describeConnectionBackend(context.env as WorkerEnvironment),
     jobRuntime: (() => { try { const selected = jobRuntime(context.env as WorkerEnvironment); return { name: selected.name, ...selected.describe(context.env as WorkerEnvironment) }; } catch (error) { return { name: (context.env as WorkerEnvironment).TRESTLE_JOB_RUNTIME ?? "cloudflare", configured: false, detail: error instanceof Error ? error.message : "unavailable" }; } })(),
   },
 }));
@@ -647,6 +653,8 @@ app.onError((error, context) => {
 
 registerJobRuntime(triggerRuntime);
 registerJobRuntime(inngestRuntime);
+registerConnectionBackend(localConnectionBackend);
+registerConnectionBackend(nangoConnectionBackend);
 
 export default {
   fetch: app.fetch.bind(app),

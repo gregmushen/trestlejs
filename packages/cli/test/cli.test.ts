@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { TRESTLEJS_VERSION } from "../src/core.js";
+import { parseProjectManifest } from "../src/manifest.js";
 import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 
 import { executeCli, initializeSecrets } from "../src/index.js";
@@ -337,6 +338,64 @@ describe("TrestleJS CLI", () => {
     const cloudflare = capture(root);
     expect(await executeCli(["jobs", "use", "cloudflare"], cloudflare.runtime)).toBe(1);
     expect(cloudflare.stderr()).toContain("rerun with --yes");
+  });
+
+  it("selects the Nango connection backend only with an experimental opt-in", async () => {
+    const shellOptIn = process.env.TRESTLE_EXPERIMENTAL;
+    delete process.env.TRESTLE_EXPERIMENTAL;
+    onTestFinished(() => {
+      if (shellOptIn === undefined) delete process.env.TRESTLE_EXPERIMENTAL;
+      else process.env.TRESTLE_EXPERIMENTAL = shellOptIn;
+    });
+    const root = await fixture();
+    await writeFile(path.join(root, "apps", "worker", "wrangler.jsonc"), `{
+  "vars": {
+    "APP_ENV": "local"
+  },
+  "env": {
+    "staging": { "vars": { "APP_ENV": "staging", "STRIPE_MODE": "test" } },
+    "production": { "vars": { "APP_ENV": "production" } }
+  }
+}
+`);
+    const blocked = capture(root);
+    expect(await executeCli(["integrations", "use", "nango"], blocked.runtime)).toBe(1);
+    expect(blocked.stderr()).toContain("integrations use is experimental in beta");
+    expect(await readFile(path.join(root, ".trestle", "project.yaml"), "utf8")).not.toContain("integrations:");
+    const unknown = capture(root);
+    expect(await executeCli(["--experimental", "integrations", "use", "paragon"], unknown.runtime)).toBe(1);
+    expect(unknown.stderr()).toContain("supports nango");
+
+    const selected = capture(root);
+    expect(await executeCli(["--experimental", "integrations", "use", "nango"], selected.runtime), selected.stderr()).toBe(0);
+    expect(selected.stdout()).toContain("NANGO_SECRET_KEY");
+    const manifest = parseProjectManifest(await readFile(path.join(root, ".trestle", "project.yaml"), "utf8"));
+    expect(manifest.integrations).toEqual({ backend: "nango", allowed: [] });
+    expect(selected.stdout()).toContain("No integrations are allowed yet");
+    expect(manifest.secrets?.NANGO_SECRET_KEY).toEqual({ target: "worker", required: ["staging", "production"] });
+    expect(manifest.secrets?.NANGO_WEBHOOK_SECRET).toEqual({ target: "worker", required: [] });
+    const config = await readFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "utf8");
+    expect(config).toContain('"APP_ENV": "local", "TRESTLE_CONNECTION_BACKEND": "local", "TRESTLE_CONNECTION_INTEGRATIONS": ""');
+    expect(config).toContain('"STRIPE_MODE": "test", "TRESTLE_CONNECTION_BACKEND": "nango", "TRESTLE_CONNECTION_INTEGRATIONS": "" }');
+    expect(config).toContain('"APP_ENV": "production", "TRESTLE_CONNECTION_BACKEND": "nango", "TRESTLE_CONNECTION_INTEGRATIONS": "" }');
+
+    const again = capture(root);
+    expect(await executeCli(["--experimental", "integrations", "use", "nango"], again.runtime)).toBe(0);
+    expect(again.stdout()).toContain("nango is already selected.");
+    expect(await readFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "utf8")).toBe(config);
+
+    const selfHosted = capture(root);
+    expect(await executeCli(["--experimental", "integrations", "use", "nango", "--host", "https://nango.example.test", "--integrations", "slack,github"], selfHosted.runtime), selfHosted.stderr()).toBe(0);
+    expect(parseProjectManifest(await readFile(path.join(root, ".trestle", "project.yaml"), "utf8")).integrations).toEqual({ backend: "nango", allowed: ["github", "slack"], host: "https://nango.example.test" });
+    const hosted = await readFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "utf8");
+    expect(hosted).toContain('"TRESTLE_CONNECTION_BACKEND": "nango", "TRESTLE_CONNECTION_INTEGRATIONS": "github,slack", "NANGO_HOST": "https://nango.example.test" }');
+    expect(hosted).toContain('"TRESTLE_CONNECTION_BACKEND": "local", "TRESTLE_CONNECTION_INTEGRATIONS": "github,slack"');
+    // Reselecting without --integrations keeps the allowlist.
+    expect(await executeCli(["--experimental", "integrations", "use", "nango", "--host", "https://nango.example.test"], capture(root).runtime)).toBe(0);
+    expect(await readFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "utf8")).toBe(hosted);
+    const invalid = capture(root);
+    expect(await executeCli(["--experimental", "integrations", "use", "nango", "--integrations", "bad key"], invalid.runtime)).toBe(1);
+    expect(hosted.match(/TRESTLE_CONNECTION_BACKEND/gu)).toHaveLength(3);
   });
 
   it("scaffolds self-hosted job runtimes, gating the undeployed Cloudflare Container profile", async () => {

@@ -2,7 +2,7 @@ import { JobRuntimeChangeError, PlatformOperationError, type JobRuntimeState } f
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { adminViews } from "../src/api-registry.js";
-import { admin, adminAuthEnvironment, adminDependencies, capabilityGuidance, jobsDashboardUrl, type AdminEnvironment } from "./index.js";
+import { admin, adminAuthEnvironment, adminDependencies, capabilityGuidance, connectionBackendStatus, jobsDashboardUrl, type AdminEnvironment } from "./index.js";
 import { adminRoutePolicies } from "./route-policies.js";
 
 type RuntimeFields = { runtime: string; hosting: string; endpoint: string | null; project: string | null };
@@ -66,6 +66,15 @@ describe("platform admin Worker", () => {
     state.roles = ["ghost_role"];
     expect(await call("GET", "/api/admin/session")).toMatchObject({ status: 200, body: { permissions: [] } });
     expect(await call("GET", "/api/admin/health")).toMatchObject({ status: 403, body: { reason: "permission_missing" } });
+  });
+
+  it("requires platform.operations.read for Connections and passes on only the backend's safe status fields", async () => {
+    state.roles = ["security_admin"];
+    expect(await call("GET", "/api/admin/integrations/connections")).toMatchObject({ status: 403, body: { reason: "permission_missing" } });
+    expect(connectionBackendStatus({ capabilities: { connectionBackend: { name: "nango", configured: true, detail: "Nango Cloud", webhookForwarding: "available", inboundVerification: true, secretKey: "leak" } } }))
+      .toEqual({ name: "nango", configured: true, detail: "Nango Cloud", webhookForwarding: "available", inboundVerification: true });
+    expect(connectionBackendStatus({ capabilities: { connectionBackend: { name: "<script>" } } })).toBeNull();
+    expect(connectionBackendStatus(undefined)).toBeNull();
   });
 
   it("redacts admin credentials from authorization diagnostics", async () => {
