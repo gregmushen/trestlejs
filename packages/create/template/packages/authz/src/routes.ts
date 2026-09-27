@@ -16,6 +16,9 @@ export const customerRoutePolicies = defineRoutePolicies(permissions, [
   { method: "GET", path: "/api/auth/*", public: true, audience: "public" },
   { method: "POST", path: "/api/auth/*", public: true, audience: "public" },
   { method: "POST", path: "/api/webhooks/resend", public: true, audience: "public" },
+  // Signed, expiring one-click unsubscribe links from marketing sequences; the token is the authority.
+  { method: "GET", path: "/api/email/unsubscribe", public: true, audience: "public" },
+  { method: "POST", path: "/api/email/unsubscribe", public: true, audience: "public" },
   { method: "POST", path: "/webhooks/stripe", public: true, audience: "public" },
   // Connection-backend callbacks: the backend's signature is the authority; the tenant comes from persisted state.
   { method: "POST", path: "/webhooks/nango", public: true, audience: "public" },

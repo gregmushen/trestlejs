@@ -4,7 +4,9 @@ export type EmailAddress = string | { email: string; name?: string };
 export type EmailDeliveryId = string;
 export type ScheduledEmailStatus = "scheduled" | "cancelled" | "already_sent" | "not_found" | "provider_rejected";
 export type EmailTemplate<Props = unknown> = { name: string; props: Props; render: () => ReactElement };
-export type EmailMessage = { from?: EmailAddress; to: EmailAddress | EmailAddress[]; cc?: EmailAddress[]; bcc?: EmailAddress[]; replyTo?: EmailAddress | EmailAddress[]; subject: string; template: EmailTemplate };
+export type EmailMessage = { from?: EmailAddress; to: EmailAddress | EmailAddress[]; cc?: EmailAddress[]; bcc?: EmailAddress[]; replyTo?: EmailAddress | EmailAddress[]; subject: string; template: EmailTemplate;
+  /** Extra message headers, for example `List-Unsubscribe` on marketing email. */
+  headers?: Readonly<Record<string, string>> };
 export type SendEmailOptions = { idempotencyKey?: string; correlationId?: string; causationId?: string; organizationId?: string };
 export type EmailReceipt = { id: EmailDeliveryId; acceptedAt: Date };
 export type ScheduledEmail = { id: EmailDeliveryId; sendAt: Date; status: ScheduledEmailStatus };

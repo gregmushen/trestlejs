@@ -3,7 +3,7 @@ import { renderEmail } from "../render.js";
 import { EmailAlreadySent, EmailRejected, EmailValidationError } from "../types.js";
 import type { EmailLogger, EmailMessage, EmailReceipt, EmailService, ScheduledEmail, SendEmailOptions } from "../types.js";
 
-export type CapturedEmail = { id: string; to: string[]; cc: string[]; bcc: string[]; replyTo: string[]; from?: string; subject: string; template: string; templateProps: unknown; html: string; text: string; createdAt: string; acceptedAt?: string; scheduledAt?: string; status: "accepted" | "scheduled" | "cancelled" };
+export type CapturedEmail = { id: string; to: string[]; cc: string[]; bcc: string[]; replyTo: string[]; from?: string; subject: string; template: string; templateProps: unknown; html: string; text: string; headers?: Record<string, string>; createdAt: string; acceptedAt?: string; scheduledAt?: string; status: "accepted" | "scheduled" | "cancelled" };
 export type EmailClock = { now(): Date };
 export const systemEmailClock: EmailClock = { now: () => new Date() };
 
@@ -97,7 +97,7 @@ export class LocalEmailAdapter implements EmailService {
     const rendered = await renderEmail(message.template);
     const captured: CapturedEmail = {
       id: crypto.randomUUID(), to: formatAddresses(message.to), cc: message.cc?.map(formatAddress) ?? [], bcc: message.bcc?.map(formatAddress) ?? [], replyTo: message.replyTo ? formatAddresses(message.replyTo) : [],
-      ...(message.from ? { from: formatAddress(message.from) } : {}), subject: message.subject, template: message.template.name, templateProps: message.template.props, html: rendered.html, text: rendered.text, createdAt: createdAt.toISOString(),
+      ...(message.from ? { from: formatAddress(message.from) } : {}), subject: message.subject, template: message.template.name, templateProps: message.template.props, html: rendered.html, text: rendered.text, ...(message.headers ? { headers: { ...message.headers } } : {}), createdAt: createdAt.toISOString(),
       ...(status === "accepted" ? { acceptedAt: createdAt.toISOString() } : {}), ...(sendAt ? { scheduledAt: sendAt.toISOString() } : {}), status,
     };
     this.store.messages.set(captured.id, captured);

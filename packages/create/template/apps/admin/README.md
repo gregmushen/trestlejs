@@ -22,7 +22,7 @@ The Operations views work on the application's own subsystems, not copies of the
 
 - **Async Operations:** dead-lettered outbox events. Redrive returns one to delivery (`platform.outbox.redrive`).
 - **Jobs:** the job engine and dispatch health. Switching the engine, pausing dispatch, settling unconsumed events, and reverting to the deployed configuration need `platform.jobs.manage`.
-- **Email:** Resend webhook readiness, delivery outcome counts, and recent verified events; the Suppressions view lists each organization's suppressed addresses (masked). Removing one needs `platform.email.manage`.
+- **Email:** Resend webhook readiness, delivery outcome counts, and recent verified events; the Suppressions view lists each organization's suppressed addresses (masked). Removing one needs `platform.email.manage`. The Sequences view shows each email sequence's active runs, sends, exits, and failures, and its runs (masked recipients); exiting a run needs `platform.sequences.manage`.
 - **Webhooks:** endpoint state and dead or exhausted deliveries across organizations. An operator can disable an endpoint or replay a delivery whose payload is still retained (`platform.webhooks.manage`).
 - **Artifacts:** upload lifecycle totals and stale pending uploads.
 

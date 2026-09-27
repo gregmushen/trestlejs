@@ -815,7 +815,10 @@ how it confirms changes. The conventions:
 Background work is written once:
 
 - event consumers, with `eventConsumers.register` in `apps/worker/src/index.ts`;
-- scheduled jobs, with `scheduledJobs.register` in `apps/worker/src/jobs.ts`.
+- scheduled jobs, with `scheduledJobs.register` in `apps/worker/src/jobs.ts`;
+- email sequences, with `emailSequences.register(defineSequence(...))` in
+  `apps/worker/src/email-sequences.ts` (waits, exits, suppression, and
+  unsubscribe links work the same on every runtime).
 
 `pnpm exec trestle jobs list` prints what is registered, as the code declares
 it.

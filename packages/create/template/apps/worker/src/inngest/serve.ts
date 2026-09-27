@@ -3,6 +3,7 @@ import { serve } from "inngest/hono";
 import { Hono } from "hono";
 
 import { eventConsumers } from "../index.js";
+import { emailSequences } from "../email-sequences.js";
 import { scheduledJobs } from "../jobs.js";
 import type { WorkerEnvironment } from "../worker-environment.js";
 import { createInngestFunctions } from "./functions.js";
@@ -21,5 +22,5 @@ inngestRoutes.on(["GET", "POST", "PUT"], "/api/jobs/inngest", async (context) =>
     ...(environment.INNGEST_DEV === "1" ? { isDev: true } : {}),
     ...(environment.INNGEST_BASE_URL ? { baseUrl: environment.INNGEST_BASE_URL } : {}),
   });
-  return await serve({ client: inngest, functions: createInngestFunctions(inngest, environment, { eventConsumers: eventConsumers as never, scheduledJobs: scheduledJobs as never }), ...(environment.INNGEST_SIGNING_KEY ? { signingKey: environment.INNGEST_SIGNING_KEY } : {}) })(context);
+  return await serve({ client: inngest, functions: createInngestFunctions(inngest, environment, { eventConsumers: eventConsumers as never, scheduledJobs: scheduledJobs as never, emailSequences }), ...(environment.INNGEST_SIGNING_KEY ? { signingKey: environment.INNGEST_SIGNING_KEY } : {}) })(context);
 });

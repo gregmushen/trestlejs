@@ -58,6 +58,19 @@ export const emailDeliveredEvent = emailDeliveryEvent("email.delivered", "An ema
 export const emailDeliveryDelayedEvent = emailDeliveryEvent("email.delivery_delayed", "An email delivery was temporarily delayed");
 export const emailBouncedEvent = emailDeliveryEvent("email.bounced", "The recipient's mail server rejected an email");
 export const emailComplainedEvent = emailDeliveryEvent("email.complained", "The recipient marked an email as spam");
+const emailUnsubscribedPayload = z.object({ organizationId: z.string().min(1), recipientHash: z.string().regex(/^[0-9a-f]{64}$/u) });
+export const emailUnsubscribedEvent = defineEvent({ name: "email.unsubscribed", schemaVersion: 1, sensitivity: "confidential",
+  description: "A recipient unsubscribed from an organization's marketing email with a signed link",
+  resource: { type: "organization", id: (payload: z.infer<typeof emailUnsubscribedPayload>) => payload.organizationId },
+  payload: emailUnsubscribedPayload });
+
+// Application lifecycle events that email sequences start from. Publish them in
+// the same transaction as the change they describe (see createEventPublisher).
+const userSignedUpPayload = z.object({ organizationId: z.string().min(1), userId: z.string().min(1) });
+export const userSignedUpEvent = defineEvent({ name: "user.signed_up", schemaVersion: 1, sensitivity: "confidential",
+  description: "A user signed up and joined an organization",
+  resource: { type: "user", id: (payload: z.infer<typeof userSignedUpPayload>) => payload.userId },
+  payload: userSignedUpPayload });
 
 // trestle:resource-event-definitions
 export const applicationEventCatalog = defineEventCatalog([
@@ -72,5 +85,7 @@ export const applicationEventCatalog = defineEventCatalog([
   emailDeliveryDelayedEvent,
   emailBouncedEvent,
   emailComplainedEvent,
+  emailUnsubscribedEvent,
+  userSignedUpEvent,
   // trestle:resource-event-list
 ]);

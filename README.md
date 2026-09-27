@@ -241,6 +241,62 @@ delivery webhooks commit `email.delivered`, `email.delivery_delayed`,
 complaints add the address to the organization's `email_suppression` list in
 the same transaction; check it with `isSuppressed(db, organizationId, address)`.
 
+### Email sequences
+
+Drip and lifecycle email is code, in `apps/worker/src/email-sequences.ts`:
+
+```ts
+emailSequences.register(defineSequence({
+  id: "trial-nurture",
+  kind: "marketing",                     // or "transactional"
+  authority: "tenant",
+  trigger: "user.signed_up",              // a committed event starts a run
+  recipient: async (event, ctx) => { const u = await ctx.user(event.payload.userId); return u && { userId: u.id, address: u.email }; },
+  exitOn: ["billing.subscription.activated"],
+  steps: [{ send: "welcome" }, { wait: "3d" }, { send: "tips", unless: (ctx) => ... }, { wait: "4d" }, { send: "trial-ending" }],
+  templates: { welcome: (ctx) => ({ subject, template }), ... },
+  quietHours: { start: "21:00", end: "08:00" }, // the default; false sends at any hour
+}));
+```
+
+`defineSequence` checks durations, template names, and that every event is in
+the catalog when the module loads. The same definition runs on every job
+runtime (Cloudflare Workflows, trigger.dev, Inngest; see
+[docs/JOB_RUNTIMES.md](docs/JOB_RUNTIMES.md#email-sequences)), and on each:
+
+- **One run per person.** A run is keyed by sequence, organization and user; a
+  repeated trigger does not start a second one (`sequence_run`, migration 0043).
+- **Authority before every send.** The trigger event must still be committed
+  for the organization and inside the sequence's `validForDays` (default 14),
+  the organization must exist, the user must still be a member, and a
+  `requires` entitlement must still be held. A failure ends the run as
+  `failed` with the engine's non-retryable error.
+- **Exits.** An `exitOn` event for the same organization ends the user's runs
+  (or every run of the sequence in the organization when the event names no
+  user) and cancels the engine's waiting run; an exit during a wait prevents
+  the next send even if cancellation fails. `email.unsubscribed`, permanent
+  `email.bounced`, and `email.complained` end the recipient's marketing runs.
+  A trigger or exit event can also have the application's own consumer:
+  `emailSequences.attach` composes with it (both run under one inbox claim,
+  so they complete exactly once together). Register application consumers
+  first, with `tenant` authority and no entitlement gate.
+- **Suppression.** Marketing sequences check the suppression list before every
+  send; transactional sequences ignore unsubscribes but not hard bounces or
+  complaints. Every marketing email carries a signed one-click unsubscribe link
+  (`/api/email/unsubscribe`, valid 90 days) and `List-Unsubscribe` /
+  `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers.
+- **No duplicates.** A send uses the Resend idempotency key
+  `seq:<runId>:<stepIndex>` and is recorded in the transaction that advances
+  the run.
+- **Time zones and quiet hours.** Day waits keep the recipient's local time of
+  day across daylight-saving changes; a send due in quiet hours moves to their
+  end.
+
+The shipped `trialNurture` example is not registered: publish `user.signed_up`
+from your signup flow and register it to enable it. The platform admin's
+**Sequences** view shows each sequence's active runs, sends, exits and
+failures, and lets an operator exit a run (`platform.sequences.manage`).
+
 ## Billing without a Stripe account
 
 Local billing is deterministic and writes to the same canonical PostgreSQL

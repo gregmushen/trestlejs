@@ -8,5 +8,6 @@ import type { WorkerEnvironment } from "../../worker/src/worker-environment.js";
 export function jobEnvironment(): WorkerEnvironment {
   const environment = process.env as unknown as WorkerEnvironment;
   if (!environment.DATABASE_URL) throw new Error("DATABASE_URL is not set for this trigger.dev environment; run trestle jobs env push");
-  return environment;
+  // Work started here (email sequence runs) runs on trigger.dev.
+  return { ...environment, TRESTLE_JOB_RUNTIME: environment.TRESTLE_JOB_RUNTIME ?? "trigger" };
 }

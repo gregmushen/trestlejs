@@ -5,10 +5,14 @@ import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { createLogger, loggerSecretsFromEnvironment, type Logger } from "@__TRESTLE_PROJECT_NAME__/context";
 import { PostgresEventInbox, PostgresOutboxStore, type CommittedEventStore, type NativeWebhookWakeup } from "@__TRESTLE_PROJECT_NAME__/db";
 import { eventEnvelopeSchema, type CloudflareQueueBinding, type EventEnvelope, type EventInboxStore } from "@__TRESTLE_PROJECT_NAME__/events";
-import type { EventConsumerRegistry, PostCommitEffect } from "./async-runtime.js";
+import type { EventConsumerRegistry, PostCommitEffect, SequenceWorkflowParams } from "./async-runtime.js";
+import { emailSequences } from "./email-sequences.js";
 import { eventConsumers } from "./index.js";
 import { consumeCommittedEvent } from "./job-runtime.js";
+import { isSequenceWorkflowParams } from "./sequence-engines.js";
+import { driveSequenceRun, type SequenceRegistry } from "./sequence-runtime.js";
 import { projectWebhookForEvent } from "./webhook-runtime.js";
+import type { WorkerEnvironment } from "./worker-environment.js";
 
 /**
  * One execution of the Workflow step. Every execution, including retries and
@@ -37,8 +41,29 @@ export async function consumeWorkflowEvent<Environment, Data = unknown>(input: {
   });
 }
 
-export class TrestleWorkflow extends WorkflowEntrypoint<AuthEnvironment, EventEnvelope> {
-  async run(event: WorkflowEvent<EventEnvelope>, step: WorkflowStep): Promise<void> {
+/**
+ * A sequence run as a Workflow instance: each step is a `step.do` (a retried
+ * step reloads the run, and the database fences it on the run's current
+ * step), and each wait a durable `step.sleepUntil` to the wake time the run
+ * stored. An exit terminates the instance; if it is still waiting anyway,
+ * the next step finds the run ended and sends nothing.
+ */
+export async function runSequenceWorkflow<Environment>(input: { registry: SequenceRegistry<Environment>; environment: Environment; params: SequenceWorkflowParams; step: WorkflowStep; log: Logger }): Promise<void> {
+  await driveSequenceRun({
+    registry: input.registry, environment: input.environment, run: { runId: input.params.runId, triggerEventId: input.params.triggerEventId }, log: input.log,
+    step: async (name, execute) => await input.step.do(name, { retries: { limit: 5, delay: "30 seconds", backoff: "exponential" }, timeout: "2 minutes" }, execute),
+    sleepUntil: async (name, at) => { await input.step.sleepUntil(name, at); },
+    permanent: (message) => new NonRetryableError(message),
+  });
+}
+
+export class TrestleWorkflow extends WorkflowEntrypoint<AuthEnvironment, EventEnvelope | SequenceWorkflowParams> {
+  async run(event: WorkflowEvent<EventEnvelope | SequenceWorkflowParams>, step: WorkflowStep): Promise<void> {
+    if (isSequenceWorkflowParams(event.payload)) {
+      await runSequenceWorkflow({ registry: emailSequences, environment: this.env as WorkerEnvironment, params: event.payload, step,
+        log: createLogger({ workflowId: event.instanceId }, undefined, { secretValues: loggerSecretsFromEnvironment(this.env) }) });
+      return;
+    }
     const envelope = eventEnvelopeSchema.parse(event.payload);
     await step.do("consume-event-v1", { retries: { limit: 5, delay: "30 seconds", backoff: "exponential" }, timeout: "2 minutes" }, async () => {
       const inbox = new PostgresEventInbox(this.env.DATABASE_URL, { assumeApplicationRole: true });

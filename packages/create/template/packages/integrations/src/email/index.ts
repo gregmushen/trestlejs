@@ -8,6 +8,7 @@ export * from "./templates/verify-email.js";
 export * from "./templates/reset-password.js";
 export * from "./templates/invitation.js";
 export * from "./templates/security-alert.js";
+export * from "./templates/sequence-message.js";
 
 import { LocalEmailAdapter } from "./adapters/local.js";
 import { ResendEmailAdapter } from "./adapters/resend.js";

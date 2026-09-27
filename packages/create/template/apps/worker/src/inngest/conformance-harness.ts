@@ -7,10 +7,12 @@ import { Hono } from "hono";
 import { Inngest, NonRetriableError } from "inngest";
 import { serve } from "inngest/hono";
 
-import { conformanceRegistry } from "../job-conformance.js";
+import { conformanceRegistry, conformanceSequences } from "../job-conformance.js";
 import type { ConformanceHarness } from "../job-conformance-suite.js";
-import { inngestEventName, sendCommittedEventToInngest } from "../job-runtime-inngest.js";
+import { cancelInngestSequence, inngestEventName, sendCommittedEventToInngest, sendSequenceToInngest } from "../job-runtime-inngest.js";
 import { executeCommittedEventById } from "../job-runtime.js";
+import type { SequenceEngine } from "../sequence-runtime.js";
+import { createInngestSequenceFunction } from "./functions.js";
 
 /**
  * The conformance suite against the real Inngest engine (the Dev Server,
@@ -45,16 +47,29 @@ export async function inngestHarness(connectionString: string): Promise<Conforma
   const inngest = selfHosted
     ? new Inngest({ id: "trestle-conformance", baseUrl: selfHosted.url, signingKey: selfHosted.signingKey, eventKey: selfHosted.eventKey })
     : new Inngest({ id: "trestle-conformance", isDev: true, baseUrl: inngestUrl });
+  const environment = selfHosted ? { INNGEST_EVENT_KEY: selfHosted.eventKey, INNGEST_BASE_URL: selfHosted.url } : { INNGEST_DEV: "1", INNGEST_BASE_URL: inngestUrl };
+  // Sequence runs start and cancel through the Worker's own sends; the harness keeps Inngest's event IDs to watch their runs.
+  const sequenceEvents: string[] = [];
+  const engine: SequenceEngine<unknown> = {
+    name: "inngest",
+    start: async (_environment, run) => {
+      const ids = await sendSequenceToInngest({ environment, ...run });
+      sequenceEvents.push(...ids);
+      return { engineRunId: ids[0] ?? null };
+    },
+    cancel: async (_environment, run) => { await cancelInngestSequence({ environment, runId: run.runId }); },
+  };
   const probe = inngest.createFunction(
     { id: "trestle-conformance-event", retries: 5, triggers: [{ event: inngestEventName }] },
     async ({ event, step, runId }) => {
       await step.run("consume-event-v1", async () => {
-        await executeCommittedEventById({ eventId: String(event.data.eventId), connectionString, registry: conformanceRegistry(connectionString, version), environment: {}, runId, runtime: "inngest", log: quiet, permanent: (message) => new NonRetriableError(message), assumeApplicationRole: false });
+        await executeCommittedEventById({ eventId: String(event.data.eventId), connectionString, registry: conformanceRegistry(connectionString, version, engine), environment: {}, runId, runtime: "inngest", log: quiet, permanent: (message) => new NonRetriableError(message), assumeApplicationRole: false });
       });
     },
   );
+  const sequence = createInngestSequenceFunction(inngest, "trestle-conformance-sequence", conformanceSequences(connectionString, engine), {});
   const app = new Hono();
-  app.on(["GET", "POST", "PUT"], "/api/jobs/inngest", serve({ client: inngest, functions: [probe], ...(selfHosted ? { serveOrigin: selfHosted.serveOrigin } : {}) }));
+  app.on(["GET", "POST", "PUT"], "/api/jobs/inngest", serve({ client: inngest, functions: [probe, sequence], ...(selfHosted ? { serveOrigin: selfHosted.serveOrigin } : {}) }));
   let server = await listen(app);
   let dev: ChildProcess | undefined;
   if (selfHosted) {
@@ -65,7 +80,7 @@ export async function inngestHarness(connectionString: string): Promise<Conforma
     dev = spawn("npx", ["--yes", "inngest-cli@1.45.1", "dev", "--port", String(devPort), "-u", `http://127.0.0.1:${appPort}/api/jobs/inngest`, "--no-discovery", "--no-poll"], { stdio: "ignore", detached: true });
     for (let waited = 0; ; waited += 1_000) {
       const registered = await fetch(`http://127.0.0.1:${devPort}/dev`).then((response) => response.ok ? response.json() as Promise<{ functions?: unknown[] }> : undefined).catch(() => undefined);
-      if (registered?.functions?.length) break;
+      if ((registered?.functions?.length ?? 0) >= 2) break;
       if (waited > 180_000) throw new Error("the Inngest Dev Server did not register the conformance function");
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
@@ -77,7 +92,7 @@ export async function inngestHarness(connectionString: string): Promise<Conforma
   const publisher: ConformanceHarness["publisher"] = {
     send: async (envelope, delivery) => {
       // The Worker's own send, to the Dev Server.
-      const ids = await sendCommittedEventToInngest({ environment: selfHosted ? { INNGEST_EVENT_KEY: selfHosted.eventKey, INNGEST_BASE_URL: selfHosted.url } : { INNGEST_DEV: "1", INNGEST_BASE_URL: inngestUrl }, eventId: envelope.id, generation: delivery?.generation ?? 0 });
+      const ids = await sendCommittedEventToInngest({ environment, eventId: envelope.id, generation: delivery?.generation ?? 0 });
       events.set(envelope.id, [...(events.get(envelope.id) ?? []), ...ids]);
     },
   };
@@ -101,6 +116,14 @@ export async function inngestHarness(connectionString: string): Promise<Conforma
           await settledRuns();
         }
       } finally { await store.close(); }
+    },
+    async settleSequences() {
+      for (let waited = 0; waited < 240_000; waited += 1_000) {
+        const runs = (await Promise.all(sequenceEvents.map(runsFor))).map((found) => found.sort((left, right) => right.run_started_at.localeCompare(left.run_started_at))[0]);
+        if (runs.every((run) => run && run.ended_at && finished.has(run.status))) return;
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+      throw new Error("Inngest sequence runs did not settle");
     },
     async failed() {
       const failed: string[] = [];

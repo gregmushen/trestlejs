@@ -497,7 +497,7 @@ The shipped registry:
 | --- | --- |
 | Organization | `organization.read`, `organization.members.read`, `organization.audit.read`, `organization.billing.read`, `organization.billing.manage`, `organization.webhooks.read`, `organization.webhooks.manage`, `organization.webhooks.deliveries.read`, `organization.webhooks.replay`, `organization.settings.manage` |
 | Application | `resource.read`, `resource.write` (both admit API keys), `application.roles.read`, `application.roles.assign`, `application.service_accounts.read`, `application.service_accounts.manage` |
-| Platform | `platform.overview.read`, `platform.organizations.read`, `platform.users.read`, `platform.audit.read`, `platform.roles.read`, `platform.roles.manage`, `platform.operations.read`, `platform.outbox.redrive`, `platform.jobs.manage`, `platform.email.manage`, `platform.webhooks.manage`, `platform.subscriptions.read`, `platform.entitlements.manage`, `platform.machine_access.read`, `platform.api_keys.revoke`, `platform.support_sessions.use` |
+| Platform | `platform.overview.read`, `platform.organizations.read`, `platform.users.read`, `platform.audit.read`, `platform.roles.read`, `platform.roles.manage`, `platform.operations.read`, `platform.outbox.redrive`, `platform.jobs.manage`, `platform.email.manage`, `platform.sequences.manage`, `platform.webhooks.manage`, `platform.subscriptions.read`, `platform.entitlements.manage`, `platform.machine_access.read`, `platform.api_keys.revoke`, `platform.support_sessions.use` |
 
 New permission meaning enters the system through reviewed source. Runtime admin
 cannot invent a permission that application code does not recognize. The
@@ -1050,6 +1050,7 @@ Integrations
 Communications
   Email Delivery
   Suppressions
+  Sequences
 
 Operations
   Async Operations
@@ -1136,6 +1137,24 @@ The shipped views, with their paths, permissions, and capabilities:
   complaint or unsubscribe warns that it may violate the recipient's consent.
   `trestle_platform` has `SELECT` and `DELETE` on `email_suppression` (a
   delete-only policy) and no `INSERT` or `UPDATE`.
+- **Sequences** (`/communications/sequences`, `platform.operations.read`;
+  capability `email`): per `defineSequence` sequence, active runs, sends over
+  24 hours and 7 days, exits by reason (an `exitOn` event, an unsubscribe,
+  bounce or complaint, `suppressed` when the recipient was suppressed at send
+  time, or `operator`), failures, and suppressions hit; then the runs,
+  filterable by organization, sequence, and status, with the masked
+  recipient, current step, sends, next wake time, and the engine and its run
+  ID. A run on the effective engine links to that engine's dashboard (the
+  Jobs view's link; on Cloudflare, the Jobs view, since Workflow instances
+  `seq-<run ID>` have no external dashboard). With
+  `platform.sequences.manage` (granted to `platform_operator`; step-up,
+  reason, destructive confirmation, audit as `platform.sequence_run.exited`,
+  which never names the recipient) an operator exits an active run: its next
+  step sends nothing, whether or not the engine's waiting run is cancelled.
+  `trestle_platform` has `SELECT` on `sequence_run` and `sequence_send`, and
+  `UPDATE` only of `status`, `exit_reason`, `next_at`, and `updated_at` under a
+  policy that allows only active → exited. Its overview card shows active
+  runs, the day's sends, suppressions, and failures.
 - **Async Operations** (`/operations/async`, `platform.operations.read`;
   capability `queues`): outbox counts and dead-lettered events. Redrive
   requires `platform.outbox.redrive`.

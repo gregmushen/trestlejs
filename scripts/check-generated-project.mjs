@@ -185,6 +185,12 @@ try {
       "delivers verified Stripe billing and Resend delivery events to their tenant handlers",
       "recovers accepted work across an executor restart",
       "completes in-flight work exactly once across a deploy",
+      // Email sequences: waits, exits, suppression, authority, and idempotent sends on this runtime.
+      "waits, then sends each step once with one-click unsubscribe headers",
+      "exits a sequence during its wait and never sends the next step",
+      "checks suppression before a send and exits a suppressed recipient's marketing run",
+      "ends a run permanently when the user's membership is revoked between steps",
+      "does not duplicate a send whose response was lost and retried",
     ]);
     // Development accounts and the additive seed lifecycle.
     await requireScenarios(project, "./packages/auth", ["src/dev-account.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
@@ -233,6 +239,13 @@ try {
       "commits the receipt, the tenant outbox event and a hard-bounce suppression together, once",
       "publishes soft bounces and delays without suppressing, and suppresses complaints",
       "keeps suppressions tenant-scoped under row-level security",
+    ]);
+    await requireScenarios(project, "./packages/db", ["src/sequences.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
+      "starts one active run per sequence, organization and user, and one run per trigger event",
+      "records a send and advances the run in one transaction, fenced on the current step",
+      "exits active runs by user, by recipient, or across an organization's sequences",
+      "isolates runs by tenant; the platform role reads them and only exits an active run, audited",
+      "records a signed unsubscribe as a suppression and one outbox event, once",
     ]);
     await requireScenarios(project, "./packages/db", ["src/billing-events.integration.test.ts"], { TRESTLE_RLS_TEST_DATABASE_URL: process.env.TRESTLE_GENERATED_DATABASE_URL }, [
       "commits the receipt, subscription, and entitlements together and ignores a duplicate",
@@ -422,6 +435,12 @@ try {
       "delivers verified Stripe billing and Resend delivery events to their tenant handlers",
       "recovers accepted work across an executor restart",
       "completes in-flight work exactly once across a deploy",
+      // Email sequences: waits, exits, suppression, authority, and idempotent sends on this runtime.
+      "waits, then sends each step once with one-click unsubscribe headers",
+      "exits a sequence during its wait and never sends the next step",
+      "checks suppression before a send and exits a suppressed recipient's marketing run",
+      "ends a run permanently when the user's membership is revoked between steps",
+      "does not duplicate a send whose response was lost and retried",
     ]);
     // Separately: both files run their own Inngest Dev Server on the same ports.
     await requireScenarios(inngestProject, "./apps/worker", ["src/inngest/migration.integration.test.ts"], { TRESTLE_INNGEST_CONFORMANCE: "1", TRESTLE_RLS_TEST_DATABASE_URL: inngestDatabaseUrl.toString() }, [
@@ -471,6 +490,8 @@ try {
       "plans, applies, reverts, pauses, and settles job runtime changes under platform.jobs.manage with step-up, a reason, and optimistic concurrency",
       "lists, filters, and removes an email suppression over HTTP with an audit row; the platform role cannot add one",
       "reports email deliverability to operations readers and removes a suppression only under platform.email.manage with step-up and a reason",
+      "lists sequence runs with masked recipients and exits an active run over HTTP with an audit row; the platform role cannot advance one",
+      "reports email sequences to operations readers and exits a run only under platform.sequences.manage with step-up and a reason",
       // Step-up: fresh assurance for platform actions, factor changes gated at the strongest enrolled factor, operators only, and fail-closed environments.
       "requires fresh assurance for platform actions and reports it in the session",
       ...["POST /api/auth/two-factor/enable", "POST /api/auth/two-factor/disable", "POST /api/auth/two-factor/generate-backup-codes", "GET /api/auth/passkey/generate-register-options", "POST /api/auth/passkey/verify-registration", "POST /api/auth/passkey/delete-passkey"]
