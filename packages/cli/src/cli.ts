@@ -34,6 +34,7 @@ import { assertOutboxRetentionCutoff, formatOutboxRetentionSummary, type OutboxR
 import { runCommand, runDevelopment } from "./processes.js";
 import { emailDeploymentIssues, inspectResendSender, validEmailAddress, type RemoteEmailEnvironment } from "./resend-status.js";
 import { reconcileStripeCatalog, validateStripeCatalog } from "./stripe-sync.js";
+import { configureResendWebhook, inspectResendWebhook } from "./resend-webhook.js";
 import { configureStripeWebhook } from "./stripe-webhook.js";
 import { stripeDeploymentIssues, stripeServerKeyMatchesMode } from "./stripe-deployment.js";
 import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-config.js";
@@ -641,7 +642,8 @@ export function createProgram(runtime: CliRuntime): Command {
     });
   email.command("doctor").description("summarize and check email delivery configuration")
     .option("--env <environment>", "email environment", environment, "local")
-    .action(async (options: { env: ReturnType<typeof environment> }, command: Command) => {
+    .option("--webhook-url <url>", "deployed /api/webhooks/resend URL to check against the Resend webhook and stored signing secret")
+    .action(async (options: { env: ReturnType<typeof environment>; webhookUrl?: string }, command: Command) => {
       const context = await projectContext(command, runtime);
       const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime)).catch((error) => {
         if (options.env === "local" && error instanceof SecretsError) return {} as SecretValues;
@@ -662,8 +664,48 @@ export function createProgram(runtime: CliRuntime): Command {
         try { const provider = await inspectResendSender(values.RESEND_API_KEY, senderValue); if (!provider.verified) problems.push(`Resend sender domain ${provider.domain} is ${provider.providerStatus ?? "not registered"}`); }
         catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
       }
-      runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Resend ${options.env} lifecycle and delivery safety are configured\n`);
+      if (problems.length === 0 && values.RESEND_API_KEY && options.webhookUrl) {
+        try {
+          const webhook = await inspectResendWebhook(values.RESEND_API_KEY, options.webhookUrl, values.RESEND_WEBHOOK_SECRET);
+          if (!webhook.found) problems.push(`no Resend webhook targets ${webhook.url}; run trestle email webhook configure`);
+          else if (!webhook.enabled) problems.push(`Resend webhook for ${webhook.url} is ambiguous or disabled`);
+          else if (!webhook.eventsMatch) problems.push("Resend webhook is missing delivery event subscriptions");
+          else if (!webhook.secretMatches) problems.push("RESEND_WEBHOOK_SECRET does not match the Resend webhook signing secret");
+        } catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
+      }
+      runtime.stdout(problems.length ? `${problems.map((value) => `✗ ${value}`).join("\n")}\n` : `✓ Resend ${options.env} lifecycle and delivery safety are configured\n${options.webhookUrl ? "✓ Resend webhook exists, subscribes to delivery events, and matches the stored signing secret\n" : "! Pass --webhook-url to check the remote webhook and signing secret\n"}`);
       if (problems.length) throw new CliFailure("email doctor found failures");
+    });
+  const emailWebhook = email.command("webhook").description("configure the Resend delivery webhook");
+  emailWebhook.command("configure").description("create or rotate the Resend delivery webhook for an environment")
+    .requiredOption("--env <environment>", "remote environment", environment)
+    .requiredOption("--url <url>", "exact deployed /api/webhooks/resend URL")
+    .requiredOption("--api-key-stdin", "read a Resend full-access key from standard input; never store it")
+    .option("--replace-webhook-id <id>", "explicit old webhook to disable after encrypted secret storage")
+    .option("--resume", "resume an interrupted apply from the remote webhook state")
+    .option("--apply", "create and configure the webhook after reviewing the plan")
+    .option("--yes", "confirm production mutation")
+    .action(async (options: { env: ReturnType<typeof environment>; url: string; apiKeyStdin: boolean; replaceWebhookId?: string; resume?: boolean; apply?: boolean; yes?: boolean }, command: Command) => {
+      if (options.env === "local") throw new CliFailure("remote Resend webhook configuration requires preview, staging, or production");
+      if (options.env === "production" && options.apply && !options.yes) throw new CliFailure("production webhook mutation requires --apply --yes after review");
+      if (!options.apiKeyStdin || !runtime.stdin) throw new CliFailure("Resend management key must be supplied on standard input");
+      const apiKey = (await runtime.stdin()).trim();
+      const context = await projectContext(command, runtime);
+      if (!context.manifest.secrets?.RESEND_WEBHOOK_SECRET) throw new CliFailure("RESEND_WEBHOOK_SECRET must be declared before remote webhook setup");
+      const values = await readSecrets(context.root, options.env, selectedMasterKey(runtime));
+      const report = await configureResendWebhook({
+        environment: options.env, url: options.url, apiKey, apply: Boolean(options.apply),
+        ...(options.replaceWebhookId ? { replaceWebhookId: options.replaceWebhookId } : {}),
+        ...(options.resume ? { resume: true } : {}),
+        persistSecret: async (secret) => writeSecrets(context.root, options.env, { ...values, RESEND_WEBHOOK_SECRET: secret }, selectedMasterKey(runtime)),
+      });
+      runtime.stdout([`Resend ${options.env} webhook`, `URL: ${report.url}`, `Plan: ${report.classification}`,
+        `Enabled webhook IDs: ${report.enabledWebhookIds.join(", ") || "none"}`,
+        ...(report.reason ? [`Review: ${report.reason}`] : []),
+        ...(report.createdWebhookId ? [`Configured webhook: ${report.createdWebhookId}`, "Signing secret stored in encrypted credentials; push secrets before testing delivery."] : []),
+        ...(report.disabledWebhookId ? [`Disabled old webhook: ${report.disabledWebhookId}`] : []), ""].join("\n"));
+      if (options.apply && report.createdWebhookId) return;
+      if (options.apply) throw new CliFailure("Resend webhook setup did not apply");
     });
 
   const queue = experimental(program.command("queue").description("operate asynchronous delivery queues"), runtime);
@@ -1463,6 +1505,9 @@ export function createProgram(runtime: CliRuntime): Command {
       const secretKey = values.TRIGGER_SECRET_KEY;
       if (!secretKey) throw new CliFailure(`TRIGGER_SECRET_KEY is not set for ${options.env}; run trestle secrets set TRIGGER_SECRET_KEY --env ${options.env}`);
       const shared = Object.entries(context.manifest.secrets ?? {}).filter(([, declaration]) => declaration.shareWith?.includes("jobs")).map(([name]) => name);
+      // trigger.dev tasks send email outside the Worker, so they need the Resend key wherever email delivery requires it.
+      const resend = context.manifest.secrets?.RESEND_API_KEY;
+      if (resend && !shared.includes("RESEND_API_KEY") && (resend.required.includes(options.env) || values.RESEND_API_KEY)) shared.push("RESEND_API_KEY");
       const variables: Record<string, string> = { APP_ENV: options.env };
       const missing: string[] = [];
       for (const name of shared) { if (values[name]) variables[name] = values[name]!; else missing.push(name); }

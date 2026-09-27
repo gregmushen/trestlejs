@@ -157,11 +157,13 @@ export async function platformAccessAssignments(database: Database, organization
   return { organizationName: found.name, principalName: `${person.name} <${person.email}>`, organizationRoles: membership[0] ? membershipRoles(membership[0].roles) : [], applicationRoles: assignments.map((row) => row.role), member: Boolean(membership[0]) };
 }
 
-export type PlatformEmailEvent = Readonly<{ id: string; emailDeliveryId: string; status: string; occurredAt: Date; receivedAt: Date }>;
+export type PlatformEmailEvent = Readonly<{ id: string; emailDeliveryId: string; status: string; occurredAt: Date; receivedAt: Date; organizationId: string | null; bounceType: string | null; bounceSubType: string | null }>;
 
 /** Provider delivery-status events, newest first. The table holds no bodies, recipients, or templates. */
-export async function listPlatformEmailEvents(database: Database, options: Readonly<{ status?: string; limit?: number }> = {}): Promise<PlatformEmailEvent[]> {
-  return await database.select({ id: emailDeliveryEvent.id, emailDeliveryId: emailDeliveryEvent.emailDeliveryId, status: emailDeliveryEvent.status, occurredAt: emailDeliveryEvent.occurredAt, receivedAt: emailDeliveryEvent.receivedAt })
-    .from(emailDeliveryEvent).where(options.status ? eq(emailDeliveryEvent.status, options.status) : undefined)
+export async function listPlatformEmailEvents(database: Database, options: Readonly<{ status?: string; organizationId?: string; limit?: number }> = {}): Promise<PlatformEmailEvent[]> {
+  const filters = [options.status ? eq(emailDeliveryEvent.status, options.status) : undefined, options.organizationId ? eq(emailDeliveryEvent.organizationId, options.organizationId) : undefined].filter((value) => value !== undefined);
+  return await database.select({ id: emailDeliveryEvent.id, emailDeliveryId: emailDeliveryEvent.emailDeliveryId, status: emailDeliveryEvent.status, occurredAt: emailDeliveryEvent.occurredAt, receivedAt: emailDeliveryEvent.receivedAt,
+    organizationId: emailDeliveryEvent.organizationId, bounceType: emailDeliveryEvent.bounceType, bounceSubType: emailDeliveryEvent.bounceSubType })
+    .from(emailDeliveryEvent).where(filters.length ? and(...filters) : undefined)
     .orderBy(desc(emailDeliveryEvent.occurredAt), desc(emailDeliveryEvent.id)).limit(pageSize(options.limit, 100, 500));
 }

@@ -166,7 +166,7 @@ suite("platform admin Worker against PostgreSQL", () => {
       await sql!`delete from job_runtime_config where environment = 'local'`;
       await recordDeclaredJobRuntime(connectionString!, "local", { runtime: "cloudflare", hosting: "cloudflare", endpoint: null, project: null, available: ["cloudflare", "inngest", "trigger"], credentials: { TRIGGER_SECRET_KEY: true, INNGEST_EVENT_KEY: false, INNGEST_SIGNING_KEY: false } });
       const plan = await send("POST", "/plan", { runtime: "trigger", hosting: "cloud", project: "proj_abc" });
-      expect(plan).toMatchObject({ status: 200, body: { kind: "switch", allowed: true, experimental: true, overrideVersion: 0, credentials: [{ name: "TRIGGER_SECRET_KEY", present: true }] } });
+      expect(plan).toMatchObject({ status: 200, body: { kind: "switch", allowed: true, experimental: true, overrideVersion: 0, credentials: [{ name: "TRIGGER_SECRET_KEY", present: true }, { name: "RESEND_API_KEY", present: false }] } });
       expect((await send("POST", "/plan", { runtime: "inngest", hosting: "cloud" })).body.problems.map((problem: { code: string }) => problem.code)).toEqual(["credentials_missing"]);
       expect(await send("PUT", "", { runtime: "inngest", hosting: "cloud", expectedVersion: 0, acknowledgeExperimental: true, reason: "try inngest" })).toMatchObject({ status: 422, body: { codes: ["credentials_missing"] } });
       expect(await send("PUT", "", { runtime: "trigger", hosting: "cloud", project: "proj_abc", expectedVersion: 0, reason: "no ack" })).toMatchObject({ status: 422, body: { codes: ["experimental_not_acknowledged"] } });
@@ -185,6 +185,43 @@ suite("platform admin Worker against PostgreSQL", () => {
       expect(JSON.stringify(events)).not.toMatch(/SECRET_KEY|EVENT_KEY|credentials/u);
     } finally {
       await sql!`delete from job_runtime_config where environment = 'local'`;
+    }
+  });
+
+  it("lists, filters, and removes an email suppression over HTTP with an audit row; the platform role cannot add one", async () => {
+    signedIn = operator;
+    const organizationId = `${run}-org`;
+    const eventId = `msg_${run}`;
+    try {
+      await sql!`insert into email_suppression (organization_id, address, reason, source_event_id) values (${organizationId}, ${`${run}@example.test`}, 'complained', ${eventId}), (${organizationId}, ${`${run}-other@example.test`}, 'bounced', null)`;
+      await sql!`insert into email_delivery_event (id, email_delivery_id, status, occurred_at, organization_id, bounce_type, bounce_sub_type) values (${eventId}, ${`email_${run}`}, 'complained', now(), ${organizationId}, null, null)`;
+      const read = await admin.request("/api/admin/email", undefined, environment);
+      expect(read.status).toBe(200);
+      const email = await read.json() as { counts: { last24h: { complained: number } }; events: Array<{ id: string; organizationId: string | null }>; webhook: { lastReceivedAt: string | null } };
+      expect(email.counts.last24h.complained).toBeGreaterThanOrEqual(1);
+      expect(email.events.find((event) => event.id === eventId)).toMatchObject({ organizationId });
+      expect(email.webhook.lastReceivedAt).not.toBeNull();
+      const listed = await (await admin.request(`/api/admin/email/suppressions?organizationId=${organizationId}`, undefined, environment)).json() as { suppressions: Array<{ address: string; reason: string; organizationName: string | null }> };
+      expect(listed.suppressions).toHaveLength(2);
+      expect(listed.suppressions.every((row) => !row.address.includes(run) && row.organizationName === "Acme")).toBe(true);
+      const found = await (await admin.request(`/api/admin/email/suppressions?address=${encodeURIComponent(`${run.toUpperCase()}@Example.test`)}`, undefined, environment)).json() as { suppressions: Array<{ reason: string; sourceEventId: string }> };
+      expect(found.suppressions).toEqual([expect.objectContaining({ reason: "complained", sourceEventId: eventId })]);
+      const remove = (reason: string) => admin.request("/api/admin/email/suppressions", { method: "DELETE", headers: { origin: "http://localhost:42070", "content-type": "application/json", "x-correlation-id": `${run}-corr` },
+        body: JSON.stringify({ organizationId, address: `${run}@example.test`, reason }) }, environment);
+      expect((await remove("recipient re-subscribed in ticket 7")).status).toBe(200);
+      expect((await remove("again")).status).toBe(404);
+      expect(await sql!`select address from email_suppression where organization_id = ${organizationId}`).toEqual([{ address: `${run}-other@example.test` }]);
+      const [audit] = await sql!`select actor_id, organization_id, target_type, target_id, reason, summary from audit_event where correlation_id = ${`${run}-corr`} and name = 'platform.email_suppression.removed'`;
+      expect(audit).toMatchObject({ actor_id: operator, organization_id: organizationId, target_type: "email_suppression", reason: "recipient re-subscribed in ticket 7", summary: { suppressionReason: "complained", sourceEventId: eventId } });
+      expect(JSON.stringify(audit)).not.toContain(`${run}@example.test`);
+      // The platform role reads and removes; it never adds or rewrites a suppression.
+      await expect(sql!.begin(async (transaction) => {
+        await transaction`set local role trestle_platform`;
+        await transaction`insert into email_suppression (organization_id, address, reason) values (${organizationId}, 'forged@example.test', 'unsubscribed')`;
+      })).rejects.toThrow(/permission denied|row-level security/u);
+    } finally {
+      await sql!`delete from email_suppression where organization_id = ${organizationId}`;
+      await sql!`delete from email_delivery_event where id = ${eventId}`;
     }
   });
 });

@@ -2,6 +2,7 @@ import { Resend } from "resend";
 import { formatAddress, formatAddresses } from "../address.js";
 import { renderEmail } from "../render.js";
 import { EmailAlreadySent, EmailProviderUnavailable, EmailRateLimited, EmailRejected, EmailValidationError } from "../types.js";
+import { RESEND_ORGANIZATION_TAG } from "../webhooks.js";
 import type { EmailAddress, EmailLogger, EmailMessage, EmailReceipt, EmailService, ScheduledEmail, SendEmailOptions } from "../types.js";
 
 export type ResendEmailAdapterOptions = { apiKey: string; from: EmailAddress; replyTo?: EmailAddress; logger?: EmailLogger };
@@ -14,6 +15,12 @@ function normalizeError(error: { name?: string; message?: string; statusCode?: n
   return new EmailRejected(message);
 }
 
+/** Delivery webhooks return this tag, which binds their events to the sending organization. */
+function organizationTag(options: SendEmailOptions) {
+  return options.organizationId && /^[A-Za-z0-9_-]{1,256}$/u.test(options.organizationId)
+    ? { tags: [{ name: RESEND_ORGANIZATION_TAG, value: options.organizationId }] } : {};
+}
+
 export class ResendEmailAdapter implements EmailService {
   private readonly client: Resend;
   constructor(private readonly options: ResendEmailAdapterOptions) { this.client = new Resend(options.apiKey); }
@@ -21,7 +28,7 @@ export class ResendEmailAdapter implements EmailService {
   async send(message: EmailMessage, sendOptions: SendEmailOptions = {}): Promise<EmailReceipt> {
     const startedAt = new Date();
     this.options.logger?.("email.send.started", this.fields(message, sendOptions));
-    const { data, error } = await this.client.emails.send(await this.payload(message), sendOptions.idempotencyKey ? { idempotencyKey: sendOptions.idempotencyKey } : undefined);
+    const { data, error } = await this.client.emails.send({ ...(await this.payload(message)), ...organizationTag(sendOptions) }, sendOptions.idempotencyKey ? { idempotencyKey: sendOptions.idempotencyKey } : undefined);
     if (error || !data) {
       const normalized = normalizeError(error);
       this.options.logger?.("email.send.failed", { ...this.fields(message, sendOptions), failureCategory: normalized.constructor.name });
@@ -33,7 +40,7 @@ export class ResendEmailAdapter implements EmailService {
 
   async schedule(message: EmailMessage, sendAt: Date, sendOptions: SendEmailOptions = {}): Promise<ScheduledEmail> {
     if (!Number.isFinite(sendAt.getTime()) || sendAt <= new Date()) throw new EmailValidationError("sendAt must be a valid future date");
-    const { data, error } = await this.client.emails.send({ ...(await this.payload(message)), scheduledAt: sendAt.toISOString() }, sendOptions.idempotencyKey ? { idempotencyKey: sendOptions.idempotencyKey } : undefined);
+    const { data, error } = await this.client.emails.send({ ...(await this.payload(message)), ...organizationTag(sendOptions), scheduledAt: sendAt.toISOString() }, sendOptions.idempotencyKey ? { idempotencyKey: sendOptions.idempotencyKey } : undefined);
     if (error || !data) throw normalizeError(error);
     this.options.logger?.("email.schedule.created", { ...this.fields(message, sendOptions), emailDeliveryId: data.id });
     return { id: data.id, sendAt, status: "scheduled" };

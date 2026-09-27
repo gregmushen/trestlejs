@@ -56,7 +56,8 @@ type WirePlatformRoles = {
 };
 type WireRoleHolders = { assignments: Array<{ kind: "member" | "user" | "service_account"; id: string; organizationId: string; organizationName: string; principalId: string; name: string; detail: string; role: string; email?: string; grantedAt?: string; grantedBy?: string }> };
 type WireServiceAccounts = { serviceAccounts: Array<{ id: string; organizationId: string; organizationName: string; name: string; applicationRoles: string[]; status: string; createdAt: string }> };
-type WireEmail = { events: Array<{ id: string; emailDeliveryId: string; status: string; occurredAt: string; receivedAt: string }> };
+type WireEmailEvent = { id: string; emailDeliveryId: string; status: string; occurredAt: string; receivedAt: string; organizationId: string | null; bounceType: string | null; bounceSubType: string | null };
+type WireEmail = { webhook: EmailWebhookStatus; counts: EmailDeliverabilityCounts; events: WireEmailEvent[] };
 type WireApiKeys = { keys: Array<{ id: string; organizationId: string; serviceAccountId: string; serviceAccountName: string; name: string; environment: string; displayPrefix: string; scopes: string[]; expiresAt: string | null; createdAt: string; rotatedFrom: string | null; revokedAt: string | null; revocationReason: string | null }> };
 
 /** What a read-only support session can see: the organization's profile, members, plan, regional settings, and recent audit. */
@@ -77,6 +78,13 @@ export class UnsupportedAction extends Error {
 }
 
 const keyStatus = (key: { revokedAt: string | null; expiresAt: string | null }): string => key.revokedAt ? "revoked" : key.expiresAt && Date.parse(key.expiresAt) <= Date.now() ? "expired" : "active";
+
+/** Resend webhook readiness as the Worker reports it (presence only), and the CLI command that configures it. */
+export type EmailWebhookStatus = { secretConfigured: boolean | null; mode: string | null; lastReceivedAt: string | null; command: string };
+export type EmailDeliverabilityCounts = Record<"last24h" | "last7d", Record<"delivered" | "delivery_delayed" | "bounced" | "complained", number>>;
+export type EmailDeliverability = { webhook: EmailWebhookStatus; counts: EmailDeliverabilityCounts; events: WireEmailEvent[] };
+/** One organization's suppressed address; the address is masked by the Worker. */
+export type EmailSuppression = { organizationId: string; organizationName: string | null; address: string; reason: "unsubscribed" | "bounced" | "complained"; sourceEventId: string | null; createdAt: string };
 
 /** The environment's job engine and dispatch health (GET /api/admin/operations/jobs). Never credentials. */
 export type JobsRuntimeFields = { runtime: string; hosting: string; endpoint: string | null; project: string | null };
@@ -223,6 +231,7 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
     };
   };
   const emailEvents = async (status?: string) => (await request<WireEmail>("GET", "email", undefined, { status })).events;
+  const emailDeliverability = async (filters: { status?: string; organizationId?: string } = {}): Promise<EmailDeliverability> => await request<WireEmail>("GET", "email", undefined, filters);
 
   return {
     session,
@@ -264,11 +273,14 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
         return { id, provider: "resend", template: "", recipient: "", status: latest.status, correlationId: "", occurredAt: latest.occurredAt, events: group.length };
       }) };
     },
+    emailDeliverability,
+    emailSuppressions: async (filters: { organizationId?: string; address?: string } = {}) => await request<{ suppressions: EmailSuppression[] }>("GET", "email/suppressions", undefined, filters),
+    removeEmailSuppression: async (input: { organizationId: string; address: string }, reason: string) => await request<{ removed: true; suppressionReason: string }>("DELETE", "email/suppressions", { ...input, ...reasoned(reason) }),
     emailDelivery: async (id: string): Promise<EmailDeliveryDetail> => {
       const events = (await emailEvents()).filter((event) => event.emailDeliveryId === id).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
       if (events.length === 0) throw new Error("Email delivery not found");
       return {
-        delivery: { id, provider: "resend", template: "", recipient: "", recipientCount: 1, status: events.at(-1)!.status, failureCategory: null, correlationId: null, organizationId: null, organizationName: null, createdAt: events[0]!.occurredAt },
+        delivery: { id, provider: "resend", template: "", recipient: "", recipientCount: 1, status: events.at(-1)!.status, failureCategory: events.map((event) => event.bounceSubType).filter(Boolean).at(-1) ?? null, correlationId: null, organizationId: events.map((event) => event.organizationId).find(Boolean) ?? null, organizationName: null, createdAt: events[0]!.occurredAt },
         events: events.map((event) => ({ status: event.status, occurredAt: event.occurredAt, receivedAt: event.receivedAt })),
         notification: null,
       };

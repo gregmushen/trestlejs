@@ -123,6 +123,10 @@ export const adminViews: readonly AdminView[] = defineAdminViews([
     { method: "GET", path: "/api/admin/service-accounts" },
   ] },
   { id: "email", path: "/communications/email", label: "Email", group: "Communications", permission: "platform.operations.read", capability: "email", api: [{ method: "GET", path: "/api/admin/email" }] },
+  { id: "email-suppressions", path: "/communications/suppressions", label: "Suppressions", group: "Communications", permission: "platform.operations.read", capability: "email", api: [
+    { method: "GET", path: "/api/admin/email/suppressions" },
+    { method: "DELETE", path: "/api/admin/email/suppressions", permission: "platform.email.manage" },
+  ] },
   { id: "plans", path: "/commercial/plans", label: "Plans", group: "Commercial", permission: "platform.subscriptions.read", capability: "billing", api: [] },
   { id: "entitlements", path: "/commercial/entitlements", label: "Entitlements", group: "Commercial", permission: "platform.subscriptions.read", capability: "billing", api: [
     { method: "GET", path: "/api/admin/commercial/subscriptions" },

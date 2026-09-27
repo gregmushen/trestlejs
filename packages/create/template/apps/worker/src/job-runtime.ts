@@ -1,5 +1,5 @@
 import type { Logger } from "@__TRESTLE_PROJECT_NAME__/context";
-import { jobRuntimeCredentialNames, PostgresEventInbox, PostgresOutboxStore, readJobRuntimeOverride, recordDeclaredJobRuntime, type CommittedEventStore, type DeclaredJobRuntime, type JobRuntimeOverride } from "@__TRESTLE_PROJECT_NAME__/db";
+import { jobRuntimeCredentialNames, jobRuntimeTaskCredentialNames, PostgresEventInbox, PostgresOutboxStore, readJobRuntimeOverride, recordDeclaredJobRuntime, type CommittedEventStore, type DeclaredJobRuntime, type JobRuntimeOverride } from "@__TRESTLE_PROJECT_NAME__/db";
 import { CloudflareQueuePublisher, PermanentEventError, safeErrorCategory, type EventEnvelope, type EventInboxStore, type QueuePublisher } from "@__TRESTLE_PROJECT_NAME__/events";
 
 import { handleEventWithInbox, type EventConsumerRegistry, type PostCommitEffect } from "./async-runtime.js";
@@ -145,7 +145,7 @@ export function declaredJobRuntime(environment: WorkerEnvironment): DeclaredJobR
 /** Whether each runtime credential is set on this Worker; the admin shows set or missing, never a value. */
 function credentialPresence(environment: WorkerEnvironment): Record<string, boolean> {
   const variables = environment as WorkerEnvironment & Readonly<Record<string, unknown>>;
-  const names = [...new Set(Object.values(jobRuntimeCredentialNames).flat())].sort();
+  const names = [...new Set([...Object.values(jobRuntimeCredentialNames), ...Object.values(jobRuntimeTaskCredentialNames)].flat())].sort();
   return Object.fromEntries(names.map((name) => [name, typeof variables[name] === "string" && variables[name] !== ""]));
 }
 

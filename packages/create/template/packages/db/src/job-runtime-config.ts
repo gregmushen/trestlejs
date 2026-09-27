@@ -22,6 +22,18 @@ export const jobRuntimeCredentialNames: Readonly<Record<JobRuntimeKind, readonly
   inngest: ["INNGEST_EVENT_KEY", "INNGEST_SIGNING_KEY"],
 };
 
+/**
+ * Credentials that job code needs where the runtime executes it outside the
+ * Worker. trigger.dev tasks send email themselves, so they need the Resend key
+ * (`trestle jobs env push` copies it); Cloudflare and Inngest send from the
+ * Worker. Reported as presence on the Worker, and never required to switch.
+ */
+export const jobRuntimeTaskCredentialNames: Readonly<Record<JobRuntimeKind, readonly string[]>> = {
+  cloudflare: [],
+  trigger: ["RESEND_API_KEY"],
+  inngest: [],
+};
+
 /** What the customer Worker was deployed with. Never a credential. */
 export type DeclaredJobRuntime = Readonly<{
   runtime: JobRuntimeKind; hosting: JobRuntimeHosting; endpoint: string | null; project: string | null;

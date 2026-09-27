@@ -13,7 +13,7 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, plans, PostgresLocalBillingProvider } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
-import { activeSupportView, applyBillingNotificationEvent, billingReconciliationRequestedEvent, createDatabase, emailDeliveryEvent, endSupportView, exchangeSupportHandoff, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, createTenantDatabase, newSupportToken, outboxApplicationConnectionString, PostgresEventInbox, PostgresOutboxStore, replayTenantWebhookDelivery, requestBillingSubscriptionReconciliation, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
+import { activeSupportView, applyBillingNotificationEvent, billingReconciliationRequestedEvent, createDatabase, emailDeliveryEvent, endSupportView, exchangeSupportHandoff, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, createTenantDatabase, newSupportToken, outboxApplicationConnectionString, PostgresEventInbox, PostgresOutboxStore, recordTenantEmailDeliveryEvent, replayTenantWebhookDelivery, requestBillingSubscriptionReconciliation, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -361,6 +361,12 @@ app.post("/api/dev/emails/flush", async (context) => {
   return context.json({ flushed: await new LocalEmailAdapter().flushScheduledEmail() });
 });
 
+// A tenant delivery event commits an outbox row: dispatch it now.
+app.use("/api/webhooks/resend", async (context, next) => {
+  await next();
+  if (context.res.status === 202) wakeOutboxDispatch(context);
+});
+
 app.post("/api/webhooks/resend", async (context) => {
   const log = createLogger({ correlationId: context.get("correlationId"), provider: "resend" }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
   if (!context.env.RESEND_API_KEY || !context.env.RESEND_WEBHOOK_SECRET) return context.json({ error: "Email webhook is not configured" }, 503);
@@ -375,11 +381,26 @@ app.post("/api/webhooks/resend", async (context) => {
     log.warn("email.webhook.rejected", { reason: "invalid_signature_or_payload" });
     return context.json({ error: "Invalid webhook" }, 400);
   }
+  const { context: delivery, ...record } = event;
+  const summary = { id: record.id, emailDeliveryId: record.emailDeliveryId, status: record.status, occurredAt: record.occurredAt };
   try {
-    const inserted = await createDatabase(context.env.DATABASE_URL, context.env.DATABASE_DRIVER).insert(emailDeliveryEvent).values(event).onConflictDoNothing().returning();
-    const duplicate = inserted.length === 0;
-    log.info(duplicate ? "email.webhook.duplicate" : "email.webhook.processed", { providerEventId: event.id, emailDeliveryId: event.emailDeliveryId, deliveryStatus: event.status });
-    return context.json({ duplicate, event }, duplicate ? 200 : 202);
+    let duplicate: boolean;
+    if (delivery?.organizationId) {
+      // Email sent for an organization: the receipt, its outbox event and any suppression commit together.
+      const result = await recordTenantEmailDeliveryEvent({ databaseUrl: context.env.DATABASE_URL, ...(context.env.DATABASE_DRIVER ? { driver: context.env.DATABASE_DRIVER } : {}),
+        organizationId: delivery.organizationId, event: record, correlationId: context.get("correlationId"),
+        ...(delivery.recipient ? { recipient: delivery.recipient } : {}),
+        ...(delivery.bounceType ? { bounceType: delivery.bounceType } : {}), ...(delivery.bounceSubType ? { bounceSubType: delivery.bounceSubType } : {}) });
+      duplicate = result.duplicate;
+      if (result.suppressed) log.info("email.webhook.suppressed", { providerEventId: record.id, emailDeliveryId: record.emailDeliveryId, organizationId: delivery.organizationId, deliveryStatus: record.status });
+    } else {
+      // Untagged email has no tenant: record the receipt only, as billing leaves unresolved ownership unpublished.
+      const inserted = await createDatabase(context.env.DATABASE_URL, context.env.DATABASE_DRIVER).insert(emailDeliveryEvent).values(record).onConflictDoNothing().returning();
+      duplicate = inserted.length === 0;
+      if (!duplicate) log.info("email.webhook.unpublished", { providerEventId: record.id, emailDeliveryId: record.emailDeliveryId, reason: "organization_unresolved" });
+    }
+    log.info(duplicate ? "email.webhook.duplicate" : "email.webhook.processed", { providerEventId: record.id, emailDeliveryId: record.emailDeliveryId, deliveryStatus: record.status });
+    return context.json({ duplicate, event: summary }, duplicate ? 200 : 202);
   } catch {
     log.error("email.webhook.persistence_failed", { providerEventId: event.id, emailDeliveryId: event.emailDeliveryId });
     return context.json({ error: "Email webhook could not be recorded" }, 503);
@@ -543,7 +564,7 @@ app.get("/api/health/operational", (context) => context.json({
   environment: context.env.APP_ENV ?? "local",
   capabilities: {
     database: { configured: Boolean(context.env.DATABASE_URL) },
-    email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && configuredValue(context.env.EMAIL_FROM)), stagingProtected: !["preview", "staging"].includes(context.env.APP_ENV ?? "local") || configuredValue(context.env.EMAIL_STAGING_REDIRECT) },
+    email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && configuredValue(context.env.EMAIL_FROM)), stagingProtected: !["preview", "staging"].includes(context.env.APP_ENV ?? "local") || configuredValue(context.env.EMAIL_STAGING_REDIRECT), webhookConfigured: Boolean(context.env.RESEND_WEBHOOK_SECRET) },
     billing: { mode: context.env.STRIPE_MODE ?? "local", configured: stripeConfigurationReady(context.env), plans: Object.keys(plans).length },
     queues: { configured: Boolean((context.env as WorkerEnvironment).TRESTLE_EVENTS) },
     artifacts: { configured: artifactRuntimeReady(context.env), mode: context.env.TRESTLE_ARTIFACTS ? "r2" : context.env.APP_ENV === "local" || !context.env.APP_ENV ? "local" : "unavailable" },

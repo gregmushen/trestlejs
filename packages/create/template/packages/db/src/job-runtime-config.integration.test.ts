@@ -118,10 +118,9 @@ suite("job runtime configuration", () => {
       const platform = createPlatformDatabase(connectionString!, "postgres-js");
       try {
         expect(await failure(settleUnconsumedJobs(platform, environment, { olderThanMinutes: -1 }, context("x")))).toMatch(/olderThanMinutes/u);
-        // Only rows processed more than nine days ago: this test's own.
-        const result = await settleUnconsumedJobs(platform, environment, { olderThanMinutes: 9 * 24 * 60 }, context("drain trigger"));
-        expect(result.requeued).toBeGreaterThanOrEqual(1);
-        expect(result.deadLettered).toBeGreaterThanOrEqual(1);
+        // Settlement is table-wide and other suites settle in parallel, so this test asserts its own rows' final
+        // state, which is the same whichever settlement reached them first, rather than this call's counts.
+        await settleUnconsumedJobs(platform, environment, { olderThanMinutes: 9 * 24 * 60 }, context("drain trigger"));
       } finally { await platform.$client.end(); }
       const rows = await sql!<{ id: string; status: string; attempts: number; last_error: string | null }[]>`select id, status, attempts, last_error from outbox_message where id in (${ids.stale}, ${ids.capped})`;
       expect(rows.find((row) => row.id === ids.stale)).toMatchObject({ status: "pending", attempts: 2 });

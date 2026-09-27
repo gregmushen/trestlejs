@@ -1,6 +1,6 @@
-import { createDatabase, PostgresOutboxStore, tenantRecord } from "@__TRESTLE_PROJECT_NAME__/db";
-import { dispatchOutbox, type EventEnvelope, type QueuePublisher } from "@__TRESTLE_PROJECT_NAME__/events";
-import { and, eq, like } from "drizzle-orm";
+import { createDatabase, emailDeliveryEvent, outboxStatement, PostgresOutboxStore, recordTenantEmailDeliveryEvent, tenantRecord } from "@__TRESTLE_PROJECT_NAME__/db";
+import { applicationEventCatalog, dispatchOutbox, eventEnvelopeSchema, type EventEnvelope, type QueuePublisher } from "@__TRESTLE_PROJECT_NAME__/events";
+import { and, eq, inArray, like } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { conformanceEntitledEvent, conformanceEntitlement, conformanceEvent, countRecords, type ConformancePayload } from "./job-conformance.js";
@@ -38,6 +38,7 @@ export function runtimeConformanceSuite(options: { runtime: JobRuntimeName; conn
     let harness: ConformanceHarness | undefined;
     const open = async () => (harness ??= await options.harness(connectionString));
     const appended: string[] = [];
+    const providerEventIds: string[] = [];
     beforeAll(async () => { if (options.connectionString) await open(); }, Math.max(timeoutMs, 240_000));
 
     async function commit(organizationId: string, definition: { name: string; schemaVersion: number }, payload: ConformancePayload, occurredAt = new Date()): Promise<EventEnvelope> {
@@ -67,6 +68,7 @@ export function runtimeConformanceSuite(options: { runtime: JobRuntimeName; conn
       await harness?.close();
       if (!database) return;
       await database.delete(tenantRecord).where(like(tenantRecord.organizationId, `${run}%`));
+      if (providerEventIds.length) await database.delete(emailDeliveryEvent).where(inArray(emailDeliveryEvent.id, providerEventIds));
       await database.$client.end();
     });
 
@@ -135,6 +137,26 @@ export function runtimeConformanceSuite(options: { runtime: JobRuntimeName; conn
         expect(await count(organizationId, `done:${tag(`fan-${organizationId}`)}:v1`)).toBe(1);
         expect(await count(organizations.find((other) => other !== organizationId)!, `done:${tag(`fan-${organizationId}`)}:v1`)).toBe(0);
       }
+    }, timeoutMs);
+
+    it("delivers verified Stripe billing and Resend delivery events to their tenant handlers", async () => {
+      const stripeEventId = `evt_${tag("stripe").replaceAll("-", "_")}`;
+      const resendEventId = `msg_${tag("resend")}`;
+      providerEventIds.push(resendEventId);
+      // The billing event as applyBillingNotificationEvent commits it for a verified Stripe invoice.
+      const payload = applicationEventCatalog.parse("billing.invoice.paid", 1, { organizationId: organizations[0]!, currentSubscription: true, amountMinor: 1200, currency: "usd" });
+      const billing = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "billing.invoice.paid", schemaVersion: 1, occurredAt: new Date().toISOString(),
+        resource: applicationEventCatalog.resource("billing.invoice.paid", 1, payload), correlationId: stripeEventId, causationId: stripeEventId,
+        idempotencyKey: `billing:stripe:${stripeEventId}`, payload });
+      await database!.execute(outboxStatement(billing, organizations[0]!));
+      // The Resend event through the same producer the verified webhook uses.
+      await recordTenantEmailDeliveryEvent({ databaseUrl: connectionString, driver: "postgres-js", organizationId: organizations[1]!, correlationId: resendEventId,
+        event: { id: resendEventId, emailDeliveryId: `email_${tag("resend")}`, status: "bounced", occurredAt: new Date() }, bounceType: "Transient" });
+      await dispatch();
+      await (await open()).settle();
+      expect(await count(organizations[0]!, `provider:billing.invoice.paid:${stripeEventId}:v1`)).toBe(1);
+      expect(await count(organizations[1]!, `provider:email.bounced:${resendEventId}:v1`)).toBe(1);
+      expect(await count(organizations[1]!, `provider:billing.invoice.paid:${stripeEventId}:v1`)).toBe(0);
     }, timeoutMs);
 
     it("recovers accepted work across an executor restart", async () => {

@@ -8,9 +8,9 @@ import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_N
 import {
   artifactOperations, createDatabase, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, mintSupportHandoff, startSupportSession, supportableOrganizations, supportOrganizationView,
-  grantPlatformRole, listPlatformAuditEvents, listPlatformEmailEvents, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
+  emailDeliverabilitySummary, grantPlatformRole, listEmailSuppressions, listPlatformAuditEvents, listPlatformEmailEvents, removeEmailSuppression, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
   listPlatformApiKeys, listPlatformIntegrationConnections, listPlatformOrganizations, listPlatformQuarantinedEvents, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
-  clearJobRuntimeOverride, jobDispatchHealth, JobRuntimeChangeError, jobRuntimeCredentialNames, jobRuntimeState, setJobDispatchPaused, setJobRuntimeOverride, settleUnconsumedJobs, validateJobRuntimeTarget,
+  clearJobRuntimeOverride, jobDispatchHealth, JobRuntimeChangeError, jobRuntimeCredentialNames, jobRuntimeState, jobRuntimeTaskCredentialNames, setJobDispatchPaused, setJobRuntimeOverride, settleUnconsumedJobs, validateJobRuntimeTarget,
   sessionAssurance, type Database, type JobDispatchHealth, type JobRuntimeState, type JobRuntimeTarget, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { buildOpenApi } from "@__TRESTLE_PROJECT_NAME__/contracts";
@@ -62,6 +62,13 @@ export const adminDependencies = {
     const database = platformDatabase(environment);
     const [state, dispatch] = await Promise.all([jobRuntimeState(database, name), jobDispatchHealth(database)]);
     return { state, dispatch };
+  },
+  /** Email deliverability reads and the audited suppression removal, on the trestle_platform connection. */
+  email: {
+    events: async (environment: AdminEnvironment, filters: Parameters<typeof listPlatformEmailEvents>[1]) => await listPlatformEmailEvents(platformDatabase(environment), filters),
+    summary: async (environment: AdminEnvironment) => await emailDeliverabilitySummary(platformDatabase(environment)),
+    suppressions: async (environment: AdminEnvironment, filters: Parameters<typeof listEmailSuppressions>[1]) => await listEmailSuppressions(platformDatabase(environment), filters),
+    remove: async (environment: AdminEnvironment, input: Parameters<typeof removeEmailSuppression>[1], change: PlatformChangeContext) => await removeEmailSuppression(platformDatabase(environment), input, change),
   },
   /** Job runtime writes; each audits in its own transaction on the trestle_platform connection. */
   jobChanges: {
@@ -498,9 +505,41 @@ admin.post("/api/admin/access/explain", async (context) => {
   return context.json({ decision, explanation: formatAccessExplanation(decision) });
 });
 
+/** The CLI command that creates or rotates the Resend webhook; the admin never calls Resend. */
+const emailWebhookCommand = (environment: string) => `pnpm exec trestle email webhook configure --env ${environment} --url https://<worker>/api/webhooks/resend --api-key-stdin`;
+
 admin.get("/api/admin/email", async (context) => {
-  const events = await listPlatformEmailEvents(platformDatabase(context.env), { ...(context.req.query("status") ? { status: context.req.query("status")! } : {}) });
-  return context.json({ events: events.map((event) => ({ ...event, occurredAt: event.occurredAt.toISOString(), receivedAt: event.receivedAt.toISOString() })) });
+  const environment = adminEnvironment(context.env);
+  const status = context.req.query("status");
+  const organizationId = context.req.query("organizationId");
+  const [events, summary, reported] = await Promise.all([
+    adminDependencies.email.events(context.env, { ...(status ? { status } : {}), ...(organizationId ? { organizationId } : {}) }),
+    adminDependencies.email.summary(context.env),
+    adminDependencies.operationalStatus(context.env).catch(() => null),
+  ]);
+  // Presence only, as the Worker reports it; null when the Worker did not answer.
+  const email = (reported as { capabilities?: { email?: { webhookConfigured?: unknown; mode?: unknown } } } | null)?.capabilities?.email;
+  const secretConfigured = typeof email?.webhookConfigured === "boolean" ? email.webhookConfigured : null;
+  return context.json({
+    webhook: { secretConfigured, mode: typeof email?.mode === "string" ? email.mode : null, lastReceivedAt: iso(summary.lastReceivedAt), command: emailWebhookCommand(environment) },
+    counts: { last24h: summary.last24h, last7d: summary.last7d },
+    events: events.map((event) => ({ ...event, occurredAt: event.occurredAt.toISOString(), receivedAt: event.receivedAt.toISOString() })),
+  });
+});
+
+admin.get("/api/admin/email/suppressions", async (context) => {
+  const organizationId = context.req.query("organizationId")?.trim();
+  const address = context.req.query("address")?.trim();
+  const suppressions = await adminDependencies.email.suppressions(context.env, { ...(organizationId ? { organizationId } : {}), ...(address ? { address } : {}) });
+  return context.json({ suppressions: suppressions.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })) });
+});
+
+admin.delete("/api/admin/email/suppressions", async (context) => {
+  const body = await context.req.json().catch(() => ({})) as { organizationId?: unknown; address?: unknown; reason?: unknown };
+  const change = await actionContext(context, body);
+  if (typeof body.organizationId !== "string" || typeof body.address !== "string") throw new PlatformOperationError("invalid", "Choose an organization and an email address");
+  const removed = await adminDependencies.email.remove(context.env, { organizationId: body.organizationId, address: body.address }, change);
+  return context.json({ removed: true, suppressionReason: removed.reason, correlationId: context.get("correlationId") });
 });
 
 admin.get("/api/admin/support/sessions", async (context) => {
@@ -608,7 +647,10 @@ const secretCommand = (name: string, environment: string) => `pnpm exec trestle 
 function jobsCredentials(state: JobRuntimeState | null, runtime: string | null, environment: string) {
   const names = runtime && Object.hasOwn(jobRuntimeCredentialNames, runtime) ? jobRuntimeCredentialNames[runtime as keyof typeof jobRuntimeCredentialNames] : [];
   // Presence only; null means the Worker has not reported it.
-  return names.map((name) => ({ name, present: state?.credentials ? state.credentials[name] === true : null, command: secretCommand(name, environment) }));
+  const tasks = runtime && Object.hasOwn(jobRuntimeTaskCredentialNames, runtime) ? jobRuntimeTaskCredentialNames[runtime as keyof typeof jobRuntimeTaskCredentialNames] : [];
+  return [...names.map((name) => ({ name, present: state?.credentials ? state.credentials[name] === true : null, command: secretCommand(name, environment) })),
+    // Job code on this runtime runs outside the Worker; its copy is pushed with jobs env push.
+    ...tasks.map((name) => ({ name, present: state?.credentials ? state.credentials[name] === true : null, command: `${secretCommand(name, environment)} && pnpm exec trestle jobs env push --env ${environment}` }))];
 }
 
 admin.get("/api/admin/operations/jobs", async (context) => {

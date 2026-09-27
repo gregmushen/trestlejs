@@ -136,7 +136,9 @@ suite("outbox retention and failure redaction", () => {
       const message = envelope();
       ids.push(message.id);
       await owner.append(message, { organizationId: "org-retention" });
-      await admin!`update outbox_message set status=${status}, processed_at=${processedAt} where id=${message.id}`;
+      // Retention candidates are old events, not only old dispatches: a recent occurred_at would make them look
+      // unconsumed to settlement, which other suites run over the whole table in parallel with this one.
+      await admin!`update outbox_message set status=${status}, processed_at=${processedAt}, occurred_at=coalesce(${processedAt}, occurred_at) where id=${message.id}`;
       return message;
     };
     const remaining = async () => (await admin!<{ id: string }[]>`select id from outbox_message where id = any(${ids})`).map((row) => row.id);

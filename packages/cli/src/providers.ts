@@ -26,7 +26,7 @@ export const builtInProviders: Readonly<Record<string, ProviderDeclaration>> = {
     secrets: ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET"],
     mode: { local: "fixture", preview: "live", staging: "live", production: "live" },
     patterns: { RESEND_API_KEY: "^re_", RESEND_WEBHOOK_SECRET: "^whsec_" },
-    setup: "Create an API key at https://resend.com/api-keys and a webhook signing secret, then: pnpm exec trestle secrets set RESEND_API_KEY --env <environment>",
+    setup: "Create an API key at https://resend.com/api-keys, then: pnpm exec trestle secrets set RESEND_API_KEY --env <environment>; run trestle email webhook configure for the signing secret",
     health: { url: "https://api.resend.com/domains", bearer: "RESEND_API_KEY", expect: [200] },
   },
   stripe: {
