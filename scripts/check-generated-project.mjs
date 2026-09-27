@@ -405,6 +405,10 @@ try {
       "recovers accepted work across an executor restart",
       "completes in-flight work exactly once across a deploy",
     ]);
+    // Separately: both files run their own Inngest Dev Server on the same ports.
+    await requireScenarios(inngestProject, "./apps/worker", ["src/inngest/migration.integration.test.ts"], { TRESTLE_INNGEST_CONFORMANCE: "1", TRESTLE_RLS_TEST_DATABASE_URL: inngestDatabaseUrl.toString() }, [
+      "moves Cloudflare to Inngest and back with pending, in-flight, and lost work, running every event exactly once",
+    ]);
   }
   // Admin disabled (the default): no admin app and no admin deployment configuration.
   if (await stat(path.join(project, "apps", "admin")).then(() => true, () => false)) throw new Error("The default project generated apps/admin");

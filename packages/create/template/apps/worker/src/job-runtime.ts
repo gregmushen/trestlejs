@@ -82,6 +82,9 @@ export async function consumeCommittedEvent<Environment, Data = unknown>(input: 
   } catch (error) {
     if (error instanceof PermanentEventError) {
       input.log.warn(`${prefix}.event.rejected`, { ...fields, reason: error.reason });
+      // Like a Queue rejection, a permanent failure dead-letters the committed event: visible and redrivable, never settled.
+      // A failed write must not turn the permanent failure into a retry; settlement dead-letters the event at the attempt cap instead.
+      await input.outbox.reject?.(input.envelope.id, error.reason).catch((rejectError: unknown) => input.log.error(`${prefix}.event.reject_failed`, { ...fields, errorCategory: safeErrorCategory(rejectError) }));
       throw input.permanent(`Event rejected: ${error.reason}`);
     }
     input.log.warn(`${prefix}.event.retrying`, { ...fields, errorCategory: safeErrorCategory(error) });
