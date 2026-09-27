@@ -8,7 +8,7 @@ import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_N
 import {
   artifactOperations, createDatabase, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, mintSupportHandoff, startSupportSession, supportableOrganizations, supportOrganizationView,
-  emailDeliverabilitySummary, grantPlatformRole, listEmailSuppressions, listPlatformAuditEvents, listPlatformEmailEvents, removeEmailSuppression, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
+  emailDeliverabilitySummary, exitSequenceRunAsOperator, grantPlatformRole, listEmailSuppressions, listSequenceRuns, sequenceSummaries, listPlatformAuditEvents, listPlatformEmailEvents, removeEmailSuppression, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
   listPlatformApiKeys, listPlatformIntegrationConnections, listPlatformOrganizations, listPlatformQuarantinedEvents, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   clearJobRuntimeOverride, jobDispatchHealth, JobRuntimeChangeError, jobRuntimeCredentialNames, jobRuntimeState, jobRuntimeTaskCredentialNames, setJobDispatchPaused, setJobRuntimeOverride, settleUnconsumedJobs, validateJobRuntimeTarget,
   sessionAssurance, type Database, type JobDispatchHealth, type JobRuntimeState, type JobRuntimeTarget, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
@@ -69,6 +69,12 @@ export const adminDependencies = {
     summary: async (environment: AdminEnvironment) => await emailDeliverabilitySummary(platformDatabase(environment)),
     suppressions: async (environment: AdminEnvironment, filters: Parameters<typeof listEmailSuppressions>[1]) => await listEmailSuppressions(platformDatabase(environment), filters),
     remove: async (environment: AdminEnvironment, input: Parameters<typeof removeEmailSuppression>[1], change: PlatformChangeContext) => await removeEmailSuppression(platformDatabase(environment), input, change),
+  },
+  /** Email sequence reads and the audited operator exit, on the trestle_platform connection. */
+  sequences: {
+    summaries: async (environment: AdminEnvironment) => await sequenceSummaries(platformDatabase(environment)),
+    runs: async (environment: AdminEnvironment, filters: Parameters<typeof listSequenceRuns>[1]) => await listSequenceRuns(platformDatabase(environment), filters),
+    exit: async (environment: AdminEnvironment, input: Parameters<typeof exitSequenceRunAsOperator>[1], change: PlatformChangeContext) => await exitSequenceRunAsOperator(platformDatabase(environment), input, change),
   },
   /** Job runtime writes; each audits in its own transaction on the trestle_platform connection. */
   jobChanges: {
@@ -540,6 +546,38 @@ admin.delete("/api/admin/email/suppressions", async (context) => {
   if (typeof body.organizationId !== "string" || typeof body.address !== "string") throw new PlatformOperationError("invalid", "Choose an organization and an email address");
   const removed = await adminDependencies.email.remove(context.env, { organizationId: body.organizationId, address: body.address }, change);
   return context.json({ removed: true, suppressionReason: removed.reason, correlationId: context.get("correlationId") });
+});
+
+/** Where an engine's sequence runs are inspected: the Jobs view's dashboard link for the effective engine (Cloudflare: none). */
+async function sequencesEngine(context: AdminContext): Promise<{ runtime: string | null; dashboardUrl: string | null }> {
+  const { state } = await adminDependencies.jobRuntime(context.env, adminEnvironment(context.env));
+  const config = state?.effective ?? null;
+  return { runtime: config?.runtime ?? null, dashboardUrl: config ? jobsDashboardUrl(config) : null };
+}
+
+admin.get("/api/admin/email/sequences", async (context) => {
+  const [summaries, engine] = await Promise.all([adminDependencies.sequences.summaries(context.env), sequencesEngine(context)]);
+  return context.json({ ...engine, sequences: summaries });
+});
+
+admin.get("/api/admin/email/sequences/runs", async (context) => {
+  const organizationId = context.req.query("organizationId")?.trim();
+  const sequenceId = context.req.query("sequenceId")?.trim();
+  const status = context.req.query("status")?.trim();
+  if (status && !["active", "completed", "exited", "failed"].includes(status)) throw new PlatformOperationError("invalid", "Status must be active, completed, exited, or failed");
+  const [runs, engine] = await Promise.all([
+    adminDependencies.sequences.runs(context.env, { ...(organizationId ? { organizationId } : {}), ...(sequenceId ? { sequenceId } : {}), ...(status ? { status } : {}) }),
+    sequencesEngine(context),
+  ]);
+  return context.json({ runs: runs.map((run) => ({ ...run, nextAt: iso(run.nextAt), createdAt: run.createdAt.toISOString(), updatedAt: run.updatedAt.toISOString(),
+    // A run links to the dashboard only on the engine the dashboard shows.
+    dashboardUrl: run.engine === engine.runtime ? engine.dashboardUrl : null })) });
+});
+
+admin.post("/api/admin/email/sequences/runs/:runId/exit", async (context) => {
+  const change = await actionContext(context);
+  const exited = await adminDependencies.sequences.exit(context.env, { runId: context.req.param("runId") }, change);
+  return context.json({ exited: true, sequenceId: exited.sequenceId, correlationId: context.get("correlationId") });
 });
 
 admin.get("/api/admin/support/sessions", async (context) => {

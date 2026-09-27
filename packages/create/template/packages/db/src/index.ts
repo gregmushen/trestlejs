@@ -12,6 +12,7 @@ import * as artifactSchema from "./artifact-schema.js";
 import * as artifactMaintenanceSchema from "./artifact-maintenance-schema.js";
 import * as billingSchema from "./billing-schema.js";
 import * as emailSchema from "./email-schema.js";
+import * as sequenceSchema from "./sequence-schema.js";
 import * as tenantSchema from "./tenant-schema.js";
 import * as outboxSchema from "./outbox-schema.js";
 import * as scheduledJobSchema from "./scheduled-job-schema.js";
@@ -51,6 +52,9 @@ export * from "./billing-events.js";
 export * from "./email-schema.js";
 export * from "./email-delivery.js";
 export * from "./platform-email.js";
+export * from "./sequence-schema.js";
+export * from "./sequences.js";
+export * from "./platform-sequences.js";
 export * from "./roles.js";
 export * from "./tenant-schema.js";
 export * from "./outbox-schema.js";
@@ -79,7 +83,7 @@ export * from "./job-runtime-schema.js";
 export * from "./job-runtime-config.js";
 export * from "./tenancy.js";
 
-const schema = { ...accessSchema, ...assuranceSchema, ...auditSchema, ...platformSchema, ...authSchema, ...artifactSchema, ...artifactMaintenanceSchema, ...billingSchema, ...emailSchema, ...tenantSchema, ...outboxSchema, ...scheduledJobSchema, ...jobRuntimeSchema, ...webhookSchema, ...webhookProjectionSchema, ...webhookAttemptSchema, ...webhookSecretSchema };
+const schema = { ...accessSchema, ...assuranceSchema, ...auditSchema, ...platformSchema, ...authSchema, ...artifactSchema, ...artifactMaintenanceSchema, ...billingSchema, ...emailSchema, ...sequenceSchema, ...tenantSchema, ...outboxSchema, ...scheduledJobSchema, ...jobRuntimeSchema, ...webhookSchema, ...webhookProjectionSchema, ...webhookAttemptSchema, ...webhookSecretSchema };
 
 export type DatabaseDriver = "neon-http" | "neon-serverless" | "postgres-js";
 

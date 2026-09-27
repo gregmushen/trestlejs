@@ -13,7 +13,7 @@ import { createAuth, type AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth
 import { getPlan, plans, PostgresLocalBillingProvider } from "@__TRESTLE_PROJECT_NAME__/billing";
 import { healthResponseSchema } from "@__TRESTLE_PROJECT_NAME__/contracts";
 import { createLogger, createMetrics, loggerSecretsFromEnvironment, safeErrorDiagnostic } from "@__TRESTLE_PROJECT_NAME__/context";
-import { activeSupportView, applyBillingNotificationEvent, billingReconciliationRequestedEvent, createDatabase, emailDeliveryEvent, endSupportView, exchangeSupportHandoff, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, createTenantDatabase, newSupportToken, outboxApplicationConnectionString, PostgresEventInbox, PostgresOutboxStore, recordTenantEmailDeliveryEvent, replayTenantWebhookDelivery, requestBillingSubscriptionReconciliation, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
+import { activeSupportView, applyBillingNotificationEvent, billingReconciliationRequestedEvent, createDatabase, emailDeliveryEvent, endSupportView, exchangeSupportHandoff, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, createTenantDatabase, newSupportToken, outboxApplicationConnectionString, PostgresEventInbox, PostgresOutboxStore, recordTenantEmailDeliveryEvent, recordTenantEmailUnsubscribe, replayTenantWebhookDelivery, requestBillingSubscriptionReconciliation, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
 import { and, eq } from "drizzle-orm";
@@ -36,6 +36,8 @@ import { maintainReadyArtifacts } from "./artifact-retention.js";
 import { consumeNativeWebhookQueueMessages, looksLikeNativeWebhookWakeup } from "./webhook-native-queue.js";
 import type { Database } from "@__TRESTLE_PROJECT_NAME__/db";
 import { scheduledJobs } from "./jobs.js";
+import { emailSequences } from "./email-sequences.js";
+import { verifyUnsubscribeToken } from "./sequence-runtime.js";
 import { runSafetySweep, wakeOutboxDispatch } from "./scheduler-runtime.js";
 import { frameworkDueWork, scheduleDueWork, schedulerStub } from "./scheduler.js";
 import type { WorkerEnvironment } from "./worker-environment.js";
@@ -50,6 +52,8 @@ export const eventConsumers = new EventConsumerRegistry<AuthEnvironment, Databas
 });
 // Durable Stripe/local subscription reconciliation: tenantless, verified system work.
 eventConsumers.register(billingReconciliationRequestedEvent, handleBillingReconciliationRequested, { authority: "system" });
+// Email sequences (email-sequences.ts): triggers start runs, exit events end them.
+emailSequences.attach(eventConsumers);
 
 app.use("*", async (context, next) => {
   const supplied = context.req.header("x-correlation-id");
@@ -404,6 +408,46 @@ app.post("/api/webhooks/resend", async (context) => {
   } catch {
     log.error("email.webhook.persistence_failed", { providerEventId: event.id, emailDeliveryId: event.emailDeliveryId });
     return context.json({ error: "Email webhook could not be recorded" }, 503);
+  }
+});
+
+const unsubscribePage = (title: string, body: string, form?: string) =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${title}</title></head><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5"><h1>${title}</h1><p>${body}</p>${form ?? ""}</body></html>`;
+
+// An unsubscribe commits the suppression and an outbox event: dispatch it now.
+app.use("/api/email/unsubscribe", async (context, next) => {
+  await next();
+  if (context.req.method === "POST" && context.res.status === 200) wakeOutboxDispatch(context);
+});
+
+// Signed one-click unsubscribe links from marketing sequences. The token (organization,
+// recipient hash, expiry; HMAC-signed with a key derived from BETTER_AUTH_SECRET) is the
+// only authority. GET shows a confirmation, so a link scanner never unsubscribes anyone;
+// POST (the confirmation form, or a mail client's List-Unsubscribe-Post) performs it.
+app.get("/api/email/unsubscribe", async (context) => {
+  context.header("Cache-Control", "no-store");
+  context.header("Referrer-Policy", "no-referrer");
+  const token = context.req.query("token") ?? "";
+  if (!await verifyUnsubscribeToken(context.env.BETTER_AUTH_SECRET, token)) return context.html(unsubscribePage("Link expired", "This unsubscribe link is invalid or has expired."), 400);
+  return context.html(unsubscribePage("Unsubscribe", "Stop receiving these emails?", `<form method="post" action="/api/email/unsubscribe?token=${encodeURIComponent(token)}"><button type="submit">Unsubscribe</button></form>`));
+});
+
+app.post("/api/email/unsubscribe", async (context) => {
+  context.header("Cache-Control", "no-store");
+  const log = createLogger({ correlationId: context.get("correlationId") }, undefined, { secretValues: loggerSecretsFromEnvironment(context.env) });
+  const subject = await verifyUnsubscribeToken(context.env.BETTER_AUTH_SECRET, context.req.query("token") ?? "");
+  if (!subject) {
+    log.warn("email.unsubscribe.rejected", { reason: "invalid_or_expired_token" });
+    return context.html(unsubscribePage("Link expired", "This unsubscribe link is invalid or has expired."), 400);
+  }
+  try {
+    const result = await recordTenantEmailUnsubscribe({ databaseUrl: context.env.DATABASE_URL, ...(context.env.DATABASE_DRIVER ? { driver: context.env.DATABASE_DRIVER } : {}), ...subject, correlationId: context.get("correlationId") });
+    if (!result.found) return context.html(unsubscribePage("Link expired", "This unsubscribe link is invalid or has expired."), 404);
+    log.info("email.unsubscribe.recorded", { organizationId: subject.organizationId, suppressed: result.suppressed });
+    return context.html(unsubscribePage("Unsubscribed", "You will not receive these emails again."));
+  } catch {
+    log.error("email.unsubscribe.persistence_failed", { organizationId: subject.organizationId });
+    return context.html(unsubscribePage("Try again", "We could not record your request. Please try again."), 503);
   }
 });
 

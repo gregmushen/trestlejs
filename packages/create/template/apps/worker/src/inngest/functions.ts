@@ -4,10 +4,11 @@ import { createLogger, loggerSecretsFromEnvironment } from "@__TRESTLE_PROJECT_N
 import { PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
 
 import type { EventConsumerRegistry } from "../async-runtime.js";
-import { inngestEventName } from "../job-runtime-inngest.js";
+import { inngestEventName, inngestSequenceEventName, inngestSequenceExitEventName } from "../job-runtime-inngest.js";
 import { executeCommittedEventById } from "../job-runtime.js";
 import type { ScheduledJobRegistry } from "../scheduled-jobs.js";
 import { scheduledJobName } from "../scheduled-jobs.js";
+import { driveSequenceRun, type SequenceRegistry, type SequenceStepOutcome } from "../sequence-runtime.js";
 import { projectWebhookForEvent } from "../webhook-runtime.js";
 import type { WorkerEnvironment } from "../worker-environment.js";
 
@@ -15,9 +16,11 @@ import type { WorkerEnvironment } from "../worker-environment.js";
  * The Inngest functions for this Worker. `trestle-event` runs one committed
  * event inside a step: every attempt reloads and re-verifies it and rechecks
  * entitlements, because a step's result is memoized only after it succeeds.
- * `trestle-due-work` runs due scheduled jobs every minute.
+ * `trestle-due-work` runs due scheduled jobs every minute. `trestle-sequence`
+ * runs one email sequence run: each step a `step.run`, each wait a durable
+ * `step.sleepUntil`, cancelled by the exit event for its run.
  */
-export function createInngestFunctions(inngest: Inngest, environment: WorkerEnvironment, registries: { eventConsumers: EventConsumerRegistry<WorkerEnvironment, unknown>; scheduledJobs: ScheduledJobRegistry<WorkerEnvironment, unknown> }) {
+export function createInngestFunctions(inngest: Inngest, environment: WorkerEnvironment, registries: { eventConsumers: EventConsumerRegistry<WorkerEnvironment, unknown>; scheduledJobs: ScheduledJobRegistry<WorkerEnvironment, unknown>; emailSequences: SequenceRegistry<WorkerEnvironment> }) {
   const event = inngest.createFunction(
     { id: "trestle-event", retries: 5, triggers: [{ event: inngestEventName }] },
     async ({ event: received, step, runId }) => {
@@ -50,5 +53,24 @@ export function createInngestFunctions(inngest: Inngest, environment: WorkerEnvi
       return { ran };
     },
   );
-  return [event, dueWork];
+  const sequence = createInngestSequenceFunction(inngest, "trestle-sequence", registries.emailSequences, environment);
+  return [event, dueWork, sequence];
+}
+
+/** One sequence run as an Inngest function; `cancelOn` ends it when the run's exit event arrives. */
+export function createInngestSequenceFunction<Environment>(inngest: Inngest, id: string, registry: SequenceRegistry<Environment>, environment: Environment) {
+  return inngest.createFunction(
+    { id, retries: 5, triggers: [{ event: inngestSequenceEventName }], cancelOn: [{ event: inngestSequenceExitEventName, match: "data.runId" }] },
+    async ({ event: received, step, runId }) => {
+      const data = received.data as { runId?: unknown; triggerEventId?: unknown };
+      if (typeof data.runId !== "string" || typeof data.triggerEventId !== "string") throw new NonRetriableError("Sequence run event is malformed");
+      const log = createLogger({ runId, sequenceRunId: data.runId }, undefined, { secretValues: loggerSecretsFromEnvironment((environment ?? {}) as object) });
+      return await driveSequenceRun({
+        registry, environment, run: { runId: data.runId, triggerEventId: data.triggerEventId }, log,
+        step: async (name, execute) => await step.run(name, execute) as SequenceStepOutcome,
+        sleepUntil: async (name, at) => { await step.sleepUntil(name, at); },
+        permanent: (message) => new NonRetriableError(message),
+      });
+    },
+  );
 }

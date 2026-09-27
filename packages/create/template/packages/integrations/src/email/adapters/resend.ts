@@ -5,7 +5,8 @@ import { EmailAlreadySent, EmailProviderUnavailable, EmailRateLimited, EmailReje
 import { RESEND_ORGANIZATION_TAG } from "../webhooks.js";
 import type { EmailAddress, EmailLogger, EmailMessage, EmailReceipt, EmailService, ScheduledEmail, SendEmailOptions } from "../types.js";
 
-export type ResendEmailAdapterOptions = { apiKey: string; from: EmailAddress; replyTo?: EmailAddress; logger?: EmailLogger };
+/** `baseUrl` points the client at another Resend-compatible API (a recorded fake in tests); Resend itself when unset. */
+export type ResendEmailAdapterOptions = { apiKey: string; from: EmailAddress; replyTo?: EmailAddress; logger?: EmailLogger; baseUrl?: string };
 
 function normalizeError(error: { name?: string; message?: string; statusCode?: number | null } | null): Error {
   const message = error?.message ?? "Resend rejected the email operation";
@@ -23,7 +24,7 @@ function organizationTag(options: SendEmailOptions) {
 
 export class ResendEmailAdapter implements EmailService {
   private readonly client: Resend;
-  constructor(private readonly options: ResendEmailAdapterOptions) { this.client = new Resend(options.apiKey); }
+  constructor(private readonly options: ResendEmailAdapterOptions) { this.client = new Resend(options.apiKey, options.baseUrl ? { baseUrl: options.baseUrl } : undefined); }
 
   async send(message: EmailMessage, sendOptions: SendEmailOptions = {}): Promise<EmailReceipt> {
     const startedAt = new Date();
@@ -71,7 +72,7 @@ export class ResendEmailAdapter implements EmailService {
 
   private async payload(message: EmailMessage) {
     const rendered = await renderEmail(message.template);
-    return { from: formatAddress(message.from ?? this.options.from), to: formatAddresses(message.to), subject: message.subject, html: rendered.html, text: rendered.text, ...(message.cc ? { cc: message.cc.map(formatAddress) } : {}), ...(message.bcc ? { bcc: message.bcc.map(formatAddress) } : {}), ...(message.replyTo ? { replyTo: formatAddresses(message.replyTo) } : this.options.replyTo ? { replyTo: formatAddress(this.options.replyTo) } : {}) };
+    return { from: formatAddress(message.from ?? this.options.from), to: formatAddresses(message.to), subject: message.subject, html: rendered.html, text: rendered.text, ...(message.cc ? { cc: message.cc.map(formatAddress) } : {}), ...(message.bcc ? { bcc: message.bcc.map(formatAddress) } : {}), ...(message.replyTo ? { replyTo: formatAddresses(message.replyTo) } : this.options.replyTo ? { replyTo: formatAddress(this.options.replyTo) } : {}), ...(message.headers ? { headers: { ...message.headers } } : {}) };
   }
 
   private fields(message: EmailMessage, options: SendEmailOptions) {

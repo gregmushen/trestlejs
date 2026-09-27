@@ -4,6 +4,7 @@ import { applicationEventCatalog, eventEnvelopeSchema } from "@__TRESTLE_PROJECT
 import { emailDeliveryEvent, emailSuppression } from "./email-schema.js";
 import { createTenantDatabase, type Database, type DatabaseDriver } from "./index.js";
 import { outboxStatement } from "./outbox.js";
+import { sequenceRun } from "./sequence-schema.js";
 
 export type EmailSuppressionReason = "unsubscribed" | "bounced" | "complained";
 
@@ -70,6 +71,47 @@ export async function isSuppressed(database: Database, organizationId: string, a
   const [row] = await database.select({ reason: emailSuppression.reason }).from(emailSuppression)
     .where(and(eq(emailSuppression.organizationId, organizationId), eq(emailSuppression.address, normalizeEmailAddress(address)))).limit(1);
   return Boolean(row);
+}
+
+/** Why the organization must not email this address, or null when it may. */
+export async function emailSuppressionReason(database: Database, organizationId: string, address: string): Promise<EmailSuppressionReason | null> {
+  const [row] = await database.select({ reason: emailSuppression.reason }).from(emailSuppression)
+    .where(and(eq(emailSuppression.organizationId, organizationId), eq(emailSuppression.address, normalizeEmailAddress(address)))).limit(1);
+  return (row?.reason as EmailSuppressionReason | undefined) ?? null;
+}
+
+/**
+ * A verified one-click unsubscribe for a recipient an organization's email
+ * sequences wrote to. The suppression and the `email.unsubscribed` outbox
+ * event commit in one tenant transaction; the event's consumer exits the
+ * recipient's marketing sequence runs. Repeating it changes nothing. Returns
+ * `found: false` when no sequence of the organization knows the recipient.
+ */
+export async function recordTenantEmailUnsubscribe(input: {
+  databaseUrl: string;
+  driver?: DatabaseDriver;
+  organizationId: string;
+  recipientHash: string;
+  correlationId: string;
+  now?: Date;
+}): Promise<{ found: boolean; suppressed: boolean }> {
+  if (!/^[A-Za-z0-9_-]+$/u.test(input.organizationId)) throw new Error("Invalid unsubscribe organization identifier");
+  if (!/^[0-9a-f]{64}$/u.test(input.recipientHash)) throw new Error("Invalid unsubscribe recipient");
+  const database = createTenantDatabase(input.databaseUrl, input.driver, input.organizationId);
+  return await database.transaction(async (transaction) => {
+    await transaction.execute(sql`select set_config('app.organization_id', ${input.organizationId}, true)`);
+    const [run] = await transaction.select({ address: sequenceRun.recipientAddress }).from(sequenceRun)
+      .where(and(eq(sequenceRun.organizationId, input.organizationId), eq(sequenceRun.recipientHash, input.recipientHash))).limit(1);
+    if (!run) return { found: false, suppressed: false };
+    const inserted = await transaction.insert(emailSuppression).values({ organizationId: input.organizationId, address: run.address, reason: "unsubscribed" }).onConflictDoNothing().returning();
+    const payload = applicationEventCatalog.parse("email.unsubscribed", 1, { organizationId: input.organizationId, recipientHash: input.recipientHash });
+    const envelope = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "email.unsubscribed", schemaVersion: 1,
+      occurredAt: (input.now ?? new Date()).toISOString(), resource: applicationEventCatalog.resource("email.unsubscribed", 1, payload),
+      correlationId: input.correlationId, idempotencyKey: `${input.organizationId}:email:unsubscribed:${input.recipientHash}`, payload });
+    // One event per recipient: a second unsubscribe (or a mail client's retry) adds nothing.
+    await transaction.execute(outboxStatement(envelope, input.organizationId));
+    return { found: true, suppressed: inserted.length > 0 };
+  });
 }
 
 /** Record an unsubscribe; an existing suppression for the address is kept. */

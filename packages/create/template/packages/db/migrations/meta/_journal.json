@@ -302,6 +302,13 @@
       "when": 1790546339744,
       "tag": "0042_soft_tombstone",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1790546440611,
+      "tag": "0043_tearful_major_mapleleaf",
+      "breakpoints": true
     }
   ]
 }

@@ -44,6 +44,7 @@ export const permissions = definePermissions({
   "platform.outbox.redrive": { plane: "platform", description: "Return dead-lettered outbox events to delivery" },
   "platform.jobs.manage": { plane: "platform", description: "Change the environment's job runtime, pause dispatch, and settle unconsumed events" },
   "platform.email.manage": { plane: "platform", description: "Remove an address from an organization's email suppression list" },
+  "platform.sequences.manage": { plane: "platform", description: "End an active email sequence run for a recipient" },
   "platform.webhooks.manage": { plane: "platform", description: "Disable webhook endpoints and replay failed deliveries" },
   "platform.subscriptions.read": { plane: "platform", description: "Read organizations' plans, subscriptions, and entitlement overrides with internal reasons" },
   "platform.entitlements.manage": { plane: "platform", description: "Grant and revoke entitlement overrides" },

@@ -86,6 +86,13 @@ export type EmailDeliverability = { webhook: EmailWebhookStatus; counts: EmailDe
 /** One organization's suppressed address; the address is masked by the Worker. */
 export type EmailSuppression = { organizationId: string; organizationName: string | null; address: string; reason: "unsubscribed" | "bounced" | "complained"; sourceEventId: string | null; createdAt: string };
 
+/** Per `defineSequence` sequence: runs by status, sends over 24 hours and 7 days, and exits by reason. */
+export type SequenceSummary = { sequenceId: string; active: number; completed: number; failed: number; sends: { last24h: number; last7d: number }; exits: Record<string, number>; suppressed: number };
+/** The effective job engine and its dashboard (null on Cloudflare), with every sequence's summary. */
+export type EmailSequences = { runtime: string | null; dashboardUrl: string | null; sequences: SequenceSummary[] };
+/** One sequence run; the recipient is masked by the Worker. */
+export type SequenceRunRow = { id: string; organizationId: string; organizationName: string | null; sequenceId: string; kind: string; userId: string; recipient: string; status: "active" | "completed" | "exited" | "failed"; exitReason: string | null; currentStep: number; nextAt: string | null; engine: string; engineRunId: string | null; sends: number; createdAt: string; updatedAt: string; dashboardUrl: string | null };
+
 /** The environment's job engine and dispatch health (GET /api/admin/operations/jobs). Never credentials. */
 export type JobsRuntimeFields = { runtime: string; hosting: string; endpoint: string | null; project: string | null };
 /** A credential the engine needs: set or missing on the Worker (null before it reports), and the CLI command that sets it. */
@@ -276,6 +283,9 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
     emailDeliverability,
     emailSuppressions: async (filters: { organizationId?: string; address?: string } = {}) => await request<{ suppressions: EmailSuppression[] }>("GET", "email/suppressions", undefined, filters),
     removeEmailSuppression: async (input: { organizationId: string; address: string }, reason: string) => await request<{ removed: true; suppressionReason: string }>("DELETE", "email/suppressions", { ...input, ...reasoned(reason) }),
+    emailSequences: async () => await request<EmailSequences>("GET", "email/sequences"),
+    sequenceRuns: async (filters: { organizationId?: string; sequenceId?: string; status?: string } = {}) => await request<{ runs: SequenceRunRow[] }>("GET", "email/sequences/runs", undefined, filters),
+    exitSequenceRun: async (runId: string, reason: string) => await request<{ exited: true; sequenceId: string }>("POST", `email/sequences/runs/${encodeURIComponent(runId)}/exit`, reasoned(reason)),
     emailDelivery: async (id: string): Promise<EmailDeliveryDetail> => {
       const events = (await emailEvents()).filter((event) => event.emailDeliveryId === id).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
       if (events.length === 0) throw new Error("Email delivery not found");

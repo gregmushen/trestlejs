@@ -40,6 +40,35 @@ export async function sendCommittedEventToInngest(input: { environment: InngestE
   return ((await response.json().catch(() => ({}))) as { ids?: string[] }).ids ?? [];
 }
 
+/** Starts the `trestle-sequence` function for one sequence run. */
+export const inngestSequenceEventName = "trestle/sequence.started";
+/** Cancels a sequence run's function: its `cancelOn` matches `data.runId`. */
+export const inngestSequenceExitEventName = "trestle/sequence.exited";
+
+async function sendInngestEvents(environment: InngestEnvironment, events: unknown[], fetcher: typeof fetch = fetch): Promise<string[]> {
+  const key = environment.INNGEST_EVENT_KEY ?? (environment.INNGEST_DEV === "1" ? "local" : undefined);
+  if (!key) throw new Error("INNGEST_EVENT_KEY is not set");
+  const response = await fetcher(`${eventApi(environment)}/e/${encodeURIComponent(key)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(events) });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`Inngest did not accept the event (HTTP ${response.status})`);
+  }
+  return ((await response.json().catch(() => ({}))) as { ids?: string[] }).ids ?? [];
+}
+
+/**
+ * Starts one sequence run on Inngest. The event ID derives from the run ID,
+ * so Inngest deduplicates a repeated start. Returns Inngest's event IDs.
+ */
+export async function sendSequenceToInngest(input: { environment: InngestEnvironment; runId: string; triggerEventId: string; fetch?: typeof fetch }): Promise<string[]> {
+  return await sendInngestEvents(input.environment, [{ name: inngestSequenceEventName, id: `trestle-sequence:${input.runId}`, data: { runId: input.runId, triggerEventId: input.triggerEventId } }], input.fetch);
+}
+
+/** Cancels a sequence run waiting on Inngest. */
+export async function cancelInngestSequence(input: { environment: InngestEnvironment; runId: string; fetch?: typeof fetch }): Promise<void> {
+  await sendInngestEvents(input.environment, [{ name: inngestSequenceExitEventName, id: `trestle-sequence-exit:${input.runId}`, data: { runId: input.runId } }], input.fetch);
+}
+
 export const inngestRuntime: JobRuntimeAdapter = {
   name: "inngest",
   publisher: (environment) => {

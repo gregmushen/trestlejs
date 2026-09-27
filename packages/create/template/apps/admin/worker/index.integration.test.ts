@@ -224,5 +224,43 @@ suite("platform admin Worker against PostgreSQL", () => {
       await sql!`delete from email_delivery_event where id = ${eventId}`;
     }
   });
+
+  it("lists sequence runs with masked recipients and exits an active run over HTTP with an audit row; the platform role cannot advance one", async () => {
+    signedIn = operator;
+    const organizationId = `${run}-org`;
+    const runId = crypto.randomUUID();
+    const sequenceId = `${run}-drip`;
+    const hash = "c".repeat(64);
+    try {
+      await sql!`insert into sequence_run (id, organization_id, sequence_id, kind, user_id, recipient_address, recipient_hash, trigger_event_id, status, current_step, next_at, engine, engine_run_id)
+        values (${runId}, ${organizationId}, ${sequenceId}, 'marketing', ${owner}, ${`${run}@example.test`}, ${hash}, ${crypto.randomUUID()}, 'active', 2, now() + interval '3 days', 'cloudflare', ${`seq-${runId}`})`;
+      await sql!`insert into sequence_send (run_id, organization_id, step_index, idempotency_key, email_delivery_id) values (${runId}, ${organizationId}, 0, ${`seq:${runId}:0`}, 're_1')`;
+      const summary = await (await admin.request("/api/admin/email/sequences", undefined, environment)).json() as { sequences: Array<{ sequenceId: string; active: number; sends: { last24h: number } }> };
+      expect(summary.sequences.find((row) => row.sequenceId === sequenceId)).toMatchObject({ active: 1, sends: { last24h: 1 } });
+      const listed = await (await admin.request(`/api/admin/email/sequences/runs?organizationId=${organizationId}&sequenceId=${sequenceId}`, undefined, environment)).json() as { runs: Array<{ id: string; recipient: string; sends: number; organizationName: string | null }> };
+      expect(listed.runs).toEqual([expect.objectContaining({ id: runId, sends: 1, organizationName: "Acme" })]);
+      expect(JSON.stringify(listed)).not.toContain(`${run}@example.test`);
+      const exit = () => admin.request(`/api/admin/email/sequences/runs/${runId}/exit`, { method: "POST", headers: { origin: "http://localhost:42070", "content-type": "application/json", "x-correlation-id": `${run}-corr` },
+        body: JSON.stringify({ reason: "recipient asked to stop in ticket 9" }) }, environment);
+      expect((await exit()).status).toBe(200);
+      expect((await exit()).status).toBe(404);
+      expect(await sql!`select status, exit_reason, next_at from sequence_run where id = ${runId}`).toEqual([{ status: "exited", exit_reason: "operator", next_at: null }]);
+      const [audit] = await sql!`select actor_id, organization_id, target_type, target_id, reason, summary from audit_event where correlation_id = ${`${run}-corr`} and name = 'platform.sequence_run.exited'`;
+      expect(audit).toMatchObject({ actor_id: operator, organization_id: organizationId, target_type: "sequence_run", target_id: runId, reason: "recipient asked to stop in ticket 9", summary: { sequenceId, currentStep: 2 } });
+      expect(JSON.stringify(audit)).not.toContain(`${run}@example.test`);
+      // The platform role only ends an active run; it never advances, rewrites, or reopens one.
+      await expect(sql!.begin(async (transaction) => {
+        await transaction`set local role trestle_platform`;
+        await transaction`update sequence_run set current_step = 9 where id = ${runId}`;
+      })).rejects.toThrow(/permission denied/u);
+      const reopened = await sql!.begin(async (transaction) => {
+        await transaction`set local role trestle_platform`;
+        return await transaction`update sequence_run set status = 'active', exit_reason = null where id = ${runId}`;
+      });
+      expect(reopened.count).toBe(0);
+    } finally {
+      await sql!`delete from sequence_run where id = ${runId}`;
+    }
+  });
 });
 

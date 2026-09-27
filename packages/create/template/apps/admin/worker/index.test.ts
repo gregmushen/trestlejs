@@ -413,6 +413,46 @@ describe("platform admin Worker", () => {
     expect((await call("GET", "/api/admin/operations/jobs")).body.migration).toMatchObject({ from: "cloudflare", to: "trigger", unconsumed: 1 });
   });
 
+  it("reports email sequences to operations readers and exits a run only under platform.sequences.manage with step-up and a reason", async () => {
+    const exited: Array<[unknown, string]> = [];
+    const summary = { sequenceId: "trial-nurture", active: 2, completed: 5, failed: 1, sends: { last24h: 3, last7d: 12 }, exits: { "billing.subscription.activated": 4, suppressed: 1 }, suppressed: 1 };
+    const run = { id: "3f0c4a52-4f4f-4d44-9b1e-2c8e5bb2f7a1", organizationId: "org-1", organizationName: "Acme", sequenceId: "trial-nurture", kind: "marketing", userId: "user-1", recipient: "p***@example.test", status: "active", exitReason: null,
+      currentStep: 2, nextAt: new Date("2026-09-30T15:00:00Z"), engine: "trigger", engineRunId: "run_abc", sends: 1, createdAt: new Date("2026-09-27T15:00:00Z"), updatedAt: new Date("2026-09-27T15:00:01Z") };
+    const filters: unknown[] = [];
+    adminDependencies.sequences = {
+      summaries: async () => [summary],
+      runs: async (_environment, value) => { filters.push(value); return [run, { ...run, id: "other", engine: "cloudflare", engineRunId: "seq-other" }]; },
+      exit: async (_environment, input, change) => { exited.push([input, change.reason]); return { sequenceId: "trial-nurture", organizationId: "org-1", currentStep: 2 }; },
+    };
+    adminDependencies.jobRuntime = async () => ({ state: jobState({ runtime: "trigger", hosting: "cloud", endpoint: null, project: "proj_abc123" }), dispatch: { pending: 0, unconsumed: 0, dead: 0 } });
+    state.roles = ["commercial_admin"];
+    expect(await call("GET", "/api/admin/email/sequences")).toMatchObject({ status: 403 });
+    expect(await call("GET", "/api/admin/email/sequences/runs")).toMatchObject({ status: 403 });
+    state.roles = ["platform_operator"];
+    expect(await call("GET", "/api/admin/email/sequences")).toEqual({ status: 200, body: { runtime: "trigger", dashboardUrl: "https://cloud.trigger.dev/projects/v3/proj_abc123", sequences: [summary] } });
+    const runs = await call("GET", "/api/admin/email/sequences/runs?organizationId=org-1&sequenceId=trial-nurture&status=active");
+    expect(runs).toMatchObject({ status: 200, body: { runs: [
+      { id: run.id, recipient: "p***@example.test", nextAt: "2026-09-30T15:00:00.000Z", dashboardUrl: "https://cloud.trigger.dev/projects/v3/proj_abc123" },
+      // A run on another engine does not link to this engine's dashboard.
+      { id: "other", dashboardUrl: null },
+    ] } });
+    expect(filters).toEqual([{ organizationId: "org-1", sequenceId: "trial-nurture", status: "active" }]);
+    expect(await call("GET", "/api/admin/email/sequences/runs?status=paused")).toMatchObject({ status: 400, body: { error: "invalid" } });
+    const path = `/api/admin/email/sequences/runs/${run.id}/exit`;
+    // Operations readers without platform.sequences.manage cannot exit a run.
+    state.roles = ["security_admin"];
+    expect(await call("POST", path, { body: { reason: "stop" } })).toMatchObject({ status: 403 });
+    state.roles = ["platform_operator"];
+    assured(null);
+    expect(await call("POST", path, { body: { reason: "customer asked in ticket 7" } })).toMatchObject({ status: 428, body: { error: "step_up_required" } });
+    assured("password");
+    expect(await call("POST", path, { body: {} })).toMatchObject({ status: 400, body: { error: "invalid" } });
+    expect(exited).toEqual([]);
+    expect(await call("POST", path, { body: { reason: "customer asked in ticket 7" } })).toMatchObject({ status: 200, body: { exited: true, sequenceId: "trial-nurture" } });
+    expect(exited).toEqual([[{ runId: run.id }, "customer asked in ticket 7"]]);
+    expect(JSON.stringify((await call("GET", "/api/admin/email/sequences/runs")).body)).not.toContain("person@example.test");
+  });
+
   it("reports email deliverability to operations readers and removes a suppression only under platform.email.manage with step-up and a reason", async () => {
     const removed: Array<[unknown, string]> = [];
     adminDependencies.operationalStatus = async () => ({ capabilities: { email: { configured: true, mode: "resend", webhookConfigured: false } } });

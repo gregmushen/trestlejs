@@ -4,7 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runtimeConformanceSuite, type ConformanceHarness } from "./job-conformance-suite.js";
-import { PostgresOutboxStore } from "@__TRESTLE_PROJECT_NAME__/db";
+import { createDatabase, PostgresOutboxStore, sequenceRun } from "@__TRESTLE_PROJECT_NAME__/db";
+import { and, eq, gte } from "drizzle-orm";
 import { dispatchOutbox } from "@__TRESTLE_PROJECT_NAME__/events";
 
 import { triggerCommittedEvent } from "./job-runtime-trigger.js";
@@ -34,6 +35,7 @@ async function runStatus(runId: string): Promise<string> {
 
 async function triggerHarness(connectionString: string): Promise<ConformanceHarness> {
   const runs = new Map<string, string>();
+  const startedAt = new Date();
   let child: ChildProcess | undefined;
   let output = "";
   const ready = async (after: number) => {
@@ -90,6 +92,19 @@ async function triggerHarness(connectionString: string): Promise<ConformanceHarn
           await settledRuns();
         }
       } finally { await store.close(); }
+    },
+    async settleSequences() {
+      // Sequence runs are started from inside the task, so they are found through the runs they recorded.
+      const database = createDatabase(connectionString, "postgres-js");
+      try {
+        for (let waited = 0; waited < 180_000; waited += 1_000) {
+          const rows = await database.select({ status: sequenceRun.status, engineRunId: sequenceRun.engineRunId }).from(sequenceRun).where(and(eq(sequenceRun.engine, "trigger"), gte(sequenceRun.createdAt, startedAt)));
+          const statuses = await Promise.all(rows.map(async (row) => row.engineRunId ? await runStatus(row.engineRunId) : row.status === "active" ? "PENDING" : "COMPLETED"));
+          if (statuses.every((status) => terminal.has(status))) return;
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        }
+        throw new Error("trigger.dev sequence runs did not settle");
+      } finally { await database.$client.end(); }
     },
     async failed() {
       const failed: string[] = [];

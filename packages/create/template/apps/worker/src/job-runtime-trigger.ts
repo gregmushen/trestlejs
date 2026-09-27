@@ -32,6 +32,36 @@ export async function triggerCommittedEvent(input: { apiUrl: string; secretKey: 
   return { runId: body.id, cached: body.isCached === true };
 }
 
+/** The trigger.dev task that runs one email sequence run (apps/jobs/src/trigger/sequence.ts). */
+export const triggerSequenceTask = "trestle-sequence";
+
+/**
+ * Starts (or finds) the trigger.dev run for one sequence run. Only the run
+ * and trigger event IDs leave the application; the run ID is the idempotency
+ * key, so a repeated start returns the existing run.
+ */
+export async function triggerSequenceRun(input: { apiUrl: string; secretKey: string; taskId?: string; runId: string; triggerEventId: string; fetch?: typeof fetch }): Promise<{ runId: string }> {
+  const response = await (input.fetch ?? fetch)(`${input.apiUrl.replace(/\/$/u, "")}/api/v1/tasks/${encodeURIComponent(input.taskId ?? triggerSequenceTask)}/trigger`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${input.secretKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ payload: { runId: input.runId, triggerEventId: input.triggerEventId }, options: { idempotencyKey: `trestle-sequence:${input.runId}`, idempotencyKeyTTL: triggerIdempotencyTtl } }),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`trigger.dev did not accept the sequence run (HTTP ${response.status})`);
+  }
+  const body = await response.json() as { id?: string };
+  if (typeof body.id !== "string") throw new Error("trigger.dev returned no run ID");
+  return { runId: body.id };
+}
+
+/** Cancels a waiting trigger.dev run. A run that already finished is not an error. */
+export async function cancelTriggerRun(input: { apiUrl: string; secretKey: string; runId: string; fetch?: typeof fetch }): Promise<void> {
+  const response = await (input.fetch ?? fetch)(`${input.apiUrl.replace(/\/$/u, "")}/api/v2/runs/${encodeURIComponent(input.runId)}/cancel`, { method: "POST", headers: { authorization: `Bearer ${input.secretKey}` } });
+  await response.body?.cancel();
+  if (!response.ok && response.status !== 400 && response.status !== 404) throw new Error(`trigger.dev did not cancel the run (HTTP ${response.status})`);
+}
+
 export const triggerRuntime: JobRuntimeAdapter = {
   name: "trigger",
   publisher: (environment) => {

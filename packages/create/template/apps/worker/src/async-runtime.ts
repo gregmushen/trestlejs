@@ -147,8 +147,10 @@ export class EventConsumerRegistry<Environment = unknown, Data = unknown> {
   }
 }
 
+/** A sequence run's Workflow instance carries only identifiers (see sequence-engines.ts). */
+export type SequenceWorkflowParams = { kind: "sequence"; runId: string; triggerEventId: string };
 export type CloudflareWorkflowBinding = {
-  create(options: { id: string; params: EventEnvelope }): Promise<{ id: string }>;
+  create(options: { id: string; params: EventEnvelope | SequenceWorkflowParams }): Promise<{ id: string }>;
   get(id: string): Promise<unknown>;
 };
 

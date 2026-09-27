@@ -49,6 +49,48 @@ How in-flight runs meet new code differs by runtime:
 | Inngest | resume on the new code (`new-code`) |
 | trigger.dev | finish on the version they started on (`pinned`) |
 
+## Email sequences
+
+`defineSequence` (apps/worker/src/sequences.ts) is written once. Its runtime-
+neutral core, `runSequenceStep` (sequence-runtime.ts), executes one step of
+one run: it reloads the run and the committed trigger event, re-verifies
+authority before every send, checks the run is still active and the recipient
+not suppressed, sends with the Resend idempotency key `seq:<runId>:<step>`, and
+records the send in the transaction that advances the run. Every change is
+fenced on the run's current step, so a retried or replayed step returns what
+the run already recorded. `driveSequenceRun` loops over steps with each
+engine's own durable primitives:
+
+| | Cloudflare | trigger.dev | Inngest |
+| --- | --- | --- | --- |
+| a run | one Workflow instance `seq-<runId>` on `TRESTLE_WORKFLOW` (`TrestleWorkflow` branches on the params) | one `trestle-sequence` task run, idempotency key `trestle-sequence:<runId>` | one `trestle-sequence` function run, event ID `trestle-sequence:<runId>` |
+| a step | `step.do` (5 retries) | called directly; the database fences a replay after a retried attempt | `step.run` |
+| a wait | `step.sleepUntil(wake time)` | `wait.until({ date })` (checkpointed) | `step.sleepUntil(wake time)` |
+| exit on event | the consumer marks runs `exited`, then terminates the instance | the consumer marks runs `exited`, then cancels the run (`POST /api/v2/runs/:id/cancel`) | the consumer marks runs `exited`, then sends `trestle/sequence.exited`, which the function's `cancelOn` matches on `data.runId` |
+| authority failure | `NonRetryableError` | `AbortTaskRunError` | `NonRetriableError` |
+
+The wake time is computed once, when the wait step runs, and stored on the
+run (`next_at`): calendar-day waits keep the recipient's local time of day
+(IANA zone, UTC when unknown), and a send due inside quiet hours (default
+21:00–08:00) moves to their end. A retried or resumed step sleeps until the
+same instant. Cancellation is best effort everywhere: the next step's active
+check is what guarantees an exit during a wait prevents the next send.
+
+New runs start on the configured runtime (`TRESTLE_JOB_RUNTIME`; trigger.dev
+tasks default to `trigger`); an exit cancels a run on the engine it started on.
+Sequences on Cloudflare need Workflows (`TRESTLE_WORKFLOWS_ENABLED` and the
+`TRESTLE_WORKFLOW` binding); without them the trigger event's consumer fails
+and retries, then dead-letters, rather than silently dropping the run.
+
+The conformance suite adds five sequence cases on every harness: wait then
+send, exit during a wait prevents the next send, suppression before send,
+authority revoked between steps ends the run, and a send whose response was
+lost is not duplicated (the real Resend adapter against a recorded fake of
+Resend's HTTP API that honors idempotency keys). They pass on Cloudflare
+(in process, required in CI) and on the Inngest Dev Server (required in CI);
+the trigger.dev harness implements them but they have not yet been run against
+a trigger.dev engine.
+
 ## Settlement
 
 trigger.dev and Inngest can end a run without success. Examples:

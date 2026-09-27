@@ -4,6 +4,9 @@ declare module "cloudflare:workers" {
   export type WorkflowEvent<T> = { payload: Readonly<T>; timestamp: Date; instanceId: string; workflowName: string };
   export type WorkflowStep = {
     do<T>(name: string, config: { retries: { limit: number; delay: string; backoff: "constant" | "linear" | "exponential" }; timeout: string }, callback: () => Promise<T>): Promise<T>;
+    /** Durable sleeps: the instance is suspended and resumed, not held in memory. */
+    sleep(name: string, duration: string | number): Promise<void>;
+    sleepUntil(name: string, timestamp: Date | number): Promise<void>;
   };
   export abstract class WorkflowEntrypoint<Environment, Params = unknown> {
     protected readonly env: Environment;
