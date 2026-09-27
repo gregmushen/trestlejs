@@ -1,5 +1,5 @@
 import type { Logger } from "@__TRESTLE_PROJECT_NAME__/context";
-import { PostgresEventInbox, PostgresOutboxStore, recordDeclaredJobRuntime, type CommittedEventStore, type DeclaredJobRuntime } from "@__TRESTLE_PROJECT_NAME__/db";
+import { jobRuntimeCredentialNames, PostgresEventInbox, PostgresOutboxStore, readJobRuntimeOverride, recordDeclaredJobRuntime, type CommittedEventStore, type DeclaredJobRuntime, type JobRuntimeOverride } from "@__TRESTLE_PROJECT_NAME__/db";
 import { CloudflareQueuePublisher, PermanentEventError, safeErrorCategory, type EventEnvelope, type EventInboxStore, type QueuePublisher } from "@__TRESTLE_PROJECT_NAME__/events";
 
 import { handleEventWithInbox, type EventConsumerRegistry, type PostCommitEffect } from "./async-runtime.js";
@@ -139,6 +139,17 @@ function publicEndpoint(value: string | undefined): string | null {
  * means the vendor's cloud. Secrets are never read into it.
  */
 export function declaredJobRuntime(environment: WorkerEnvironment): DeclaredJobRuntime {
+  return { ...deployedJobRuntime(environment), available: [...adapters.keys()].sort(), credentials: credentialPresence(environment) };
+}
+
+/** Whether each runtime credential is set on this Worker; the admin shows set or missing, never a value. */
+function credentialPresence(environment: WorkerEnvironment): Record<string, boolean> {
+  const variables = environment as WorkerEnvironment & Readonly<Record<string, unknown>>;
+  const names = [...new Set(Object.values(jobRuntimeCredentialNames).flat())].sort();
+  return Object.fromEntries(names.map((name) => [name, typeof variables[name] === "string" && variables[name] !== ""]));
+}
+
+function deployedJobRuntime(environment: WorkerEnvironment): DeclaredJobRuntime {
   const name = jobRuntime(environment).name;
   const variables = environment as WorkerEnvironment & Readonly<{ TRIGGER_API_URL?: string; TRIGGER_PROJECT_REF?: string; INNGEST_BASE_URL?: string }>;
   if (name === "trigger") {
@@ -172,3 +183,67 @@ export async function declareJobRuntime(environment: WorkerEnvironment, record: 
 
 /** Tests only: forget what this isolate already recorded. */
 export function resetJobRuntimeDeclaration(): void { lastDeclared = undefined; }
+
+/** How long an isolate reuses the admin override before reading it again. */
+export const jobRuntimeOverrideCacheMs = 30_000;
+
+/** Where the dispatcher sends committed events now, and whether an operator paused dispatch. */
+export type DispatchJobRuntime = Readonly<{ adapter: JobRuntimeAdapter; environment: WorkerEnvironment; paused: boolean; source: "declared" | "override" }>;
+
+let cachedOverride: { scope: string; at: number; value: JobRuntimeOverride | null } | undefined;
+
+/** The Worker environment with an override's endpoint and project applied, for the override runtime's publisher. */
+function overrideEnvironment(environment: WorkerEnvironment, override: JobRuntimeOverride): WorkerEnvironment {
+  const selfHosted = override.hosting === "self-hosted" ? override.endpoint ?? undefined : undefined;
+  if (override.runtime === "trigger") return { ...environment, TRIGGER_API_URL: selfHosted, ...(override.project ? { TRIGGER_PROJECT_REF: override.project } : {}) } as WorkerEnvironment;
+  if (override.runtime === "inngest") return { ...environment, INNGEST_BASE_URL: selfHosted } as WorkerEnvironment;
+  return environment;
+}
+
+/**
+ * The runtime the dispatcher publishes to: the admin override when one is
+ * set and its adapter is installed here, else TRESTLE_JOB_RUNTIME. The
+ * override is read at most every 30 seconds per isolate. When the read
+ * fails, dispatch fails closed to the deployed configuration; an override
+ * naming an uninstalled runtime is logged and ignored. Only the dispatch
+ * target changes: consumers (the Queue consumer, the Inngest serve endpoint,
+ * trigger.dev tasks) accept work from any runtime so in-flight runs drain,
+ * and the inbox still completes each event exactly once.
+ */
+export async function dispatchJobRuntime(environment: WorkerEnvironment, log: Logger, dependencies: { read?: typeof readJobRuntimeOverride; now?: () => number } = {}): Promise<DispatchJobRuntime> {
+  const read = dependencies.read ?? readJobRuntimeOverride;
+  const now = (dependencies.now ?? Date.now)();
+  const scope = environment.APP_ENV ?? "local";
+  let override: JobRuntimeOverride | null;
+  if (cachedOverride && cachedOverride.scope === scope && now - cachedOverride.at < jobRuntimeOverrideCacheMs) override = cachedOverride.value;
+  else {
+    try {
+      override = await read(environment.DATABASE_URL, scope);
+      cachedOverride = { scope, at: now, value: override };
+    } catch (error) {
+      log.warn("jobs.runtime.override_unavailable", { errorCategory: safeErrorCategory(error) });
+      return { adapter: jobRuntime(environment), environment, paused: false, source: "declared" };
+    }
+  }
+  const paused = override?.settings.dispatchPaused ?? false;
+  if (override?.runtime) {
+    const adapter = adapters.get(override.runtime as JobRuntimeName);
+    if (adapter) return { adapter, environment: overrideEnvironment(environment, override), paused, source: "override" };
+    log.error("jobs.runtime.override_ignored", { runtime: override.runtime, reason: "adapter_not_installed" });
+  }
+  return { adapter: jobRuntime(environment), environment, paused, source: "declared" };
+}
+
+/**
+ * The dispatch target from this isolate's last override read, without a
+ * database round trip (the deployed configuration before the first read).
+ * Used only to decide whether a commit should wake the dispatcher.
+ */
+export function cachedDispatchJobRuntime(environment: WorkerEnvironment): Pick<DispatchJobRuntime, "adapter" | "environment"> {
+  const override = cachedOverride?.scope === (environment.APP_ENV ?? "local") ? cachedOverride.value : null;
+  const adapter = override?.runtime ? adapters.get(override.runtime as JobRuntimeName) : undefined;
+  return adapter && override ? { adapter, environment: overrideEnvironment(environment, override) } : { adapter: jobRuntime(environment), environment };
+}
+
+/** Tests only: forget the cached admin override. */
+export function resetJobRuntimeOverrideCache(): void { cachedOverride = undefined; }

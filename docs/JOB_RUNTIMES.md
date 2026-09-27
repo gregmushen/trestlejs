@@ -153,3 +153,39 @@ checks this against the real Inngest engine: Cloudflare → Inngest → Cloudfla
 with in-flight, pending, and lost work, asserting that every event completes
 exactly once. It is required in CI. Rolling back is the same procedure in the
 other direction.
+
+### From the platform admin
+
+The admin **Jobs** view (`/operations/jobs`) runs the same flow without a
+deploy, for operators with `platform.jobs.manage`:
+
+1. **Review switch** plans the change and writes nothing: the target must be
+   installed in the deployed Worker, its endpoint must be https (http only for
+   localhost), a trigger.dev project looks like `proj_…`, and every credential
+   the engine needs must be set. The Worker reports which adapters it has and
+   whether each credential is set (never a value); a missing one shows the
+   `pnpm exec trestle secrets set <NAME> --env <env>` command. Secrets are not
+   edited from admin.
+2. **Confirm** takes a reason and a fresh step-up, and an experimental engine
+   needs an explicit acknowledgement. The change is written as an override
+   (`job_runtime_config.override_*`) at the version that was reviewed; a
+   concurrent change returns 409. Every change is audited with its before and
+   after.
+3. The Worker's dispatcher reads the override at most every 30 seconds per
+   isolate and sends pending events only to the new engine; event IDs are
+   kept. If the override cannot be read, dispatch falls back to
+   `TRESTLE_JOB_RUNTIME`; an override naming an engine whose adapter is not
+   installed is logged and ignored. Consumers keep accepting work from every
+   engine, so the old engine's accepted runs drain.
+4. The view shows the migration while the previous engine still has
+   unconsumed events. **Settle now** re-dispatches what it never completed
+   (after 30 minutes, up to 100 at a time, dead-lettering events at the attempt
+   cap), as `--settle` does.
+5. **Revert to deploy config** clears the override. To make a switch
+   permanent, run `trestle jobs use <runtime>` and deploy, then revert.
+
+**Pause dispatch** stops the Worker sending committed events (they stay
+pending and are counted in the view) until it is resumed. It is the only
+runtime setting the admin edits: the Worker has no other job setting it
+honors at runtime today, so concurrency, retry defaults, and schedule
+switches are deferred rather than shown as knobs that do nothing.

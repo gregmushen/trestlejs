@@ -1,6 +1,6 @@
 {
-  "id": "b6c5e33c-913c-469d-ba6b-03ba852fe13f",
-  "prevId": "0ba66714-5c20-47ae-b74f-48ed8582e3a1",
+  "id": "145daadb-9cab-42a9-a9eb-ef2619245c5e",
+  "prevId": "694b3a35-6260-4b3c-90e2-98de53a40a4a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2436,155 +2436,6 @@
       },
       "isRLSEnabled": true
     },
-    "public.integration_provider_event": {
-      "name": "integration_provider_event",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "backend": {
-          "name": "backend",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "environment": {
-          "name": "environment",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "event_key": {
-          "name": "event_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "outcome": {
-          "name": "outcome",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "provider_config_key": {
-          "name": "provider_config_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "backend_connection_id": {
-          "name": "backend_connection_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "received_at": {
-          "name": "received_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "integration_provider_event_key_uidx": {
-          "name": "integration_provider_event_key_uidx",
-          "columns": [
-            {
-              "expression": "backend",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "environment",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "event_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "integration_provider_event_outcome_idx": {
-          "name": "integration_provider_event_outcome_idx",
-          "columns": [
-            {
-              "expression": "outcome",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "received_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {
-        "integration_provider_event_platform_select": {
-          "name": "integration_provider_event_platform_select",
-          "as": "PERMISSIVE",
-          "for": "SELECT",
-          "to": [
-            "trestle_platform"
-          ],
-          "using": "true"
-        }
-      },
-      "checkConstraints": {
-        "integration_provider_event_outcome_check": {
-          "name": "integration_provider_event_outcome_check",
-          "value": "\"integration_provider_event\".\"outcome\" IN ('applied', 'duplicate', 'quarantined', 'ignored')"
-        },
-        "integration_provider_event_key_check": {
-          "name": "integration_provider_event_key_check",
-          "value": "\"integration_provider_event\".\"event_key\" ~ '^[0-9a-f]{64}$'"
-        }
-      },
-      "isRLSEnabled": true
-    },
     "public.job_runtime_config": {
       "name": "job_runtime_config",
       "schema": "",
@@ -2625,6 +2476,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "declared_available": {
+          "name": "declared_available",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "declared_credentials": {
+          "name": "declared_credentials",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         },
         "override_runtime": {
           "name": "override_runtime",
@@ -2674,6 +2537,18 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "switched_from": {
+          "name": "switched_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "switched_at": {
+          "name": "switched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -2699,6 +2574,16 @@
             "trestle_platform"
           ],
           "using": "true"
+        },
+        "job_runtime_config_platform_override": {
+          "name": "job_runtime_config_platform_override",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": [
+            "trestle_platform"
+          ],
+          "using": "true",
+          "withCheck": "true"
         }
       },
       "checkConstraints": {

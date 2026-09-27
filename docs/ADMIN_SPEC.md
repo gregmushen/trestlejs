@@ -497,7 +497,7 @@ The shipped registry:
 | --- | --- |
 | Organization | `organization.read`, `organization.members.read`, `organization.audit.read`, `organization.billing.read`, `organization.billing.manage`, `organization.webhooks.read`, `organization.webhooks.manage`, `organization.webhooks.deliveries.read`, `organization.webhooks.replay`, `organization.settings.manage` |
 | Application | `resource.read`, `resource.write` (both admit API keys), `application.roles.read`, `application.roles.assign`, `application.service_accounts.read`, `application.service_accounts.manage` |
-| Platform | `platform.overview.read`, `platform.organizations.read`, `platform.users.read`, `platform.audit.read`, `platform.roles.read`, `platform.roles.manage`, `platform.operations.read`, `platform.outbox.redrive`, `platform.webhooks.manage`, `platform.subscriptions.read`, `platform.entitlements.manage`, `platform.machine_access.read`, `platform.api_keys.revoke`, `platform.support_sessions.use` |
+| Platform | `platform.overview.read`, `platform.organizations.read`, `platform.users.read`, `platform.audit.read`, `platform.roles.read`, `platform.roles.manage`, `platform.operations.read`, `platform.outbox.redrive`, `platform.jobs.manage`, `platform.webhooks.manage`, `platform.subscriptions.read`, `platform.entitlements.manage`, `platform.machine_access.read`, `platform.api_keys.revoke`, `platform.support_sessions.use` |
 
 New permission meaning enters the system through reviewed source. Runtime admin
 cannot invent a permission that application code does not recognize. The
@@ -1123,10 +1123,17 @@ The shipped views, with their paths, permissions, and capabilities:
   requires `platform.outbox.redrive`.
 - **Jobs** (`/operations/jobs`, `platform.operations.read`): the
   environment's job engine, hosting, and location as the customer Worker
-  declared it (an admin override takes precedence once editing lands), its
-  support status, pending, unconsumed, and dead outbox counts, an engine
-  comparison, and a link to the engine's dashboard (the async operations view
-  for Cloudflare). Read-only; credentials are never shown.
+  declared it or as an admin override sets it (the override takes
+  precedence), its support status, pending, unconsumed, and dead outbox
+  counts, migration progress after a switch, an engine comparison, and a link
+  to the engine's dashboard (the async operations view for Cloudflare).
+  Credentials show only as set or missing, with the CLI command that sets
+  them. With `platform.jobs.manage` (step-up, reason, audit): review and
+  confirm an engine, hosting, or location change (a plan first; installed
+  engines and present credentials only; experimental engines need an
+  acknowledgement; optimistic concurrency), pause or resume dispatch, settle
+  unconsumed events, and revert to the deployed configuration. See
+  [Job runtimes](JOB_RUNTIMES.md#from-the-platform-admin).
 - **Artifacts** (`/operations/artifacts`, `platform.operations.read`;
   capability `r2`): counts and bytes per upload state, and stale pending
   uploads.

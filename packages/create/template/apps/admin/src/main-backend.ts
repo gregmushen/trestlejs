@@ -79,10 +79,24 @@ export class UnsupportedAction extends Error {
 const keyStatus = (key: { revokedAt: string | null; expiresAt: string | null }): string => key.revokedAt ? "revoked" : key.expiresAt && Date.parse(key.expiresAt) <= Date.now() ? "expired" : "active";
 
 /** The environment's job engine and dispatch health (GET /api/admin/operations/jobs). Never credentials. */
+export type JobsRuntimeFields = { runtime: string; hosting: string; endpoint: string | null; project: string | null };
+/** A credential the engine needs: set or missing on the Worker (null before it reports), and the CLI command that sets it. */
+export type JobsCredential = { name: string; present: boolean | null; command: string };
+export type JobsDispatch = { pending: number; unconsumed: number; dead: number };
 export type JobsStatus = {
   runtime: string | null; hosting: string | null; endpoint: string | null; project: string | null;
   source: "declared" | "override" | "unknown"; declaredAt: string | null; supportStatus: "supported" | "experimental" | "unknown";
-  dashboardUrl: string | null; dispatch: { pending: number; unconsumed: number; dead: number }; migration: null;
+  dashboardUrl: string | null; dispatch: JobsDispatch;
+  declared: JobsRuntimeFields | null; override: (JobsRuntimeFields & { by: string | null; at: string | null }) | null; overrideVersion: number;
+  settings: { dispatchPaused: boolean }; available: string[]; credentials: JobsCredential[];
+  migration: { from: string; to: string; since: string; unconsumed: number } | null;
+};
+export type JobsTargetInput = { runtime: string; hosting: string; endpoint?: string | null; project?: string | null };
+/** The reviewed switch (POST /api/admin/operations/jobs/plan): nothing is written until it is confirmed. */
+export type JobsPlan = {
+  current: JobsRuntimeFields & { source: string }; target: JobsRuntimeFields; kind: "switch" | "settings" | "unchanged"; allowed: boolean;
+  problems: Array<{ code: string; message: string }>; credentials: JobsCredential[]; dispatch: JobsDispatch; experimental: boolean;
+  overrideVersion: number; steps: string[]; rollback: string[];
 };
 
 export function mainBackend(request: Request, reasoned: (reason: string) => { reason: string }) {
@@ -344,6 +358,11 @@ export function mainBackend(request: Request, reasoned: (reason: string) => { re
       return { succeeded: [id] };
     },
     jobs: async () => await request<JobsStatus>("GET", "operations/jobs"),
+    planJobs: async (input: JobsTargetInput) => await request<JobsPlan>("POST", "operations/jobs/plan", input),
+    setJobs: async (input: JobsTargetInput & { expectedVersion: number; acknowledgeExperimental: boolean }, reason: string) => await request<{ overrideVersion: number }>("PUT", "operations/jobs", { ...input, ...reasoned(reason) }),
+    setJobsPaused: async (dispatchPaused: boolean, expectedVersion: number, reason: string) => await request<{ overrideVersion: number }>("PUT", "operations/jobs/settings", { dispatchPaused, expectedVersion, ...reasoned(reason) }),
+    revertJobs: async (expectedVersion: number, reason: string) => await request<{ overrideVersion: number }>("DELETE", "operations/jobs/override", { expectedVersion, ...reasoned(reason) }),
+    settleJobs: async (olderThanMinutes: number, reason: string) => await request<{ deadLettered: number; requeued: number }>("POST", "operations/jobs/settle", { olderThanMinutes, ...reasoned(reason) }),
     artifactTotals: async () => await request<{ states: Record<"pending" | "ready" | "cleaning" | "deleted", { count: number; bytes: number }>; stalePending: number }>("GET", "operations/artifacts"),
     webhooks,
     webhook,
