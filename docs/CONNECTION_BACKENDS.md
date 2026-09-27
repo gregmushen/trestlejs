@@ -19,7 +19,7 @@ A profile is **supported** only when its evidence exists. Anything else is
 | Backend | Where credentials live | Status | Evidence |
 | --- | --- | --- | --- |
 | `none` (default) | nowhere: tenant Connections are disabled | Supported | Selection and fail-closed tests |
-| `local` | in-memory, in the local Worker | Supported for local development and tests only | Unit tests; callback, binding, duplicate, quarantine, and reauthorization tests against PostgreSQL. Refuses to run outside `APP_ENV=local` |
+| `local` | in-memory, in the local Worker | Supported for local development and tests only | Unit tests; callback, binding, duplicate, quarantine recording, and reauthorization tests against PostgreSQL. Refuses to run outside `APP_ENV=local` |
 | `nango` (Nango Cloud) | the developer's Nango account | Experimental (`--experimental`) | Mocked-transport tests for connect sessions, proxy headers, connection lookup and deletion, and webhook signatures. No run against a real Nango environment yet |
 | `nango` (self-hosted) | the developer's Nango instance (`NANGO_HOST`) | Experimental (`--experimental`) | As above; never run against a self-hosted instance |
 
@@ -29,16 +29,22 @@ integration specification against a real Nango environment.
 ## Enable Nango
 
 ```sh
-pnpm exec trestle integrations use nango --experimental
+pnpm exec trestle integrations use nango --integrations github,slack --experimental
 # or, for a self-hosted instance
-pnpm exec trestle integrations use nango --host https://nango.example.com --experimental
+pnpm exec trestle integrations use nango --integrations github,slack --host https://nango.example.com --experimental
 ```
 
-This writes `integrations: { backend: nango }` to `.trestle/project.yaml`,
+`--integrations` lists the Nango integration IDs tenants may connect. It is an
+allowlist: a connect session for any other ID is refused with 403 before
+anything reaches Nango, and an empty list allows none. Rerunning without
+`--integrations` keeps the current list.
+
+This writes `integrations: { backend: nango, allowed: [...] }` to `.trestle/project.yaml`,
 declares `NANGO_SECRET_KEY` (required in staging and production) and
 `NANGO_WEBHOOK_SECRET`, and sets `TRESTLE_CONNECTION_BACKEND` in
 `apps/worker/wrangler.jsonc`: `nango` for deployed environments and `local`
-for local development, which never needs a Nango account.
+for local development, which never needs a Nango account. The allowlist goes
+to every environment as `TRESTLE_CONNECTION_INTEGRATIONS`.
 
 Then, per deployed environment:
 
@@ -46,7 +52,7 @@ Then, per deployed environment:
    Nango environment or secret key between Trestle environments;
    `trestle doctor` fails when it can see the same key in two environments.
 2. `trestle secrets set NANGO_SECRET_KEY --env <env>` with that environment's
-   secret key. It is the only required secret.
+   secret key.
 3. `trestle secrets set NANGO_WEBHOOK_SECRET --env <env>` with the webhook
    signing key from Nango's Environment Settings > Webhooks. This key is
    distinct from the secret key. Without it the Worker refuses Nango
@@ -58,7 +64,8 @@ Then, per deployed environment:
 
 1. A member with `organization.integrations.manage` calls
    `POST /api/tenant/integrations/connect-sessions` with a
-   `providerConfigKey` (the Nango integration ID). Trestle records a durable,
+   `providerConfigKey` (the Nango integration ID), which must be on the
+   allowlist. Trestle records a durable,
    30-minute authorization attempt, then asks Nango for a connect session
    tagged only with the attempt ID. The browser receives only the short-lived
    session token.
@@ -79,12 +86,20 @@ Then, per deployed environment:
    revoked with cleanup pending.
 
 Callbacks for unknown attempts or Connections, or with a mismatched binding,
-are quarantined: acknowledged, logged, and never applied. A repeated callback
-is answered as a duplicate and changes nothing.
+are quarantined: acknowledged, never applied, and recorded. Every applied,
+duplicate, or quarantined callback is recorded once in
+`integration_provider_event`, keyed by a SHA-256 of its body (Nango sends no
+event ID, and a redelivery repeats the body). Rows hold safe metadata only:
+never tags, tokens, or the body. The organization is filled in only from
+Trestle's own records. A redelivery that later succeeds replaces its earlier
+quarantine. A repeated callback is answered as a duplicate and changes
+nothing. Callbacks Trestle does not act on (syncs, forwarded webhooks) are
+acknowledged and not recorded.
 
 The platform admin's **Integrations → Connections** view shows the selected
 backend, its configuration state, whether callbacks can be verified, webhook
-forwarding availability, counts by state, and Connections across tenants. It
+forwarding availability, counts by state, recent quarantined callbacks with
+their reasons, and Connections across tenants. It
 never shows credentials, tokens, or Nango connection IDs.
 
 ## Nango deployment and licensing
@@ -108,7 +123,7 @@ facts are Nango's and may change; the health report and admin say
 
 ## Not yet built
 
-Integration definitions and entitlement checks for which integrations a tenant
-may connect, Actions and Executions, reconciliation of pending backend
-cleanup, forwarded provider webhooks, and the customer Settings → Integrations
-UI.
+Integration definitions and per-plan entitlements (which integrations a plan
+includes, maximum Connections); today the allowlist is application-wide. Also not yet built: Actions and Executions, reconciliation
+of pending backend cleanup, forwarded provider webhooks, and the customer
+Settings → Integrations UI.

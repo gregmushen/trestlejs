@@ -9,7 +9,7 @@ import {
   artifactOperations, createDatabase, createPlatformDatabase, disableWebhookEndpoint, grantEntitlementOverride, listDeadOutboxEvents, listFailedWebhookDeliveries, listPlatformSubscriptions,
   activeSupportSession, endSupportSession, listSupportSessions, mintSupportHandoff, startSupportSession, supportableOrganizations, supportOrganizationView,
   grantPlatformRole, listPlatformAuditEvents, listPlatformEmailEvents, listPlatformRoleHolders, listPlatformServiceAccounts, platformAccessAssignments, listPlatformRoleAssignments, listPlatformUsers, organizationRegionalOverrides, platformAuditEvent, platformOrganizationDetail, PlatformRoleError, revokePlatformRole,
-  listPlatformApiKeys, listPlatformIntegrationConnections, listPlatformOrganizations, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
+  listPlatformApiKeys, listPlatformIntegrationConnections, listPlatformOrganizations, listPlatformQuarantinedEvents, listPlatformWebhookEndpoints, outboxStatusCounts, MachineAccessError, platformCommercialDetail, platformRevokeApiKey, PlatformOperationError, redriveOutboxEvent, replayWebhookDelivery, revokeEntitlementOverride,
   sessionAssurance, type Database, type DatabaseDriver, type PlatformChangeContext, type SessionAssurance,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { buildOpenApi } from "@__TRESTLE_PROJECT_NAME__/contracts";
@@ -332,14 +332,16 @@ export function connectionBackendStatus(report: unknown): { name: string; config
 
 admin.get("/api/admin/integrations/connections", async (context) => {
   const database = platformDatabase(context.env);
-  const [listed, backend] = await Promise.all([
+  const [listed, quarantined, backend] = await Promise.all([
     listPlatformIntegrationConnections(database),
+    listPlatformQuarantinedEvents(database, { limit: 50 }),
     adminDependencies.operationalStatus(context.env).then(connectionBackendStatus, () => null),
   ]);
   const names = await organizationNames(database, [...new Set(listed.connections.map((connection) => connection.organizationId))]);
   return context.json({
     backend,
     counts: listed.counts,
+    quarantined: quarantined.map((event) => ({ ...event, receivedAt: event.receivedAt.toISOString() })),
     connections: listed.connections.map((connection) => ({
       ...connection, organizationName: names.get(connection.organizationId) ?? connection.organizationId,
       connectedAt: iso(connection.connectedAt), revokedAt: iso(connection.revokedAt), createdAt: connection.createdAt.toISOString(), updatedAt: connection.updatedAt.toISOString(),

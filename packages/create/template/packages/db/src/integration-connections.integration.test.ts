@@ -4,7 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { createDatabase, createPlatformDatabase, createTenantDatabase } from "./index.js";
 import {
   clearConnectionCleanup, completeAuthorizationAttempt, createAuthorizationAttempt, failAuthorizationAttempt, listIntegrationConnections, listPlatformIntegrationConnections,
-  requireConnectionReauthorization, resolveAuthorizationAttempt, resolveIntegrationConnection, revokeIntegrationConnection, usableConnectionRef,
+  listPlatformQuarantinedEvents, recordProviderEvent, requireConnectionReauthorization, resolveAuthorizationAttempt, resolveIntegrationConnection, revokeIntegrationConnection, usableConnectionRef,
 } from "./integration-connections.js";
 import { outboxApplicationConnectionString } from "./outbox.js";
 
@@ -22,6 +22,7 @@ suite("integration Connections", () => {
     await sql!`delete from audit_event where organization_id in (${organizationId}, ${otherOrganizationId})`;
     await sql!`delete from integration_authorization_attempt where organization_id in (${organizationId}, ${otherOrganizationId})`;
     await sql!`delete from integration_connection where organization_id in (${organizationId}, ${otherOrganizationId})`;
+    await sql!`delete from integration_provider_event where backend_connection_id = ${`${run}-q`}`;
     await sql!.end();
   });
 
@@ -85,6 +86,23 @@ suite("integration Connections", () => {
     await clearConnectionCleanup(tenant, { organizationId, connectionId: connection!.id, now });
     expect((await listIntegrationConnections(tenant, { organizationId, environment: "local" }))[0]).toMatchObject({ state: "revoked", cleanupPending: false });
     await tenant.$client.end();
+  });
+
+  it("records each callback once through the resolver, upgrading only a quarantine to applied", async () => {
+    const app = createDatabase(outboxApplicationConnectionString(connectionString!), "postgres-js");
+    const platform = createPlatformDatabase(connectionString!, "postgres-js");
+    const eventKey = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
+    const event = { backend: "local", environment: "local", eventKey, kind: "authorization", providerConfigKey: "github", backendConnectionId: `${run}-q` };
+    expect(await recordProviderEvent(app, { ...event, outcome: "quarantined", reason: "backend_connection_missing" })).toBe(true);
+    expect(await recordProviderEvent(app, { ...event, outcome: "quarantined", reason: "backend_connection_missing" })).toBe(false);
+    expect((await listPlatformQuarantinedEvents(platform)).some((row) => row.reason === "backend_connection_missing" && row.providerConfigKey === "github")).toBe(true);
+    expect(JSON.stringify(await listPlatformQuarantinedEvents(platform))).not.toContain(`${run}-q`);
+    expect(await recordProviderEvent(app, { ...event, outcome: "applied", organizationId })).toBe(true);
+    expect(await recordProviderEvent(app, { ...event, outcome: "quarantined", reason: "attempt_used" })).toBe(false);
+    expect(await sql!`select outcome, organization_id from integration_provider_event where event_key = ${eventKey}`).toEqual([{ outcome: "applied", organization_id: organizationId }]);
+    // The runtime role cannot read or write the table directly.
+    await expect(app.execute(`select id from integration_provider_event limit 1`)).rejects.toThrow();
+    await Promise.all([app.$client.end(), platform.$client.end()]);
   });
 
   it("lists Connections across tenants for the platform, without backend connection IDs", async () => {

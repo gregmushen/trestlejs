@@ -2,7 +2,7 @@ import { and, asc, count, desc, eq, sql } from "drizzle-orm";
 
 import { recordAuditEvent, type AuditEventInput } from "./audit.js";
 import type { Database } from "./index.js";
-import { integrationAuthorizationAttempt, integrationConnection } from "./integration-schema.js";
+import { integrationAuthorizationAttempt, integrationConnection, integrationProviderEvent } from "./integration-schema.js";
 
 export type ConnectionState = "disconnected" | "authorizing" | "connected" | "degraded" | "reauthorization_required" | "revoked";
 export const connectionStates = ["disconnected", "authorizing", "connected", "degraded", "reauthorization_required", "revoked"] as const;
@@ -185,4 +185,31 @@ export async function usableConnectionRef(database: Database, input: Readonly<{ 
   const [row] = await database.select({ backend: integrationConnection.backend, providerConfigKey: integrationConnection.providerConfigKey, backendConnectionId: integrationConnection.backendConnectionId, generation: integrationConnection.generation })
     .from(integrationConnection).where(and(eq(integrationConnection.id, input.connectionId), eq(integrationConnection.organizationId, input.organizationId), sql`${integrationConnection.state} IN ('connected', 'degraded')`)).limit(1);
   return row ?? null;
+}
+
+export type ProviderEventOutcome = "applied" | "duplicate" | "quarantined" | "ignored";
+
+/**
+ * Records a verified backend callback's outcome once per content key. Returns
+ * false when this exact callback was already recorded (a redelivery), unless it
+ * turns an earlier quarantine into an applied outcome. Safe
+ * metadata only; the organization only when persisted state supplied it.
+ */
+export async function recordProviderEvent(database: Database, input: Readonly<{
+  backend: string; environment: string; eventKey: string; kind: string; outcome: ProviderEventOutcome; reason?: string | null;
+  providerConfigKey?: string | null; backendConnectionId?: string | null; organizationId?: string | null;
+}>): Promise<boolean> {
+  if (!/^[0-9a-f]{64}$/u.test(input.eventKey)) throw new Error("Provider event keys are SHA-256 hex digests");
+  const [row] = rowsOf(await database.execute(sql`select trestle_record_integration_event(${input.backend}, ${input.environment}, ${input.eventKey}, ${input.kind}, ${input.outcome}, ${input.reason ?? null}, ${input.providerConfigKey ?? null}, ${input.backendConnectionId ?? null}, ${input.organizationId ?? null}) as inserted`));
+  return row?.inserted === true;
+}
+
+export type PlatformQuarantinedEvent = Readonly<{ id: string; backend: string; environment: string; kind: string; reason: string | null; providerConfigKey: string | null; receivedAt: Date }>;
+
+/** Recent quarantined callbacks for the platform admin. Never the backend connection ID. */
+export async function listPlatformQuarantinedEvents(database: Database, options: Readonly<{ limit?: number }> = {}): Promise<PlatformQuarantinedEvent[]> {
+  return await database.select({ id: integrationProviderEvent.id, backend: integrationProviderEvent.backend, environment: integrationProviderEvent.environment, kind: integrationProviderEvent.kind,
+    reason: integrationProviderEvent.reason, providerConfigKey: integrationProviderEvent.providerConfigKey, receivedAt: integrationProviderEvent.receivedAt })
+    .from(integrationProviderEvent).where(eq(integrationProviderEvent.outcome, "quarantined"))
+    .orderBy(desc(integrationProviderEvent.receivedAt), asc(integrationProviderEvent.id)).limit(Math.min(Math.max(options.limit ?? 50, 1), 200));
 }

@@ -1372,13 +1372,17 @@ export function createProgram(runtime: CliRuntime): Command {
     .description("select the connection backend for deployed environments (nango); local development uses the deterministic local backend")
     .argument("<backend>", "nango")
     .option("--host <url>", "a self-hosted Nango URL; omit for Nango Cloud")
-    .action(async (backendName: string, options: { host?: string }, command: Command) => {
+    .option("--integrations <keys>", "comma-separated Nango integration IDs tenants may connect (replaces the allowlist; empty allows none)")
+    .action(async (backendName: string, options: { host?: string; integrations?: string }, command: Command) => {
       if (backendName !== "nango") throw new CliFailure("integrations use supports nango; none (the default) disables tenant Connections");
       const context = await projectContext(command, runtime);
       let changed: readonly string[];
-      try { changed = await enableConnectionBackend(context.root, "nango", options.host ? { host: options.host } : {}); }
+      const allowed = options.integrations?.split(",").map((key) => key.trim()).filter(Boolean);
+      if (allowed?.some((key) => !/^[A-Za-z0-9._-]{1,100}$/u.test(key))) throw new CliFailure("--integrations takes Nango integration IDs: letters, digits, dot, underscore, or dash");
+      try { changed = await enableConnectionBackend(context.root, "nango", { ...(options.host ? { host: options.host } : {}), ...(allowed ? { allowed } : {}) }); }
       catch (error) { throw new CliFailure(error instanceof Error ? error.message : String(error)); }
       runtime.stdout(`${changed.length ? `Selected nango.\n${changed.map((file) => `  ${file}`).join("\n")}` : "nango is already selected."}\n`
+        + `${allowed?.length ? "" : "No integrations are allowed yet: rerun with --integrations github,slack (your Nango integration IDs).\n"}`
         + "Next: create one Nango environment per Trestle environment; set its secret key with trestle secrets set NANGO_SECRET_KEY --env <env> (never reuse a key across environments) "
         + "and its webhook signing key with trestle secrets set NANGO_WEBHOOK_SECRET --env <env>; point the Nango webhook URL at https://<worker>/webhooks/nango; run trestle doctor --env <env>.\n");
     }), runtime);

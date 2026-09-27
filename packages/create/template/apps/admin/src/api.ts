@@ -305,7 +305,9 @@ export type RegionalResolutionJson = { user: { userId: string; name: string }; c
 /** The application Worker's connection backend, as its operational health reports it. Never a secret. */
 export type ConnectionBackendJson = { name: string; configured: boolean; detail: string; webhookForwarding: "available" | "unavailable" | "unknown"; inboundVerification: boolean };
 export type IntegrationConnectionJson = { id: string; organizationId: string; organizationName: string; environment: string; backend: string; providerConfigKey: string; provider: string | null; state: string; generation: number; cleanupPending: boolean; connectedAt: string | null; revokedAt: string | null; createdAt: string; updatedAt: string };
-export type IntegrationConnectionsState = { backend: ConnectionBackendJson | null; counts: Record<string, number>; connections: IntegrationConnectionJson[] };
+/** A verified backend callback that could not be applied: safe metadata only, never tags, tokens, or the body. */
+export type QuarantinedCallbackJson = { id: string; backend: string; environment: string; kind: string; reason: string | null; providerConfigKey: string | null; receivedAt: string };
+export type IntegrationConnectionsState = { backend: ConnectionBackendJson | null; counts: Record<string, number>; quarantined: QuarantinedCallbackJson[]; connections: IntegrationConnectionJson[] };
 
 type Query = Record<string, string | undefined>;
 export type Reasoned = { reason: string };

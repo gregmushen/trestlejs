@@ -29,6 +29,7 @@ suite("connection backend callbacks", () => {
     await sql!`delete from audit_event where organization_id = ${organizationId}`;
     await sql!`delete from integration_authorization_attempt where organization_id = ${organizationId}`;
     await sql!`delete from integration_connection where organization_id = ${organizationId}`;
+    await sql!`delete from integration_provider_event where backend_connection_id like ${`${run}-%`}`;
     await sql!.end();
   });
 
@@ -38,6 +39,12 @@ suite("connection backend callbacks", () => {
     expect(await callback({ ...base, tags: { [attemptTag]: crypto.randomUUID(), organization_id: organizationId } })).toEqual({ status: 202, body: { quarantined: true } });
     expect(await callback({ type: "auth", operation: "refresh", success: false, connectionId: `${run}-unknown`, providerConfigKey: "github", error: { type: "refresh_failed" } })).toEqual({ status: 202, body: { quarantined: true } });
     expect(await sql!`select id from integration_connection where organization_id = ${organizationId}`).toHaveLength(0);
+    // Each quarantined callback is recorded once, with safe metadata and no organization taken from tags.
+    const events = await sql!`select kind, outcome, reason, organization_id from integration_provider_event where backend_connection_id like ${`${run}-%`} order by received_at`;
+    expect(events.map((row) => row.reason)).toEqual(["unbound", "unknown_attempt", "unknown_connection"]);
+    expect(events.every((row) => row.outcome === "quarantined" && row.organization_id === null)).toBe(true);
+    expect(await callback({ ...base, tags: { organization_id: organizationId } })).toEqual({ status: 202, body: { quarantined: true } });
+    expect(await sql!`select id from integration_provider_event where backend_connection_id like ${`${run}-%`}`).toHaveLength(3);
   });
 
   it("binds a verified connection to the attempt's tenant once, then flags a refresh failure once", async () => {
@@ -58,6 +65,8 @@ suite("connection backend callbacks", () => {
     expect((await listIntegrationConnections(tenant, { organizationId, environment: "local" }))[0]).toMatchObject({ state: "reauthorization_required" });
     const audits = await sql!`select name, actor_type from audit_event where organization_id = ${organizationId} order by occurred_at`;
     expect(audits.map((row) => row.name)).toEqual(["integrations.connection.connected", "integrations.connection.reauthorization_required"]);
+    const applied = await sql!`select outcome, organization_id from integration_provider_event where backend_connection_id = ${`${run}-c`} and outcome = 'applied'`;
+    expect(applied).toEqual([{ outcome: "applied", organization_id: organizationId }, { outcome: "applied", organization_id: organizationId }]);
     await tenant.$client.end();
   });
 

@@ -17,13 +17,13 @@ export const nangoSecrets = {
 } as const;
 
 /** Deployed environments use the selected backend; local development uses the deterministic local backend. */
-function withConnectionBackend(source: string, backend: string, host: string | undefined): string {
+function withConnectionBackend(source: string, backend: string, host: string | undefined, allowed: readonly string[]): string {
   const pattern = /("vars"\s*:\s*\{)([^{}]*)(\})/gu;
   return source.replace(pattern, (_match, open: string, body: string, close: string) => {
     const local = /"APP_ENV"\s*:\s*"local"/u.test(body);
     const selected = local ? "local" : backend;
-    let updated = body.replace(/\s*,?\s*"TRESTLE_CONNECTION_BACKEND"\s*:\s*"[^"]*"/gu, "").replace(/\s*,?\s*"NANGO_HOST"\s*:\s*"[^"]*"/gu, "");
-    const additions = [`"TRESTLE_CONNECTION_BACKEND": ${JSON.stringify(selected)}`, ...(!local && host ? [`"NANGO_HOST": ${JSON.stringify(host)}`] : [])].join(", ");
+    let updated = body.replace(/\s*,?\s*"(?:TRESTLE_CONNECTION_BACKEND|TRESTLE_CONNECTION_INTEGRATIONS|NANGO_HOST)"\s*:\s*"[^"]*"/gu, "");
+    const additions = [`"TRESTLE_CONNECTION_BACKEND": ${JSON.stringify(selected)}`, `"TRESTLE_CONNECTION_INTEGRATIONS": ${JSON.stringify(allowed.join(","))}`, ...(!local && host ? [`"NANGO_HOST": ${JSON.stringify(host)}`] : [])].join(", ");
     updated = updated.trim() ? `${updated.replace(/\s+$/u, "")}, ${additions} ` : ` ${additions} `;
     return `${open}${updated}${close}`;
   });
@@ -32,17 +32,20 @@ function withConnectionBackend(source: string, backend: string, host: string | u
 /**
  * Selects the tenant connection backend: writes the `integrations:` block to
  * .trestle/project.yaml, declares the backend's secret names, and sets
- * TRESTLE_CONNECTION_BACKEND in the Worker configuration. Returns the files
+ * TRESTLE_CONNECTION_BACKEND and the integration allowlist
+ * (TRESTLE_CONNECTION_INTEGRATIONS) in the Worker configuration. Returns the files
  * it changed. Secret values are never written here; set them with
  * `trestle secrets set`.
  */
-export async function enableConnectionBackend(root: string, backend: "nango", options: Readonly<{ host?: string }> = {}): Promise<readonly string[]> {
+export async function enableConnectionBackend(root: string, backend: "nango", options: Readonly<{ host?: string; allowed?: readonly string[] }> = {}): Promise<readonly string[]> {
   const manifestPath = path.join(root, ".trestle", "project.yaml");
   const source = await readFile(manifestPath, "utf8");
   const current = parseProjectManifest(source);
   const document = parseDocument(source);
   const changed: string[] = [];
-  const desired = { backend, ...(options.host ? { host: options.host } : {}) };
+  // Without --integrations the existing allowlist is kept; it starts empty, which allows no Connections.
+  const allowed = [...new Set(options.allowed ?? current.integrations?.allowed ?? [])].sort();
+  const desired = { backend, allowed, ...(options.host ? { host: options.host } : {}) };
   if (JSON.stringify(current.integrations ?? {}) !== JSON.stringify(desired)) document.set("integrations", desired);
   for (const [name, declaration] of Object.entries(nangoSecrets)) {
     if (!current.secrets?.[name]) document.setIn(["secrets", name], { target: declaration.target, required: [...declaration.required] });
@@ -62,7 +65,7 @@ export async function enableConnectionBackend(root: string, backend: "nango", op
     const configPath = path.join(root, worker, "wrangler.jsonc");
     const config = await readFile(configPath, "utf8").catch(() => undefined);
     if (config !== undefined) {
-      const rendered = withConnectionBackend(config, backend, options.host);
+      const rendered = withConnectionBackend(config, backend, options.host, allowed);
       if (rendered !== config) {
         await writeFile(configPath, rendered, "utf8");
         changed.push(path.join(worker, "wrangler.jsonc"));

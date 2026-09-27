@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { hexHmacSha256 } from "./connection-backend.js";
+import { allowedIntegrations } from "./connection-routes.js";
 import { app } from "./index.js";
+import type { WorkerEnvironment } from "./worker-environment.js";
 
 const environment = { DATABASE_URL: "postgres://user:password@127.0.0.1:1/unused", DATABASE_DRIVER: "postgres-js" as const, BETTER_AUTH_SECRET: "test-secret-at-least-32-characters", APP_ENV: "staging" as const };
 const nango = { ...environment, TRESTLE_CONNECTION_BACKEND: "nango", NANGO_SECRET_KEY: "nango-secret-key-value-unique-0042", NANGO_WEBHOOK_SECRET: "nango-webhook-signing-key" };
@@ -25,6 +27,11 @@ describe("connection backend routes", () => {
     const response = await post("/webhooks/nango", body, { "x-nango-hmac-sha256": await hexHmacSha256(nango.NANGO_WEBHOOK_SECRET, body) }, nango);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ignored: true });
+  });
+
+  it("allows only declared integrations, and none when the list is empty", () => {
+    expect(allowedIntegrations(nango as WorkerEnvironment)).toEqual([]);
+    expect(allowedIntegrations({ ...nango, TRESTLE_CONNECTION_INTEGRATIONS: " github, slack ,,bad key" } as WorkerEnvironment)).toEqual(["github", "slack"]);
   });
 
   it("serves the local callback only in local development", async () => {

@@ -1,4 +1,4 @@
-import { api, type ConnectionBackendJson, type IntegrationConnectionsState } from "../../api";
+import { api, type ConnectionBackendJson, type IntegrationConnectionsState, type QuarantinedCallbackJson } from "../../api";
 import { useAdminQuery } from "../../shell/context";
 import { Banner, Select } from "../../shell/kumo";
 import { AdminFacts } from "../../shell/resource";
@@ -14,6 +14,7 @@ const forwardingLabel: Record<ConnectionBackendJson["webhookForwarding"], string
 export function ConnectionBackendSummary(props: { backend: ConnectionBackendJson | null; counts: IntegrationConnectionsState["counts"] }) {
   const { backend } = props;
   return <>
+    {backend?.name === "nango" && <Banner className="mb-4" variant="secondary" title="Experimental" description="The Nango connection backend is experimental and has not been verified against a live Nango environment." />}
     {!backend && <Banner className="mb-4" variant="alert" title="Backend status unavailable" description="The application Worker did not report its connection backend. Run pnpm exec trestle doctor for this environment." />}
     {backend?.name === "none" && <Banner className="mb-4" variant="secondary" title="Connections are disabled" description="TRESTLE_CONNECTION_BACKEND is none. Enable a backend with pnpm exec trestle integrations use nango --experimental." />}
     {backend && backend.name !== "none" && !backend.configured && <Banner className="mb-4" variant="alert" title={`${backend.name} is not configured`} description={backend.detail} />}
@@ -28,6 +29,28 @@ export function ConnectionBackendSummary(props: { backend: ConnectionBackendJson
   </>;
 }
 
+const quarantineExplanations: Record<string, string> = {
+  unbound: "No Trestle authorization attempt tag: the connection was not started from this application",
+  unknown_attempt: "The attempt does not exist in this environment",
+  unknown_connection: "No Connection is bound to this backend connection",
+  binding_mismatch: "Environment, backend, or integration differs from the attempt",
+  attempt_used: "The attempt already completed with a different connection",
+  attempt_expired: "The attempt expired before the callback arrived",
+  attempt_not_found: "The attempt does not exist in this environment",
+  backend_connection_missing: "The backend does not hold the reported connection",
+};
+export const quarantineExplanation = (reason: string | null): string => (reason && quarantineExplanations[reason]) ?? reason ?? "unknown reason";
+
+/** Verified callbacks that were acknowledged but never applied: misconfigured webhook URLs, stale attempts, or probing. */
+export function QuarantinedCallbacks(props: { rows: readonly QuarantinedCallbackJson[] }) {
+  return props.rows.length ? <AdminDataTable caption="Quarantined callbacks" primary={false} rows={props.rows} rowKey={(row) => row.id} columns={[
+    { header: "Received", nowrap: true, cell: (row) => formatDate(row.receivedAt) },
+    { header: "Integration", nowrap: true, cell: (row) => row.providerConfigKey ? <AdminCode>{row.providerConfigKey}</AdminCode> : "—" },
+    { header: "Kind", nowrap: true, cell: (row) => row.kind },
+    { header: "Reason", minWidth: "14rem", cell: (row) => quarantineExplanation(row.reason) },
+  ]} /> : <AdminEmpty title="No quarantined callbacks" />;
+}
+
 export default function ConnectionsView() {
   const [search, update] = useViewSearch<{ state?: string }>();
   const connections = useAdminQuery(["connections"], api.connections, { refetchInterval: 30_000 });
@@ -39,6 +62,9 @@ export default function ConnectionsView() {
       </Select>} />
     <AdminQueryState query={connections}>{(data) => <>
       <AdminSection title="Connection backend"><ConnectionBackendSummary backend={data.backend} counts={data.counts} /></AdminSection>
+      <AdminSection title={`Quarantined callbacks (${data.quarantined.length})`} description="Signed backend callbacks acknowledged but not applied. They never change a tenant's state.">
+        <QuarantinedCallbacks rows={data.quarantined} />
+      </AdminSection>
       <AdminSection title="Connections">
         {(() => {
           const rows = data.connections.filter((row) => !search.state || row.state === search.state);

@@ -87,6 +87,8 @@ export const jobsDeclarationSchema = z
 export const integrationsDeclarationSchema = z
   .object({
     backend: z.enum(["none", "nango"]).default("none"),
+    /** Backend integration keys tenants may connect; anything else is refused before a session is minted. */
+    allowed: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,100}$/u)).default([]),
     host: z.string().url().refine((value) => value.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/u.test(value), "a self-hosted Nango must use https (http only for localhost)").optional(),
   })
   .strict()

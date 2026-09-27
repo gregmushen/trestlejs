@@ -2,7 +2,7 @@ import type { AuthEnvironment } from "@__TRESTLE_PROJECT_NAME__/auth";
 import { createLogger, loggerSecretsFromEnvironment, type Logger } from "@__TRESTLE_PROJECT_NAME__/context";
 import {
   clearConnectionCleanup, completeAuthorizationAttempt, createAuthorizationAttempt, createDatabase, createTenantDatabase, failAuthorizationAttempt, listIntegrationConnections,
-  outboxApplicationConnectionString, requireConnectionReauthorization, resolveAuthorizationAttempt, resolveIntegrationConnection, revokeIntegrationConnection, usableConnectionRef, type Database,
+  outboxApplicationConnectionString, recordProviderEvent, requireConnectionReauthorization, resolveAuthorizationAttempt, resolveIntegrationConnection, revokeIntegrationConnection, usableConnectionRef, type Database,
 } from "@__TRESTLE_PROJECT_NAME__/db";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
@@ -30,6 +30,10 @@ const providerConfigKeySchema = z.string().trim().min(1).max(100).regex(/^[A-Za-
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const worker = (environment: AuthEnvironment) => environment as WorkerEnvironment;
 const appEnvironment = (environment: AuthEnvironment) => environment.APP_ENV ?? "local";
+/** TRESTLE_CONNECTION_INTEGRATIONS: the comma-separated backend integration keys tenants may connect. */
+export function allowedIntegrations(environment: WorkerEnvironment): string[] {
+  return (environment.TRESTLE_CONNECTION_INTEGRATIONS ?? "").split(",").map((key) => key.trim()).filter((key) => providerConfigKeySchema.safeParse(key).success);
+}
 const expectedOrigin = (environment: AuthEnvironment) => environment.WEB_ORIGIN ?? environment.BETTER_AUTH_URL ?? "http://localhost:42069";
 
 connectionRoutes.get("/api/tenant/integrations/connections", requireExecutionContext, async (context) => {
@@ -49,6 +53,8 @@ connectionRoutes.post("/api/tenant/integrations/connect-sessions", requireExecut
   if (!context.req.header("content-type")?.toLowerCase().startsWith("application/json")) return context.json({ error: "JSON content type required" }, 415);
   const parsed = z.object({ providerConfigKey: providerConfigKeySchema }).strict().safeParse(await context.req.json().catch(() => null));
   if (!parsed.success) return context.json({ error: "Invalid connect session request" }, 400);
+  // Only integrations the application declared may be connected; an empty list allows none.
+  if (!allowedIntegrations(worker(context.env)).includes(parsed.data.providerConfigKey)) return context.json({ error: "integration_not_allowed", message: "This integration is not enabled for this application" }, 403);
   let backend: ConnectionBackend;
   try { backend = configuredConnectionBackend(worker(context.env)); }
   catch (error) { return context.json({ error: "Connections are not configured", detail: error instanceof ConnectionBackendUnavailable ? error.message : "unavailable" }, 503); }
@@ -126,8 +132,25 @@ export async function handleConnectionCallback(input: Readonly<{
     input.log.warn("integrations.callback.rejected", { backend: backend.name, reason: "invalid_signature_or_payload" });
     return { status: 400, body: { error: "Invalid callback" } };
   }
+  const eventKey = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input.rawBody)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const outcome = await applyConnectionCallback(input, backend, event);
+  // Recorded only once the outcome is decided; a retryable failure leaves nothing, so the redelivery is processed again.
+  if (outcome.record) {
+    const recorder = input.database?.app() ?? createDatabase(outboxApplicationConnectionString(input.environment.DATABASE_URL), input.environment.DATABASE_DRIVER);
+    try {
+      await recordProviderEvent(recorder, { backend: backend.name, environment: input.environment.APP_ENV ?? "local", eventKey, kind: outcome.record.kind, outcome: outcome.record.outcome, reason: outcome.record.reason ?? null,
+        providerConfigKey: "providerConfigKey" in event ? event.providerConfigKey : null, backendConnectionId: "backendConnectionId" in event ? event.backendConnectionId : null, organizationId: outcome.record.organizationId ?? null });
+    } finally { await (input.database?.close ?? (async (database: Database) => { await (database.$client as { end?: () => Promise<void> }).end?.(); }))(recorder); }
+  }
+  return { status: outcome.status, body: outcome.body };
+}
+
+type AppliedCallback = CallbackOutcome & Readonly<{ record?: Readonly<{ kind: string; outcome: "applied" | "duplicate" | "quarantined" | "ignored"; reason?: string; organizationId?: string }> }>;
+
+async function applyConnectionCallback(input: Parameters<typeof handleConnectionCallback>[0], backend: ConnectionBackend, event: BackendEvent): Promise<AppliedCallback> {
   if (event.kind === "ignored") {
     input.log.info("integrations.callback.ignored", { backend: backend.name, type: event.type });
+    // Not recorded: a backend may forward many callbacks Trestle does not act on (syncs, forwarded webhooks).
     return { status: 200, body: { ignored: true } };
   }
   const environmentName = input.environment.APP_ENV ?? "local";
@@ -138,9 +161,9 @@ export async function handleConnectionCallback(input: Readonly<{
     close: async (database: Database) => { await (database.$client as { end?: () => Promise<void> }).end?.(); },
   };
   const audit = { actor: { type: "system" as const, id: `connection-backend:${backend.name}` }, environment: environmentName, correlationId: input.correlationId };
-  const quarantine = (reason: string): CallbackOutcome => {
+  const quarantine = (reason: string): AppliedCallback => {
     input.log.warn("integrations.callback.quarantined", { backend: backend.name, kind: event.kind, reason });
-    return { status: 202, body: { quarantined: true } };
+    return { status: 202, body: { quarantined: true }, record: { kind: event.kind, outcome: "quarantined", reason } };
   };
   const app = databases.app();
   try {
@@ -151,7 +174,8 @@ export async function handleConnectionCallback(input: Readonly<{
       try {
         const changed = await requireConnectionReauthorization(tenant, { organizationId: bound.organizationId, connectionId: bound.connectionId, category: event.errorCategory, now, audit });
         input.log.info(changed ? "integrations.connection.reauthorization_required" : "integrations.callback.duplicate", { backend: backend.name, connectionId: bound.connectionId });
-        return changed ? { status: 202, body: { state: "reauthorization_required" } } : { status: 200, body: { duplicate: true } };
+        const record = { kind: event.kind, outcome: changed ? "applied" as const : "duplicate" as const, organizationId: bound.organizationId };
+        return changed ? { status: 202, body: { state: "reauthorization_required" }, record } : { status: 200, body: { duplicate: true }, record };
       } finally { await databases.close(tenant); }
     }
     if (!event.attemptId) return quarantine("unbound");
@@ -163,7 +187,8 @@ export async function handleConnectionCallback(input: Readonly<{
       if (!event.success) {
         const failed = await failAuthorizationAttempt(tenant, { organizationId: attempt.organizationId, attemptId: event.attemptId, category: event.errorCategory ?? "unknown", now });
         input.log.info(failed ? "integrations.authorization.failed" : "integrations.callback.duplicate", { backend: backend.name, attemptId: event.attemptId, category: event.errorCategory });
-        return failed ? { status: 202, body: { state: "failed" } } : { status: 200, body: { duplicate: true } };
+        const record = { kind: event.kind, outcome: failed ? "applied" as const : "duplicate" as const, reason: "authorization_failed", organizationId: attempt.organizationId };
+        return failed ? { status: 202, body: { state: "failed" }, record } : { status: 200, body: { duplicate: true }, record };
       }
       const ref = { providerConfigKey: event.providerConfigKey, backendConnectionId: event.backendConnectionId };
       let provider: string | null;
@@ -178,10 +203,10 @@ export async function handleConnectionCallback(input: Readonly<{
       if (result.state === "rejected") return quarantine(result.reason);
       if (result.state === "duplicate") {
         input.log.info("integrations.callback.duplicate", { backend: backend.name, connectionId: result.connectionId });
-        return { status: 200, body: { duplicate: true } };
+        return { status: 200, body: { duplicate: true }, record: { kind: event.kind, outcome: "duplicate", organizationId: attempt.organizationId } };
       }
       input.log.info("integrations.connection.connected", { backend: backend.name, connectionId: result.connectionId, generation: result.generation, reconnected: result.reconnected });
-      return { status: 202, body: { state: "connected" } };
+      return { status: 202, body: { state: "connected" }, record: { kind: event.kind, outcome: "applied", organizationId: attempt.organizationId } };
     } finally { await databases.close(tenant); }
   } finally { await databases.close(app); }
 }

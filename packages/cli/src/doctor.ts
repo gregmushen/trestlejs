@@ -78,6 +78,12 @@ async function nangoChecks(root: string, manifest: ProjectManifest, environment:
     message: values.NANGO_WEBHOOK_SECRET?.trim() ? "the Nango webhook signing key is configured" : "without NANGO_WEBHOOK_SECRET the Worker refuses Nango connection callbacks, so no Connection completes",
     ...(!values.NANGO_WEBHOOK_SECRET?.trim() ? { remediation: `Copy the signing key from Nango (Environment Settings > Webhooks) and run trestle secrets set NANGO_WEBHOOK_SECRET --env ${environment}` } : {}),
   });
+  const allowed = manifest.integrations?.allowed ?? [];
+  checks.push({
+    id: "integrations.allowlist.declared", group: "architecture", status: allowed.length ? "pass" : "fail",
+    message: allowed.length ? `tenants may connect ${allowed.join(", ")}` : "no integrations are allowed, so tenants cannot connect anything",
+    ...(!allowed.length ? { remediation: "Run trestle integrations use nango --integrations <ids> --experimental with your Nango integration IDs" } : {}),
+  });
   if (!key) return checks;
   const reused: string[] = [];
   for (const other of manifest.environments) {

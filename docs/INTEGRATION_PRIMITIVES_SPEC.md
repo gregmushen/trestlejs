@@ -327,8 +327,10 @@ verifyInbound(rawBody, headers)  authenticate backend-originated callbacks
 ```
 
 **Bring your own account.** The application developer supplies their own
-Nango account. `NANGO_SECRET_KEY` is the only required secret. `NANGO_HOST`
-is optional and needed only for a self-hosted instance. Each Trestle
+Nango account and supplies two secrets per environment: `NANGO_SECRET_KEY`
+for API calls and `NANGO_WEBHOOK_SECRET`, Nango's separate webhook signing
+key, for authenticating callbacks. `NANGO_HOST` is optional and needed only
+for a self-hosted instance. Each Trestle
 environment maps to a distinct Nango environment and its own key, and Doctor
 rejects reuse of one key across environments. Trestle never provisions,
 resells, or operates Nango on the developer's behalf. The key is a

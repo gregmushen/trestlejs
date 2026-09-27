@@ -68,3 +68,31 @@ export const integrationAuthorizationAttempt = pgTable("integration_authorizatio
   check("integration_authorization_attempt_backend_check", sql`${table.backend} IN ('local', 'nango')`),
   pgPolicy("integration_authorization_attempt_tenant", { for: "all", to: "trestle_app", using: sql`${table.organizationId} = current_setting('app.organization_id', true)`, withCheck: sql`${table.organizationId} = current_setting('app.organization_id', true)` }),
 ]).enableRLS();
+
+/**
+ * Every authenticated connection-backend callback, once, by a content key
+ * (the backend sends no stable event ID; a redelivery repeats the same body).
+ * Rows carry safe metadata only: never tags, tokens, or the raw body. The
+ * organization is filled in only from persisted state, never from the
+ * callback. Written through `trestle_record_integration_event`; the platform
+ * admin reads quarantined rows to find misconfiguration or abuse.
+ */
+export const integrationProviderEvent = pgTable("integration_provider_event", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  backend: text("backend").notNull(),
+  environment: text("environment").notNull(),
+  eventKey: text("event_key").notNull(),
+  kind: text("kind").notNull(),
+  outcome: text("outcome").notNull(),
+  reason: text("reason"),
+  providerConfigKey: text("provider_config_key"),
+  backendConnectionId: text("backend_connection_id"),
+  organizationId: text("organization_id"),
+  receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("integration_provider_event_key_uidx").on(table.backend, table.environment, table.eventKey),
+  index("integration_provider_event_outcome_idx").on(table.outcome, table.receivedAt),
+  check("integration_provider_event_outcome_check", sql`${table.outcome} IN ('applied', 'duplicate', 'quarantined', 'ignored')`),
+  check("integration_provider_event_key_check", sql`${table.eventKey} ~ '^[0-9a-f]{64}$'`),
+  pgPolicy("integration_provider_event_platform_select", { for: "select", to: "trestle_platform", using: sql`true` }),
+]).enableRLS();
