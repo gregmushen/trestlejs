@@ -17,7 +17,7 @@ hosted exit blocked), `blocked`.
 | P02 contracts/planner | complete | P02 PR | Schemas, canonical digests, pure planner |
 | P03 read-only adapter/CLI | complete | P03 PR | R1 read-only surface; mutations registered as unavailable |
 | P04 approval/control store | complete | P04 PR | Local exit (simulation) met; hosted enrollment pending |
-| P05 credential generations | pending | — | |
+| P05 credential generations | complete | P05 PR | v2 envelope + CAS commit; public pull still unavailable |
 | P06 executor/fake provider | pending | — | |
 | P07 Neon hosted slice | pending | — | |
 | P08 deployment/consumers | pending | — | |
@@ -187,3 +187,25 @@ local only, no account effect). Not authenticated.
 - Review findings fixed: memory restore merged into a non-empty store; restored
   stores could reissue fencing tokens (high-water mark added); concurrent first
   connections raced on DDL (migration serialized by advisory lock).
+
+## P05 — Credential generations and compatibility
+
+- Status: **complete**. Public `trestle infra credentials pull` stays unavailable
+  until P06 coordinates it with approvals/reservations (plan requirement).
+- Decision: `docs/decisions/D-04-credential-envelope.md`.
+- Module `infra/credentials.ts`: v2 envelope (AES-256-GCM; AAD = canonical
+  `{schema, version, projectId, environment, purpose, generation, metadata}`),
+  commit via control-store CAS (`credentials:<project>:<env>:<purpose>`) so
+  ciphertext and metadata commit atomically; digest check on read; master-key
+  re-encryption as a new generation; strict dotenv parser (character scanner, no
+  evaluation); protected import (isolated workspace, no symlinks, confinement,
+  owner and 0600 checks, never the application root, missing/undeclared/colliding
+  outputs rejected — AR-05); adapter-owned cleanup with reported debt; merge rules
+  (application-owned preserved, override conflicts need an explicit choice,
+  editing a provider value marks a visible override).
+- Unchanged: `trestle secrets` v1 files, editor (`$VISUAL`/`$EDITOR`/vi), show/get
+  export and `secrets key rotate`. v1 reader rejects v2 envelopes (no silent
+  downgrade).
+- Tests: `infra-credentials.test.ts` 18. Mutation check: dropping metadata from
+  AAD, disabling the undeclared-output check, the permission check, or the
+  override check each turned the suite red. `pnpm check`: 43 files pass.
