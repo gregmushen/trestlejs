@@ -98,3 +98,27 @@ describe("trestle infra apply", () => {
     });
   });
 });
+
+describe("trestle infra lifecycle and rotation planning", () => {
+  it("writes blocked, exact-ID plans for destroy, detach, adopt, upgrade and rotate without provider writes", async () => {
+    const root = await project();
+    await writeFile(path.join(root, ".trestle", "infrastructure.yaml"), `${INTENT}        deletionPolicy: delete\n        credentialBindings:\n          runtime: {output: DATABASE_URL, classification: provider-managed, consumers: [worker]}\n`);
+    await writeFile(path.join(root, ".trestle", "project.yaml"), (await readFile(path.join(root, ".trestle", "project.yaml"), "utf8")).replace("apps: {}", "apps:\n  worker: apps/worker"));
+    await writeFile(path.join(root, ".trestle", "infrastructure.bindings.json"), JSON.stringify({ schemaVersion: 1, environments: { staging: { trestleProjectId: "trestle-proj-1", stripeAccountId: "acct_fake0000001", projectsProjectId: "proj_fake0001", projectsEnvironment: "staging", generation: 2, resources: { database: { provider: "neon", service: "postgres", plan: "free", externalId: "neon_res0001", lifecycleOwner: "stripe-projects", boundBy: "op-1" } } } } }));
+    const { run, output } = cli(root);
+    const cases: Array<[string[], RegExp]> = [
+      [["infra", "destroy", "database", "--env", "staging", "--confirm-target", "database"], /confirm the exact target ID/u],
+      [["infra", "detach", "database", "--env", "staging"], /non-destructive detach/u],
+      [["infra", "upgrade", "database", "--env", "staging", "--to", "launch"], /price is unknown/u],
+      [["infra", "rotate", "runtime", "--env", "staging", "--inventory-complete"], /invalidation behavior is unknown/u],
+    ];
+    for (const [argv, reason] of cases) {
+      output.stdout = "";
+      output.stderr = "";
+      expect(await run(argv), argv.join(" ")).toBe(2);
+      expect(output.stderr, argv.join(" ")).toMatch(reason);
+      expect(output.stdout).toContain("neon_res0001");
+    }
+    expect(mutatingCalls(await fake.calls())).toEqual([]);
+  });
+});

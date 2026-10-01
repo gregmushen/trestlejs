@@ -78,6 +78,11 @@ export type CapabilityRow = Readonly<{
   /** Freshness window; evidence older than this is treated as unknown. */
   maxAgeDays: number;
   limitations: readonly string[];
+  /**
+   * Proven privilege of each credential output this operation produces. Only
+   * `least_privilege` outputs may be projected to application consumers.
+   */
+  credentialScopes?: Readonly<Record<string, "least_privilege" | "owner" | "unknown">>;
 }>;
 
 export type ResolvedCapability = Readonly<{

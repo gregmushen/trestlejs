@@ -1,5 +1,5 @@
 import { resolveCapability, type CapabilityRow, type CommandEffect, type EvidenceStatus, type InfraOperation, type Toolchain } from "./capabilities.js";
-import { CATALOG_SERVICES, capabilityFor } from "./capability-matrix.js";
+import { CATALOG_SERVICES, capabilityFor, DIRECT_WRITERS } from "./capability-matrix.js";
 import { canonicalDigest } from "./canonical.js";
 import type { DesiredResource, EnvironmentBinding, InfraEnvironment, InfrastructureBindings, InfrastructureIntent, Observation } from "./schema.js";
 
@@ -238,6 +238,15 @@ export function planInfrastructure(input: PlanInput): InfraPlan {
       if (!environmentIntent.resources[dependency]) blockers.push(`missing dependency ${dependency}`);
     }
     const cost = mutating && (classification === "create" || classification === "upgrade") ? assessCost(resource) : { kind: "free" as const, recurring: false, accountWide: false, requiresAuthorization: false, notes: [] };
+    if (classification === "create" || classification === "adopt") {
+      const writer = DIRECT_WRITERS[`${resource.provider}/${resource.service}`];
+      if (writer && resource.lifecycleOwner === "stripe-projects" && !resource.directWriterDisabled) blockers.push(`${writer}; disable it for ${input.environment} and set directWriterDisabled: true before Projects owns ${name}`);
+      for (const credential of Object.values(resource.credentialBindings)) {
+        const applicationConsumers = credential.consumers.filter((consumer) => consumer !== "migrations" && consumer !== "ci");
+        const scope = row?.credentialScopes?.[credential.output] ?? "unknown";
+        if (applicationConsumers.length && scope !== "least_privilege") blockers.push(`${credential.output} has ${scope} privilege; only a proven least-privilege credential may reach ${applicationConsumers.join(", ")} (derive a scoped runtime credential instead)`);
+      }
+    }
     if (cost.kind === "unknown") blockers.push(`cost of ${resource.provider}/${resource.service} is unknown and cannot be treated as free`);
     if (cost.requiresAuthorization && !resource.costLimit) blockers.push(`${name} needs a declared costLimit before a paid or account-wide change can be approved`);
     if (blockers.length > 0) classification = "blocked";

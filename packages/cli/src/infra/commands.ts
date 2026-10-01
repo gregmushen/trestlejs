@@ -21,6 +21,10 @@ import { approvalFor, generateApproverKeys, signApproval, type SignedApproval } 
 import { applyPlan, OUTCOME_EXIT, type ApplyResult } from "./runner.js";
 import { resolveMasterKey } from "../secrets.js";
 import { projectsWorkspace } from "./doctor.js";
+import { planAdopt, planDestroy, planDetach, planTierChange, type LifecyclePlan } from "./lifecycle.js";
+import { planRotation } from "./rotation.js";
+import { ROTATION_PROFILES } from "./capability-matrix.js";
+import { consumerRegistry } from "./consumers.js";
 
 /** Test seams; production uses the real process runner and clock. */
 export type InfraRuntime = Readonly<{ runner?: ProcessRunner; now?: () => Date }>;
@@ -42,12 +46,7 @@ environments: {}
 
 /** Mutation commands stay registered but unavailable until their gates pass. */
 const PENDING: ReadonlyArray<[name: string, args: string, description: string, gate: string]> = [
-  ["link", "<provider>", "link a provider account to the Projects project for an environment", "approval authority and durable control state (P04) are not enabled"],
-  ["adopt", "<resource>", "plan association with an existing exact resource identity", "Projects reports existing-resource linking unsupported for Neon, Cloudflare and Resend"],
-  ["rotate", "<credential-binding>", "plan a provider credential rotation", "rotation invalidation and response-loss recovery are unknown (D-05)"],
-  ["upgrade", "<resource>", "plan a reviewed tier change", "tier changes require cost authorization and hosted evidence"],
-  ["detach", "<resource>", "plan association removal while retaining the resource", "no non-destructive detach is proven"],
-  ["destroy", "<resource>", "plan destructive removal with explicit safeguards", "exact-ID deletion is not proven (P13)"],
+  ["link", "<provider>", "link a provider account to the Projects project for an environment", "provider linking has no hosted evidence yet (it may create provider accounts); see docs/STRIPE_PROJECTS_CAPABILITIES.md"],
 ];
 
 export function registerInfraCommands(infra: Command, runtime: CliRuntime & { infra?: InfraRuntime }): void {
@@ -311,6 +310,91 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
     .description("import validated declared credentials; never rotates provider keys")
     .requiredOption("--env <environment>", "target environment", remoteEnvironment)
     .action(() => { throw new CliFailure("trestle infra credentials pull is not available yet: credential generations and concurrent-edit coordination (P05/P06) are not enabled", 2); });
+
+  const lifecycle = async (root: string, environment: InfraEnvironment, build: (input: { intent: Awaited<ReturnType<typeof readInfrastructure>>["intent"]; binding: NonNullable<Awaited<ReturnType<typeof readInfrastructure>>["bindings"]["environments"][InfraEnvironment]>; toolchain: Parameters<typeof planDetach>[0]["toolchain"]; observation: Parameters<typeof planAdopt>[0]["observation"] }) => LifecyclePlan) => {
+    const { intent, bindings } = await readInfrastructure(root);
+    const binding = bindings.environments[environment];
+    if (!binding) throw new CliFailure(`${environment} has no reviewed Projects binding`, 2);
+    const { check, adapter } = await toolchain();
+    const workspace = projectsWorkspace(root, environment);
+    const observed = adapter && await stat(path.join(workspace, ".projects")).then(() => true, () => false) ? await adapter.observe(workspace, now()) : undefined;
+    let plan: LifecyclePlan;
+    try {
+      plan = build({ intent, binding, toolchain: check.ok ? check.toolchain : undefined, observation: observed?.status === "ok" ? observed.observation : undefined });
+    } catch (error) {
+      throw new CliFailure(error instanceof Error ? error.message : String(error), 2);
+    }
+    const directory = path.join(root, INFRA_PATHS.local, "plans");
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const file = path.join(directory, `${plan.kind}-${plan.digest.replace("sha256:", "").slice(0, 16)}.json`);
+    await writeFile(file, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+    runtime.stdout(`${JSON.stringify(structuredOutput({ plan, file: path.relative(root, file) }), null, 2)}\n`);
+    if (plan.blockers.length) throw new CliFailure(`${plan.kind} of ${plan.resource} is blocked: ${plan.blockers.join("; ")}`, 2);
+  };
+
+  infra.command("adopt")
+    .description("plan association with an existing exact resource identity; never recreates or changes data")
+    .argument("<resource>")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .option("--previous-writer <name>", "the automation that currently writes this resource and will be disabled")
+    .action(async (resource: string, options: { env: InfraEnvironment; previousWriter?: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      await lifecycle(context.root, options.env, ({ intent, binding, toolchain: chain, observation }) => planAdopt({ intent, environment: options.env, binding, resource, previousWriter: options.previousWriter ?? null, now: now(), ...(chain ? { toolchain: chain } : {}), ...(observation ? { observation } : {}) }));
+    });
+
+  infra.command("upgrade")
+    .description("plan a reviewed tier change with refreshed price and account-wide effect")
+    .argument("<resource>")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .requiredOption("--to <plan>", "catalog plan service_id to move to")
+    .option("--downgrade", "the change lowers the tier (treated as potentially destructive)")
+    .action(async (resource: string, options: { env: InfraEnvironment; to: string; downgrade?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      // Live pricing is not available from the qualified toolchain, so price stays unknown and the plan is blocked.
+      await lifecycle(context.root, options.env, ({ intent, binding, toolchain: chain }) => planTierChange({ intent, environment: options.env, binding, resource, targetPlan: options.to, currentPlan: binding.resources[resource]?.plan ?? null, price: null, direction: options.downgrade ? "downgrade" : "upgrade", now: now(), ...(chain ? { toolchain: chain } : {}) }));
+    });
+
+  infra.command("detach")
+    .description("plan association removal while retaining the resource and its data")
+    .argument("<resource>")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .action(async (resource: string, options: { env: InfraEnvironment }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      await lifecycle(context.root, options.env, ({ intent, binding, toolchain: chain }) => planDetach({ intent, environment: options.env, binding, resource, now: now(), ...(chain ? { toolchain: chain } : {}) }));
+    });
+
+  infra.command("destroy")
+    .description("plan destructive removal of an exact resource ID with retain, reference, drain and restore safeguards")
+    .argument("<resource>")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .option("--confirm-target <id>", "the exact external ID to delete; names are not accepted")
+    .action(async (resource: string, options: { env: InfraEnvironment; confirmTarget?: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      // Reference, drain and restore evidence come from separately authorized verification; until recorded they block.
+      await lifecycle(context.root, options.env, ({ intent, binding, toolchain: chain, observation }) => planDestroy({ intent, environment: options.env, binding, resource, evidence: { consumers: [], referenceScanComplete: false, restoreVerified: false, drained: false }, confirmTarget: options.confirmTarget ?? null, now: now(), ...(chain ? { toolchain: chain } : {}), ...(observation ? { observation } : {}) }));
+    });
+
+  infra.command("rotate")
+    .description("plan a provider credential rotation for its real rotation unit and consumers; does not rotate")
+    .argument("<credential-binding>")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .option("--inventory-complete", "assert that every consumer of this credential, including ones outside this repository, is declared")
+    .action(async (credentialBinding: string, options: { env: InfraEnvironment; inventoryComplete?: boolean }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const { intent, bindings } = await readInfrastructure(context.root);
+      const binding = bindings.environments[options.env];
+      if (!binding) throw new CliFailure(`${options.env} has no reviewed Projects binding`, 2);
+      let rotation;
+      try {
+        const resource = Object.values(intent.environments[options.env]?.resources ?? {}).find((candidate) => credentialBinding in candidate.credentialBindings);
+        const profile = resource ? ROTATION_PROFILES[`${resource.provider}/${resource.service}`] : undefined;
+        rotation = planRotation({ intent, environment: options.env, binding, credentialBinding, profile, consumers: consumerRegistry(context.manifest, intent, options.env), inventoryComplete: Boolean(options.inventoryComplete) });
+      } catch (error) {
+        throw new CliFailure(error instanceof Error ? error.message : String(error), 2);
+      }
+      runtime.stdout(`${JSON.stringify(structuredOutput({ rotation, executable: rotation.blockers.length === 0 }), null, 2)}\n`);
+      if (rotation.blockers.length) throw new CliFailure(`rotation of ${credentialBinding} is blocked: ${rotation.blockers.join("; ")}`, 2);
+    });
 
   for (const [name, args, description, gate] of PENDING) {
     infra.command(name)

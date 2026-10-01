@@ -1,3 +1,4 @@
+import { capabilityFor } from "../src/infra/capability-matrix.js";
 import { describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 
@@ -225,5 +226,31 @@ describe("infrastructure planning", () => {
     expect(JSON.stringify(plan)).not.toMatch(/postgres:\/\/|sk_live|whsec_/u);
     expect(plan.operations[0]!.credentialOutputs).toEqual(["DATABASE_URL"]);
     expect(plan.expiresAt).toBe("2026-10-02T01:00:00.000Z");
+  });
+});
+
+describe("single writer and least-privilege projection (P11, P12)", () => {
+  const hostedRow = (scopes?: Record<string, "least_privilege" | "owner" | "unknown">) => (provider: string, service: string, operation: import("../src/infra/capabilities.js").InfraOperation) => {
+    const row = capabilityFor(provider, service, operation);
+    return row ? { ...row, evidence: "hosted_verified" as const, unknowns: [], ...(scopes ? { credentialScopes: scopes } : {}) } : undefined;
+  };
+  const plan = (document: object, scopes?: Record<string, "least_privilege" | "owner" | "unknown">) => planInfrastructure({ intent: parseIntent(stringify(document)), bindings: binding(), environment: "staging", observation: observation(), toolchain: SUPPORTED_TOOLCHAIN, now, capabilities: hostedRow(scopes) });
+  const env = (resources: object) => ({ schemaVersion: 1, backend: "stripe-projects", environments: { staging: { projectsBinding: "s", resources } } });
+
+  it("blocks Projects ownership of a kind a generated script still writes", () => {
+    const bucket = { provider: "cloudflare", service: "r2:bucket", costLimit: { currency: "usd", monthlyMinor: 500 } };
+    expect(plan(env({ assets: bucket })).operations[0]!.blockers.join(" ")).toMatch(/cloudflare-r2\.mjs .* directWriterDisabled/u);
+    expect(plan(env({ assets: { ...bucket, directWriterDisabled: true } })).operations[0]!.blockers.join(" ")).not.toMatch(/directWriterDisabled/u);
+  });
+
+  it("refuses to project an owner or unproven credential to application consumers", () => {
+    const resend = { provider: "resend", service: "email", plan: "free", costLimit: { currency: "usd", monthlyMinor: 0 }, credentialBindings: { sending: { output: "RESEND_API_KEY", classification: "provider-managed", consumers: ["worker"] } } };
+    expect(plan(env({ email: resend })).operations[0]!.blockers.join(" ")).toMatch(/RESEND_API_KEY has unknown privilege/u);
+    expect(plan(env({ email: resend }), { RESEND_API_KEY: "owner" }).operations[0]!.blockers.join(" ")).toMatch(/owner privilege/u);
+    expect(plan(env({ email: resend }), { RESEND_API_KEY: "least_privilege" }).operations[0]!.blockers).toEqual([]);
+    const neon = { provider: "neon", service: "postgres", plan: "free", credentialBindings: { owner: { output: "DATABASE_URL", classification: "provider-managed", consumers: ["worker"] } } };
+    expect(plan(env({ database: neon })).operations[0]!.blockers.join(" ")).toMatch(/derive a scoped runtime credential/u);
+    const operator = { ...neon, credentialBindings: { owner: { output: "DATABASE_URL", classification: "operator-only" } } };
+    expect(plan(env({ database: operator })).operations[0]!.blockers).toEqual([]);
   });
 });

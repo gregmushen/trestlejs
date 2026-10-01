@@ -18,7 +18,7 @@ const store = await PostgresOperationStore.connect(config.url, { schema: config.
 const now = () => new Date(config.now);
 const capabilities = (provider, service, operation) => {
   const row = capabilityFor(provider, service, operation);
-  return row && row.evidence !== "unsupported" ? { ...row, evidence: "hosted_verified", unknowns: [], toolchain: check.toolchain, observedAt: config.now } : row;
+  return row && row.evidence !== "unsupported" ? { ...row, evidence: "hosted_verified", unknowns: [], toolchain: check.toolchain, observedAt: config.now, credentialScopes: { RESEND_API_KEY: "least_privilege" } } : row;
 };
 const killAt = config.killAt;
 const result = await applyPlan(
