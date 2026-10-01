@@ -5,7 +5,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import { environmentNameSchema } from "../manifest.js";
-import { findCredentialLeaves } from "./redaction.js";
+import { findCredentialLeaves, redact } from "./redaction.js";
 
 /**
  * Infrastructure intent, bindings and observations (spec §9–§10, plan P02).
@@ -151,7 +151,10 @@ export function parseIntent(source: string): InfrastructureIntent {
   try {
     document = parseYaml(source, { uniqueKeys: true });
   } catch (error) {
-    throw new InfraConfigError(`.trestle/infrastructure.yaml is not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
+    // YAML errors quote source lines, which may contain secrets: report position only.
+    const position = (error as { linePos?: Array<{ line: number; col: number }> }).linePos?.[0];
+    const summary = redact((error instanceof Error ? error.message : String(error)).split("\n")[0]!.replace(/ at line \d+, column \d+:?.*$/u, ""));
+    throw new InfraConfigError(`.trestle/infrastructure.yaml is not valid YAML${position ? ` (line ${position.line}, column ${position.col})` : ""}: ${summary}`);
   }
   const result = infrastructureIntentSchema.safeParse(document);
   if (!result.success) throw new InfraConfigError(`.trestle/infrastructure.yaml is invalid:\n${result.error.issues.map((issue) => `  ${issue.path.join(".") || "(root)"}: ${issue.message}`).join("\n")}`);

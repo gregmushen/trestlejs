@@ -6,6 +6,7 @@ import { parseSetupPlan, structuredOutput, type EnvironmentName, type ProjectMan
 
 import { validateCi } from "./ci.js";
 import { inspectResources } from "./inspect.js";
+import { InfraConfigError, readInfrastructure } from "./infra/schema.js";
 import { inspectResourceRelations } from "./legacy-relations.js";
 import { diffSetupPlan } from "./plan.js";
 import { hasForcedRlsMigration, missingFiles, readMigrationSql } from "./resource-checks.js";
@@ -207,6 +208,19 @@ export async function runDoctor(
     } else {
       checks.push({ id: "setup.plan.valid", group: "architecture", status: "fail", message: "SetupPlan cannot be validated", evidence: error instanceof Error ? error.message : String(error), remediation: "Run trestle plan validate .trestle/setup.json" });
     }
+  }
+
+  // Only configuration validity is asserted here; remote readiness is unknown until trestle infra doctor runs.
+  try {
+    await access(path.join(root, ".trestle", "infrastructure.yaml"));
+    try {
+      await readInfrastructure(root);
+      checks.push({ id: "infra.intent.valid", group: "architecture", status: "pass", message: "infrastructure intent and bindings are valid; remote readiness is not checked here", remediation: "Run trestle infra doctor --env <environment> --experimental for read-only infrastructure readiness" });
+    } catch (error) {
+      checks.push({ id: "infra.intent.valid", group: "architecture", status: "fail", message: "infrastructure intent or bindings are invalid", evidence: error instanceof InfraConfigError ? error.message : String(error), remediation: "Fix .trestle/infrastructure.yaml or .trestle/infrastructure.bindings.json" });
+    }
+  } catch {
+    // No infrastructure intent: Stripe Projects provisioning is optional.
   }
 
   try {

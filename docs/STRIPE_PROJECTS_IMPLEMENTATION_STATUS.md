@@ -15,7 +15,7 @@ hosted exit blocked), `blocked`.
 | P00 baseline | complete | #226 | Baseline recorded below |
 | P01 capabilities | partial | P01 PR | Read-only matrix, fixtures, D-01/D-05; authenticated and hosted probes blocked on login |
 | P02 contracts/planner | complete | P02 PR | Schemas, canonical digests, pure planner |
-| P03 read-only adapter/CLI | pending | — | |
+| P03 read-only adapter/CLI | complete | P03 PR | R1 read-only surface; mutations registered as unavailable |
 | P04 approval/control store | pending | — | |
 | P05 credential generations | pending | — | |
 | P06 executor/fake provider | pending | — | |
@@ -121,3 +121,40 @@ local only, no account effect). Not authenticated.
   200-graph property test of operation order). `pnpm check`: 38 files / 320 tests pass.
 - Review finding fixed: a bound resource with blockers could stay `no_change`;
   now any blocker forces `blocked` (covered by an ownership-handoff test).
+
+## P03 — Safe process adapter and read-only CLI
+
+- Status: **complete** — R1 read-only surface. All mutation commands are
+  registered but exit 2 with their gate (`link`, `adopt`, `apply`, `rotate`,
+  `upgrade`, `detach`, `destroy`, `credentials pull`, `operation resume`).
+- Process boundary (`infra/process.ts`): absolute executables only, argument
+  allowlist (no whitespace/metacharacters/control chars), caller-supplied env,
+  process-group kill on timeout or output overflow.
+- Adapter (`infra/adapters/stripe-projects.ts`): the plugin is a go-plugin gRPC
+  server (observed), so the adapter runs the `stripe` host by absolute path after
+  checking file ownership/permissions, verifies the pinned plugin sha256 and the
+  active plugin version, runs reads in a removed scratch directory with
+  `HOME`, fixed `PATH`, telemetry opt-out only, accepts only envelope `0.1`,
+  treats any unexpected file write (e.g. `.env`) by a read as failure, and
+  redacts provider errors by content.
+- Endpoint validation (`infra/endpoints.ts`, AR-12): Neon host suffix, port 5432,
+  mandatory `sslmode=require|verify-full`, no redirecting options; provider API
+  hosts over https without embedded credentials; dashboard allowlist for `open`.
+- CLI (`trestle infra`, experimental): `init` (local files + `.gitignore` only),
+  `catalog [--live]`, `plan` (persisted 0600, secret-free), `status` (never
+  contacts providers; remote state reported as unknown, not empty), `doctor`
+  (read-only; `pass/fail/unknown/not_applicable`; active verification reported as
+  unknown), `open`, `operation show`.
+- `trestle doctor` integration: `infra.intent.valid` asserts configuration
+  validity only and points to `trestle infra doctor`.
+- Tests: `infra-process.test.ts` 5, `infra-readonly.test.ts` 19 (fake `stripe`
+  host with call log; zero mutating calls from plan/status/doctor/catalog; real
+  built-CLI process test). `pnpm check`: 40 files / 344 tests pass.
+- Review findings fixed: YAML syntax errors quoted source lines (could leak a
+  secret) — now position-only and redacted, with a regression test; synchronous
+  throw from the runner on unsafe args converted to rejection.
+- Limitation: authenticated `status` schema is unobserved, so plans are always
+  stale (never executable) until live observation parsing lands with hosted access.
+- Operational incident during this package: a broad `pkill` used to clear a hung
+  shell command stopped Docker Desktop and three unrelated local containers
+  (`cbr-local-*`); Docker and those containers were restarted and verified running.

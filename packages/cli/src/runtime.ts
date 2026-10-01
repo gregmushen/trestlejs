@@ -5,6 +5,8 @@ export type CliRuntime = {
   environment?: (name: string) => string | undefined;
   stdin?: () => Promise<string>;
   isTTY?: () => boolean;
+  /** Infrastructure test seams: process runner and clock. */
+  infra?: import("./infra/commands.js").InfraRuntime;
 };
 
 export const processRuntime: CliRuntime = {
