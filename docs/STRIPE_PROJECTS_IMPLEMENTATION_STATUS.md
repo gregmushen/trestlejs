@@ -19,8 +19,8 @@ hosted exit blocked), `blocked`.
 | P04 approval/control store | complete | P04 PR | Local exit (simulation) met; hosted enrollment pending |
 | P05 credential generations | complete | P05 PR | v2 envelope + CAS commit; public pull still unavailable |
 | P06 executor/fake provider | complete | P06 PR | Fake-provider crash/concurrency gates pass; real apply still gated by capability evidence |
-| P07 Neon hosted slice | pending | — | |
-| P08 deployment/consumers | pending | — | |
+| P07 Neon hosted slice | blocked | — | Needs Stripe login + sandbox authorization + control DB (see prerequisites) |
+| P08 deployment/consumers | partial | P08 PR | Consumer registry, projection, generation proof against fakes; hosted proof blocked on P07 |
 | P09 rotation fault model | pending | — | |
 | P10 hosted rotation | pending | — | |
 | P11 Cloudflare | pending | — | |
@@ -253,3 +253,40 @@ local only, no account effect). Not authenticated.
 - Limitations: the real authenticated `status` schema and `add` semantics for plan
   selection (`neon/free` vs `neon/postgres`) are unverified; the Projects vault cache
   (`.projects/vault`) remains in the isolated workspace by upstream design.
+
+## P07 — Neon hosted provisioning vertical slice
+
+- Status: **blocked**. External prerequisites (owner: Greg Mushen): authenticated
+  Stripe Projects session on the executing host; explicit sandbox authorization
+  naming the Stripe account, Projects project/environment, the Neon `free` plan,
+  a $0 budget, provider terms acceptance and cleanup disposition; an independent
+  PostgreSQL control store; a disposable deployment target.
+- Ready locally: executor, approvals, control store, credential import, endpoint
+  validation and fake-provider proof (P04–P06). The real `status` schema and
+  `add` plan-selection semantics must be observed first; capability rows stay
+  `documented` until then.
+- Next action once authorized: authenticated read fixtures (`status`, `list`,
+  `services list`), `add --preflight` side-effect check, then one `neon/postgres`
+  create through `trestle infra apply` with hosted evidence recorded, runtime role
+  derivation, forced RLS and two-tenant denial.
+
+## P08 — Deployment handoff and consumer generation proof
+
+- Status: **partial** — local exit met against fakes; hosted proof depends on P07.
+- Modules: `infra/consumers.ts` (consumer registry from the manifest and intent;
+  per-consumer projection; operator-only never projected to application
+  consumers; non-secret generation marker), `infra/deployment.ts` (reviewed host
+  target check before projection; per-consumer revision + generation + fresh
+  connection verification; partial host update recorded; deployment record
+  committed by CAS with `managementPath: not_required`; retired generations
+  refused; `verificationCurrent` requires re-verification after config drift, a
+  new generation or a new artifact).
+- Template: Worker `/api/health/operational` reports `credentialGeneration` only
+  when it matches a strict non-secret format (`TRESTLE_CREDENTIAL_GENERATION`),
+  with a Worker test proving a hostile value is not echoed.
+- Tests: `infra-deployment.test.ts` 10 (wrong Worker/admin target, old replica
+  200, old generation on the right revision, pooled connection, rate limit and
+  network failure, partial host update, retired-generation rollback, config
+  drift, management vs data-plane outage).
+- Limitation: no real `ConsumerDeployer`/`ProbeRunner` against Cloudflare yet; the
+  existing `secrets push` path is not yet wrapped (needs a hosted target).

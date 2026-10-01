@@ -18,4 +18,6 @@ export type WorkerEnvironment = AuthEnvironment & {
   TRESTLE_CONNECTION_BACKEND?: string;
   /** Comma-separated backend integration keys tenants may connect (e.g. "github,slack"); empty allows none. */
   TRESTLE_CONNECTION_INTEGRATIONS?: string;
+  /** Non-secret marker of the approved credential generation this revision was deployed with. */
+  TRESTLE_CREDENTIAL_GENERATION?: string;
 };

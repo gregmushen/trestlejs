@@ -606,6 +606,8 @@ app.get("/api/health", (context) =>
 app.get("/api/health/operational", (context) => context.json({
   status: "ok",
   environment: context.env.APP_ENV ?? "local",
+  // Lets deployment verification tell a new revision from an old replica; never a secret.
+  credentialGeneration: /^[a-z0-9:.-]{1,120}$/u.test((context.env as WorkerEnvironment).TRESTLE_CREDENTIAL_GENERATION ?? "") ? (context.env as WorkerEnvironment).TRESTLE_CREDENTIAL_GENERATION : null,
   capabilities: {
     database: { configured: Boolean(context.env.DATABASE_URL) },
     email: { mode: context.env.EMAIL_DELIVERY_MODE ?? "local", configured: (context.env.EMAIL_DELIVERY_MODE ?? "local") === "local" || Boolean(context.env.RESEND_API_KEY && configuredValue(context.env.EMAIL_FROM)), stagingProtected: !["preview", "staging"].includes(context.env.APP_ENV ?? "local") || configuredValue(context.env.EMAIL_STAGING_REDIRECT), webhookConfigured: Boolean(context.env.RESEND_WEBHOOK_SECRET) },
