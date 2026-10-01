@@ -14,7 +14,7 @@ hosted exit blocked), `blocked`.
 | --- | --- | --- | --- |
 | P00 baseline | complete | #226 | Baseline recorded below |
 | P01 capabilities | partial | P01 PR | Read-only matrix, fixtures, D-01/D-05; authenticated and hosted probes blocked on login |
-| P02 contracts/planner | pending | — | |
+| P02 contracts/planner | complete | P02 PR | Schemas, canonical digests, pure planner |
 | P03 read-only adapter/CLI | pending | — | |
 | P04 approval/control store | pending | — | |
 | P05 credential generations | pending | — | |
@@ -101,3 +101,23 @@ local only, no account effect). Not authenticated.
   expiry disabled) each turned the suite red; one surviving mutant led to an added
   assertion.
 - Next: authenticated read fixtures and sandbox probes once login/authorization exist.
+
+## P02 — Contracts and deterministic planning
+
+- Status: **complete** (pure planning; no mutation path exists).
+- Modules: `infra/schema.ts` (intent `.trestle/infrastructure.yaml`, bindings,
+  observations; parsed independently of SetupPlan v1), `infra/canonical.ts`
+  (sorted-key canonical JSON, sha256 digests), `infra/redaction.ts`
+  (content-based credential detection), `infra/planner.ts`.
+- Behavior: dependency ordering with cycle/unknown rejection; unresolved create
+  targets `pending:<op>`; account/project/environment drift blocks; bound
+  resource missing from a complete observation blocks (no recreate); incomplete
+  discovery proves nothing; same-name unbound resource is not identity;
+  undeclared cross-environment sharing blocks; orphans reported, never deleted;
+  component pricing without a catalog plan and account-scoped plans require cost
+  authorization (unknown cost is never free); offline plans are stale and never
+  executable; secret values rejected in intent and bindings.
+- Tests: `infra-planner.test.ts` 21, `infra-redaction.test.ts` 3 (includes a
+  200-graph property test of operation order). `pnpm check`: 38 files / 320 tests pass.
+- Review finding fixed: a bound resource with blockers could stay `no_change`;
+  now any blocker forces `blocked` (covered by an ownership-handoff test).
