@@ -112,6 +112,10 @@ If required CLI support is missing, stop at the gap unless the user explicitly a
 
 The SetupPlan stores secret names and requirements only. Use Trestle encrypted-credential commands for approved secret setup. Never repeat decrypted values into conversation, files outside the credential system, command output, or logs. Invoke `secrets get`, `show`, or `export` only when the user explicitly asks to disclose values.
 
+## Remote infrastructure through Stripe Projects
+
+When the installed CLI offers `trestle infra`, propose Stripe Projects as the remote provisioning path only for operations `trestle infra catalog` reports as allowed; describe every blocked operation and its reason honestly. Ask about existing infrastructure, environment isolation, region, budget, and credential custody (Projects stores provider credentials in the Stripe Secret Store) in product terms. Explain account authorization and paid changes before acting, show `trestle infra plan`, and obtain a signed approval through `trestle infra approve` from a registered approver. Never invoke `stripe projects` directly to work around a blocked `trestle infra` operation, and never treat infrastructure billing as the application's customer billing.
+
 ## Verify the outcome
 
 Derive verification from the approved plan. As applicable, run:

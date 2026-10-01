@@ -26,9 +26,9 @@ hosted exit blocked), `blocked`.
 | P11 Cloudflare | partial | P09–P13 PR | Single-writer guard over generated scripts; per-operation hosted conformance blocked |
 | P12 Resend | partial | P09–P13 PR | Least-privilege projection rule; sender/domain/webhook stay direct extensions; hosted conformance blocked |
 | P13 lifecycle operations | partial | P09–P13 PR | Exact-ID adopt/tier/detach/destroy planning with safeguards; execution blocked by capability evidence |
-| P14 SetupPlan/CI/upgrades/docs | pending | — | |
-| P15 registry starter | pending | — | |
-| P16 release qualification | pending | — | |
+| P14 SetupPlan/CI/upgrades/docs | partial | P14–P15 PR | SetupPlan v2 reference, CI trust check, docs, skill; preview automation blocked on hosted access |
+| P15 registry starter | blocked | P14–P15 PR | D-06: registry variant deferred (bootstrap provisions before Trestle approval and writes plaintext .env); manifest validator ready |
+| P16 release qualification | blocked | — | Local gates pass on the final tree; no advertised mutation is qualified; publication needs authorization |
 
 ## External prerequisites (consolidated)
 
@@ -352,3 +352,116 @@ local only, no account effect). Not authenticated.
   confirmation, a complete reference scan, drained work and verified restore, and
   refuses when the name now resolves to a replacement (AR-11).
 - Tests: `infra-lifecycle.test.ts` 8; CLI planning test in `infra-cli-apply.test.ts`.
+
+## P14 — SetupPlan, CI, upgrades and documentation
+
+- Status: **partial**.
+- SetupPlan: `schemaVersion: 2` adds only an optional `infrastructure` reference
+  (`.trestle/infrastructure.yaml`, remote environments). Version 1 plans cannot
+  carry it, `approved` fields stay rejected, external/destructive lists stay
+  rejected, and a newer schema version reports "requires a newer trestle CLI".
+  `trestle plan diff` lists infrastructure as `external` items from the same
+  planner; `trestle apply` records them as handed off and performs no remote work.
+- CI trust (`infra/ci-trust.ts`, surfaced as `ci.infra.trust` by `trestle ci
+  validate` only when a workflow runs `trestle infra`): privileged commands
+  (`apply`, `approve`, `operation resume`, `approver register`) must not be
+  reachable from untrusted triggers (pull requests from forks or the same
+  repository, `pull_request_target`, comments, `workflow_run`), must run in a
+  protected environment, and must not install with lifecycle scripts, run
+  application code, check out pull-request head code or interpolate event data.
+  The control-store secret may not appear in untrusted-trigger workflows. Branch
+  rules requiring review of workflow changes remain the primary control.
+- Upgrades: infrastructure files are opt-in; upgrading the package never creates
+  them, provisions, or moves credentials. v1 credential files are untouched; v2
+  envelopes are rejected by older CLIs. The Worker health field (P08) and the setup
+  skill section flow through the normal source upgrade.
+- Docs: `docs/STRIPE_PROJECTS.md` (canonical guide describing only installed
+  behavior), CLI README section, setup-skill section (both copies, parity test).
+- Not done (blocked): preview identity/TTL/cleanup automation and protected CI
+  apply/deploy/verify stages need a hosted target; `link` and public credential
+  pull remain unavailable.
+- Tests: `infra-setup-plan.test.ts` 4, `infra-ci.test.ts` 6.
+
+## P15 — Materialized starter and registry path
+
+- Status: **blocked (documented)** — see `docs/decisions/D-06-registry-bootstrap.md`.
+  `stripe projects build` provisions before any Trestle approval and writes
+  plaintext credentials (including an owner database URL) to `.env`, which
+  conflicts with Trestle custody; exact-ID adoption of bootstrap resources is
+  unsupported. No registry entry was submitted.
+- Ready: `infra/registry.ts` generates and validates a manifest from one pinned
+  release (40-character `ref`, recorded catalog service IDs, `--ignore-scripts`
+  install, no provisioning in install, no TanStack Start mislabel, secret scan).
+- Tests: `infra-registry.test.ts` 2.
+
+## P16 — Production and release qualification
+
+- Status: **blocked**. No provider operation is hosted-verified, so there is no
+  advertised mutation to qualify, and npm publication / registry submission need
+  explicit release authorization. Nothing was published; no production or hosted
+  resource was created.
+- Final local gates on `d655d1b` (all P00–P15 changes; disposable
+  `postgres:17-alpine`): `pnpm check` pass (52 files, 458 tests);
+  `release:check` pass; `release:pack` pass (local tarballs only);
+  `check:infra-recovery` pass (23/23); `check:upgrade` pass;
+  `check:customized-upgrade` pass; `check:generated` pass (first attempt failed
+  on a database left dirty by an interrupted earlier run; passed on a recreated
+  database).
+- Tarball inspection: no `.env`, `.projects` or `.trestle/infrastructure.local`
+  entries. The secret-pattern scan matched only pre-existing fake fixtures in
+  template tests (`sk_live_sensitive`, `whsec_sensitive`, `whsec_notifications`,
+  a base64 test key); no real credentials.
+- Owned resources left behind: none remote. Local only: disposable Docker
+  container `trestle-sp-pg`, Projects plugin 0.45.0 installed under
+  `~/.config/stripe/plugins`, worktree `trestle-stripe-projects`.
+
+## Adversarial finding coverage (AR-01–AR-15)
+
+Each finding has a falsifiable test that fails if the control is removed. "Local"
+means proven against fakes or a disposable local PostgreSQL; no finding has
+hosted provider proof yet.
+
+| Finding | Tests | Evidence level |
+| --- | --- | --- |
+| AR-01 approval tamper/replay | `store-contract` (single use, replay = resume, revoked on resume), `infra-store.test` (signature binds every field), `infra-runner` (replay, altered plan, uncovered effects, revoked approver), `infra-store.integration` (6 concurrent consumers → 1) | Local |
+| AR-02 stale runner | `store-contract` (in-flight lease loss stays uncertain), `infra-store.integration` (cross-process delayed completion), `infra-runner` (absent-but-unproven create is not retried) | Local |
+| AR-03 lost issued key | `infra-rotation` (immediate + unproven re-retrieval blocks before issuance; lost response recovered by re-retrieval; ambiguous request needs operator confirmation) | Local (hosted: P10 blocked) |
+| AR-04 stale/cross-project snapshot | `infra-credentials` (envelope substitution, CAS), `infra-runner` (stale binding generation), `infra-rotation` (stale pull after rotation) | Local |
+| AR-05 bundled effects | `infra-capabilities` (complete effect inventory), `infra-readonly` (adapter refuses mutating commands; unexpected `.env` write fails a read), `infra-credentials` (undeclared sibling outputs rejected), `infra-rotation` (undeclared bundle output blocks) | Local |
+| AR-06 privileged build code | `infra-process` (only the supplied environment reaches children), `infra-ci` (untrusted triggers, missing environment, lifecycle scripts, app code, head checkout, interpolation) | Local (validator); hosted CI not exercised |
+| AR-07 false health/retirement proof | `infra-deployment` (old replica, old generation, pooled connection, rate limit, network failure), `infra-rotation` (inconclusive probe, 401 without new-key control) | Local |
+| AR-08 rollback and old jobs | `infra-deployment` (retired generation refused), `infra-rotation` (undrained jobs block retirement; rollback after rotation refused) | Local |
+| AR-09 mutating doctor | `infra-readonly` (plan/status/doctor/catalog make zero mutating calls; doctor reports active verification as unknown) | Local |
+| AR-10 registry bypass | D-06; `infra-registry` (manifest cannot provision in install; lifecycle scripts disabled) | Documented; registry deferred |
+| AR-11 replaced deletion target | `infra-lifecycle` (name resolving to a replacement is refused; exact-ID confirmation) | Local (planning) |
+| AR-12 malicious endpoint | `infra-readonly` (Neon host, TLS, port, redirecting options; API hosts) | Local |
+| AR-13 unsafe compensation | `infra-runner` (terminal failure retains earlier resource; no `remove` effect ever) | Local |
+| AR-14 stale capability evidence | `infra-capabilities` (version, hash, schema drift and expiry downgrade to unknown) | Local |
+| AR-15 management/data-plane confusion | `infra-deployment` (deployment needs no Projects path; data-plane failure is unverified) | Local |
+
+## Acceptance scenarios (spec §32)
+
+| # | Scenario | Evidence | Status |
+| --- | --- | --- | --- |
+| 1 | Local app without a Projects account | `pnpm check`, `check:generated` with no provider accounts; infra is opt-in | Local proof |
+| 2 | Inspect supported operations and evidence | `trestle infra catalog`, `infra-capabilities`, `infra-readonly` | Local proof |
+| 3 | Plan without creating resources or exposing credentials | `infra-readonly` (zero mutating calls, plan 0600 and secret-free) | Local proof |
+| 4 | Provision Neon through Projects without duplicates | `infra-runner`, `infra-crash.integration` (fake provider) | Hosted blocked (P07) |
+| 5 | Least-privilege runtime access and forced RLS | Planner refuses owner URL for Workers; generated/upgrade checks prove two-tenant forced RLS locally | Hosted blocked (P07) |
+| 6 | Import into environment-bound encrypted storage | `infra-credentials`, `infra-runner` | Local proof (fake provider) |
+| 7 | Edit with vi and reveal without changing provider keys | `trestle secrets` unchanged; `infra-credentials` override rules | Local proof |
+| 8 | Deploy the artifact with only declared credentials | `infra-deployment` (fake host) | Hosted blocked (P08 hosted) |
+| 9 | Rotate and verify every consumer | `infra-rotation` (fake provider) | Hosted blocked (P10) |
+| 10 | Observe old-key rejection | `infra-rotation` (fake provider-specific probe) | Hosted blocked (P10) |
+| 11 | Recover interrupted provisioning and rotation | `infra-runner` crash matrix, `infra-crash.integration` SIGKILL, `infra-rotation` | Local proof |
+| 12 | Refuse account/environment drift | `infra-planner`, `infra-runner` | Local proof |
+| 13 | Adopt without recreating | `infra-lifecycle` planning; Projects reports adoption unsupported | Blocked (provider capability) |
+| 14 | Cloudflare/Resend through Projects with explicit extensions | Single-writer and least-privilege rules; direct commands retained | Hosted blocked (P11/P12) |
+| 15 | Authorize cost/tier changes without customer billing | `infra-lifecycle` tier planning, `infra-planner` cost rules | Local proof (planning) |
+| 16 | Retain or remove per lifecycle policy | `infra-lifecycle` destroy planning | Execution blocked (exact-ID delete unproven) |
+| 17 | Serve during a Projects outage | `infra-deployment` (no Projects path in deployment) | Hosted unverified |
+| 18 | Secret-free evidence; unknown distinct from pass | `infra-readonly` doctor/status, runner store scans | Local proof |
+| 19 | Reject altered/replayed approval and source escalation | AR-01 tests, `infra-setup-plan` (v1 cannot gain infrastructure), `infra-ci` | Local proof |
+| 20 | Response-loss and stale-runner safety | AR-02/AR-03 tests | Local proof |
+| 21 | Prevent old deployments or pulls from restoring retired keys | AR-04/AR-08 tests | Local proof |
+| 22 | Distinguish Projects bootstrap from Trestle approval | D-06 | Blocked (registry deferred) |

@@ -8,8 +8,11 @@ import { generateResource, generateResourceMigration, names } from "./generate-r
 import { hasForcedRlsMigration, missingFiles, readMigrationSql } from "./resource-checks.js";
 import { CliFailure, type CliRuntime } from "./runtime.js";
 import { enableAdminCapability } from "./upgrade-source.js";
+import { planInfrastructure } from "./infra/planner.js";
+import { readInfrastructure } from "./infra/schema.js";
 
-export type PlanClassification = "already correct" | "create" | "update" | "delete" | "blocked" | "unknown";
+/** `external` items belong to another, separately approved execution path (trestle infra apply). */
+export type PlanClassification = "already correct" | "create" | "update" | "delete" | "blocked" | "unknown" | "external";
 export type PlanDiffItem = { id: string; classification: PlanClassification; summary: string };
 export type PlanDiff = { planHash: string; items: PlanDiffItem[]; converged: boolean };
 
@@ -172,7 +175,19 @@ export async function diffSetupPlan(root: string, manifest: ProjectManifest, pla
       items.push({ id: `resources.${resource.name}.migration`, classification: "create", summary: `${resource.name} journaled forced-RLS migration` });
     }
   }
-  return { planHash: planHash(input), items, converged: items.every(({ classification }) => classification === "already correct") };
+  if (plan.infrastructure) {
+    // Same planner as trestle infra plan, offline and read-only; execution is never part of SetupPlan apply.
+    try {
+      const { intent, bindings } = await readInfrastructure(root);
+      for (const environment of plan.infrastructure.environments) {
+        const infra = planInfrastructure({ intent, bindings, environment, now: new Date() });
+        for (const operation of infra.operations) items.push({ id: `infrastructure.${environment}.${operation.resource}`, classification: "external", summary: `${operation.classification} ${operation.provider}/${operation.service}; review with trestle infra plan --env ${environment} and execute only through an approved trestle infra apply` });
+      }
+    } catch (error) {
+      items.push({ id: "infrastructure", classification: "blocked", summary: `infrastructure intent cannot be planned: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}` });
+    }
+  }
+  return { planHash: planHash(input), items, converged: items.every(({ classification }) => classification === "already correct" || classification === "external") };
 }
 
 export function formatPlanDiff(diff: PlanDiff): string {
@@ -184,7 +199,7 @@ type ApplyState = { schemaVersion: 1; planHash: string; updatedAt: string; opera
 export async function applySetupPlan(root: string, manifest: ProjectManifest, plan: SetupPlan, input: string): Promise<ApplyState> {
   const diff = await diffSetupPlan(root, manifest, plan, input);
   const operations: ApplyState["operations"] = [];
-  const unsafe = diff.items.filter((item) => !["already correct", "create"].includes(item.classification) || (item.classification === "create" && !item.id.startsWith("resources.") && item.id !== "capabilities.admin" && item.id !== "apps.admin"));
+  const unsafe = diff.items.filter((item) => !["already correct", "create", "external"].includes(item.classification) || (item.classification === "create" && !item.id.startsWith("resources.") && item.id !== "capabilities.admin" && item.id !== "apps.admin"));
   if (unsafe.length) {
     for (const item of unsafe) operations.push({ id: item.id, status: "blocked", reason: `${item.classification}: ${item.summary}` });
     const state = { schemaVersion: 1 as const, planHash: diff.planHash, updatedAt: new Date().toISOString(), operations };
@@ -196,6 +211,7 @@ export async function applySetupPlan(root: string, manifest: ProjectManifest, pl
     operations.push({ id: "capabilities.admin", status: "completed", files: [...files] });
     operations.push({ id: "apps.admin", status: "completed" });
   }
+  for (const item of diff.items.filter(({ classification }) => classification === "external")) operations.push({ id: item.id, status: "blocked", reason: "infrastructure executes only through an approved trestle infra apply; SetupPlan apply makes no remote changes" });
   const migrations = new Map<string, SetupPlan["resources"][number]>();
   for (const resource of plan.resources) {
     const item = diff.items.find(({ id }) => id === `resources.${resource.name}`);
