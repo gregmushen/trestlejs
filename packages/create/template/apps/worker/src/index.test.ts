@@ -114,6 +114,15 @@ describe("worker routes", () => {
     await expect(health.json()).resolves.toMatchObject({ capabilities: { workflows: { enabled: true, configured: false } } });
   });
 
+  it("reports only a well-formed credential generation marker for deployment verification", async () => {
+    const marked = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "staging", TRESTLE_CREDENTIAL_GENERATION: "staging:g7:abababababab" });
+    await expect(marked.json()).resolves.toMatchObject({ credentialGeneration: "staging:g7:abababababab" });
+    const hostile = await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "staging", TRESTLE_CREDENTIAL_GENERATION: "postgres://owner:secret@host/db" });
+    const body = await hostile.json() as { credentialGeneration: unknown };
+    expect(body.credentialGeneration).toBeNull();
+    expect(JSON.stringify(body)).not.toContain("secret@host");
+  });
+
   it("logs validated Queue correlation and causation without raw payloads", async () => {
     const rawSecret = "untrusted-queue-payload-secret";
     const event = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "billing.checkout.completed", schemaVersion: 1,
