@@ -16,7 +16,7 @@ hosted exit blocked), `blocked`.
 | P01 capabilities | partial | P01 PR | Read-only matrix, fixtures, D-01/D-05; authenticated and hosted probes blocked on login |
 | P02 contracts/planner | complete | P02 PR | Schemas, canonical digests, pure planner |
 | P03 read-only adapter/CLI | complete | P03 PR | R1 read-only surface; mutations registered as unavailable |
-| P04 approval/control store | pending | — | |
+| P04 approval/control store | complete | P04 PR | Local exit (simulation) met; hosted enrollment pending |
 | P05 credential generations | pending | — | |
 | P06 executor/fake provider | pending | — | |
 | P07 Neon hosted slice | pending | — | |
@@ -158,3 +158,32 @@ local only, no account effect). Not authenticated.
 - Operational incident during this package: a broad `pkill` used to clear a hung
   shell command stopped Docker Desktop and three unrelated local containers
   (`cbr-local-*`); Docker and those containers were restarted and verified running.
+
+## P04 — Trusted approval and durable control state
+
+- Status: **complete** for the plan exit ("AR-01/02 controls proven in
+  simulation"). Remote mutation remains disabled. Hosted enrollment of a real
+  control database is an external prerequisite (see table above).
+- Decisions: `docs/decisions/D-02-control-store.md`, `D-03-approval-identity.md`.
+- Modules: `infra/approvals.ts` (Ed25519 canonical approvals bound to plan,
+  source, artifact, target, effects, cost limit, expiry, approver, nonce),
+  `infra/store.ts` (contract), `infra/stores/rules.ts` (shared decision rules),
+  `infra/stores/memory.ts` (tests only; `kind: "memory"`),
+  `infra/stores/postgres.ts` (schema `trestle_infra`; append-only journal enforced
+  by trigger; row locks + advisory locks; fencing sequence; CAS generations;
+  logical export/import that refuses to merge into a non-empty store).
+- New dependency: `postgres@3.4.9` (already used by the template and repo scripts).
+- New scripts: `pnpm check:infra` (all infra unit tests), `pnpm check:infra-recovery`
+  (PostgreSQL contract + multiprocess tests; fails if the disposable database URL is
+  missing). CI runs `check:infra-recovery` against the job's postgres service.
+- Tests: one behavioral contract (`test/helpers/store-contract.ts`, 8 cases) runs
+  against both stores; plus approval binding, reservation rule enumeration,
+  database-level journal immutability, and separate-process races (8 reservers →
+  1 acquired; 8 generation writers → 1 commit; 6 approval consumers → 1 consumed,
+  5 resume) and the AR-02 delayed-completion-after-lease-loss scenario across
+  processes. Integration suite passed 6 consecutive runs locally.
+- Results: `pnpm check` 42 files / 356 tests pass (integration skipped without DB, by design);
+  `check:infra-recovery` 14/14 against disposable `postgres:17-alpine`.
+- Review findings fixed: memory restore merged into a non-empty store; restored
+  stores could reissue fencing tokens (high-water mark added); concurrent first
+  connections raced on DDL (migration serialized by advisory lock).
