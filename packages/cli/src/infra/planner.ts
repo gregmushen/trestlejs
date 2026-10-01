@@ -1,4 +1,4 @@
-import { resolveCapability, type CommandEffect, type EvidenceStatus, type InfraOperation, type Toolchain } from "./capabilities.js";
+import { resolveCapability, type CapabilityRow, type CommandEffect, type EvidenceStatus, type InfraOperation, type Toolchain } from "./capabilities.js";
 import { CATALOG_SERVICES, capabilityFor } from "./capability-matrix.js";
 import { canonicalDigest } from "./canonical.js";
 import type { DesiredResource, EnvironmentBinding, InfraEnvironment, InfrastructureBindings, InfrastructureIntent, Observation } from "./schema.js";
@@ -69,6 +69,8 @@ export type PlanInput = Readonly<{
   now: Date;
   /** Plans expire; apply must refresh preconditions regardless. */
   ttlSeconds?: number;
+  /** Capability evidence source; defaults to the recorded matrix. Tests inject qualified rows for fake providers. */
+  capabilities?: (provider: string, service: string, operation: InfraOperation) => CapabilityRow | undefined;
 }>;
 
 export class InfraPlanError extends Error {
@@ -227,7 +229,7 @@ export function planInfrastructure(input: PlanInput): InfraPlan {
       preconditions.push("no unresolved create operation exists for this resource");
     }
 
-    const row = capabilityFor(resource.provider, resource.service, operation);
+    const row = (input.capabilities ?? capabilityFor)(resource.provider, resource.service, operation);
     const resolved = row ? resolveCapability(row, input.toolchain, input.now) : undefined;
     const mutating = classification !== "no_change" && classification !== "unknown";
     if (mutating && !resolved) blockers.push(`no capability evidence for ${resource.provider}/${resource.service} ${operation}`);

@@ -4,7 +4,8 @@ import path from "node:path";
 
 import { z } from "zod";
 
-import { COMMAND_EFFECTS, isRemoteReadOnly, SUPPORTED_TOOLCHAIN, type Toolchain } from "../capabilities.js";
+import { COMMAND_EFFECTS, isRemoteReadOnly, SUPPORTED_TOOLCHAIN, type CommandEffect, type Toolchain } from "../capabilities.js";
+import type { Observation } from "../schema.js";
 import { sha256 } from "../canonical.js";
 import type { ProcessRunner } from "../process.js";
 import { redact } from "../redaction.js";
@@ -187,4 +188,86 @@ export class StripeProjectsAdapter {
       },
     };
   }
+
+  /**
+   * Runs one approved mutating command in the environment's isolated workspace.
+   * Every recorded effect of the command must be covered by the approval.
+   * Outcomes distinguish a definitive provider answer from an unknown one: a
+   * timeout, crash or lost response never counts as "did not happen".
+   */
+  async mutate(command: string, positionals: readonly string[], flags: Readonly<Record<string, string | true>>, workspace: string, approvedEffects: readonly CommandEffect[]): Promise<MutationOutcome> {
+    const effects = COMMAND_EFFECTS[command];
+    if (!effects || isRemoteReadOnly(command)) throw new ProjectsAdapterError(`${command} is not a recorded mutating Projects command`);
+    const missing = effects.filter((effect) => !approvedEffects.includes(effect));
+    if (missing.length) throw new ProjectsAdapterError(`projects ${command} has unapproved effects: ${missing.join(", ")}`);
+    const allowedFlags = new Set(["name", "output", "skip-skills", "skip-install", "mode", "account", "yes"]);
+    const flagArgs: string[] = [];
+    for (const [flag, value] of Object.entries(flags)) {
+      if (!allowedFlags.has(flag)) throw new ProjectsAdapterError(`flag --${flag} is not permitted`);
+      flagArgs.push(`--${flag}`, ...(value === true ? [] : [value]));
+    }
+    const verb = command === "env pull" ? ["env", "--pull"] : command.split(" ");
+    const result = await this.runner.run({
+      executable: this.toolchain.stripePath,
+      args: ["projects", ...verb, ...positionals, ...flagArgs, "--json", "--non-interactive"],
+      cwd: workspace, env: minimalEnvironment(this.location), timeoutMs: 300_000, maxOutputBytes: this.maxOutputBytes,
+    });
+    if (result.timedOut) return { status: "unknown", reason: `projects ${command} timed out; the provider may still complete it` };
+    if (result.truncated) return { status: "unknown", reason: `projects ${command} output exceeded the bound` };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      return { status: "unknown", reason: `projects ${command} returned no parseable response (exit ${String(result.exitCode)}${result.signal ? `, ${result.signal}` : ""})` };
+    }
+    const envelope = envelopeSchema.safeParse(parsed);
+    if (!envelope.success || envelope.data.version !== this.toolchain.envelopeVersion) return { status: "unknown", reason: `projects ${command} returned an unrecognized envelope` };
+    if (!envelope.data.ok) {
+      const error = envelope.data.error;
+      return error ? { status: "rejected", code: error.code, message: redact(error.message).slice(0, 300) } : { status: "unknown", reason: `projects ${command} failed without an error code` };
+    }
+    return { status: "ok", data: envelope.data.data };
+  }
+
+  /**
+   * Reads the workspace's active Projects environment and resources.
+   * The status data shape is implemented against the fake provider; the real
+   * 0.45.0 authenticated shape is unverified (no hosted access), so live use is
+   * additionally gated by capability evidence.
+   */
+  async observe(workspace: string, now: Date): Promise<ObservationResult> {
+    const result = await this.read("status", [], workspace);
+    if (result.status === "failure") return { status: "unknown", reason: result.reason };
+    if (result.status === "provider_error") return { status: "unknown", reason: `${result.code}: ${result.message}` };
+    if (result.authenticated === false) return { status: "unknown", reason: "Projects session is not authenticated" };
+    const parsed = statusSchema.safeParse(result.data);
+    if (!parsed.success) return { status: "unknown", reason: "status data did not match the expected schema" };
+    const data = parsed.data;
+    return {
+      status: "ok",
+      observation: {
+        observedAt: now.toISOString(), stripeAccountId: data.account.id, projectsProjectId: data.project.id, projectsEnvironment: data.environment.active,
+        resources: data.resources.map((resource) => ({ externalId: resource.id, provider: resource.provider as Observation["resources"][number]["provider"], service: resource.service, name: resource.name })),
+        complete: data.complete === true,
+      },
+    };
+  }
 }
+
+const statusSchema = z.object({
+  account: z.object({ id: z.string().regex(/^acct_[A-Za-z0-9]{6,}$/u) }),
+  project: z.object({ id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u) }),
+  environment: z.object({ active: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/u) }),
+  resources: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u), name: z.string().max(200), provider: z.enum(["neon", "cloudflare", "resend"]), service: z.string().min(1) }).passthrough()),
+  complete: z.boolean().optional(),
+}).passthrough();
+
+export type MutationOutcome =
+  | Readonly<{ status: "ok"; data: unknown }>
+  | Readonly<{ status: "rejected"; code: string; message: string }>
+  | Readonly<{ status: "unknown"; reason: string }>;
+
+export type ObservationResult = Readonly<{ status: "ok"; observation: Observation }> | Readonly<{ status: "unknown"; reason: string }>;
+
+/** The adapter surface the executor depends on. */
+export type MutatingAdapter = Pick<StripeProjectsAdapter, "mutate" | "observe">;

@@ -29,7 +29,7 @@ create table if not exists ${schema}.approvers (
 );
 create table if not exists ${schema}.approvals (
   approval_id text primary key,
-  operation_id text not null unique,
+  operation_id text not null,
   plan_digest text not null,
   approver_id text not null references ${schema}.approvers(id),
   approval jsonb not null,
@@ -122,13 +122,16 @@ export class PostgresOperationStore implements OperationStore {
 
   async recordApproval(approval: SignedApproval, now: Date): Promise<void> {
     await this.sql.begin(async (tx) => {
+      const [recorded] = await tx.unsafe(`select approval from ${this.table("approvals")} where approval_id = $1`, [approval.payload.approvalId]);
+      // Re-recording the identical approval is a no-op; consumption is the authoritative check.
+      if (recorded && (recorded.approval as SignedApproval).signature === approval.signature) return;
       const problem = approvalProblems(approval, await this.approver(tx, approval.payload.approverId), now);
       if (problem) throw new StoreConflictError(problem);
       try {
         await tx.unsafe(`insert into ${this.table("approvals")} (approval_id, operation_id, plan_digest, approver_id, approval, expires_at) values ($1, $2, $3, $4, $5, $6)`,
           [approval.payload.approvalId, approval.payload.operationId, approval.payload.planDigest, approval.payload.approverId, approval as never, approval.payload.expiresAt]);
       } catch (error) {
-        if ((error as { code?: string }).code === "23505") throw new StoreConflictError("approval or operation approval is already recorded");
+        if ((error as { code?: string }).code === "23505") throw new StoreConflictError("approval is already recorded");
         throw error;
       }
     });
@@ -139,11 +142,12 @@ export class PostgresOperationStore implements OperationStore {
       const [row] = await tx.unsafe(`select approval, consumed_by from ${this.table("approvals")} where approval_id = $1 for update`, [approvalId]);
       if (!row) return { status: "rejected", reason: "approval is not recorded" } as const;
       const approval = row.approval as SignedApproval;
-      if (row.consumed_by) return row.consumed_by === operationId ? { status: "already_consumed_by_operation" } as const : { status: "rejected", reason: "approval was already consumed by another operation" } as const;
+      if (row.consumed_by && row.consumed_by !== operationId) return { status: "rejected", reason: "approval was already consumed by another operation" } as const;
       if (approval.payload.operationId !== operationId) return { status: "rejected", reason: "approval is bound to a different operation" } as const;
       if (approval.payload.planDigest !== planDigest) return { status: "rejected", reason: "approval is bound to a different plan digest" } as const;
       const problem = approvalProblems(approval, await this.approver(tx, approval.payload.approverId), now);
       if (problem) return { status: "rejected", reason: problem } as const;
+      if (row.consumed_by === operationId) return { status: "already_consumed_by_operation" } as const;
       await tx.unsafe(`update ${this.table("approvals")} set consumed_by = $2, consumed_at = $3 where approval_id = $1`, [approvalId, operationId, now]);
       return { status: "consumed" } as const;
     });

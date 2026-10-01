@@ -20,7 +20,7 @@
     "test:watch": "vitest",
     "check:customized-upgrade": "node scripts/check-customized-upgrade.mjs",
     "check:infra": "pnpm build && vitest run packages/cli/test/infra-",
-    "check:infra-recovery": "pnpm build && TRESTLE_INFRA_REQUIRE_INTEGRATION=1 vitest run packages/cli/test/infra-store.integration.test.ts"
+    "check:infra-recovery": "pnpm build && TRESTLE_INFRA_REQUIRE_INTEGRATION=1 vitest run packages/cli/test/infra-store.integration.test.ts packages/cli/test/infra-crash.integration.test.ts packages/cli/test/infra-cli-apply.test.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.2",

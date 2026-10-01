@@ -48,6 +48,8 @@ export const COMMAND_EFFECTS: Readonly<Record<string, readonly CommandEffect[]>>
   "downgrade": ["remote_tier_change", "local_vault_write", "local_plaintext_credentials", "may_charge"],
   "remove": ["remote_resource_delete", "local_state_write"],
   "env pull": ["remote_read", "local_vault_write", "local_plaintext_credentials"],
+  "env create": ["remote_membership_change", "local_state_write"],
+  "env use": ["local_state_write"],
   "env add": ["remote_membership_change", "local_state_write", "local_vault_write", "local_plaintext_credentials"],
   "env remove": ["remote_membership_change", "local_state_write", "local_vault_write", "local_plaintext_credentials"],
   "open": ["browser_launch"],

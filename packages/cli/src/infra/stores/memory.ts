@@ -26,21 +26,25 @@ export class MemoryOperationStore implements OperationStore {
   }
 
   async recordApproval(approval: SignedApproval, now: Date): Promise<void> {
+    const recorded = this.approvals.get(approval.payload.approvalId);
+    // Re-recording the identical approval is a no-op; consumption is the authoritative check.
+    if (recorded && recorded.approval.signature === approval.signature) return;
     const problem = approvalProblems(approval, this.approvers.get(approval.payload.approverId), now);
     if (problem) throw new StoreConflictError(problem);
     if (this.approvals.has(approval.payload.approvalId)) throw new StoreConflictError("approval is already recorded");
-    if ([...this.approvals.values()].some((entry) => entry.approval.payload.operationId === approval.payload.operationId)) throw new StoreConflictError("operation already has an approval");
     this.approvals.set(approval.payload.approvalId, { approval, consumedBy: null, consumedAt: null });
   }
 
   async consumeApproval(approvalId: string, operationId: string, planDigest: string, now: Date): Promise<ConsumeResult> {
     const entry = this.approvals.get(approvalId);
     if (!entry) return { status: "rejected", reason: "approval is not recorded" };
-    if (entry.consumedBy) return entry.consumedBy === operationId ? { status: "already_consumed_by_operation" } : { status: "rejected", reason: "approval was already consumed by another operation" };
+    if (entry.consumedBy && entry.consumedBy !== operationId) return { status: "rejected", reason: "approval was already consumed by another operation" };
     if (entry.approval.payload.operationId !== operationId) return { status: "rejected", reason: "approval is bound to a different operation" };
     if (entry.approval.payload.planDigest !== planDigest) return { status: "rejected", reason: "approval is bound to a different plan digest" };
+    // Resume re-checks current authority: a revoked approver or expired approval stops it.
     const problem = approvalProblems(entry.approval, this.approvers.get(entry.approval.payload.approverId), now);
     if (problem) return { status: "rejected", reason: problem };
+    if (entry.consumedBy === operationId) return { status: "already_consumed_by_operation" };
     this.approvals.set(approvalId, { ...entry, consumedBy: operationId, consumedAt: now.toISOString() });
     return { status: "consumed" };
   }

@@ -38,7 +38,12 @@ export function storeContract(name: string, open: () => Promise<OperationStore &
       expect(await store.consumeApproval(approval.payload.approvalId, "op-1", PLAN.digest, at(1))).toEqual({ status: "consumed" });
       expect(await store.consumeApproval(approval.payload.approvalId, "op-1", PLAN.digest, at(2))).toEqual({ status: "already_consumed_by_operation" });
       expect(await store.consumeApproval(approval.payload.approvalId, "op-2", PLAN.digest, at(2))).toMatchObject({ status: "rejected" });
-      await expect(store.recordApproval(approval, at(3))).rejects.toThrow(StoreConflictError);
+      // Resume re-checks authority: once revoked, even the same operation's replay is refused.
+      await store.revokeApprover("alice", at(2));
+      expect(await store.consumeApproval(approval.payload.approvalId, "op-1", PLAN.digest, at(3))).toMatchObject({ status: "rejected", reason: expect.stringMatching(/revoked/u) });
+      await store.recordApproval(approval, at(3));
+      const altered = { ...approval, signature: Buffer.from("different").toString("base64") };
+      await expect(store.recordApproval(altered, at(3))).rejects.toThrow(StoreConflictError);
     }));
 
     it("rejects tampered, re-targeted, unregistered, revoked, out-of-scope and expired approvals", withStore(async (store) => {

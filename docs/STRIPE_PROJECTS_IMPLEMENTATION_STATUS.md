@@ -18,7 +18,7 @@ hosted exit blocked), `blocked`.
 | P03 read-only adapter/CLI | complete | P03 PR | R1 read-only surface; mutations registered as unavailable |
 | P04 approval/control store | complete | P04 PR | Local exit (simulation) met; hosted enrollment pending |
 | P05 credential generations | complete | P05 PR | v2 envelope + CAS commit; public pull still unavailable |
-| P06 executor/fake provider | pending | — | |
+| P06 executor/fake provider | complete | P06 PR | Fake-provider crash/concurrency gates pass; real apply still gated by capability evidence |
 | P07 Neon hosted slice | pending | — | |
 | P08 deployment/consumers | pending | — | |
 | P09 rotation fault model | pending | — | |
@@ -209,3 +209,47 @@ local only, no account effect). Not authenticated.
 - Tests: `infra-credentials.test.ts` 18. Mutation check: dropping metadata from
   AAD, disabling the undeclared-output check, the permission check, or the
   override check each turned the suite red. `pnpm check`: 43 files pass.
+
+## P06 — Executor and exhaustive fake-provider recovery
+
+- Status: **complete** for the plan exit (all fake-provider adversarial cases for
+  the initial provisioning path pass). Real apply is wired but remains blocked by
+  capability evidence until P07 qualifies a hosted tuple.
+- Executor (`infra/runner.ts`): verifies plan digest and source digest, requires a
+  PostgreSQL store (memory only in simulation), uses the control-store binding
+  generation over repository copies, re-observes and rejects identity or material
+  drift, checks approval coverage, records/consumes the approval, journals intent
+  before each effect, fences effects with `beginEffect`, classifies outcomes
+  (`succeeded`, `blocked`, `failed_retryable`, `failed_terminal`,
+  `outcome_unknown`, `needs_intervention`; exit codes 0/2/1/1/3/4), binds exact IDs
+  by CAS, imports declared credentials into v2 snapshots, removes adapter plaintext,
+  and never compensates automatically.
+- Recovery: lost response → reservation stays uncertain → resume binds the resource
+  found by observation; absence after an in-flight request is **not** proof
+  (AR-02) and needs `operation resume --confirm-absent <reason> --actor <name>`;
+  incomplete discovery never proves absence; retryable provider rejections back off
+  on the injected clock.
+- Fake provider: stateful `stripe` host whose remote state lives outside runner
+  processes, with per-command fault injection (crash, hang, lost response, error)
+  and exact effect counters.
+- CLI: `infra apply`, `infra approve` (key outside project, 0600), `infra approver
+  keygen|register`, `infra operation resume`. `apply` requires
+  `TRESTLE_INFRA_CONTROL_DATABASE_URL` and a linked workspace.
+- Tests: `infra-runner.test.ts` 32 (crash at 9 boundaries × 2 resources, replay,
+  tamper, drift, stale binding generation, lost response, AR-02, incomplete
+  discovery, backoff, terminal rejection, no compensation, lease loss, revoked
+  approver on resume); `infra-crash.integration.test.ts` 6 (real SIGKILL at 6
+  boundaries, resumed by a second process against PostgreSQL);
+  `infra-cli-apply.test.ts` 3. `pnpm check` 45 files / 408 tests;
+  `check:infra-recovery` 23/23.
+- Review findings fixed: (1) **security** — resuming with an already-consumed
+  approval skipped revocation/expiry checks; consumption now re-checks current
+  authority for same-operation replay (store contract updated); (2) intent edits
+  that only changed dependencies passed drift checks; source digest now required;
+  (3) a crash after the binding commit skipped credential import; completion is now
+  an explicit journal event; (4) absence-based reconciliation could duplicate an
+  in-flight create; now requires operator confirmation; (5) slow calls could
+  outlive their lease and crash on release.
+- Limitations: the real authenticated `status` schema and `add` semantics for plan
+  selection (`neon/free` vs `neon/postgres`) are unverified; the Projects vault cache
+  (`.projects/vault`) remains in the isolated workspace by upstream design.

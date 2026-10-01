@@ -1,4 +1,5 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import type { Command } from "commander";
@@ -16,6 +17,10 @@ import { DASHBOARD_URLS } from "./endpoints.js";
 import { planInfrastructure, planIsExecutable, type InfraPlan } from "./planner.js";
 import { nodeProcessRunner, type ProcessRunner } from "./process.js";
 import { INFRA_PATHS, readInfrastructure, type InfraEnvironment } from "./schema.js";
+import { approvalFor, generateApproverKeys, signApproval, type SignedApproval } from "./approvals.js";
+import { applyPlan, OUTCOME_EXIT, type ApplyResult } from "./runner.js";
+import { resolveMasterKey } from "../secrets.js";
+import { projectsWorkspace } from "./doctor.js";
 
 /** Test seams; production uses the real process runner and clock. */
 export type InfraRuntime = Readonly<{ runner?: ProcessRunner; now?: () => Date }>;
@@ -39,7 +44,6 @@ environments: {}
 const PENDING: ReadonlyArray<[name: string, args: string, description: string, gate: string]> = [
   ["link", "<provider>", "link a provider account to the Projects project for an environment", "approval authority and durable control state (P04) are not enabled"],
   ["adopt", "<resource>", "plan association with an existing exact resource identity", "Projects reports existing-resource linking unsupported for Neon, Cloudflare and Resend"],
-  ["apply", "<plan-id>", "execute an approved infrastructure plan", "no provider operation has hosted evidence, and approval/control state (P04–P06) is not enabled"],
   ["rotate", "<credential-binding>", "plan a provider credential rotation", "rotation invalidation and response-loss recovery are unknown (D-05)"],
   ["upgrade", "<resource>", "plan a reviewed tier change", "tier changes require cost authorization and hosted evidence"],
   ["detach", "<resource>", "plan association removal while retaining the resource", "no non-destructive detach is proven"],
@@ -58,6 +62,38 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
     const expected = overrideHash && /^[a-f0-9]{64}$/u.test(overrideHash) ? { ...SUPPORTED_TOOLCHAIN, pluginSha256: overrideHash } : SUPPORTED_TOOLCHAIN;
     const check = await verifyToolchain(location, runner(), expected);
     return check.ok ? { check, adapter: new StripeProjectsAdapter(check.toolchain, location, runner()) } : { check };
+  };
+
+  const controlStore = async () => {
+    const url = environmentOf("TRESTLE_INFRA_CONTROL_DATABASE_URL");
+    if (!url) throw new CliFailure("remote mutation requires TRESTLE_INFRA_CONTROL_DATABASE_URL naming an independent PostgreSQL control store; local files are never used as the journal", 2);
+    const { PostgresOperationStore } = await import("./stores/postgres.js");
+    return PostgresOperationStore.connect(url);
+  };
+
+  const execute = async (root: string, environment: InfraEnvironment, planFile: string, approvalFile: string, operationId?: string, confirmAbsent?: { actor: string; reason: string }): Promise<ApplyResult> => {
+    if (!environmentOf("TRESTLE_INFRA_CONTROL_DATABASE_URL")) await controlStore();
+    const plan = JSON.parse(await readFile(path.resolve(root, planFile), "utf8")) as InfraPlan;
+    const approval = JSON.parse(await readFile(path.resolve(root, approvalFile), "utf8")) as SignedApproval;
+    if (operationId && approval.payload.operationId !== operationId) throw new CliFailure(`approval is for ${approval.payload.operationId}, not ${operationId}`);
+    if (plan.environment !== environment) throw new CliFailure(`plan is for ${plan.environment}, not ${environment}`);
+    const { intent, bindings } = await readInfrastructure(root);
+    const { check, adapter } = await toolchain();
+    if (!adapter) throw new CliFailure(`Projects toolchain is not qualified: ${check.ok ? "" : check.reasons.join("; ")}`, 2);
+    const workspace = projectsWorkspace(root, environment);
+    if (!(await stat(path.join(workspace, ".projects")).then(() => true, () => false))) throw new CliFailure(`${environment} has no linked Projects workspace; link the environment before applying`, 2);
+    const masterKey = await resolveMasterKey(root, environment, environmentOf("TRESTLE_MASTER_KEY"));
+    const store = await controlStore();
+    try {
+      return await applyPlan({ plan, approval, intent, bindings }, { store, adapter, workspace, projectRoot: root, masterKey, now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)), ...(confirmAbsent ? { confirmAbsent } : {}) });
+    } finally {
+      await store.close();
+    }
+  };
+
+  const report = (result: ApplyResult) => {
+    runtime.stdout(`${JSON.stringify(structuredOutput(result), null, 2)}\n`);
+    if (result.outcome !== "succeeded") throw new CliFailure(`operation ${result.operationId}: ${result.outcome}${result.nextStep ? ` — ${result.nextStep}` : ""}`, OUTCOME_EXIT[result.outcome]);
   };
 
   infra.command("init")
@@ -192,10 +228,83 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
       runtime.stdout(record.endsWith("\n") ? record : `${record}\n`);
     });
   operation.command("resume")
-    .description("resume verified unfinished steps of an operation")
+    .description("resume an operation from its journal: reconcile uncertain steps by observation, never repeat committed effects")
     .argument("<id>")
     .requiredOption("--env <environment>", "target environment", remoteEnvironment)
-    .action(() => { throw new CliFailure("trestle infra operation resume is not available yet: no mutating operation can be started", 2); });
+    .requiredOption("--plan <file>", "the plan the operation was approved for")
+    .requiredOption("--approval <file>", "the original approval, or a renewal for the same operation")
+    .option("--confirm-absent <reason>", "assert, as the recorded operator, that no earlier request for an uncertain target can still complete")
+    .option("--actor <name>", "operator name recorded with --confirm-absent")
+    .action(async (id: string, options: { env: InfraEnvironment; plan: string; approval: string; confirmAbsent?: string; actor?: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      if (options.confirmAbsent && !options.actor) throw new CliFailure("--confirm-absent requires --actor");
+      const result = await execute(context.root, options.env, options.plan, options.approval, id, options.confirmAbsent ? { actor: options.actor!, reason: options.confirmAbsent } : undefined);
+      report(result);
+    });
+
+  infra.command("apply")
+    .description("execute an approved plan with fresh preconditions; requires an independent PostgreSQL control store")
+    .argument("<plan-file>")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .requiredOption("--approval <file>", "signed approval for this plan and operation")
+    .action(async (planFile: string, options: { env: InfraEnvironment; approval: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      report(await execute(context.root, options.env, planFile, options.approval));
+    });
+
+  infra.command("approve")
+    .description("sign an approval for one plan and operation with an approver key kept outside the repository")
+    .argument("<plan-file>")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .requiredOption("--approver <id>", "approver ID registered in the control store")
+    .requiredOption("--key <file>", "Ed25519 private key (PEM, mode 0600, outside the project)")
+    .option("--operation-id <id>", "operation ID to bind (default: new)")
+    .option("--artifact-digest <digest>", "immutable artifact digest to bind")
+    .action(async (planFile: string, options: { env: InfraEnvironment; approver: string; key: string; operationId?: string; artifactDigest?: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const plan = JSON.parse(await readFile(path.resolve(context.root, planFile), "utf8")) as InfraPlan;
+      if (plan.environment !== options.env) throw new CliFailure(`plan is for ${plan.environment}, not ${options.env}`);
+      const keyPath = path.resolve(runtime.cwd(), options.key);
+      if (!path.relative(context.root, keyPath).startsWith("..")) throw new CliFailure("approver keys must live outside the project directory");
+      const info = await stat(keyPath).catch(() => { throw new CliFailure("approver key not found"); });
+      if ((info.mode & 0o077) !== 0) throw new CliFailure("approver key must not be readable by group or others (chmod 600)");
+      const operationId = options.operationId ?? `op-${randomUUID()}`;
+      if (!/^op-[A-Za-z0-9-]{1,80}$/u.test(operationId)) throw new CliFailure("operation IDs look like op-<id>");
+      const approval = signApproval(approvalFor(plan, { operationId, approverId: options.approver, now: now(), ...(options.artifactDigest ? { artifactDigest: options.artifactDigest } : {}) }), await readFile(keyPath, "utf8"));
+      const directory = path.join(context.root, INFRA_PATHS.local, "approvals");
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      const file = path.join(directory, `${operationId}.json`);
+      await writeFile(file, `${JSON.stringify(approval, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      runtime.stdout(`Signed approval ${approval.payload.approvalId} for ${operationId}\n  plan     ${plan.digest}\n  effects  ${approval.payload.allowedEffects.join(", ") || "none"}\n  expires  ${approval.payload.expiresAt}\n  saved    ${path.relative(context.root, file)}\n`);
+    });
+
+  const approver = infra.command("approver").description("manage infrastructure approvers");
+  approver.command("keygen")
+    .description("create an Ed25519 approver key pair outside the project")
+    .requiredOption("--out <file>", "private key path (public key is written beside it with .pub)")
+    .action(async (options: { out: string }) => {
+      const out = path.resolve(runtime.cwd(), options.out);
+      const keys = generateApproverKeys();
+      await mkdir(path.dirname(out), { recursive: true, mode: 0o700 });
+      await writeFile(out, keys.privateKeyPem, { mode: 0o600, flag: "wx" });
+      await writeFile(`${out}.pub`, keys.publicKeyPem, { mode: 0o644, flag: "wx" });
+      runtime.stdout(`Wrote ${out} (private, 0600) and ${out}.pub\nRegister the public key with: trestle infra approver register <id> --public-key ${out}.pub --env <environment>\n`);
+    });
+  approver.command("register")
+    .description("register an approver public key in the control store (control-store administrators only)")
+    .argument("<id>")
+    .requiredOption("--public-key <file>", "PEM public key")
+    .option("--env <environment>", "an environment this approver may approve (repeatable)", (value: string, previous: string[]) => [...previous, remoteEnvironment(value)], [] as string[])
+    .action(async (id: string, options: { publicKey: string; env: string[] }) => {
+      if (options.env.length === 0) throw new CliFailure("name at least one --env <environment>");
+      const store = await controlStore();
+      try {
+        await store.registerApprover(id, await readFile(path.resolve(runtime.cwd(), options.publicKey), "utf8"), options.env, now());
+        runtime.stdout(`Registered approver ${id} for ${options.env.join(", ")}\n`);
+      } finally {
+        await store.close();
+      }
+    });
 
   const credentials = infra.command("credentials").description("Projects-managed credential import");
   credentials.command("pull")
