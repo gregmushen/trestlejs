@@ -193,7 +193,7 @@ export type OutputMapping = Readonly<{ output: string; as: string; classificatio
  * symlinks, files outside the workspace, foreign ownership, permissive modes,
  * missing declared outputs, collisions, and undeclared extra outputs (AR-05).
  */
-export async function importDotenvOutputs(file: string, workspace: string, mappings: readonly OutputMapping[], options: { projectRoot: string; now: Date }): Promise<{ values: Record<string, string>; metadata: CredentialMetadata[] }> {
+export async function importDotenvOutputs(file: string, workspace: string, mappings: readonly OutputMapping[], options: { projectRoot: string; now: Date; /** Outputs declared by other resources in the same environment: tolerated, not imported. */ siblingOutputs?: readonly string[] }): Promise<{ values: Record<string, string>; metadata: CredentialMetadata[] }> {
   const resolvedWorkspace = await realpath(workspace);
   const resolvedProject = await realpath(options.projectRoot);
   if (resolvedWorkspace === resolvedProject) throw new CredentialError("credential outputs are never read from the application root");
@@ -207,7 +207,7 @@ export async function importDotenvOutputs(file: string, workspace: string, mappi
   if ((info.mode & 0o077) !== 0) throw new CredentialError("credential output is readable by group or others");
   const raw = parseDotenv(await readFile(resolved, "utf8"));
   const declared = new Set(mappings.map((mapping) => mapping.output));
-  const extras = Object.keys(raw).filter((name) => !declared.has(name)).sort();
+  const extras = Object.keys(raw).filter((name) => !declared.has(name) && !(options.siblingOutputs ?? []).includes(name)).sort();
   if (extras.length) throw new CredentialError(`provider wrote undeclared credential outputs: ${extras.join(", ")}`);
   const targets = mappings.map((mapping) => mapping.as);
   if (new Set(targets).size !== targets.length) throw new CredentialError("two credential outputs map to the same name");

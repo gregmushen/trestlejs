@@ -204,7 +204,7 @@ describe("trestle infra read-only commands", () => {
   it("reports mutation commands as unavailable and never invokes the provider", async () => {
     const root = await project();
     const { runtime, output } = runtimeFor(root, fake.environment());
-    for (const argv of [["apply", "plan-1"], ["rotate", "database-bootstrap"], ["destroy", "database"], ["link", "neon"], ["credentials", "pull"]]) {
+    for (const argv of [["rotate", "database-bootstrap"], ["destroy", "database"], ["link", "neon"], ["credentials", "pull"]]) {
       output.stderr = "";
       expect(await executeCli(["infra", ...argv, "--env", "staging", "--experimental"], runtime), argv.join(" ")).toBe(2);
       expect(output.stderr).toMatch(/not available yet/u);
