@@ -62,6 +62,8 @@ export const desiredResourceSchema = z.object({
   sharedWith: z.array(environmentNameSchema).default([]),
   credentialBindings: z.record(logicalIdSchema, credentialBindingSchema).default({}),
   costLimit: costLimitSchema.optional(),
+  /** Records that a generated direct-provider writer for this kind has been disabled for this environment. */
+  directWriterDisabled: z.boolean().default(false),
   timeoutSeconds: z.number().int().min(10).max(3600).default(300),
 }).strict().superRefine((resource, context) => {
   if (resource.disposition === "adopt" && !resource.externalId) context.addIssue({ code: "custom", path: ["externalId"], message: "adoption requires an exact externalId" });

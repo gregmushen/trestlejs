@@ -79,7 +79,7 @@ export async function createHarness(options: { store?: OperationStore } = {}): P
   await store.registerApprover("alice", keys.publicKeyPem, ["staging"], clock.now());
   const capabilities = (provider: string, service: string, operation: InfraOperation): CapabilityRow | undefined => {
     const row = capabilityFor(provider, service, operation);
-    return row && row.evidence !== "unsupported" ? { ...row, evidence: "hosted_verified", unknowns: [], toolchain: check.toolchain, observedAt: clock.now().toISOString() } : row;
+    return row && row.evidence !== "unsupported" ? { ...row, evidence: "hosted_verified", unknowns: [], toolchain: check.toolchain, observedAt: clock.now().toISOString(), credentialScopes: { RESEND_API_KEY: "least_privilege" } } : row;
   };
   const intent = parseIntent(INTENT_YAML);
   const harness: Harness = {

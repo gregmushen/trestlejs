@@ -74,3 +74,21 @@ export const CATALOG_SERVICES: Readonly<Record<string, Readonly<Record<string, C
 export function capabilityFor(provider: string, service: string, operation: InfraOperation): CapabilityRow | undefined {
   return PROJECTS_CAPABILITIES.find((row) => row.provider === provider && row.service === service && row.operation === operation);
 }
+
+/**
+ * Qualified rotation profiles by provider/service (D-05). Empty until a hosted
+ * rotation qualification (P10) proves invalidation, bundle and re-retrieval
+ * behavior for a specific tuple; rotation plans are blocked meanwhile.
+ */
+export const ROTATION_PROFILES: Readonly<Record<string, import("./rotation.js").RotationProfile>> = Object.freeze({});
+
+/**
+ * Resource kinds that generated direct-provider scripts already write. A
+ * Projects-owned resource of the same kind needs that writer disabled first, so
+ * each resource keeps exactly one lifecycle owner (spec §5, plan P11).
+ */
+export const DIRECT_WRITERS: Readonly<Record<string, string>> = Object.freeze({
+  "cloudflare/r2:bucket": "scripts/cloudflare-r2.mjs creates and deletes R2 buckets",
+  "cloudflare/queues": "scripts/cloudflare-queues.mjs creates and deletes queues",
+  "cloudflare/workers": "scripts/cloudflare-worker.mjs updates Worker settings and deletes preview Workers",
+});

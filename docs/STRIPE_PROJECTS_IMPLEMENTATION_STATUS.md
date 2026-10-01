@@ -21,11 +21,11 @@ hosted exit blocked), `blocked`.
 | P06 executor/fake provider | complete | P06 PR | Fake-provider crash/concurrency gates pass; real apply still gated by capability evidence |
 | P07 Neon hosted slice | blocked | — | Needs Stripe login + sandbox authorization + control DB (see prerequisites) |
 | P08 deployment/consumers | partial | P08 PR | Consumer registry, projection, generation proof against fakes; hosted proof blocked on P07 |
-| P09 rotation fault model | pending | — | |
-| P10 hosted rotation | pending | — | |
-| P11 Cloudflare | pending | — | |
-| P12 Resend | pending | — | |
-| P13 lifecycle operations | pending | — | |
+| P09 rotation fault model | complete | P09–P13 PR | Simulated strategies survive the crash matrix; unsupported strategies make no issuance call |
+| P10 hosted rotation | blocked | — | Needs P07 hosted access and a disposable credential; rotation execution stays unsupported |
+| P11 Cloudflare | partial | P09–P13 PR | Single-writer guard over generated scripts; per-operation hosted conformance blocked |
+| P12 Resend | partial | P09–P13 PR | Least-privilege projection rule; sender/domain/webhook stay direct extensions; hosted conformance blocked |
+| P13 lifecycle operations | partial | P09–P13 PR | Exact-ID adopt/tier/detach/destroy planning with safeguards; execution blocked by capability evidence |
 | P14 SetupPlan/CI/upgrades/docs | pending | — | |
 | P15 registry starter | pending | — | |
 | P16 release qualification | pending | — | |
@@ -290,3 +290,65 @@ local only, no account effect). Not authenticated.
   drift, management vs data-plane outage).
 - Limitation: no real `ConsumerDeployer`/`ProbeRunner` against Cloudflare yet; the
   existing `secrets push` path is not yet wrapped (needs a hosted target).
+
+## P09 — Rotation state machine and fault proof
+
+- Status: **complete** (plan exit: every supported simulated strategy survives the
+  crash matrix; unsupported strategies produce no issuance call).
+- Module `infra/rotation.ts`: rotation plans for the provider's real mutation unit
+  (`bundle`), affected outputs and consumers, inventory completeness, and
+  blockers for unknown invalidation, unknown bundle, immediate invalidation
+  without proven re-retrieval (AR-03), undeclared sibling outputs (AR-05), overlap
+  without a Projects revoke operation, and missing provider-specific retirement
+  probes. `rotationPlanDocument` makes the rotation a digest-bound plan, so
+  approvals bind the exact unit. Execution journals each state, issues at most
+  once (a re-issue after an ambiguous request needs a recorded operator
+  confirmation), recovers lost responses by re-retrieval, keeps the old value only
+  in an encrypted recovery envelope under the environment master key, cuts over
+  through P08 deployment proof, refuses to retire while any consumer is unverified
+  or undrained (delayed jobs, AR-08), and retires only on provider-specific old-key
+  rejection with a working new-key control (AR-07); retired generations can never
+  be redeployed.
+- `ROTATION_PROFILES` is empty: no tuple is qualified, so `trestle infra rotate`
+  writes a blocked rotation plan.
+- Tests: `infra-rotation.test.ts` 17 (blocking matrix with zero issuance calls;
+  happy path; termination at 6 states; lost response; partial cutover; undrained
+  jobs; inconclusive retirement; false 401 without control; replay; provider
+  rejection; stale pull and rollback after rotation; mismatched approval).
+  Mutation check: 5 deliberate weakenings each turned the suite red.
+
+## P10 — Hosted rotation qualification
+
+- Status: **blocked** on P07 hosted access and an authorized disposable credential.
+  Rotation execution remains unsupported; no completion is claimed.
+
+## P11 — Cloudflare
+
+- Status: **partial**. `DIRECT_WRITERS` records the generated scripts that already
+  write R2 buckets, Queues and Worker settings; the planner blocks a
+  Projects-owned resource of those kinds until intent records
+  `directWriterDisabled: true`. Generated scripts are unchanged and remain the
+  owners. Gaps (no Pages, Workflows, routes or Worker deployment in the catalog)
+  stay direct extensions. No per-operation hosted conformance exists.
+
+## P12 — Resend
+
+- Status: **partial**. Credentials projected to application consumers require a
+  recorded `least_privilege` scope in capability evidence; Resend's account-wide
+  key and Neon's owner URL are blocked from Workers until proven or derived.
+  Sender/domain/webhook management remains in the existing direct
+  `resend-status`/`resend-webhook` commands. Webhook signing-secret rotation is a
+  separate rotation unit. No live email was sent.
+
+## P13 — Adoption, tier changes, detach and destruction
+
+- Status: **partial** (semantics proven locally; execution blocked by evidence).
+- Module `infra/lifecycle.ts` and CLI `infra adopt|upgrade|detach|destroy`: exact-ID
+  plans with safeguards. Adoption needs an exact ID verified in the bound account,
+  no duplicate adoption, and a named previous writer. Tier changes need a fresh
+  price within a declared limit, flag account-wide plans, label downgrades
+  destructive and qualify tiers by provider. Detach stays blocked instead of
+  using a deleting command. Destroy needs `deletionPolicy: delete`, exact-ID
+  confirmation, a complete reference scan, drained work and verified restore, and
+  refuses when the name now resolves to a replacement (AR-11).
+- Tests: `infra-lifecycle.test.ts` 8; CLI planning test in `infra-cli-apply.test.ts`.
