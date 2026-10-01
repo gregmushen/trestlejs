@@ -26,8 +26,8 @@ hosted exit blocked), `blocked`.
 | P11 Cloudflare | partial | P09–P13 PR | Single-writer guard over generated scripts; per-operation hosted conformance blocked |
 | P12 Resend | partial | P09–P13 PR | Least-privilege projection rule; sender/domain/webhook stay direct extensions; hosted conformance blocked |
 | P13 lifecycle operations | partial | P09–P13 PR | Exact-ID adopt/tier/detach/destroy planning with safeguards; execution blocked by capability evidence |
-| P14 SetupPlan/CI/upgrades/docs | pending | — | |
-| P15 registry starter | pending | — | |
+| P14 SetupPlan/CI/upgrades/docs | partial | P14–P15 PR | SetupPlan v2 reference, CI trust check, docs, skill; preview automation blocked on hosted access |
+| P15 registry starter | blocked | P14–P15 PR | D-06: registry variant deferred (bootstrap provisions before Trestle approval and writes plaintext .env); manifest validator ready |
 | P16 release qualification | pending | — | |
 
 ## External prerequisites (consolidated)
@@ -352,3 +352,44 @@ local only, no account effect). Not authenticated.
   confirmation, a complete reference scan, drained work and verified restore, and
   refuses when the name now resolves to a replacement (AR-11).
 - Tests: `infra-lifecycle.test.ts` 8; CLI planning test in `infra-cli-apply.test.ts`.
+
+## P14 — SetupPlan, CI, upgrades and documentation
+
+- Status: **partial**.
+- SetupPlan: `schemaVersion: 2` adds only an optional `infrastructure` reference
+  (`.trestle/infrastructure.yaml`, remote environments). Version 1 plans cannot
+  carry it, `approved` fields stay rejected, external/destructive lists stay
+  rejected, and a newer schema version reports "requires a newer trestle CLI".
+  `trestle plan diff` lists infrastructure as `external` items from the same
+  planner; `trestle apply` records them as handed off and performs no remote work.
+- CI trust (`infra/ci-trust.ts`, surfaced as `ci.infra.trust` by `trestle ci
+  validate` only when a workflow runs `trestle infra`): privileged commands
+  (`apply`, `approve`, `operation resume`, `approver register`) must not be
+  reachable from untrusted triggers (pull requests from forks or the same
+  repository, `pull_request_target`, comments, `workflow_run`), must run in a
+  protected environment, and must not install with lifecycle scripts, run
+  application code, check out pull-request head code or interpolate event data.
+  The control-store secret may not appear in untrusted-trigger workflows. Branch
+  rules requiring review of workflow changes remain the primary control.
+- Upgrades: infrastructure files are opt-in; upgrading the package never creates
+  them, provisions, or moves credentials. v1 credential files are untouched; v2
+  envelopes are rejected by older CLIs. The Worker health field (P08) and the setup
+  skill section flow through the normal source upgrade.
+- Docs: `docs/STRIPE_PROJECTS.md` (canonical guide describing only installed
+  behavior), CLI README section, setup-skill section (both copies, parity test).
+- Not done (blocked): preview identity/TTL/cleanup automation and protected CI
+  apply/deploy/verify stages need a hosted target; `link` and public credential
+  pull remain unavailable.
+- Tests: `infra-setup-plan.test.ts` 4, `infra-ci.test.ts` 6.
+
+## P15 — Materialized starter and registry path
+
+- Status: **blocked (documented)** — see `docs/decisions/D-06-registry-bootstrap.md`.
+  `stripe projects build` provisions before any Trestle approval and writes
+  plaintext credentials (including an owner database URL) to `.env`, which
+  conflicts with Trestle custody; exact-ID adoption of bootstrap resources is
+  unsupported. No registry entry was submitted.
+- Ready: `infra/registry.ts` generates and validates a manifest from one pinned
+  release (40-character `ref`, recorded catalog service IDs, `--ignore-scripts`
+  install, no provisioning in install, no TanStack Start mislabel, secret scan).
+- Tests: `infra-registry.test.ts` 2.

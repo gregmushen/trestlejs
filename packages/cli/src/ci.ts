@@ -1,5 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+
+import { infraWorkflowIssues } from "./infra/ci-trust.js";
 import { parseProjectManifest } from "./core.js";
 import { wranglerEnvironmentBlock } from "./wrangler-config.js";
 
@@ -40,6 +42,19 @@ export async function validateCi(root: string): Promise<CiValidationReport> {
       checks.push(check(`ci.workflow.${workflow}.exists`, false, `${workflow} is missing`, relativePath));
     }
   }
+
+  // Only workflows that run trestle infra get the infrastructure trust check.
+  const workflowDirectory = path.join(root, ".github", "workflows");
+  const infraIssues: string[] = [];
+  let infraWorkflows = 0;
+  for (const file of await readdir(workflowDirectory).catch(() => [] as string[])) {
+    if (!/\.ya?ml$/u.test(file)) continue;
+    const source = await readFile(path.join(workflowDirectory, file), "utf8").catch(() => "");
+    if (!/\btrestle\b[^\n]*\binfra\b/u.test(source)) continue;
+    infraWorkflows += 1;
+    infraIssues.push(...infraWorkflowIssues(file, source));
+  }
+  if (infraWorkflows > 0) checks.push(check("ci.infra.trust", infraIssues.length === 0, infraIssues.length === 0 ? "infrastructure mutation runs only in protected, trusted jobs without untrusted code" : infraIssues.join("; ")));
 
   for (const [workflow, source] of sources) {
     const externalActions = [...source.matchAll(/^\s*-\s+uses:\s+([^@\s]+)@([^\s#]+)/gmu)]

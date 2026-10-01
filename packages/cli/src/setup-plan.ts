@@ -37,7 +37,8 @@ export const setupResourceSchema = z.object({
 }).strict();
 
 export const setupPlanSchema = z.object({
-  schemaVersion: z.literal(1),
+  // Version 2 adds only the optional infrastructure reference; version 1 plans can never carry it.
+  schemaVersion: z.union([z.literal(1), z.literal(2)]),
   minimumTrestleVersion: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u),
   project: z.object({ name: z.string().min(1) }).strict(),
   // Optional for plans created before the admin application was part of SetupPlan.
@@ -69,9 +70,19 @@ export const setupPlanSchema = z.object({
   // Accepted only when empty, so schemaVersion 1 plans written by earlier releases still parse.
   externalResources: z.array(z.unknown()).max(0, "externalResources are not supported; provision provider resources outside the SetupPlan").optional(),
   destructiveOperations: z.array(z.unknown()).max(0, "destructiveOperations are not supported; perform destructive changes explicitly outside the SetupPlan").optional(),
+  /**
+   * Version 2 only: references Stripe Projects infrastructure intent so
+   * `trestle plan diff` can show it. `trestle apply` never executes it; remote
+   * changes run only through an approved `trestle infra apply`.
+   */
+  infrastructure: z.object({
+    intent: z.literal(".trestle/infrastructure.yaml"),
+    environments: z.array(environmentNameSchema.exclude(["local"])).min(1),
+  }).strict().optional(),
   // Accepted for schemaVersion 1 compatibility; ignored by plan/apply.
   verification: z.object({ commands: z.array(z.string().min(1)).default([]) }).strict().optional(),
 }).strict().superRefine((plan, context) => {
+  if (plan.infrastructure && plan.schemaVersion !== 2) context.addIssue({ code: "custom", path: ["infrastructure"], message: "infrastructure references require schemaVersion 2; version 1 plans stay source-only" });
   if (plan.apps.admin !== undefined && plan.apps.admin !== plan.capabilities.admin) {
     context.addIssue({ code: "custom", path: ["apps", "admin"], message: "apps.admin and capabilities.admin must agree" });
   }
@@ -120,6 +131,8 @@ export function parseSetupPlan(input: string): SetupPlan {
   } catch (error) {
     throw new SetupPlanError(`SetupPlan is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
+  const version = (document as { schemaVersion?: unknown } | null)?.schemaVersion;
+  if (typeof version === "number" && version > 2) throw new SetupPlanError(`SetupPlan schemaVersion ${version} requires a newer trestle CLI; this CLI understands versions 1 and 2`);
   const result = setupPlanSchema.safeParse(document);
   if (!result.success) throw new SetupPlanError("SetupPlan is invalid", result.error.issues);
   return result.data;

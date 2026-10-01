@@ -30,6 +30,19 @@ trestle --experimental payments stripe sync --env staging
 trestle logs --env staging --status error
 ```
 
+Infrastructure lifecycle through Stripe Projects is experimental and separate
+from customer billing:
+
+```bash
+trestle --experimental infra catalog neon
+trestle --experimental infra plan --env staging
+trestle --experimental infra doctor --env staging
+```
+
+Remote changes need an independent PostgreSQL control store, a signed approval
+and verified provider evidence; see
+[docs/STRIPE_PROJECTS.md](https://github.com/gregmushen/trestlejs/blob/main/docs/STRIPE_PROJECTS.md).
+
 `trestle logs` displays a bounded projection of Trestle semantic events, not
 raw Cloudflare requests, exception text, or arbitrary console output.
 
