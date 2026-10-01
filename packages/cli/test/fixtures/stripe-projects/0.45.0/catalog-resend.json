@@ -1,0 +1,72 @@
+{
+  "ok": true,
+  "command": "projects catalog",
+  "version": "0.1",
+  "data": {
+    "provider": {
+      "id": "prvdr_61VFXTzsszWb1r1S25KMa",
+      "name": "Resend",
+      "capabilities": [
+        "resources:deprovision",
+        "resources:update_service",
+        "account_entitlements:materialize"
+      ],
+      "existing_resource_linking": "unsupported"
+    },
+    "services": [
+      {
+        "id": "prvsvc_61VFx44fZQDj8o3cu5FCa",
+        "service_id": "free",
+        "kind": "plan",
+        "scope": "account",
+        "availability": "available",
+        "categories": [
+          "email"
+        ],
+        "pricing": {
+          "type": "free"
+        },
+        "updateable_to": [
+          "pro",
+          "free"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61VFx44O170Djoah259to",
+        "service_id": "pro",
+        "kind": "plan",
+        "scope": "account",
+        "availability": "available",
+        "categories": [
+          "email"
+        ],
+        "pricing": {
+          "type": "paid"
+        },
+        "updateable_to": [
+          "free",
+          "pro"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61VFx44H4RKHoEjct5QIi",
+        "service_id": "email",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "email"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "email"
+        ],
+        "livemode": true
+      }
+    ]
+  }
+}
