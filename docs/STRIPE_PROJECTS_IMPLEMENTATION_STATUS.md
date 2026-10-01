@@ -12,8 +12,8 @@ hosted exit blocked), `blocked`.
 
 | Package | Status | PR / commit | Notes |
 | --- | --- | --- | --- |
-| P00 baseline | in_progress | — | Baseline recorded below |
-| P01 capabilities | pending | — | |
+| P00 baseline | complete | #226 | Baseline recorded below |
+| P01 capabilities | partial | P01 PR | Read-only matrix, fixtures, D-01/D-05; authenticated and hosted probes blocked on login |
 | P02 contracts/planner | pending | — | |
 | P03 read-only adapter/CLI | pending | — | |
 | P04 approval/control store | pending | — | |
@@ -71,10 +71,33 @@ bound to `127.0.0.1:56543`, never a shared or production database):
 | `pnpm check` | pass — 35 files, 287 tests |
 | `pnpm check:upgrade` | pass — alpha.135 → beta.1, two-tenant RLS verified |
 | `pnpm check:customized-upgrade` | pass — beta.3 → beta.4 |
-| `pnpm check:generated` | running (see below) |
+| `pnpm check:generated` | pass — generated release canary (≈25 min) |
 
-Pre-existing failures: none observed so far.
+Pre-existing failures: none.
+
+Discrepancy: the spec links `PROOF_ORIENTED_ENGINEERING_SPEC.md`, which is not on
+main (it exists only as untracked work in the authoring checkout). Not imported.
 
 Toolchain observed for P01: Stripe CLI 1.51.0 (Homebrew), Projects plugin
 0.45.0 installed during P00/P01 discovery (`stripe plugin install projects`;
 local only, no account effect). Not authenticated.
+
+## P01 — Capability and side-effect matrix
+
+- Status: **partial**. Local exit met: reviewed matrix, complete side-effect
+  descriptors, sanitized fixtures, version-mismatch handling. Authenticated read
+  schemas and every hosted behavior remain `unknown` (no Stripe login on this host).
+- Artifacts: `docs/STRIPE_PROJECTS_CAPABILITIES.md`,
+  `docs/decisions/D-01-projects-toolchain.md`, `docs/decisions/D-05-issuance-recovery.md`,
+  `packages/cli/test/fixtures/stripe-projects/0.45.0/`,
+  `packages/cli/src/infra/capabilities.ts`, `capability-matrix.ts`.
+- Key findings: `catalog` (read) writes `.gitignore` + `.projects/cache` into its
+  cwd; no `--env` flag on any mutation (active environment is per-checkout state);
+  `add`/`rotate`/`upgrade`/membership changes auto-write plaintext dotenv;
+  `existing_resource_linking: unsupported` for Neon, Cloudflare, Resend; Resend
+  plans are account-scoped; rotation invalidation/overlap/re-retrieval undocumented.
+- Tests: `infra-capabilities.test.ts` 9/9. Mutation check: three deliberate
+  weakenings (mutation allowed with documented evidence, toolchain drift ignored,
+  expiry disabled) each turned the suite red; one surviving mutant led to an added
+  assertion.
+- Next: authenticated read fixtures and sandbox probes once login/authorization exist.

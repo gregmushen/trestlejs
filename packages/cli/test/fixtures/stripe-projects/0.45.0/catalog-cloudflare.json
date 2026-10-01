@@ -1,0 +1,239 @@
+{
+  "ok": true,
+  "command": "projects catalog",
+  "version": "0.1",
+  "data": {
+    "provider": {
+      "id": "prvdr_61UQRSWMdrciFdBNs5Ipc",
+      "name": "Cloudflare",
+      "capabilities": [
+        "resources:deprovision"
+      ],
+      "existing_resource_linking": "unsupported"
+    },
+    "services": [
+      {
+        "id": "prvsvc_61UaJW8BdsziPb1Lc55GC",
+        "service_id": "r2:bucket",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "storage"
+        ],
+        "pricing": {
+          "type": "paid"
+        },
+        "updateable_to": [
+          "r2:bucket"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UW2TqpDit2EIK1w5WpE",
+        "service_id": "workers-ai",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "ai"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "workers:free",
+          "workers:paid",
+          "workers-ai"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UW2TqgWxijDfg9P5Xbk",
+        "service_id": "browser-run",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "browser"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "workers:free",
+          "workers:paid",
+          "browser-run"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UW2Tqd0Fe6jSC4S5AYq",
+        "service_id": "hyperdrive",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "database"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "workers:free",
+          "workers:paid",
+          "hyperdrive"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UW2TqQ7sd2GjB835U1Y",
+        "service_id": "kv",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "cache"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "workers:free",
+          "workers:paid",
+          "kv"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UW2Tq9ugK2FT0I5598a",
+        "service_id": "d1",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "database"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "workers:free",
+          "workers:paid",
+          "d1"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UW2Tq86s2X4k0z05XcG",
+        "service_id": "queues",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "queue"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "workers:free",
+          "workers:paid",
+          "queues"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UW2Tq6WM39IHTiG5Foe",
+        "service_id": "containers",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "compute"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "workers:free",
+          "workers:paid",
+          "containers"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UVFmVrDpVhvoGC653ZY",
+        "service_id": "workers:free",
+        "kind": "plan",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "compute"
+        ],
+        "pricing": {
+          "type": "free"
+        },
+        "updateable_to": [
+          "workers:paid",
+          "workers:free"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UTPWiUOQ0dhqFtK5Eeu",
+        "service_id": "registrar:domain",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "domains"
+        ],
+        "pricing": {
+          "type": "paid"
+        },
+        "updateable_to": [
+          "registrar:domain"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UTAXcjeOFQACWH25PEW",
+        "service_id": "workers:paid",
+        "kind": "plan",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "compute"
+        ],
+        "pricing": {
+          "type": "paid"
+        },
+        "updateable_to": [
+          "workers:free",
+          "workers:paid"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UQcGg82uRNYkUxp5QDY",
+        "service_id": "workers",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "compute"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "workers:free",
+          "workers:paid",
+          "workers"
+        ],
+        "livemode": true
+      }
+    ]
+  }
+}

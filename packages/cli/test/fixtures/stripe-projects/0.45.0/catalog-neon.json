@@ -1,0 +1,72 @@
+{
+  "ok": true,
+  "command": "projects catalog",
+  "version": "0.1",
+  "data": {
+    "provider": {
+      "id": "prvdr_61UH8uNXFdoJUJOtT54AC",
+      "name": "Neon",
+      "capabilities": [
+        "resources:deprovision",
+        "resources:update_service"
+      ],
+      "existing_resource_linking": "unsupported"
+    },
+    "services": [
+      {
+        "id": "prvsvc_61UWwfdl8fjbyyOqy52ZM",
+        "service_id": "launch",
+        "kind": "plan",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "database"
+        ],
+        "pricing": {
+          "type": "paid"
+        },
+        "updateable_to": [
+          "launch",
+          "free"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UWdwLvsAGbqYdDW59u4",
+        "service_id": "free",
+        "kind": "plan",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "database"
+        ],
+        "pricing": {
+          "type": "free"
+        },
+        "updateable_to": [
+          "launch",
+          "free"
+        ],
+        "livemode": true
+      },
+      {
+        "id": "prvsvc_61UM1Z1aN2VWQvjsu5BU0",
+        "service_id": "postgres",
+        "kind": "deployable",
+        "scope": "project",
+        "availability": "available",
+        "categories": [
+          "database",
+          "auth"
+        ],
+        "pricing": {
+          "type": "component"
+        },
+        "updateable_to": [
+          "postgres"
+        ],
+        "livemode": true
+      }
+    ]
+  }
+}

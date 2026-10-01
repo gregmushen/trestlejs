@@ -1,0 +1,15 @@
+{
+  "ok": false,
+  "command": "projects status",
+  "version": "0.1",
+  "error": {
+    "code": "NO_PROJECT_CONFIG",
+    "message": "No project initialized in this directory. Run `stripe projects init` first."
+  },
+  "warnings": [],
+  "next_steps": [],
+  "meta": {
+    "authenticated": false,
+    "project_initialized": false
+  }
+}
