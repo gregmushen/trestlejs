@@ -41,6 +41,7 @@ import { wranglerEnvironmentBlock, wranglerStringVariable } from "./wrangler-con
 import { workflowArguments } from "./workflows.js";
 import { applyUpgrade, formatUpgradePlan, planUpgrade } from "./upgrade.js";
 import { formatProviderStatuses, providerStatuses } from "./providers.js";
+import { registerInfraCommands } from "./infra/commands.js";
 import { evidenceReport, formatEvidenceReport, readLedger, recordEvidence, starterLedger, writeLedger } from "./evidence.js";
 import { enableJobRuntime, useCloudflareRuntime } from "./upgrade-source.js";
 import { enableConnectionBackend } from "./integrations.js";
@@ -1292,6 +1293,8 @@ export function createProgram(runtime: CliRuntime): Command {
       else runtime.stdout(`${formatProviderStatuses(statuses)}\n`);
       if (blocking.length) throw new CliFailure(`${blocking.length} provider${blocking.length === 1 ? " is" : "s are"} not ready for ${options.env}`, 1);
     });
+
+  registerInfraCommands(experimental(program.command("infra").description("infrastructure lifecycle through Stripe Projects: catalog, plan, status and read-only doctor"), runtime), runtime);
 
   const evidence = program.command("evidence").description("track falsifiable implementation and release claims with recorded proof");
   evidence.command("init")

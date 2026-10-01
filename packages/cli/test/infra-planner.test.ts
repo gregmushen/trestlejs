@@ -49,6 +49,10 @@ describe("infrastructure intent schema", () => {
     expect(() => parseIntent(stringify({ ...intentDocument, environments: { local: { projectsBinding: "x", resources: {} } } }))).toThrow(/local development never uses remote infrastructure/u);
     expect(() => parseIntent(stringify({ ...intentDocument, approved: true }))).toThrow(/invalid/u);
     expect(() => parseIntent("schemaVersion: 1\nschemaVersion: 1\n")).toThrow(/not valid YAML/u);
+    let message = "";
+    try { parseIntent("schemaVersion: 1\nbad: [sk_live_ABCDEFGH12345678 postgres://owner:hunter2@h/db\n  - : :\n"); } catch (error) { message = String(error); }
+    expect(message).toMatch(/not valid YAML \(line \d+, column \d+\)/u);
+    expect(message).not.toMatch(/sk_live_|hunter2/u);
     const adopt = structuredClone(intentDocument) as unknown as { environments: { staging: { resources: Record<string, Record<string, unknown>> } } };
     adopt.environments.staging.resources.database!.disposition = "adopt";
     expect(() => parseIntent(stringify(adopt))).toThrow(/adoption requires an exact externalId/u);
