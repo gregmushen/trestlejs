@@ -25,6 +25,12 @@ import { planAdopt, planDestroy, planDetach, planTierChange, type LifecyclePlan 
 import { planRotation } from "./rotation.js";
 import { rotationProfileFor } from "./capability-matrix.js";
 import { consumerRegistry } from "./consumers.js";
+import { setupDatabase, type ScriptRunner } from "./database-setup.js";
+import { deployCredentials } from "./deployment.js";
+import { rotateRuntimeCredential } from "./runtime-rotation.js";
+import { OperationalHealthProbe, WranglerDeployer } from "./wrangler-deployer.js";
+import { redact } from "./redaction.js";
+import { runCommand } from "../processes.js";
 
 /** Test seams; production uses the real process runner and clock. */
 export type InfraRuntime = Readonly<{ runner?: ProcessRunner; now?: () => Date }>;
@@ -398,6 +404,105 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
       }
       runtime.stdout(`${JSON.stringify(structuredOutput({ rotation, executable: rotation.blockers.length === 0 }), null, 2)}\n`);
       if (rotation.blockers.length) throw new CliFailure(`rotation of ${credentialBinding} is blocked: ${rotation.blockers.join("; ")}`, 2);
+    });
+
+  // Template scripts run with only the variables we pass; output is captured and shown redacted on failure.
+  const scriptRunner: ScriptRunner = async (command, args, options) => {
+    try {
+      await runCommand(command, [...args], { cwd: options.cwd, env: { ...options.env }, stdio: "pipe" });
+    } catch (error) {
+      throw new CliFailure(`${command} ${args.join(" ")} failed: ${redact(error instanceof Error ? error.message : String(error)).slice(-400)}`);
+    }
+  };
+  const operatorPath = () => [path.dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(":");
+  const bindingFor = async (root: string, environment: InfraEnvironment) => {
+    const { bindings } = await readInfrastructure(root);
+    const store = await controlStore();
+    const committed = await store.readGeneration(`bindings:${bindings.environments[environment]?.trestleProjectId ?? ""}:${environment}`);
+    const binding = (committed?.data.binding as typeof bindings.environments[InfraEnvironment] | undefined) ?? bindings.environments[environment];
+    if (!binding) { await store.close(); throw new CliFailure(`${environment} has no binding`, 2); }
+    return { store, binding };
+  };
+  const workerConsumers = (manifest: Parameters<typeof consumerRegistry>[0]) => [
+    ...(manifest.apps.worker ? [{ id: "worker" as const, requiresNewConnection: true, plane: "application" as const }] : []),
+    ...(manifest.capabilities.admin && manifest.apps.admin ? [{ id: "admin" as const, requiresNewConnection: true, plane: "application" as const }] : []),
+  ];
+
+  const database = infra.command("database").description("connect a provisioned database to the application's migrations and runtime role");
+  database.command("setup")
+    .description("run migrations and role setup with the operator-only owner credential, then commit only the verified runtime credential for deployment")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .requiredOption("--resource <name>", "logical database resource in .trestle/infrastructure.yaml")
+    .option("--runtime-role <role>", "restricted runtime role name", "trestle_runtime")
+    .option("--yes", "confirm running migrations against the provisioned database")
+    .action(async (options: { env: InfraEnvironment; resource: string; runtimeRole: string; yes?: boolean }, command: Command) => {
+      if (!options.yes) throw new CliFailure("database setup runs migrations against the provisioned database; rerun with --yes");
+      const context = await projectContext(command, runtime);
+      const { store, binding } = await bindingFor(context.root, options.env);
+      try {
+        const bound = binding.resources[options.resource];
+        if (!bound || bound.provider !== "neon") throw new CliFailure(`${options.resource} is not a bound Neon resource`, 2);
+        const result = await setupDatabase({ root: context.root, store, masterKey: await resolveMasterKey(context.root, options.env, environmentOf("TRESTLE_MASTER_KEY")), projectId: binding.trestleProjectId, environment: options.env, resource: options.resource, externalId: bound.externalId, runtimeRole: options.runtimeRole, consumers: workerConsumers(context.manifest).map((consumer) => consumer.id), run: scriptRunner, path: operatorPath(), now });
+        runtime.stdout(`${JSON.stringify(structuredOutput(result), null, 2)}\n`);
+      } finally {
+        await store.close();
+      }
+    });
+
+  infra.command("deploy")
+    .description("project the committed deployment snapshot to each Worker with Wrangler and verify the new generation through a fresh database connection")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .requiredOption("--worker-target <name>", "reviewed Worker name; must match the Wrangler config")
+    .requiredOption("--worker-url <url>", "https base URL of the deployed Worker")
+    .requiredOption("--artifact-digest <digest>", "sha256 digest of the deployed application artifact")
+    .option("--runtime-role <role>", "role the Worker must connect as", "trestle_runtime")
+    .action(async (options: { env: InfraEnvironment; workerTarget: string; workerUrl: string; artifactDigest: string; runtimeRole: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const { store, binding } = await bindingFor(context.root, options.env);
+      try {
+        const record = await deployCredentials({
+          store, scope: { projectId: binding.trestleProjectId, environment: options.env, purpose: "deployment" }, masterKey: await resolveMasterKey(context.root, options.env, environmentOf("TRESTLE_MASTER_KEY")),
+          consumers: workerConsumers(context.manifest).filter((consumer) => consumer.id === "worker"), expectedTargets: { worker: options.workerTarget },
+          deployer: new WranglerDeployer(context.root, context.manifest, options.env, (cmd, args, opts) => runCommand(cmd, args, { ...opts, stdio: "pipe" }), process.env),
+          probes: new OperationalHealthProbe({ worker: options.workerUrl }, options.runtimeRole), artifactDigest: options.artifactDigest, configDigest: binding.projectsProjectId, now,
+        });
+        runtime.stdout(`${JSON.stringify(structuredOutput(record), null, 2)}\n`);
+        if (!record.verified) throw new CliFailure("deployment is not verified on the new credential generation", 3);
+      } finally {
+        await store.close();
+      }
+    });
+
+  database.command("rotate-runtime")
+    .description("rotate the runtime database password, cut Workers over, prove the old password is rejected and retire it")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .requiredOption("--resource <name>", "logical database resource")
+    .requiredOption("--worker-target <name>", "reviewed Worker name")
+    .requiredOption("--worker-url <url>", "https base URL of the deployed Worker")
+    .requiredOption("--artifact-digest <digest>", "sha256 digest of the deployed artifact")
+    .requiredOption("--accept-interruption <reason>", "PostgreSQL rejects the old password immediately; accept the brief interruption until Workers are cut over")
+    .requiredOption("--actor <name>", "operator recorded with the interruption acceptance")
+    .option("--runtime-role <role>", "runtime role", "trestle_runtime")
+    .option("--resume <operation-id>", "resume an interrupted rotation from its sealed recovery envelope")
+    .action(async (options: { env: InfraEnvironment; resource: string; workerTarget: string; workerUrl: string; artifactDigest: string; acceptInterruption: string; actor: string; runtimeRole: string; resume?: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const { store, binding } = await bindingFor(context.root, options.env);
+      try {
+        const { default: postgres } = await import("postgres");
+        const result = await rotateRuntimeCredential({
+          root: context.root, store, masterKey: await resolveMasterKey(context.root, options.env, environmentOf("TRESTLE_MASTER_KEY")), projectId: binding.trestleProjectId, environment: options.env, resource: options.resource, runtimeRole: options.runtimeRole,
+          run: scriptRunner, path: operatorPath(), consumers: workerConsumers(context.manifest).filter((consumer) => consumer.id === "worker"), expectedTargets: { worker: options.workerTarget },
+          deployer: new WranglerDeployer(context.root, context.manifest, options.env, (cmd, args, opts) => runCommand(cmd, args, { ...opts, stdio: "pipe" }), process.env),
+          probes: new OperationalHealthProbe({ worker: options.workerUrl }, options.runtimeRole), artifactDigest: options.artifactDigest, configDigest: binding.projectsProjectId,
+          // Only PostgreSQL's invalid-password error counts as proof; anything else is inconclusive.
+          oldCredentialRejected: async (connection) => { const db = postgres(connection, { max: 1, onnotice: () => {}, connect_timeout: 15 }); try { await db.unsafe("select 1"); return "accepted"; } catch (error) { return (error as { code?: string }).code === "28P01" ? "rejected" : "inconclusive"; } finally { await db.end({ timeout: 2 }).catch(() => {}); } },
+          acceptInterruption: { actor: options.actor, reason: options.acceptInterruption }, ...(options.resume ? { resumeOperationId: options.resume } : {}), now,
+        });
+        runtime.stdout(`${JSON.stringify(structuredOutput(result), null, 2)}\n`);
+        if (result.state !== "completed") throw new CliFailure(`runtime rotation ended in ${result.state}`, result.state === "partial_cutover" ? 3 : 4);
+      } finally {
+        await store.close();
+      }
     });
 
   for (const [name, args, description, gate] of PENDING) {

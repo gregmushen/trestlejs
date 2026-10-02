@@ -16,7 +16,7 @@ import { createLogger, createMetrics, loggerSecretsFromEnvironment, safeErrorDia
 import { activeSupportView, applyBillingNotificationEvent, billingReconciliationRequestedEvent, createDatabase, emailDeliveryEvent, endSupportView, exchangeSupportHandoff, listWebhookAttempts, listWebhookDeliveries, listWebhookEndpoints, listWebhookSubscriptions, createTenantDatabase, newSupportToken, outboxApplicationConnectionString, PostgresEventInbox, PostgresOutboxStore, recordTenantEmailDeliveryEvent, recordTenantEmailUnsubscribe, replayTenantWebhookDelivery, requestBillingSubscriptionReconciliation, replaceWebhookSubscriptions, setWebhookEndpointState, WebhookSecretError, WebhookSecretService } from "@__TRESTLE_PROJECT_NAME__/db";
 import { applicationEventCatalog, type CloudflareQueueBinding, type EventEnvelope, type QueueSettlement } from "@__TRESTLE_PROJECT_NAME__/events";
 import { clearCapturedEmails, getCapturedEmail, listCapturedEmails, LocalBillingAdapter, LocalEmailAdapter, NativeWebhookDestinationError, verifyAndNormalizeStripeEvent, verifyResendWebhook } from "@__TRESTLE_PROJECT_NAME__/integrations";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { createQueueConsumer, createWorkflowQueueConsumer, EventConsumerRegistry, type QueueBatch } from "./async-runtime.js";
 import { maintainArtifacts } from "./artifact-maintenance.js";
 import { auditArtifactReferences } from "./artifact-reference-audit.js";
@@ -603,7 +603,26 @@ app.get("/api/health", (context) =>
   ),
 );
 
-app.get("/api/health/operational", (context) => context.json({
+/**
+ * `?probe=database` opens a fresh connection (never a pooled one) and reports only
+ * the connected role, so deployment verification can prove a new credential works
+ * and that the Worker runs as the restricted runtime role. Never returns secrets.
+ */
+async function databaseProbe(environment: WorkerEnvironment): Promise<{ freshConnection: boolean; role: string | null; error?: string }> {
+  if (!environment.DATABASE_URL) return { freshConnection: false, role: null, error: "not_configured" };
+  try {
+    const result = await createDatabase(environment.DATABASE_URL, environment.DATABASE_DRIVER).execute(sql`select current_user as role`);
+    const rows = (Array.isArray(result) ? result : (result as { rows?: unknown[] }).rows ?? []) as Array<{ role?: unknown }>;
+    const role = typeof rows[0]?.role === "string" ? rows[0].role : null;
+    return { freshConnection: true, role: role && /^[a-z_][a-z0-9_]{0,62}$/u.test(role) ? role : null };
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    return { freshConnection: false, role: null, error: typeof code === "string" && /^[0-9A-Z]{5}$/u.test(code) ? code : "connection_failed" };
+  }
+}
+
+app.get("/api/health/operational", async (context) => context.json({
+  ...(context.req.query("probe") === "database" ? { database: await databaseProbe(context.env as WorkerEnvironment) } : {}),
   status: "ok",
   environment: context.env.APP_ENV ?? "local",
   // Lets deployment verification tell a new revision from an old replica; never a secret.

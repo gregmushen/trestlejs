@@ -123,6 +123,14 @@ describe("worker routes", () => {
     expect(JSON.stringify(body)).not.toContain("secret@host");
   });
 
+  it("reports a database probe only when asked, without secrets", async () => {
+    const plain = await (await app.request("/api/health/operational", undefined, { ...environment, APP_ENV: "staging" })).json() as Record<string, unknown>;
+    expect(plain.database).toBeUndefined();
+    const probed = await (await app.request("/api/health/operational?probe=database", undefined, { ...environment, APP_ENV: "staging", DATABASE_URL: "postgres://runtime:secret-pw@127.0.0.1:1/none" })).json() as { database: { freshConnection: boolean; role: string | null; error?: string } };
+    expect(probed.database.freshConnection).toBe(false);
+    expect(JSON.stringify(probed)).not.toContain("secret-pw");
+  });
+
   it("logs validated Queue correlation and causation without raw payloads", async () => {
     const rawSecret = "untrusted-queue-payload-secret";
     const event = eventEnvelopeSchema.parse({ id: crypto.randomUUID(), name: "billing.checkout.completed", schemaVersion: 1,
