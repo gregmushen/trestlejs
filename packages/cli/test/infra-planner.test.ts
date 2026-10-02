@@ -133,7 +133,8 @@ describe("infrastructure planning", () => {
   it("blocks creation while capability evidence is not hosted-verified, without claiming support", () => {
     const plan = planInfrastructure({ intent, bindings: binding(), environment: "staging", observation: observation(), toolchain: SUPPORTED_TOOLCHAIN, now });
     expect(planIsExecutable(plan)).toBe(false);
-    expect(plan.operations[1]!.blockers.join("\n")).toMatch(/create: unknown: response-loss reconciliation/u);
+    // resend/email create is hosted-verified, but this intent declares no plan, so its cost is unknown.
+    expect(plan.operations[1]!.blockers.join("\n")).toMatch(/cost of resend\/email is unknown/u);
   });
 
   it("treats component pricing without a free plan, and account-scoped plans, as requiring authorization", () => {
@@ -246,7 +247,8 @@ describe("single writer and least-privilege projection (P11, P12)", () => {
 
   it("refuses to project an owner or unproven credential to application consumers", () => {
     const resend = { provider: "resend", service: "email", plan: "free", costLimit: { currency: "usd", monthlyMinor: 0 }, credentialBindings: { sending: { output: "RESEND_API_KEY", classification: "provider-managed", consumers: ["worker"] } } };
-    expect(plan(env({ email: resend })).operations[0]!.blockers.join(" ")).toMatch(/RESEND_API_KEY has unknown privilege/u);
+    // Hosted evidence: the Projects Resend key has full account access.
+    expect(plan(env({ email: resend })).operations[0]!.blockers.join(" ")).toMatch(/RESEND_API_KEY has owner privilege/u);
     expect(plan(env({ email: resend }), { RESEND_API_KEY: "owner" }).operations[0]!.blockers.join(" ")).toMatch(/owner privilege/u);
     expect(plan(env({ email: resend }), { RESEND_API_KEY: "least_privilege" }).operations[0]!.blockers).toEqual([]);
     const neon = { provider: "neon", service: "postgres", plan: "free", credentialBindings: { owner: { output: "DATABASE_URL", classification: "provider-managed", consumers: ["worker"] } } };

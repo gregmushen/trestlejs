@@ -47,13 +47,32 @@ function neonHosted(row: CapabilityRow): CapabilityRow {
   return row;
 }
 
+const HOSTED_AT_2 = "2026-10-02T04:00:00.000Z";
+
+/** Hosted observations for resend/email (2026-10-02, free plan, no email sent). */
+function resendHosted(row: CapabilityRow): CapabilityRow {
+  if (row.operation === "create") return { ...row, evidence: "hosted_verified", unknowns: [], observedAt: HOSTED_AT_2, credentialScopes: { RESEND_API_KEY: "owner" }, limitations: ["link created a Resend account without a browser step and materialized the account-wide free plan", "RESEND_API_KEY is not prefixed by the resource name", "the key has full account access (lists domains, audiences and API keys): operator-only"] };
+  if (row.operation === "inspect") return { ...row, evidence: "hosted_verified", observedAt: HOSTED_AT_2 };
+  if (row.operation === "rotate") return { ...row, evidence: "hosted_verified", unknowns: [], observedAt: HOSTED_AT_2, limitations: ["the old key is rejected immediately with 400 validation_error \"API key is invalid\" (a missing key is 401 missing_api_key)", "env pull re-retrieves the new key"] };
+  if (row.operation === "link") return { ...row, unknowns: ["link created a Resend account without a browser step (observed); provider account creation needs its own approved plan"] };
+  return row;
+}
+
+/** Hosted observations for cloudflare/workers (2026-10-02, workers:free). */
+function cloudflareHosted(row: CapabilityRow): CapabilityRow {
+  if (row.operation === "create") return { ...row, evidence: "hosted_verified", unknowns: [], observedAt: HOSTED_AT_2, limitations: ["link requires browser authentication with Cloudflare", "outputs are non-secret only (account ID, API base URL, dashboard URL, plan ID, workers.dev subdomain): no deploy token is issued, so deployment still needs direct Cloudflare authentication"] };
+  if (row.operation === "inspect") return { ...row, evidence: "hosted_verified", observedAt: HOSTED_AT_2 };
+  if (row.operation === "rotate") return { ...row, evidence: "unsupported", unknowns: [], observedAt: HOSTED_AT_2, limitations: ["rotate fails with provider_failure 404 Route not found; there is no credential to rotate"] };
+  return row;
+}
+
 export const PROJECTS_CAPABILITIES: readonly CapabilityRow[] = Object.freeze([
   ...rows("neon", "postgres", common(notLinkable)).map(neonHosted),
-  ...rows("cloudflare", "workers", common(notLinkable)),
+  ...rows("cloudflare", "workers", common(notLinkable)).map(cloudflareHosted),
   ...rows("cloudflare", "hyperdrive", common(notLinkable)),
   ...rows("cloudflare", "queues", common(notLinkable)),
   ...rows("cloudflare", "r2:bucket", common(notLinkable)),
-  ...rows("resend", "email", common(notLinkable)),
+  ...rows("resend", "email", common(notLinkable)).map(resendHosted),
 ]);
 
 export type CatalogService = Readonly<{ kind: "plan" | "deployable"; scope: "project" | "account"; pricing: "free" | "paid" | "component" }>;
@@ -98,6 +117,8 @@ export function capabilityFor(provider: string, service: string, operation: Infr
 export function rotationProfileFor(provider: string, service: string, resourceName: string): import("./rotation.js").RotationProfile | undefined {
   // Hosted 2026-10-02: immediate invalidation for new connections, single-output bundle, re-retrieval via env pull, 28P01 distinguishes rejection.
   if (provider === "neon" && service === "postgres") return { invalidation: "immediate", bundle: [`${resourceName.toUpperCase().replace(/-/gu, "_")}_CONNECTION_STRING`], reRetrieval: "proven", retirementProbe: true };
+  // Hosted 2026-10-02: immediate invalidation, single output, re-retrieval via env pull, 400 validation_error identifies a rejected key.
+  if (provider === "resend" && service === "email") return { invalidation: "immediate", bundle: ["RESEND_API_KEY"], reRetrieval: "proven", retirementProbe: true };
   return undefined;
 }
 

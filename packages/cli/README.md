@@ -56,7 +56,16 @@ yourself:
   `<name>-N` sibling already exists; pass `--allow-duplicate <reason> --actor
   <name>` only when a second resource is intended (the override is journaled).
 - **Linking can create provider accounts.** `stripe projects link neon
-  --accept-tos` created a new Neon account without any browser step.
+  --accept-tos` and `link resend --accept-tos` created new accounts without any
+  browser step; Resend's link also turned on its account-wide free plan.
+  Cloudflare requires a browser sign-in.
+- **The Resend key has full account access.** It can list domains, audiences and
+  API keys, not just send. Keep it operator-only. A rotated Resend key is
+  rejected with `400 validation_error` ("API key is invalid"), not `401`.
+- **Cloudflare Workers through Projects issues no deploy token.** You get account
+  ID, API and dashboard URLs and the workers.dev subdomain; deploying still needs
+  your own Cloudflare authentication (`wrangler login`), and `rotate` is not
+  supported.
 - **The Neon connection string is the database owner.** It connects as
   `neondb_owner`, which has `BYPASSRLS` and `CREATEROLE`, so row-level security
   does not apply to it. Keep it operator-only and give Workers a derived

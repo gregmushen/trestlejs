@@ -23,8 +23,8 @@ hosted exit blocked), `blocked`.
 | P08 deployment/consumers | partial | P08 PR | Consumer registry, projection, generation proof against fakes; hosted proof blocked on P07 |
 | P09 rotation fault model | complete | P09–P13 PR | Simulated strategies survive the crash matrix; unsupported strategies make no issuance call |
 | P10 hosted rotation | complete | P07 PR | neon/postgres rotation qualified; Trestle rotation recovered by re-retrieval and proved retirement |
-| P11 Cloudflare | partial | P09–P13 PR | Single-writer guard over generated scripts; per-operation hosted conformance blocked |
-| P12 Resend | partial | P09–P13 PR | Least-privilege projection rule; sender/domain/webhook stay direct extensions; hosted conformance blocked |
+| P11 Cloudflare | partial | Resend/Cloudflare PR | workers create hosted-verified (no deploy token issued); rotate unsupported; deployment not exercised |
+| P12 Resend | partial | Resend/Cloudflare PR | email create + rotate hosted-verified; key is full-access (operator-only); no email sent; sender/domain still direct |
 | P13 lifecycle operations | partial | P09–P13 PR | Exact-ID adopt/tier/detach/destroy planning with safeguards; execution blocked by capability evidence |
 | P14 SetupPlan/CI/upgrades/docs | partial | P14–P15 PR | SetupPlan v2 reference, CI trust check, docs, skill; preview automation blocked on hosted access |
 | P15 registry starter | blocked | P14–P15 PR | D-06: registry variant deferred (bootstrap provisions before Trestle approval and writes plaintext .env); manifest validator ready |
@@ -456,7 +456,7 @@ hosted provider proof yet.
 | 11 | Recover interrupted provisioning and rotation | Crash matrix and SIGKILL locally; hosted rotation resumed by re-retrieval without re-issuing | **Hosted verified** (rotation) + local |
 | 12 | Refuse account/environment drift | `infra-planner`, `infra-runner` | Local proof |
 | 13 | Adopt without recreating | `infra-lifecycle` planning; Projects reports adoption unsupported | Blocked (provider capability) |
-| 14 | Cloudflare/Resend through Projects with explicit extensions | Single-writer and least-privilege rules; direct commands retained | Hosted blocked (P11/P12) |
+| 14 | Cloudflare/Resend through Projects with explicit extensions | Hosted: Resend email and Cloudflare Workers provisioned through Projects; Resend rotation qualified; Cloudflare deploy needs direct auth (extension) | **Hosted verified** (provisioning) |
 | 15 | Authorize cost/tier changes without customer billing | `infra-lifecycle` tier planning, `infra-planner` cost rules | Local proof (planning) |
 | 16 | Retain or remove per lifecycle policy | `infra-lifecycle` destroy planning | Execution blocked (exact-ID delete unproven) |
 | 17 | Serve during a Projects outage | `infra-deployment` (no Projects path in deployment) | Hosted unverified |

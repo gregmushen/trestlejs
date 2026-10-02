@@ -48,13 +48,13 @@ describe("Stripe Projects capability evidence", () => {
     expect(Object.keys(COMMAND_EFFECTS)).not.toContain("billing add");
   });
 
-  it("allows no mutation without hosted evidence, and only the hosted-qualified Neon tuples", () => {
+  it("allows no mutation without hosted evidence, and only the hosted-qualified tuples", () => {
     const allowed = PROJECTS_CAPABILITIES.filter((row) => MUTATING.has(row.operation) && resolveCapability(row, SUPPORTED_TOOLCHAIN, now).allowed).map((row) => `${row.provider}/${row.service} ${row.operation}`);
-    expect(allowed).toEqual(["neon/postgres create", "neon/postgres rotate"]);
+    expect(allowed).toEqual(["neon/postgres create", "neon/postgres rotate", "cloudflare/workers create", "resend/email create", "resend/email rotate"]);
     for (const row of PROJECTS_CAPABILITIES.filter((candidate) => MUTATING.has(candidate.operation) && candidate.evidence !== "hosted_verified")) {
       expect(resolveCapability(row, SUPPORTED_TOOLCHAIN, now).allowed, `${row.provider}/${row.service} ${row.operation}`).toBe(false);
     }
-    const create = PROJECTS_CAPABILITIES.find((row) => row.provider === "resend" && row.operation === "create")!;
+    const create = PROJECTS_CAPABILITIES.find((row) => row.provider === "cloudflare" && row.service === "queues" && row.operation === "create")!;
     for (const evidence of ["documented", "locally_tested", "unknown"] as const) {
       expect(resolveCapability({ ...create, evidence, unknowns: [] }, SUPPORTED_TOOLCHAIN, now).allowed, evidence).toBe(false);
     }
@@ -63,7 +63,7 @@ describe("Stripe Projects capability evidence", () => {
   });
 
   it("treats rotation as blocked while invalidation and response-loss behavior are unknown", () => {
-    const rotate = PROJECTS_CAPABILITIES.find((row) => row.provider === "resend" && row.operation === "rotate")!;
+    const rotate = PROJECTS_CAPABILITIES.find((row) => row.provider === "cloudflare" && row.service === "queues" && row.operation === "rotate")!;
     const hosted = resolveCapability({ ...rotate, evidence: "hosted_verified" }, SUPPORTED_TOOLCHAIN, now);
     expect(hosted.allowed).toBe(false);
     expect(hosted.reasons).toEqual(expect.arrayContaining(["unknown: re-retrieval after response loss", "unknown: invalidation timing"]));
