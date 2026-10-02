@@ -137,6 +137,8 @@ export const observationSchema = z.object({
     plan: z.string().min(1).optional(),
     name: z.string().max(200).optional(),
   }).strict()),
+  /** Plans present in the project (provider-scoped; may be account-wide). */
+  plans: z.array(z.object({ provider: providerSchema, service: z.string().min(1), externalId: externalIdSchema }).strict()).default([]),
   /** False when discovery was partial; absence then proves nothing. */
   complete: z.boolean(),
 }).strict();

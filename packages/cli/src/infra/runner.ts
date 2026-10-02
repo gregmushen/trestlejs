@@ -258,6 +258,28 @@ async function executeCreate(operation: PlanOperation, deps: RunnerDeps & { hold
       await deps.store.release(context.reservationScope, reservation.fencingToken);
       return { outcome: "needs_intervention", messages: [...messages, `${operation.resource}: ${duplicates.map((candidate) => `${candidate.name} (${candidate.externalId})`).join(", ")} already exists`], nextStep: `Projects add is not idempotent and would create another ${resource.provider}/${resource.service}. Adopt or remove the existing resource, or rerun with --allow-duplicate <reason> --actor <name> if a second one is intended` };
     }
+    // Projects requires the declared plan before a service; provision it first as its own fenced effect.
+    if (resource.plan && !fresh.observation.plans.some((plan) => plan.provider === resource.provider && plan.service === resource.plan)) {
+      const planEffect = `${context.operationId}:${operation.resource}:plan:${attempt}`;
+      await deps.store.appendEvent(context.operationId, "infra.effect.intent", { resource: operation.resource, effectId: planEffect, command: "add", plan: resource.plan }, deps.now());
+      await deps.store.beginEffect(context.reservationScope, reservation.fencingToken, planEffect, deps.now());
+      const planOutcome = await deps.adapter.mutate("add", [`${resource.provider}/${resource.plan}`], {}, deps.workspace, [...new Set(operation.effects)]);
+      if (planOutcome.status === "unknown") {
+        await deps.store.markUncertain(context.reservationScope, reservation.fencingToken, deps.now()).catch(() => undefined);
+        await deps.store.appendEvent(context.operationId, "infra.effect.outcome_unknown", { resource: operation.resource, effectId: planEffect, reason: planOutcome.reason }, deps.now());
+        return { outcome: "outcome_unknown", messages: [...messages, `${operation.resource}: plan ${resource.plan}: ${planOutcome.reason}`], nextStep: `run trestle infra operation resume ${context.operationId}` };
+      }
+      reservation = await deps.store.completeEffect(context.reservationScope, reservation.fencingToken, planEffect, deps.now());
+      if (planOutcome.status === "rejected" && RETRYABLE_REJECTIONS.has(planOutcome.code) && attempt < maxAttempts) {
+        await deps.sleep(Math.min(30_000, 1000 * 2 ** (attempt - 1)));
+        continue;
+      }
+      if (planOutcome.status === "rejected") {
+        await deps.store.release(context.reservationScope, reservation.fencingToken);
+        return { outcome: "needs_intervention", messages: [...messages, `${operation.resource}: provider rejected plan ${resource.plan} (${planOutcome.code}): ${planOutcome.message}`], nextStep: "resolve the plan problem, then resume" };
+      }
+      await deps.store.appendEvent(context.operationId, "infra.plan.provisioned", { resource: operation.resource, plan: resource.plan }, deps.now());
+    }
     if (duplicates.length) await deps.store.appendEvent(context.operationId, "infra.duplicate.allowed", { resource: operation.resource, existing: duplicates.map((candidate) => candidate.externalId), actor: deps.allowDuplicate!.actor, reason: deps.allowDuplicate!.reason }, deps.now());
     await hook("before_intent");
     await deps.store.appendEvent(context.operationId, "infra.effect.intent", { resource: operation.resource, effectId, command: "add" }, deps.now());

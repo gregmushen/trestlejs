@@ -119,6 +119,7 @@ async function listTree(root: string, prefix = ""): Promise<string[]> {
 
 const catalogSchema = z.object({
   provider: z.object({ id: z.string(), name: z.string(), capabilities: z.array(z.string()), existing_resource_linking: z.string() }).passthrough(),
+  plans: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u), provider: z.string().min(1), service_id: z.string().min(1), status: z.string() }).passthrough()).default([]),
   services: z.array(z.object({ service_id: z.string(), kind: z.string(), scope: z.string(), availability: z.string(), pricing: z.object({ type: z.string() }).passthrough(), updateable_to: z.array(z.string()).default([]) }).passthrough()),
 }).passthrough();
 
@@ -259,6 +260,7 @@ export function parseStatus(input: unknown, now: Date): ObservationResult {
     observation: {
       observedAt: now.toISOString(), stripeAccountId: data.project.merchant_id, projectsProjectId: data.project.id, projectsEnvironment: data.active_environment,
       resources: services.filter((service) => known.has(service.provider.toLowerCase())).map((service) => ({ externalId: service.id, provider: service.provider.toLowerCase() as Observation["resources"][number]["provider"], service: service.service_id, name: service.name })),
+      plans: data.plans.filter((plan) => known.has(plan.provider.toLowerCase()) && plan.status === "complete").map((plan) => ({ provider: plan.provider.toLowerCase() as Observation["resources"][number]["provider"], service: plan.service_id, externalId: plan.id })),
       // A listing with services Trestle cannot classify, or still pending, is not proof of absence.
       complete: unknownProviders.length === 0 && services.every((service) => service.status === "complete"),
     },
@@ -270,6 +272,7 @@ const statusSchema = z.object({
   project: z.object({ id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u), merchant_id: z.string().regex(/^acct_[A-Za-z0-9]{6,}$/u) }).passthrough(),
   active_environment: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/u),
   environments: z.record(z.string(), z.object({ output: z.string(), resources: z.array(z.string()) }).passthrough()),
+  plans: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u), provider: z.string().min(1), service_id: z.string().min(1), status: z.string() }).passthrough()).default([]),
   services: z.array(z.object({
     id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u),
     name: z.string().max(200),

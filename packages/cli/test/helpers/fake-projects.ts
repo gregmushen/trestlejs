@@ -127,7 +127,8 @@ if (name === "status") {
     environments[name] = { output: local.outputs[name] || ".env", resources: live.map((resource) => resource.name) };
     for (const resource of live) services.push({ id: resource.id, name: resource.name, provider: display[resource.provider] || resource.provider, service_id: resource.service, status: behavior.incompleteStatus ? "provisioning" : "complete", environments: [name] });
   }
-  out({ ok: true, command: "projects status", version, data: { project: { id: local.projectId, name: project.name, merchant_id: data.accountId }, active_environment: environment, environments, services: behavior.incompleteStatus ? services.filter((service) => service.environments[0] !== environment).concat(services.filter((service) => service.environments[0] === environment).map((service) => ({ ...service, name: service.name + "-pending" }))) : services }, meta: { authenticated, project_initialized: true } });
+  const plans = (project.plans || []).map((plan) => ({ id: plan.id, provider: display[plan.provider] || plan.provider, service_id: plan.service, status: "complete" }));
+  out({ ok: true, command: "projects status", version, data: { project: { id: local.projectId, name: project.name, merchant_id: data.accountId }, active_environment: environment, environments, plans, services: behavior.incompleteStatus ? services.filter((service) => service.environments[0] !== environment).concat(services.filter((service) => service.environments[0] === environment).map((service) => ({ ...service, name: service.name + "-pending" }))) : services }, meta: { authenticated, project_initialized: true } });
   return finish(0);
 }
 if (!authenticated) { out({ ok: false, command: "projects " + name, version, error: { code: "NOT_AUTHENTICATED", message: "sign in first" }, meta: { authenticated: false } }); return finish(1); }
@@ -169,6 +170,15 @@ if (command[0] === "env" && args.includes("--pull")) {
 if (command[0] === "add") {
   if (applyFault(fault("add", "before"), version, name)) return;
   const [provider, service] = command[1].split("/");
+  if (/^(free|launch|pro|workers:free|workers:paid)$/.test(service)) {
+    project.plans = project.plans || [];
+    if (project.plans.some((plan) => plan.provider === provider && plan.service === service)) { out({ ok: false, command: "projects add", version, error: { code: "resource_count_constraint_exceeded", message: "plan exists" } }); return finish(1); }
+    project.plans.push({ id: provider + "_plan" + String(data.nextId++).padStart(4, "0"), provider, service });
+    effect(data, "addPlan");
+    writeJson(remoteFile, data);
+    out({ ok: true, command: "projects add", version, data: { service: { key: project.plans.at(-1).id, name: provider + "-plan", provider, service_id: service, status: "complete" } } });
+    return finish(0);
+  }
   const environment = activeEnvironment();
   const resource = { id: provider + "_res" + String(data.nextId++).padStart(4, "0"), name: flag("name") || service, provider, service, credentialVersion: 1 };
   project.environments[environment].resources.push(resource);
