@@ -70,7 +70,7 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
     return PostgresOperationStore.connect(url);
   };
 
-  const execute = async (root: string, environment: InfraEnvironment, planFile: string, approvalFile: string, operationId?: string, confirmAbsent?: { actor: string; reason: string }): Promise<ApplyResult> => {
+  const execute = async (root: string, environment: InfraEnvironment, planFile: string, approvalFile: string, operationId?: string, confirmAbsent?: { actor: string; reason: string }, allowDuplicate?: { actor: string; reason: string }): Promise<ApplyResult> => {
     if (!environmentOf("TRESTLE_INFRA_CONTROL_DATABASE_URL")) await controlStore();
     const plan = JSON.parse(await readFile(path.resolve(root, planFile), "utf8")) as InfraPlan;
     const approval = JSON.parse(await readFile(path.resolve(root, approvalFile), "utf8")) as SignedApproval;
@@ -84,7 +84,7 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
     const masterKey = await resolveMasterKey(root, environment, environmentOf("TRESTLE_MASTER_KEY"));
     const store = await controlStore();
     try {
-      return await applyPlan({ plan, approval, intent, bindings }, { store, adapter, workspace, projectRoot: root, masterKey, now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)), ...(confirmAbsent ? { confirmAbsent } : {}) });
+      return await applyPlan({ plan, approval, intent, bindings }, { store, adapter, workspace, projectRoot: root, masterKey, now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)), ...(confirmAbsent ? { confirmAbsent } : {}), ...(allowDuplicate ? { allowDuplicate } : {}) });
     } finally {
       await store.close();
     }
@@ -246,9 +246,13 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
     .argument("<plan-file>")
     .requiredOption("--env <environment>", "target environment", remoteEnvironment)
     .requiredOption("--approval <file>", "signed approval for this plan and operation")
-    .action(async (planFile: string, options: { env: InfraEnvironment; approval: string }, command: Command) => {
+    .option("--allow-duplicate <reason>", "create even if a resource with the same name already exists (Projects add is not idempotent)")
+    .option("--actor <name>", "operator name recorded with --allow-duplicate")
+    .action(async (planFile: string, options: { env: InfraEnvironment; approval: string; allowDuplicate?: string; actor?: string }, command: Command) => {
       const context = await projectContext(command, runtime);
-      report(await execute(context.root, options.env, planFile, options.approval));
+      if (options.allowDuplicate && !options.actor) throw new CliFailure("--allow-duplicate requires --actor");
+      if (options.allowDuplicate) runtime.stderr("Warning: --allow-duplicate lets apply create another resource even though one with the same name exists; the override is recorded in the operation journal.\n");
+      report(await execute(context.root, options.env, planFile, options.approval, undefined, undefined, options.allowDuplicate ? { actor: options.actor!, reason: options.allowDuplicate } : undefined));
     });
 
   infra.command("approve")
