@@ -164,3 +164,16 @@ Consequences: resend/email `create` and `rotate` are hosted-verified with the ke
 marked owner-privileged; cloudflare/workers `create` is hosted-verified and
 `rotate` unsupported. Deploying a Worker still needs direct Cloudflare
 authentication, because Projects issues no deploy credential.
+## Hosted Worker deployment (2026-10-02)
+
+After `wrangler login` (OAuth, greg@myscribbl.com) to the Cloudflare account that
+Projects created (account ID matched `WORKER_ACCOUNT_ID`), a minimal Worker
+`trestle-sp-hello` deployed to `https://trestle-sp-hello.greg-6b0.workers.dev`,
+matching the Projects `WORKER_WORKERS_DEV_SUBDOMAIN` (`greg-6b0`). It returned the
+non-secret `credentialGeneration` marker. Redeploying with a new marker served the
+new value within 3 seconds; no old-marker responses were observed in that run
+(one run, so old-replica behavior is not ruled out and verification still
+requires the marker, not a 200).
+
+Projects provisioning plus direct Wrangler authentication is the working path:
+Projects issues the account and subdomain, Wrangler holds the deploy authority.
