@@ -51,8 +51,10 @@ yourself:
 
 - **`add` is not idempotent.** Running `stripe projects add` twice with the same
   `--name` silently creates a second resource named `<name>-2`. Never retry a
-  timed-out `add`; `trestle infra apply` journals intent and reconciles by
-  observation instead of retrying.
+  timed-out `add`. `trestle infra apply` journals intent, reconciles by
+  observation instead of retrying, and refuses to create when the name or a
+  `<name>-N` sibling already exists; pass `--allow-duplicate <reason> --actor
+  <name>` only when a second resource is intended (the override is journaled).
 - **Linking can create provider accounts.** `stripe projects link neon
   --accept-tos` created a new Neon account without any browser step.
 - **The Neon connection string is the database owner.** It connects as
