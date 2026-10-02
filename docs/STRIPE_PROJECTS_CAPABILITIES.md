@@ -177,3 +177,35 @@ requires the marker, not a 200).
 
 Projects provisioning plus direct Wrangler authentication is the working path:
 Projects issues the account and subdomain, Wrangler holds the deploy authority.
+## Hosted end-to-end app run (2026-10-02)
+
+A freshly generated Trestle app (`create-trestlejs`, CLI from the packed tarball)
+ran the whole automated path against real infrastructure, free plans only:
+
+1. `trestle infra apply` provisioned the missing `neon/free` plan, then created
+   and bound `appdb` (journal: `plan.provisioned` before `resource.created`).
+2. `trestle infra database setup --resource appdb --yes` ran the app's real Drizzle
+   migrations and `runtime-role.ts bootstrap-managed|configure|verify` with the
+   operator-only owner credential, and committed only the `trestle_runtime`
+   credential to the deployment snapshot.
+3. Tenant isolation through the app's `tenant_record` table and the runtime
+   credential: each tenant saw only its rows, a cross-tenant insert was denied
+   (`42501`), a cross-tenant update affected 0 rows, unscoped reads were denied, and
+   the runtime role has no BYPASSRLS.
+4. The generated Worker deployed to the Projects-created Cloudflare account
+   (`wrangler deploy --env staging --secrets-file`, non-functional placeholders
+   for unused Resend/Stripe secrets). `trestle infra deploy` projected the runtime
+   credential and marker with `wrangler secret bulk` and verified it through
+   `/api/health/operational?probe=database` (fresh connection as
+   `trestle_runtime`). The first probe answered from the previous version: secret
+   updates take seconds to propagate, so deployment now re-probes within a
+   bounded window.
+5. `trestle infra database rotate-runtime` issued a new password, cut the Worker
+   over (generation 2 verified on a fresh connection), proved the old password
+   rejected, and retired generation 1.
+
+Cleanup: both Workers deleted; `appdb`, `email` and `worker` services and the
+Neon plan removed; all three providers unlinked. Left behind (free): the
+Cloudflare `workers:free` plan record (removing it after `unlink` requires a
+browser re-link; remove plans before unlinking) and Resend's account entitlement
+(`Provider-reported account entitlements cannot be removed directly`).
