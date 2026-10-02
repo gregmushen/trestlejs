@@ -12,7 +12,7 @@ until re-tested (spec §7, AR-14).
 | Stripe CLI | 1.51.0 (Homebrew), sha256 `47343eb86017b5b8bb65010de31f8b7b880b865e3c3fd3623ec045fe7cef19d4` |
 | Projects plugin | 0.45.0 at `~/.config/stripe/plugins/projects/0.45.0/stripe-cli-projects`, sha256 `187cbb898aed495a54aa357b29d71234105c15d29e1ec195019cc570d9b3bf77` |
 | JSON envelope | `{ ok, command, version: "0.1", data | error{code,message}, warnings, next_steps, meta }` |
-| Authentication on this host | `meta.authenticated: false` — no hosted observation possible |
+| Authentication on this host | 2026-10-01: authenticated to a Stripe **test-mode sandbox** (MyScribbl, Inc.); Projects requires live-mode context (below) |
 
 Sources: installed `--help` output for every subcommand, `catalog <provider>
 --json`, `status --json`, and [docs.stripe.com/projects](https://docs.stripe.com/projects).
@@ -98,3 +98,15 @@ domains other than registrar purchase, and Worker deployment itself.
 | `remove --only-credentials` effect | unknown | Provider maintainer | P13 sandbox |
 | CI token scopes | unknown | Release maintainer | P14 |
 | Executable signing provenance (beyond sha256 pin) | unknown | CLI maintainer | Check plugin distribution signatures; until then pin sha256 |
+
+## Hosted observations (2026-10-01, test-mode sandbox login)
+
+| Probe | Result | Consequence |
+| --- | --- | --- |
+| `projects list --json` with a test-mode CLI context | `PROJECTS_CONTEXT_MISMATCH` (`active_context_livemode: false`, `requested_livemode: true`) | Projects reads and project creation require **live-mode** Stripe credentials; a test sandbox alone cannot exercise Projects |
+| `projects init --testmode --preflight` | `INVALID_ARGUMENT`: `--testmode` on `init` requires `--from` in manual mode | Test-mode resources exist only for `add --testmode` and shared-stack imports; the Projects project itself lives in a live account |
+| `stripe sandbox create` restricted key with `STRIPE_API_KEY` | `403 forbidden`, needs `provisioning_project_read` | Unclaimed sandbox keys cannot call Projects |
+
+Hosted qualification therefore needs explicit authorization to use a live-mode
+Stripe account context (no charges for free plans, but real provider accounts
+and a real Projects project). It has not been granted; nothing was created.
