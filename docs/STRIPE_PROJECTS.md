@@ -29,18 +29,20 @@ for each provider, service and operation is in
 | `trestle infra operation show <id>` / `operation resume <id>` | Inspects or resumes an operation from its journal | Provider, only for qualified operations |
 | `trestle infra adopt`, `upgrade`, `detach`, `destroy` | Write exact-ID lifecycle plans with their safeguards | None |
 | `trestle infra rotate <credential-binding>` | Writes a rotation plan for the provider's real rotation unit and consumers | None |
+| `trestle infra database setup --resource <name> --yes` | Runs your Drizzle migrations and role scripts with the operator-only owner credential, then commits only the verified restricted runtime credential for Workers | Database (migrations, roles) |
+| `trestle infra deploy --worker-target <name> --worker-url <url> --artifact-digest <digest>` | Pushes the committed runtime credential and a generation marker with `wrangler secret bulk`, then verifies through `/api/health/operational?probe=database` | Worker secrets |
+| `trestle infra database rotate-runtime … --accept-interruption <reason> --actor <name>` | Rotates the runtime password, cuts Workers over, proves the old password is rejected and retires it; `--resume <operation-id>` recovers an interrupted run | Database role, Worker secrets |
 
 `trestle infra link` and `trestle infra credentials pull` exit with status 2 and
 the gate that blocks them.
 
-### Why apply is still blocked
+### What apply can do
 
-`apply` requires every operation in the plan to have hosted evidence for the
-pinned toolchain. Today no Projects mutation has hosted evidence (no account has
-been authorized for conformance runs), so `apply` stops at its preconditions.
-This is intentional: the executor, journal, approvals and recovery are
-implemented and tested against a fake provider, but a fake proves Trestle's
-behavior, not Stripe's or a provider's.
+`apply` requires every operation to have hosted evidence for the pinned
+toolchain. Qualified today: `neon/postgres` create and rotate,
+`cloudflare/workers` create, and `resend/email` create and rotate. Declared plans
+are provisioned before their services. Everything else stops at its
+preconditions with the reason.
 
 ## Concepts
 
