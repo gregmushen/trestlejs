@@ -3,7 +3,9 @@
  * Key names alone are not trusted (spec §24): values are scanned by content.
  */
 const CREDENTIAL_PATTERNS: readonly RegExp[] = [
-  /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{8,}/u,
+  // Stripe secret, restricted and publishable keys, including newer prefixes such as rkcs_.
+  /\b(?:sk|rk|pk|rkcs|sk_org|rk_org)_(?:live|test)_[A-Za-z0-9]{8,}/u,
+  /\b[a-z]{2,6}_(?:live|test)_[A-Za-z0-9]{24,}/u,
   /\bwhsec_[A-Za-z0-9+/=]{8,}/u,
   /\bre_[A-Za-z0-9_]{16,}/u,
   /\bnapi_[A-Za-z0-9]{16,}/u,

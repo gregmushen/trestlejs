@@ -4,7 +4,7 @@ import { findCredentialLeaves, looksLikeCredential, redact } from "../src/infra/
 
 describe("infrastructure redaction", () => {
   it("recognizes credentials by content rather than key name", () => {
-    for (const value of ["sk_live_ABCDEFGH12345678", "rk_test_ABCDEFGH12345678", "whsec_abcdefgh1234", "re_ABCDEFGHIJKLMNOPQRS", "napi_abcdefghijklmnop1234", "postgres://owner:pw@ep-cool.neon.tech/db", "https://user:token@example.com", "-----BEGIN RSA PRIVATE KEY-----"]) expect(looksLikeCredential(value), value).toBe(true);
+    for (const value of ["rkcs_test_51ULdABCDEFGHIJKLMNOPQRSTUVWX", "xyz_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ12", "sk_live_ABCDEFGH12345678", "rk_test_ABCDEFGH12345678", "whsec_abcdefgh1234", "re_ABCDEFGHIJKLMNOPQRS", "napi_abcdefghijklmnop1234", "postgres://owner:pw@ep-cool.neon.tech/db", "https://user:token@example.com", "-----BEGIN RSA PRIVATE KEY-----"]) expect(looksLikeCredential(value), value).toBe(true);
     for (const value of ["postgres://ep-cool.neon.tech/db", "neon/postgres", "DATABASE_URL", "acct_1234567890", "prvsvc_61UWwfdl8fjbyyOqy52ZM"]) expect(looksLikeCredential(value), value).toBe(false);
   });
 
