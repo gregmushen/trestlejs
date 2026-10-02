@@ -243,7 +243,8 @@ export function planInfrastructure(input: PlanInput): InfraPlan {
       if (writer && resource.lifecycleOwner === "stripe-projects" && !resource.directWriterDisabled) blockers.push(`${writer}; disable it for ${input.environment} and set directWriterDisabled: true before Projects owns ${name}`);
       for (const credential of Object.values(resource.credentialBindings)) {
         const applicationConsumers = credential.consumers.filter((consumer) => consumer !== "migrations" && consumer !== "ci");
-        const scope = row?.credentialScopes?.[credential.output] ?? "unknown";
+        const scopes = row?.credentialScopes ?? {};
+        const scope = scopes[credential.output] ?? Object.entries(scopes).find(([pattern]) => pattern.startsWith("*") && credential.output.endsWith(pattern.slice(1)))?.[1] ?? "unknown";
         if (applicationConsumers.length && scope !== "least_privilege") blockers.push(`${credential.output} has ${scope} privilege; only a proven least-privilege credential may reach ${applicationConsumers.join(", ")} (derive a scoped runtime credential instead)`);
       }
     }

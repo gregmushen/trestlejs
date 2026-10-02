@@ -19,10 +19,10 @@ hosted exit blocked), `blocked`.
 | P04 approval/control store | complete | P04 PR | Local exit (simulation) met; hosted enrollment pending |
 | P05 credential generations | complete | P05 PR | v2 envelope + CAS commit; public pull still unavailable |
 | P06 executor/fake provider | complete | P06 PR | Fake-provider crash/concurrency gates pass; real apply still gated by capability evidence |
-| P07 Neon hosted slice | blocked | — | Needs Stripe login + sandbox authorization + control DB (see prerequisites) |
+| P07 Neon hosted slice | complete | P07 PR | Real `trestle infra apply` created and bound Neon through Projects; RLS proven with a runtime role |
 | P08 deployment/consumers | partial | P08 PR | Consumer registry, projection, generation proof against fakes; hosted proof blocked on P07 |
 | P09 rotation fault model | complete | P09–P13 PR | Simulated strategies survive the crash matrix; unsupported strategies make no issuance call |
-| P10 hosted rotation | blocked | — | Needs P07 hosted access and a disposable credential; rotation execution stays unsupported |
+| P10 hosted rotation | complete | P07 PR | neon/postgres rotation qualified; Trestle rotation recovered by re-retrieval and proved retirement |
 | P11 Cloudflare | partial | P09–P13 PR | Single-writer guard over generated scripts; per-operation hosted conformance blocked |
 | P12 Resend | partial | P09–P13 PR | Least-privilege projection rule; sender/domain/webhook stay direct extensions; hosted conformance blocked |
 | P13 lifecycle operations | partial | P09–P13 PR | Exact-ID adopt/tier/detach/destroy planning with safeguards; execution blocked by capability evidence |
@@ -446,14 +446,14 @@ hosted provider proof yet.
 | 1 | Local app without a Projects account | `pnpm check`, `check:generated` with no provider accounts; infra is opt-in | Local proof |
 | 2 | Inspect supported operations and evidence | `trestle infra catalog`, `infra-capabilities`, `infra-readonly` | Local proof |
 | 3 | Plan without creating resources or exposing credentials | `infra-readonly` (zero mutating calls, plan 0600 and secret-free) | Local proof |
-| 4 | Provision Neon through Projects without duplicates | `infra-runner`, `infra-crash.integration` (fake provider) | Hosted blocked (P07) |
-| 5 | Least-privilege runtime access and forced RLS | Planner refuses owner URL for Workers; generated/upgrade checks prove two-tenant forced RLS locally | Hosted blocked (P07) |
-| 6 | Import into environment-bound encrypted storage | `infra-credentials`, `infra-runner` | Local proof (fake provider) |
+| 4 | Provision Neon through Projects without duplicates | Hosted: `trestle infra apply` created `tdb`, replay resumed with no second create; fakes for crash matrix | **Hosted verified** |
+| 5 | Least-privilege runtime access and forced RLS | Hosted: runtime role on the real Neon database, forced RLS, cross-tenant denial; owner URL proven BYPASSRLS | **Hosted verified** |
+| 6 | Import into environment-bound encrypted storage | Hosted: real outputs imported to an operator v2 snapshot, plaintext removed | **Hosted verified** |
 | 7 | Edit with vi and reveal without changing provider keys | `trestle secrets` unchanged; `infra-credentials` override rules | Local proof |
 | 8 | Deploy the artifact with only declared credentials | `infra-deployment` (fake host) | Hosted blocked (P08 hosted) |
-| 9 | Rotate and verify every consumer | `infra-rotation` (fake provider) | Hosted blocked (P10) |
-| 10 | Observe old-key rejection | `infra-rotation` (fake provider-specific probe) | Hosted blocked (P10) |
-| 11 | Recover interrupted provisioning and rotation | `infra-runner` crash matrix, `infra-crash.integration` SIGKILL, `infra-rotation` | Local proof |
+| 9 | Rotate and verify every consumer | Hosted: Trestle rotation of an operator-only credential (no deployed consumers); consumer cutover proven with fakes | Hosted (operator scope); deployed consumers blocked with P08 |
+| 10 | Observe old-key rejection | Hosted: old password `28P01`, new key accepted | **Hosted verified** |
+| 11 | Recover interrupted provisioning and rotation | Crash matrix and SIGKILL locally; hosted rotation resumed by re-retrieval without re-issuing | **Hosted verified** (rotation) + local |
 | 12 | Refuse account/environment drift | `infra-planner`, `infra-runner` | Local proof |
 | 13 | Adopt without recreating | `infra-lifecycle` planning; Projects reports adoption unsupported | Blocked (provider capability) |
 | 14 | Cloudflare/Resend through Projects with explicit extensions | Single-writer and least-privilege rules; direct commands retained | Hosted blocked (P11/P12) |
@@ -465,3 +465,28 @@ hosted provider proof yet.
 | 20 | Response-loss and stale-runner safety | AR-02/AR-03 tests | Local proof |
 | 21 | Prevent old deployments or pulls from restoring retired keys | AR-04/AR-08 tests | Local proof |
 | 22 | Distinguish Projects bootstrap from Trestle approval | D-06 | Blocked (registry deferred) |
+
+## P07 and P10 — hosted results (2026-10-02)
+
+- P07 **complete**: see "Hosted qualification run" in
+  `docs/STRIPE_PROJECTS_CAPABILITIES.md`. Code changes from evidence: real `status`
+  parser (`parseStatus`, real fixtures), created identity from `data.service.key`,
+  `ignoredOutputs` for reviewed non-secret outputs, neon/postgres `create`/`inspect`
+  hosted-verified with `*_CONNECTION_STRING` marked owner-privileged.
+- P10 **complete** for the single qualified tuple neon/postgres at plugin 0.45.0
+  (`rotationProfileFor`). Bug found by hosted run and fixed: rotation required
+  stable identifier outputs to change; now only the profile bundle must change
+  (`RotationPlan.rotates`), with a regression test. Response-loss recovery was
+  exercised for real (issued, not committed, resumed by re-retrieval, one issuance).
+- Still blocked: P08 hosted deployment (no Cloudflare target authorized),
+  P11/P12 hosted conformance, P13 exact-ID deletion (Projects `remove` takes a
+  name), P15 registry, P16 publication.
+- Cleanup: Neon databases `tdb`, `database`, accidental `database-2` and the
+  `neon-plan` removed; Neon unlinked; local plaintext outputs, vault caches, test
+  master key, approver key and the local control database deleted. Left: empty
+  Projects project `trestle-sp-test` (no delete command), empty Neon account, an
+  expiring unclaimed Stripe sandbox (`acct_1ULdNYDs6h0xbR0K`, 2026-10-08), and this
+  CLI logged in to the MyScribbl live account.
+- Incidents: the sandbox `rkcs_test_` key and two disposable scratch keys (test
+  master key, local approver key) were printed once in command output; all were
+  deleted, and redaction now covers the `rkcs_` prefix (#236).

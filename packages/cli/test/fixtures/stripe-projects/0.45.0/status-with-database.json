@@ -1,0 +1,90 @@
+{
+  "ok": true,
+  "command": "projects status",
+  "version": "0.1",
+  "data": {
+    "project": {
+      "id": "project_000000000000000000000000000000000000000000000000",
+      "name": "trestle-sp-test",
+      "merchant_id": "acct_0000000000000000",
+      "merchant_display_name": null,
+      "initialized_at": "2026-10-02T02:29:04.095Z",
+      "user_email": "user@example.test",
+      "user_email_verified": true,
+      "account_email": "account@example.test",
+      "account_email_verified": true
+    },
+    "active_environment": "staging",
+    "environments": {
+      "staging": {
+        "output": ".env.staging",
+        "resources": [
+          "database",
+          "neon-plan"
+        ]
+      },
+      "default": {
+        "output": ".env",
+        "resources": []
+      }
+    },
+    "providers": [
+      {
+        "account_request_id": "facctrq_61VVKDBsxKvKCLnON16TKA5mJ9SQQ3iEERz7fn4O0I5I",
+        "id": "prvdr_61UH8uNXFdoJUJOtT54AC",
+        "linked_at": "2026-10-02T02:31:23.016Z",
+        "name": "Neon",
+        "redirect_url": null,
+        "requested_at": "2026-10-02T02:31:23.016Z",
+        "status": "complete"
+      }
+    ],
+    "services": [
+      {
+        "configuration": {},
+        "created_at": "2026-10-02T02:31:46.946Z",
+        "environments": [
+          "staging"
+        ],
+        "id": "fres_61VVKDYh92foc8vru16TKA5mJ9SQQ3iEERz7fn4O0SUC",
+        "last_revealed_at": "2026-10-02T02:31:47.336Z",
+        "name": "database",
+        "pricing": "Free",
+        "provider": "Neon",
+        "provider_id": "prvdr_61UH8uNXFdoJUJOtT54AC",
+        "service_id": "postgres",
+        "status": "complete"
+      }
+    ],
+    "plans": [
+      {
+        "configuration": {},
+        "created_at": "2026-10-02T02:31:33.961Z",
+        "environments": [
+          "staging"
+        ],
+        "id": "fres_61VVKDNIwNnNvf5La16TKA5mJ9SQQ3iEERz7fn4O01Ky",
+        "last_revealed_at": "2026-10-02T02:31:34.356Z",
+        "name": "neon-plan",
+        "pricing": "Free",
+        "provider": "Neon",
+        "provider_id": "prvdr_61UH8uNXFdoJUJOtT54AC",
+        "service_id": "free",
+        "status": "complete"
+      }
+    ],
+    "summary": {
+      "provider_count": 1,
+      "service_count": 1,
+      "plan_count": 1
+    }
+  },
+  "warnings": [],
+  "next_steps": [
+    "stripe projects env"
+  ],
+  "meta": {
+    "authenticated": true,
+    "project_initialized": true
+  }
+}

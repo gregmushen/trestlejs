@@ -125,14 +125,15 @@ describe("infrastructure planning", () => {
   it("orders operations by dependency and leaves new identities unresolved until journaled", () => {
     const plan = planInfrastructure({ intent, bindings: binding(), environment: "staging", observation: observation(), toolchain: SUPPORTED_TOOLCHAIN, now });
     expect(plan.operations.map((operation) => operation.resource)).toEqual(["database", "email"]);
-    expect(plan.operations[0]).toMatchObject({ classification: "blocked", target: "pending:op-staging-database", capability: { operation: "create", allowed: false } });
+    // neon/postgres create is hosted-verified; the Resend email resource is not.
+    expect(plan.operations[0]).toMatchObject({ classification: "create", target: "pending:op-staging-database", capability: { operation: "create", allowed: true } });
     expect(plan.operations[1]!.dependsOn).toEqual(["op-staging-database"]);
   });
 
   it("blocks creation while capability evidence is not hosted-verified, without claiming support", () => {
     const plan = planInfrastructure({ intent, bindings: binding(), environment: "staging", observation: observation(), toolchain: SUPPORTED_TOOLCHAIN, now });
     expect(planIsExecutable(plan)).toBe(false);
-    expect(plan.operations[0]!.blockers.join("\n")).toMatch(/create: unknown: response-loss reconciliation/u);
+    expect(plan.operations[1]!.blockers.join("\n")).toMatch(/create: unknown: response-loss reconciliation/u);
   });
 
   it("treats component pricing without a free plan, and account-scoped plans, as requiring authorization", () => {

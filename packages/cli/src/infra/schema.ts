@@ -76,6 +76,8 @@ export const environmentIntentSchema = z.object({
   /** Logical name of the Projects project/environment pairing; resolved through bindings. */
   projectsBinding: logicalIdSchema,
   resources: z.record(logicalIdSchema, desiredResourceSchema).default({}),
+  /** Reviewed non-secret provider outputs (for example plan identifiers) that are tolerated but never imported. */
+  ignoredOutputs: z.array(envKeySchema).default([]),
 }).strict();
 
 export const infrastructureIntentSchema = z.object({

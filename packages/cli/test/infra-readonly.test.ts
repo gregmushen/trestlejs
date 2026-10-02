@@ -247,3 +247,15 @@ describe("trestle doctor integration", () => {
     expect(JSON.stringify(invalid)).not.toContain("sk_live_ABCDEFGH12345678");
   });
 });
+
+describe("real authenticated status (plugin 0.45.0, observed 2026-10-02)", () => {
+  it("parses the recorded empty project and database fixtures into observations", async () => {
+    const { parseStatus } = await import("../src/infra/adapters/stripe-projects.js");
+    const fixture = async (name: string) => (JSON.parse(await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "stripe-projects", "0.45.0", name), "utf8")) as { data: unknown }).data;
+    const now = new Date("2026-10-02T03:00:00.000Z");
+    expect(parseStatus(await fixture("status-empty-project.json"), now)).toMatchObject({ status: "ok", observation: { stripeAccountId: "acct_0000000000000000", projectsEnvironment: "staging", resources: [], complete: true } });
+    const withDatabase = parseStatus(await fixture("status-with-database.json"), now);
+    expect(withDatabase).toMatchObject({ status: "ok", observation: { resources: [{ provider: "neon", service: "postgres", name: "database", externalId: expect.stringMatching(/^fres_/u) }], complete: true } });
+    expect(parseStatus({ project: {} }, now)).toMatchObject({ status: "unknown" });
+  });
+});

@@ -278,8 +278,9 @@ async function executeCreate(operation: PlanOperation, deps: RunnerDeps & { hold
   return { outcome: "failed_retryable", messages, nextStep: "attempts exhausted" };
 }
 
+/** The created resource identity: `data.service.key` at plugin 0.45.0 (observed 2026-10-02). */
 function extractResourceId(data: unknown): string | undefined {
-  const id = (data as { resource?: { id?: unknown } } | undefined)?.resource?.id;
+  const id = (data as { service?: { key?: unknown } } | undefined)?.service?.key;
   return typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u.test(id) ? id : undefined;
 }
 
@@ -318,7 +319,7 @@ async function finishCreate(operation: PlanOperation, externalId: string, reserv
     }
     const outputFile = path.join(deps.workspace, context.binding.projectsEnvironment === "default" ? ".env" : `.env.${context.binding.projectsEnvironment}`);
     const environmentResources = context.intent.environments[context.environment]!.resources;
-    const siblingOutputs = Object.entries(environmentResources).filter(([name]) => name !== operation.resource).flatMap(([, other]) => Object.values(other.credentialBindings).map((credential) => credential.output));
+    const siblingOutputs = [...context.intent.environments[context.environment]!.ignoredOutputs, ...Object.entries(environmentResources).filter(([name]) => name !== operation.resource).flatMap(([, other]) => Object.values(other.credentialBindings).map((credential) => credential.output))];
     for (const purpose of ["operator", "deployment"] as SnapshotPurpose[]) {
       const mappings: OutputMapping[] = declared.filter(([, credential]) => (credential.classification === "operator-only") === (purpose === "operator")).map(([name, credential]) => ({ output: credential.output, as: credential.as ?? credential.output, classification: credential.classification, binding: name, provider: resource.provider, resource: externalId, consumers: credential.consumers }));
       if (!mappings.length) continue;

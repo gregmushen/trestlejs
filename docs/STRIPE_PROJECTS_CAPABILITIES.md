@@ -110,3 +110,40 @@ domains other than registrar purchase, and Worker deployment itself.
 Hosted qualification therefore needs explicit authorization to use a live-mode
 Stripe account context (no charges for free plans, but real provider accounts
 and a real Projects project). It has not been granted; nothing was created.
+
+## Hosted qualification run (2026-10-02, live-mode account, free plan only)
+
+Authorized scope: MyScribbl, Inc. live account, one Projects project
+(`trestle-sp-test`), Neon `free` plan, $0, Neon terms accepted, test resources
+removed afterwards. Toolchain: Stripe CLI 1.51.0, plugin 0.45.0 (pinned hash).
+
+| Step | Observation |
+| --- | --- |
+| Account onboarding | `init` first returned `ACCOUNT_NOT_ELIGIBLE` until Projects was enabled in the dashboard (browser step), then required `--yes` to confirm the merchant |
+| `link neon --accept-tos` | Completed **without a browser** and created a Neon account (`link_action: created`) |
+| `add neon/postgres --preflight` | No side effects; reported ToS, provider link and a required plan (`neon/free`) |
+| `add neon/free`, `add neon/postgres --name database` | Outputs prefixed by the logical name (`DATABASE_CONNECTION_STRING`, `DATABASE_PROJECT_ID`, …); the automatic pull renamed `NEON_ORG_ID` to `NEON_PLAN_ORG_ID`; response includes `files_modified`; identity is `data.service.key` (`fres_…`) |
+| Connection string | Direct endpoint, `sslmode=require`, role `neondb_owner` with **BYPASSRLS** and **CREATEROLE** |
+| Repeated `add` with the same name | **Not idempotent**: created a second database named `database-2` (removed) |
+| `rotate database` | Only `DATABASE_CONNECTION_STRING` changes; new connections with the old password fail with `28P01` immediately; an existing pooled connection keeps working; `env --pull` re-retrieves the new value |
+| `remove <name>` | Targets a name, not an immutable ID; rewrites the output file |
+| `unlink neon` | Deletes the provider connection; the Neon account itself remains |
+
+Evidence through Trestle itself:
+
+- `trestle infra apply` created and bound a Neon database (`tdb`) with a signed
+  approval against a PostgreSQL control store, imported its outputs into an
+  operator-only v2 snapshot, removed the plaintext output, and on replay of the
+  same approval resumed with no effect (one `tdb`; control-store dump contained no
+  connection strings).
+- Least-privilege runtime role with forced RLS on the real database: tenant A saw
+  only its rows, cross-tenant insert denied (`42501`), tenant B isolated, no rows
+  without tenant context, runtime role cannot disable RLS.
+- Rotation through Trestle's engine with the qualified profile: the first run
+  exposed a bug (stable identifier outputs were required to change) and stopped at
+  `outcome_unknown` without re-issuing; after the fix, resume recovered the issued
+  credential by re-retrieval, committed generation 2, proved retirement with
+  `28P01` plus a working new-key control, and retired generation 1.
+
+Remaining owned resources: the empty Projects project `trestle-sp-test` (no
+delete command in 0.45.0) and the empty Neon account created by `link`.

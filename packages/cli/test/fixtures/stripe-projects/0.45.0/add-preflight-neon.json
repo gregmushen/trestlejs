@@ -1,0 +1,43 @@
+[
+  {
+    "label": "Project initialized",
+    "pass": true,
+    "code": "PROJECT_NOT_INITIALIZED"
+  },
+  {
+    "label": "Stripe session authenticated",
+    "pass": true,
+    "code": "BROWSER_AUTH_REQUIRED"
+  },
+  {
+    "label": "Logged-in account matches project owner",
+    "pass": true,
+    "code": "MERCHANT_MISMATCH"
+  },
+  {
+    "label": "Resource mode resolved (live)",
+    "pass": true
+  },
+  {
+    "label": "Service \"neon/postgres\" found in catalog",
+    "pass": true
+  },
+  {
+    "label": "Provider ToS (Neon)",
+    "pass": false,
+    "code": "TOS_ACCEPTANCE_REQUIRED",
+    "remedy": "Pass --accept-tos to accept Neon terms of service."
+  },
+  {
+    "label": "Provider linking can proceed (Neon)",
+    "pass": false,
+    "code": "BROWSER_AUTH_REQUIRED",
+    "remedy": "Provider \"Neon\" is not yet linked, and this command cannot hand off provider browser authentication. Run `stripe projects link neon` in an interactive terminal first, then retry."
+  },
+  {
+    "label": "Required plan provisioned",
+    "pass": false,
+    "code": "PLAN_REQUIRED",
+    "remedy": "Provision a plan first: stripe projects add neon/free --testmode=false or stripe projects add neon/launch --testmode=false"
+  }
+]

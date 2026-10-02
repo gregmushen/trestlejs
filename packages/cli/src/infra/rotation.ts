@@ -36,7 +36,10 @@ export type RotationPlan = Readonly<{
   resource: string;
   resourceName: string;
   provider: string;
+  /** Every declared output of the resource; all are re-imported after rotation. */
   outputs: readonly string[];
+  /** Outputs the provider's rotation unit replaces; only these must change. */
+  rotates: readonly string[];
   consumers: readonly ConsumerId[];
   inventoryComplete: boolean;
   profile: RotationProfile;
@@ -81,7 +84,8 @@ export function planRotation(input: { intent: InfrastructureIntent; environment:
   if (unknownConsumers.length) blockers.push(`consumers without a deployment target: ${unknownConsumers.join(", ")}`);
   if (profile.invalidation === "overlap") blockers.push("overlap retirement needs a provider revoke operation, which Projects 0.45.0 does not expose");
   if (profile.invalidation === "immediate" && !profile.retirementProbe) blockers.push("no provider-specific probe can prove old-key retirement");
-  const body = { binding: input.credentialBinding, resource: bound.externalId, resourceName, provider: resource.provider, outputs, consumers, inventoryComplete: input.inventoryComplete, profile, downtimeExpected: profile.invalidation !== "overlap", blockers };
+  const rotates = [...(profile.bundle ?? [])].sort();
+  const body = { binding: input.credentialBinding, resource: bound.externalId, resourceName, provider: resource.provider, outputs, rotates, consumers, inventoryComplete: input.inventoryComplete, profile, downtimeExpected: profile.invalidation !== "overlap", blockers };
   return { ...body, digest: canonicalDigest(body) };
 }
 
@@ -198,10 +202,12 @@ export async function rotateCredential(input: { rotation: RotationPlan; plan: In
   // Issuance: at most one provider call per operation, unless an operator confirms the earlier one never happened.
   if (!reached.has("new_issued") && !reached.has("encrypted_snapshot_saved")) {
     const mappings: OutputMapping[] = credentials.map(([name, credential]) => ({ output: credential.output, as: credential.as ?? credential.output, classification: credential.classification, binding: name, provider: resource.provider, resource: input.rotation.resource, consumers: credential.consumers }));
-    const siblings = Object.entries(input.intent.environments[input.environment]!.resources).filter(([name]) => name !== input.rotation.resourceName).flatMap(([, other]) => Object.values(other.credentialBindings).map((credential) => credential.output));
+    const siblings = [...input.intent.environments[input.environment]!.ignoredOutputs, ...Object.entries(input.intent.environments[input.environment]!.resources).filter(([name]) => name !== input.rotation.resourceName).flatMap(([, other]) => Object.values(other.credentialBindings).map((credential) => credential.output))];
     const retrieve = async () => {
       const imported = await importDotenvOutputs(deps.outputFile, deps.workspace, mappings, { projectRoot: deps.projectRoot, now: deps.now(), siblingOutputs: siblings });
-      const unchanged = Object.entries(imported.values).filter(([name, value]) => before.values[name] === value).map(([name]) => name);
+      // Only the provider's rotation unit must change; identifiers such as branch or database names stay the same.
+      const rotating = new Set(credentials.filter(([, credential]) => input.rotation.rotates.includes(credential.output)).map(([, credential]) => credential.as ?? credential.output));
+      const unchanged = Object.entries(imported.values).filter(([name, value]) => rotating.has(name) && before.values[name] === value).map(([name]) => name);
       return { imported, unchanged };
     };
     const issue = async (): Promise<RotationResult | undefined> => {
@@ -277,8 +283,10 @@ export async function rotateCredential(input: { rotation: RotationPlan; plan: In
   await transition("consumers_verified", { generation: current.generation });
 
   // Retirement proof: provider-specific old-key rejection plus a new-key control.
-  const newValue = current.values[credentials[0]![1].as ?? credentials[0]![1].output]!;
-  const oldValue = recovered[credentials[0]![1].as ?? credentials[0]![1].output];
+  const probeCredential = credentials.find(([, credential]) => input.rotation.rotates.includes(credential.output)) ?? credentials[0]!;
+  const probeName = probeCredential[1].as ?? probeCredential[1].output;
+  const newValue = current.values[probeName]!;
+  const oldValue = recovered[probeName];
   const control = await deps.probes.newCredentialAccepted(resource.provider, newValue);
   const evidence: RetirementEvidence = oldValue === undefined ? "inconclusive" : control ? await deps.probes.oldCredentialRejected(resource.provider, oldValue) : "inconclusive";
   if (evidence !== "rejected") {

@@ -1,0 +1,46 @@
+{
+  "ok": true,
+  "command": "projects status",
+  "version": "0.1",
+  "data": {
+    "project": {
+      "id": "project_000000000000000000000000000000000000000000000000",
+      "name": "trestle-sp-test",
+      "merchant_id": "acct_0000000000000000",
+      "merchant_display_name": null,
+      "initialized_at": "2026-10-02T02:29:04.095Z",
+      "user_email": "user@example.test",
+      "user_email_verified": true,
+      "account_email": "account@example.test",
+      "account_email_verified": true
+    },
+    "active_environment": "staging",
+    "environments": {
+      "staging": {
+        "output": ".env.staging",
+        "resources": []
+      },
+      "default": {
+        "output": ".env",
+        "resources": []
+      }
+    },
+    "providers": [],
+    "services": [],
+    "plans": [],
+    "summary": {
+      "provider_count": 0,
+      "service_count": 0,
+      "plan_count": 0
+    }
+  },
+  "warnings": [],
+  "next_steps": [
+    "stripe projects catalog",
+    "stripe projects add <provider>/<service>"
+  ],
+  "meta": {
+    "authenticated": true,
+    "project_initialized": true
+  }
+}

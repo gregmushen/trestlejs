@@ -48,11 +48,13 @@ describe("Stripe Projects capability evidence", () => {
     expect(Object.keys(COMMAND_EFFECTS)).not.toContain("billing add");
   });
 
-  it("allows no mutation without hosted evidence", () => {
-    for (const row of PROJECTS_CAPABILITIES.filter((candidate) => MUTATING.has(candidate.operation))) {
+  it("allows no mutation without hosted evidence, and only the hosted-qualified Neon tuples", () => {
+    const allowed = PROJECTS_CAPABILITIES.filter((row) => MUTATING.has(row.operation) && resolveCapability(row, SUPPORTED_TOOLCHAIN, now).allowed).map((row) => `${row.provider}/${row.service} ${row.operation}`);
+    expect(allowed).toEqual(["neon/postgres create", "neon/postgres rotate"]);
+    for (const row of PROJECTS_CAPABILITIES.filter((candidate) => MUTATING.has(candidate.operation) && candidate.evidence !== "hosted_verified")) {
       expect(resolveCapability(row, SUPPORTED_TOOLCHAIN, now).allowed, `${row.provider}/${row.service} ${row.operation}`).toBe(false);
     }
-    const create = PROJECTS_CAPABILITIES.find((row) => row.operation === "create")!;
+    const create = PROJECTS_CAPABILITIES.find((row) => row.provider === "resend" && row.operation === "create")!;
     for (const evidence of ["documented", "locally_tested", "unknown"] as const) {
       expect(resolveCapability({ ...create, evidence, unknowns: [] }, SUPPORTED_TOOLCHAIN, now).allowed, evidence).toBe(false);
     }
@@ -61,7 +63,7 @@ describe("Stripe Projects capability evidence", () => {
   });
 
   it("treats rotation as blocked while invalidation and response-loss behavior are unknown", () => {
-    const rotate = PROJECTS_CAPABILITIES.find((row) => row.provider === "neon" && row.operation === "rotate")!;
+    const rotate = PROJECTS_CAPABILITIES.find((row) => row.provider === "resend" && row.operation === "rotate")!;
     const hosted = resolveCapability({ ...rotate, evidence: "hosted_verified" }, SUPPORTED_TOOLCHAIN, now);
     expect(hosted.allowed).toBe(false);
     expect(hosted.reasons).toEqual(expect.arrayContaining(["unknown: re-retrieval after response loss", "unknown: invalidation timing"]));
@@ -69,7 +71,7 @@ describe("Stripe Projects capability evidence", () => {
   });
 
   it("invalidates evidence when the plugin version, executable hash, or schema changes (AR-14)", () => {
-    const qualified = { ...PROJECTS_CAPABILITIES.find((row) => row.operation === "create")!, evidence: "hosted_verified" as const, unknowns: [] };
+    const qualified = { ...PROJECTS_CAPABILITIES.find((row) => row.operation === "create")!, evidence: "hosted_verified" as const, unknowns: [], observedAt: "2026-10-01T21:29:36.000Z" };
     expect(resolveCapability(qualified, SUPPORTED_TOOLCHAIN, now).allowed).toBe(true);
     for (const drift of [{ pluginVersion: "0.46.0" }, { pluginSha256: "0".repeat(64) }, { envelopeVersion: "0.2" }]) {
       const resolved = resolveCapability(qualified, { ...SUPPORTED_TOOLCHAIN, ...drift }, now);
@@ -79,7 +81,7 @@ describe("Stripe Projects capability evidence", () => {
   });
 
   it("expires stale evidence and rejects rows without an observation time", () => {
-    const qualified = { ...PROJECTS_CAPABILITIES.find((row) => row.operation === "create")!, evidence: "hosted_verified" as const, unknowns: [] };
+    const qualified = { ...PROJECTS_CAPABILITIES.find((row) => row.operation === "create")!, evidence: "hosted_verified" as const, unknowns: [], observedAt: "2026-10-01T21:29:36.000Z" };
     expect(resolveCapability(qualified, SUPPORTED_TOOLCHAIN, new Date("2026-12-01T00:00:00.000Z"))).toMatchObject({ evidence: "unknown", allowed: false });
     expect(resolveCapability({ ...qualified, observedAt: "yesterday-ish" }, SUPPORTED_TOOLCHAIN, now)).toMatchObject({ evidence: "unknown", allowed: false });
   });

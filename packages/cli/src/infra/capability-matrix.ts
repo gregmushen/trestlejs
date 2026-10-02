@@ -32,8 +32,23 @@ function rows(provider: string, service: string, entries: Entry[]): CapabilityRo
 
 const notLinkable = "catalog reports existing_resource_linking: unsupported";
 
+const HOSTED_AT = "2026-10-02T02:31:46.000Z";
+
+/**
+ * Hosted observations for neon/postgres through Projects 0.45.0 in an
+ * authorized free-plan sandbox (docs/STRIPE_PROJECTS_CAPABILITIES.md).
+ */
+function neonHosted(row: CapabilityRow): CapabilityRow {
+  if (row.operation === "create") return { ...row, evidence: "hosted_verified", unknowns: [], observedAt: HOSTED_AT, credentialScopes: { "*_CONNECTION_STRING": "owner" }, limitations: ["add is not idempotent: repeating it creates a suffixed duplicate (database-2); Trestle journals intent and reconciles by observation instead of retrying", "outputs are prefixed by the logical name, e.g. DATABASE_CONNECTION_STRING", "the automatic pull can rename sibling outputs (NEON_ORG_ID became NEON_PLAN_ORG_ID)", "the connection string is neondb_owner with BYPASSRLS and CREATEROLE: operator-only"] };
+  if (row.operation === "inspect") return { ...row, evidence: "hosted_verified", observedAt: HOSTED_AT };
+  if (row.operation === "rotate") return { ...row, evidence: "hosted_verified", unknowns: [], observedAt: HOSTED_AT, limitations: ["new connections with the old password fail with 28P01 immediately; existing pooled connections keep working on the old credential", "only <NAME>_CONNECTION_STRING changes", "env pull re-retrieves the newly issued value; the response-loss window itself was not exercised hosted"] };
+  if (row.operation === "link") return { ...row, unknowns: ["link created a Neon account without a browser step (observed); provider account creation needs its own approved plan"] };
+  if (row.operation === "delete") return { ...row, unknowns: ["exact immutable-ID targeting (remove takes a name; observed)"] };
+  return row;
+}
+
 export const PROJECTS_CAPABILITIES: readonly CapabilityRow[] = Object.freeze([
-  ...rows("neon", "postgres", common(notLinkable)),
+  ...rows("neon", "postgres", common(notLinkable)).map(neonHosted),
   ...rows("cloudflare", "workers", common(notLinkable)),
   ...rows("cloudflare", "hyperdrive", common(notLinkable)),
   ...rows("cloudflare", "queues", common(notLinkable)),
@@ -80,7 +95,11 @@ export function capabilityFor(provider: string, service: string, operation: Infr
  * rotation qualification (P10) proves invalidation, bundle and re-retrieval
  * behavior for a specific tuple; rotation plans are blocked meanwhile.
  */
-export const ROTATION_PROFILES: Readonly<Record<string, import("./rotation.js").RotationProfile>> = Object.freeze({});
+export function rotationProfileFor(provider: string, service: string, resourceName: string): import("./rotation.js").RotationProfile | undefined {
+  // Hosted 2026-10-02: immediate invalidation for new connections, single-output bundle, re-retrieval via env pull, 28P01 distinguishes rejection.
+  if (provider === "neon" && service === "postgres") return { invalidation: "immediate", bundle: [`${resourceName.toUpperCase().replace(/-/gu, "_")}_CONNECTION_STRING`], reRetrieval: "proven", retirementProbe: true };
+  return undefined;
+}
 
 /**
  * Resource kinds that generated direct-provider scripts already write. A
