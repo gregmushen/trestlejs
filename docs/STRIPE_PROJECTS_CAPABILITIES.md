@@ -147,3 +147,20 @@ Evidence through Trestle itself:
 
 Remaining owned resources: the empty Projects project `trestle-sp-test` (no
 delete command in 0.45.0) and the empty Neon account created by `link`.
+
+## Hosted run: Resend and Cloudflare (2026-10-02, free plans, no email sent)
+
+| Step | Observation |
+| --- | --- |
+| `link resend --accept-tos` | Created a Resend account **without a browser step** and materialized the account-wide `free` plan (a later `add resend/free` failed with `resource_count_constraint_exceeded`) |
+| `add resend/email --name email` | Output `RESEND_API_KEY` (not prefixed by the resource name) |
+| Resend key scope | **Full account access**: `GET /domains`, `/audiences` and `/api-keys` all return 200. Operator-only; never a Worker key |
+| `rotate email` | Value changes; old key rejected immediately with `400 validation_error "API key is invalid"` (same as a made-up key; a missing key is `401 missing_api_key`); `env --pull` re-retrieves the new key |
+| `link cloudflare --accept-tos` | Requires browser authentication (`BROWSER_AUTH_REQUIRED` with a Cloudflare authorize URL); completed by the account owner |
+| `add cloudflare/workers:free`, `add cloudflare/workers --name worker` | Outputs are non-secret only: `WORKER_ACCOUNT_ID`, `WORKER_API_BASE_URL` (`api.cloudflare.com/client/v4`), `WORKER_DASHBOARD_URL`, `WORKER_PLAN_SERVICE_ID`, `WORKER_WORKERS_DEV_SUBDOMAIN`, `CLOUDFLARE_PLAN_ACCOUNT_ID`. **No deploy token** |
+| `rotate worker` | `provider_failure`: `404 Route not found` (nothing to rotate) |
+
+Consequences: resend/email `create` and `rotate` are hosted-verified with the key
+marked owner-privileged; cloudflare/workers `create` is hosted-verified and
+`rotate` unsupported. Deploying a Worker still needs direct Cloudflare
+authentication, because Projects issues no deploy credential.
