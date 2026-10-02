@@ -79,6 +79,12 @@ behavior, not Stripe's or a provider's.
   retries blindly. If the resource is not visible yet, resume needs
   `--confirm-absent <reason> --actor <name>` after you confirm no request is
   still pending.
+- Projects `add` is not idempotent: a second `add` with the same name creates
+  `<name>-2`. While holding the target's reservation, `apply` re-observes right
+  before every create and refuses if that name or a `<name>-N` sibling already
+  exists. If a second resource really is intended, rerun with
+  `--allow-duplicate <reason> --actor <name>`; the CLI warns, and the override is
+  recorded in the operation journal.
 - Nothing is deleted to roll back a failure. Retained resources are reported.
 - Deployment records `provisioned`, `configured`, `deployed` and `verified`
   separately; a 200 from an old replica is not verification. Rotation retires

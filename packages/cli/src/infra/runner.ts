@@ -47,6 +47,12 @@ export type RunnerDeps = Readonly<{
    * proves that (AR-02).
    */
   confirmAbsent?: { actor: string; reason: string };
+  /**
+   * Operator override, journaled, for creating a resource although one with the
+   * same name (or a `<name>-N` sibling) already exists. Projects `add` is not
+   * idempotent, so the default is to refuse.
+   */
+  allowDuplicate?: { actor: string; reason: string };
   hooks?: Readonly<{ at?: (boundary: Boundary, context: { resource: string }) => void | Promise<void> }>;
 }>;
 
@@ -239,6 +245,20 @@ async function executeCreate(operation: PlanOperation, deps: RunnerDeps & { hold
   const maxAttempts = deps.maxAttempts ?? 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const effectId = `${context.operationId}:${operation.resource}:create:${attempt}`;
+    // Last-moment duplicate check while holding the reservation: another writer
+    // (dashboard, raw CLI) may have created the name since planning.
+    const fresh = await deps.adapter.observe(deps.workspace, deps.now());
+    if (fresh.status !== "ok") {
+      await deps.store.release(context.reservationScope, reservation.fencingToken);
+      return { outcome: "failed_retryable", messages, nextStep: `cannot re-check for duplicates before creating ${operation.resource}: ${fresh.reason}` };
+    }
+    const sibling = new RegExp(`^${operation.resource.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?:-\\d+)?$`, "u");
+    const duplicates = fresh.observation.resources.filter((candidate) => candidate.provider === resource.provider && candidate.service === resource.service && candidate.name !== undefined && sibling.test(candidate.name));
+    if (duplicates.length && !deps.allowDuplicate) {
+      await deps.store.release(context.reservationScope, reservation.fencingToken);
+      return { outcome: "needs_intervention", messages: [...messages, `${operation.resource}: ${duplicates.map((candidate) => `${candidate.name} (${candidate.externalId})`).join(", ")} already exists`], nextStep: `Projects add is not idempotent and would create another ${resource.provider}/${resource.service}. Adopt or remove the existing resource, or rerun with --allow-duplicate <reason> --actor <name> if a second one is intended` };
+    }
+    if (duplicates.length) await deps.store.appendEvent(context.operationId, "infra.duplicate.allowed", { resource: operation.resource, existing: duplicates.map((candidate) => candidate.externalId), actor: deps.allowDuplicate!.actor, reason: deps.allowDuplicate!.reason }, deps.now());
     await hook("before_intent");
     await deps.store.appendEvent(context.operationId, "infra.effect.intent", { resource: operation.resource, effectId, command: "add" }, deps.now());
     await hook("after_intent");

@@ -248,3 +248,36 @@ describe("authority on resume", () => {
     expect((await harness.fake.remote()).effects.add).toBe(1);
   });
 });
+
+describe("last-moment duplicate guard (Projects add is not idempotent)", () => {
+  async function racingAdapter(h: Harness) {
+    let observations = 0;
+    return {
+      mutate: h.adapter.mutate.bind(h.adapter),
+      observe: async (workspace: string, now: Date) => {
+        // After the precondition observation, another writer creates the same name.
+        if (++observations === 2) await h.adapter.mutate("add", ["neon/postgres"], { name: "database" }, workspace, ["remote_link", "remote_resource_create", "remote_secret_store_write", "local_state_write", "local_vault_write", "local_plaintext_credentials", "may_charge"]);
+        return h.adapter.observe(workspace, now);
+      },
+    };
+  }
+
+  it("refuses to create when the name appeared since planning, with no effect journaled", async () => {
+    harness = await createHarness();
+    const plan = await harness.plan();
+    const result = await applyPlan({ plan, approval: harness.approve(plan), intent: harness.intent, bindings: harness.bindings }, harness.deps({ adapter: await racingAdapter(harness) }));
+    expect(result).toMatchObject({ outcome: "needs_intervention", nextStep: expect.stringMatching(/--allow-duplicate/u) });
+    expect((await harness.fake.remote()).effects.add).toBe(1);
+    expect((await harness.store.events("op-apply-1")).some((event) => event.kind === "infra.effect.intent")).toBe(false);
+    expect(await harness.store.getReservation(`projects:acct_fake0000001:${harness.bindings.environments.staging!.projectsProjectId}:staging`)).toBeUndefined();
+  });
+
+  it("proceeds under an explicit, journaled override", async () => {
+    harness = await createHarness();
+    const plan = await harness.plan();
+    const result = await applyPlan({ plan, approval: harness.approve(plan), intent: harness.intent, bindings: harness.bindings }, harness.deps({ adapter: await racingAdapter(harness), allowDuplicate: { actor: "greg", reason: "second database intended" } }));
+    expect(result.outcome).toBe("succeeded");
+    const allowed = (await harness.store.events("op-apply-1")).find((event) => event.kind === "infra.duplicate.allowed");
+    expect(allowed?.data).toMatchObject({ resource: "database", actor: "greg", reason: "second database intended" });
+  });
+});
