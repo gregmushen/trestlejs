@@ -37,6 +37,8 @@ export type RuntimeRotationInput = Readonly<{
   /** Rejection check for the old credential: "rejected" only for a credential error (28P01). */
   oldCredentialRejected: (connection: string) => Promise<"rejected" | "accepted" | "inconclusive">;
   acceptInterruption: { actor: string; reason: string };
+  probeAttempts?: number;
+  sleep?: (ms: number) => Promise<void>;
   /** Resume an interrupted rotation from its recovery envelope instead of starting a new one. */
   resumeOperationId?: string;
   now: () => Date;
@@ -88,7 +90,7 @@ export async function rotateRuntimeCredential(input: RuntimeRotationInput): Prom
     const generation = current.values.DATABASE_URL === newUrl ? current.generation : await commitSnapshot(input.store, deploymentScope, current.generation, { ...current.values, DATABASE_URL: newUrl }, current.metadata.map((entry) => entry.name === "DATABASE_URL" ? { ...entry, importedAt: input.now().toISOString(), override: false } : entry), input.masterKey);
     await journal("encrypted_snapshot_saved", { generation });
 
-    const deployment = await deployCredentials({ store: input.store, scope: deploymentScope, masterKey: input.masterKey, consumers: input.consumers, expectedTargets: input.expectedTargets, deployer: input.deployer, probes: input.probes, artifactDigest: input.artifactDigest, configDigest: input.configDigest, now: input.now });
+    const deployment = await deployCredentials({ store: input.store, scope: deploymentScope, masterKey: input.masterKey, consumers: input.consumers, expectedTargets: input.expectedTargets, deployer: input.deployer, probes: input.probes, artifactDigest: input.artifactDigest, configDigest: input.configDigest, now: input.now, probeAttempts: input.probeAttempts ?? 8, ...(input.sleep ? { sleep: input.sleep } : {}) });
     await journal("consumers_updated", { generation, verified: deployment.verified });
     if (!deployment.verified) {
       await journal("partial_cutover", { unverified: deployment.consumers.filter((report) => report.state !== "verified").map((report) => report.consumer) });

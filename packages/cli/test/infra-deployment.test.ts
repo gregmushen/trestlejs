@@ -154,3 +154,20 @@ describe("deployment generation proof", () => {
     expect(record.consumers[0]).toMatchObject({ state: "unverified", detail: expect.stringMatching(/data plane/u) });
   });
 });
+
+describe("propagation window (observed with Wrangler)", () => {
+  it("re-probes until the new generation appears, without ever counting a stale answer", async () => {
+    const store = await setup([meta("DATABASE_URL", ["worker"])], { DATABASE_URL: "runtime" });
+    const host = new FakeHost();
+    let calls = 0;
+    host.probeOverride.worker = (actual) => (++calls < 3 ? { status: "ok", revision: "rev-old", credentialGeneration: "staging:g0:abababababab", newConnection: true } : { status: "ok", revision: actual.revision, credentialGeneration: actual.marker, newConnection: true });
+    const sleeps: number[] = [];
+    const record = await deployCredentials({ store, scope, masterKey, consumers: consumerRegistry(manifest(false), intent(["worker"]), "staging"), expectedTargets, deployer: host, probes: host, artifactDigest: artifact, configDigest: "c", now, probeAttempts: 5, sleep: async (ms) => { sleeps.push(ms); } });
+    expect(record.verified).toBe(true);
+    expect(sleeps).toHaveLength(2);
+    const stale = new FakeHost();
+    stale.probeOverride.worker = () => ({ status: "ok", revision: "rev-old", credentialGeneration: "staging:g0:abababababab", newConnection: true });
+    const never = await deployCredentials({ store, scope, masterKey, consumers: consumerRegistry(manifest(false), intent(["worker"]), "staging"), expectedTargets, deployer: stale, probes: stale, artifactDigest: artifact, configDigest: "c", now, probeAttempts: 3, sleep: async () => {} });
+    expect(never).toMatchObject({ verified: false, consumers: [{ state: "deployed" }] });
+  });
+});
