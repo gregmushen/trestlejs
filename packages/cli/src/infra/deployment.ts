@@ -87,6 +87,13 @@ export type DeployInput = Readonly<{
   now: () => Date;
   /** Deploy an older committed generation (rollback); defaults to the latest. */
   credentialGeneration?: number;
+  /**
+   * Host updates propagate over seconds (observed with Wrangler), so a consumer
+   * is re-probed until it reports the new generation or attempts run out. A
+   * stale or failing answer is never counted as verified.
+   */
+  probeAttempts?: number;
+  sleep?: (ms: number) => Promise<void>;
 }>;
 
 /**
@@ -119,8 +126,13 @@ export async function deployCredentials(input: DeployInput): Promise<DeploymentR
       reports.push({ consumer: consumer.id, target, state: "configured", revision: null, detail: `host update failed: ${error instanceof Error ? error.message.slice(0, 200) : "error"}` });
       continue;
     }
-    const probe = await input.probes.probe(consumer.id, target);
-    reports.push(verify(consumer, target, revision, marker, probe));
+    const attempts = Math.max(1, input.probeAttempts ?? 1);
+    let report = verify(consumer, target, revision, marker, await input.probes.probe(consumer.id, target));
+    for (let attempt = 2; attempt <= attempts && report.state !== "verified"; attempt += 1) {
+      await (input.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))))(Math.min(10_000, 1000 * attempt));
+      report = verify(consumer, target, revision, marker, await input.probes.probe(consumer.id, target));
+    }
+    reports.push(report);
   }
   const record: DeploymentRecord = {
     artifactDigest: input.artifactDigest, configDigest: input.configDigest, credentialGeneration: generation, marker,

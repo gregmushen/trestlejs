@@ -187,7 +187,7 @@ describe("infrastructure executor", () => {
     const approval = harness.approve(plan);
     let calls = 0;
     const adapter = { observe: harness.adapter.observe.bind(harness.adapter), mutate: async (...args: Parameters<typeof harness.adapter.mutate>) => {
-      if (args[0] === "add" && ++calls === 2) return { status: "rejected" as const, code: "QUOTA_EXCEEDED", message: "quota" };
+      if (args[0] === "add" && /\/(postgres|email)$/u.test(String(args[1][0])) && ++calls === 2) return { status: "rejected" as const, code: "QUOTA_EXCEEDED", message: "quota" };
       return harness.adapter.mutate(...args);
     } };
     const result = await applyPlan({ plan, approval, intent: harness.intent, bindings: harness.bindings }, harness.deps({ adapter }));
@@ -279,5 +279,19 @@ describe("last-moment duplicate guard (Projects add is not idempotent)", () => {
     expect(result.outcome).toBe("succeeded");
     const allowed = (await harness.store.events("op-apply-1")).find((event) => event.kind === "infra.duplicate.allowed");
     expect(allowed?.data).toMatchObject({ resource: "database", actor: "greg", reason: "second database intended" });
+  });
+});
+
+describe("declared plans (Projects requires the plan before a service)", () => {
+  it("provisions each missing plan once, before its service, and never again on replay", async () => {
+    harness = await createHarness();
+    const plan = await harness.plan();
+    const approval = harness.approve(plan);
+    expect((await applyPlan({ plan, approval, intent: harness.intent, bindings: harness.bindings }, harness.deps())).outcome).toBe("succeeded");
+    expect((await harness.fake.remote()).effects.addPlan).toBe(2);
+    const kinds = (await harness.store.events("op-apply-1")).map((event) => event.kind);
+    expect(kinds.indexOf("infra.plan.provisioned")).toBeLessThan(kinds.indexOf("infra.resource.created"));
+    await applyPlan({ plan, approval, intent: harness.intent, bindings: harness.bindings }, harness.deps({ holder: "runner-b" }));
+    expect((await harness.fake.remote()).effects.addPlan).toBe(2);
   });
 });

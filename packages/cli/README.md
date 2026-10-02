@@ -39,6 +39,19 @@ trestle --experimental infra plan --env staging
 trestle --experimental infra doctor --env staging
 ```
 
+After provisioning a database, connect it to your app and Workers:
+
+```bash
+trestle --experimental infra database setup --env staging --resource appdb --yes
+trestle --experimental infra deploy --env staging --worker-target <name> --worker-url <url> --artifact-digest <sha256:…>
+trestle --experimental infra database rotate-runtime --env staging --resource appdb --worker-target <name> \
+  --worker-url <url> --artifact-digest <sha256:…> --accept-interruption "<reason>" --actor <you>
+```
+
+`database setup` runs your Drizzle migrations and role scripts with the
+owner credential and deploys only a restricted runtime role. Remove Projects
+plans before unlinking a provider; afterwards Cloudflare needs a browser re-link.
+
 Remote changes need an independent PostgreSQL control store, a signed approval
 and verified provider evidence; see
 [docs/STRIPE_PROJECTS.md](https://github.com/gregmushen/trestlejs/blob/main/docs/STRIPE_PROJECTS.md).

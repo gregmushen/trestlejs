@@ -464,7 +464,7 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
           store, scope: { projectId: binding.trestleProjectId, environment: options.env, purpose: "deployment" }, masterKey: await resolveMasterKey(context.root, options.env, environmentOf("TRESTLE_MASTER_KEY")),
           consumers: workerConsumers(context.manifest).filter((consumer) => consumer.id === "worker"), expectedTargets: { worker: options.workerTarget },
           deployer: new WranglerDeployer(context.root, context.manifest, options.env, (cmd, args, opts) => runCommand(cmd, args, { ...opts, stdio: "pipe" }), process.env),
-          probes: new OperationalHealthProbe({ worker: options.workerUrl }, options.runtimeRole), artifactDigest: options.artifactDigest, configDigest: binding.projectsProjectId, now,
+          probes: new OperationalHealthProbe({ worker: options.workerUrl }, options.runtimeRole), artifactDigest: options.artifactDigest, configDigest: binding.projectsProjectId, now, probeAttempts: 8,
         });
         runtime.stdout(`${JSON.stringify(structuredOutput(record), null, 2)}\n`);
         if (!record.verified) throw new CliFailure("deployment is not verified on the new credential generation", 3);
