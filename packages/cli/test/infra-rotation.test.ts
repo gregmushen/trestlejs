@@ -201,3 +201,15 @@ describe("rotation execution", () => {
     expect(await rotations()).toBe(0);
   });
 });
+
+describe("rotation unit narrower than the declared outputs (hosted finding 2026-10-02)", () => {
+  it("requires only the rotating output to change, never the stable identifiers", async () => {
+    const { binding } = await provisioned();
+    const withIds = structuredClone(harness.intent);
+    withIds.environments.staging!.resources.email!.credentialBindings["org"] = { output: "RESEND_ORG_ID", classification: "provider-managed", consumers: ["worker"] };
+    const unit = planRotation({ intent: withIds, environment: "staging", binding, credentialBinding: "sending", profile: IMMEDIATE, consumers, inventoryComplete: true });
+    expect(unit.rotates).toEqual(["RESEND_API_KEY"]);
+    expect(unit.outputs).toEqual(["RESEND_API_KEY", "RESEND_ORG_ID"]);
+    expect(unit.blockers).toEqual([]);
+  });
+});

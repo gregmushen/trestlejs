@@ -118,8 +118,16 @@ if (name === "status") {
   if (applyFault(fault("status", "before"), version, name)) return;
   const project = data.projects[local.projectId];
   const environment = activeEnvironment();
-  const resources = (project.environments[environment] || { resources: [] }).resources.filter((resource) => !resource.deleted).map((resource) => ({ id: resource.id, name: resource.name, provider: resource.provider, service: resource.service }));
-  out({ ok: true, command: "projects status", version, data: { account: { id: data.accountId }, project: { id: local.projectId, name: project.name }, environment: { active: environment }, resources: behavior.incompleteStatus ? [] : resources, complete: !behavior.incompleteStatus }, meta: { authenticated, project_initialized: true } });
+  // Mirrors the authenticated 0.45.0 shape (fixtures/stripe-projects/0.45.0/status-with-database.json).
+  const display = { neon: "Neon", cloudflare: "Cloudflare", resend: "Resend" };
+  const services = [];
+  const environments = {};
+  for (const [name, env] of Object.entries(project.environments)) {
+    const live = env.resources.filter((resource) => !resource.deleted);
+    environments[name] = { output: local.outputs[name] || ".env", resources: live.map((resource) => resource.name) };
+    for (const resource of live) services.push({ id: resource.id, name: resource.name, provider: display[resource.provider] || resource.provider, service_id: resource.service, status: behavior.incompleteStatus ? "provisioning" : "complete", environments: [name] });
+  }
+  out({ ok: true, command: "projects status", version, data: { project: { id: local.projectId, name: project.name, merchant_id: data.accountId }, active_environment: environment, environments, services: behavior.incompleteStatus ? services.filter((service) => service.environments[0] !== environment).concat(services.filter((service) => service.environments[0] === environment).map((service) => ({ ...service, name: service.name + "-pending" }))) : services }, meta: { authenticated, project_initialized: true } });
   return finish(0);
 }
 if (!authenticated) { out({ ok: false, command: "projects " + name, version, error: { code: "NOT_AUTHENTICATED", message: "sign in first" }, meta: { authenticated: false } }); return finish(1); }
@@ -168,7 +176,7 @@ if (command[0] === "add") {
   writeJson(remoteFile, data);
   if (applyFault(fault("add", "after"), version, name)) return;
   pullOutputs(data, local);
-  out({ ok: true, command: "projects add", version, data: { resource: { id: resource.id, name: resource.name, provider, service } } });
+  out({ ok: true, command: "projects add", version, data: { files_modified: [".projects/vault/vault.json", local.outputs[environment] || ".env"], service: { key: resource.id, name: resource.name, provider, service_id: service, status: "complete" } } });
   return finish(0);
 }
 if (command[0] === "rotate") {

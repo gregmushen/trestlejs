@@ -23,7 +23,7 @@ import { resolveMasterKey } from "../secrets.js";
 import { projectsWorkspace } from "./doctor.js";
 import { planAdopt, planDestroy, planDetach, planTierChange, type LifecyclePlan } from "./lifecycle.js";
 import { planRotation } from "./rotation.js";
-import { ROTATION_PROFILES } from "./capability-matrix.js";
+import { rotationProfileFor } from "./capability-matrix.js";
 import { consumerRegistry } from "./consumers.js";
 
 /** Test seams; production uses the real process runner and clock. */
@@ -386,8 +386,8 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
       if (!binding) throw new CliFailure(`${options.env} has no reviewed Projects binding`, 2);
       let rotation;
       try {
-        const resource = Object.values(intent.environments[options.env]?.resources ?? {}).find((candidate) => credentialBinding in candidate.credentialBindings);
-        const profile = resource ? ROTATION_PROFILES[`${resource.provider}/${resource.service}`] : undefined;
+        const entry = Object.entries(intent.environments[options.env]?.resources ?? {}).find(([, candidate]) => credentialBinding in candidate.credentialBindings);
+        const profile = entry ? rotationProfileFor(entry[1].provider, entry[1].service, entry[0]) : undefined;
         rotation = planRotation({ intent, environment: options.env, binding, credentialBinding, profile, consumers: consumerRegistry(context.manifest, intent, options.env), inventoryComplete: Boolean(options.inventoryComplete) });
       } catch (error) {
         throw new CliFailure(error instanceof Error ? error.message : String(error), 2);

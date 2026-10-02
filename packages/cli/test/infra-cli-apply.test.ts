@@ -110,7 +110,8 @@ describe("trestle infra lifecycle and rotation planning", () => {
       [["infra", "destroy", "database", "--env", "staging", "--confirm-target", "database"], /confirm the exact target ID/u],
       [["infra", "detach", "database", "--env", "staging"], /non-destructive detach/u],
       [["infra", "upgrade", "database", "--env", "staging", "--to", "launch"], /price is unknown/u],
-      [["infra", "rotate", "runtime", "--env", "staging", "--inventory-complete"], /invalidation behavior is unknown/u],
+      // neon/postgres has a qualified profile, but its real bundle (DATABASE_CONNECTION_STRING) is not declared here.
+      [["infra", "rotate", "runtime", "--env", "staging", "--inventory-complete"], /undeclared outputs: DATABASE_CONNECTION_STRING/u],
     ];
     for (const [argv, reason] of cases) {
       output.stdout = "";

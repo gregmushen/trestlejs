@@ -240,26 +240,44 @@ export class StripeProjectsAdapter {
     if (result.status === "failure") return { status: "unknown", reason: result.reason };
     if (result.status === "provider_error") return { status: "unknown", reason: `${result.code}: ${result.message}` };
     if (result.authenticated === false) return { status: "unknown", reason: "Projects session is not authenticated" };
-    const parsed = statusSchema.safeParse(result.data);
-    if (!parsed.success) return { status: "unknown", reason: "status data did not match the expected schema" };
-    const data = parsed.data;
-    return {
-      status: "ok",
-      observation: {
-        observedAt: now.toISOString(), stripeAccountId: data.account.id, projectsProjectId: data.project.id, projectsEnvironment: data.environment.active,
-        resources: data.resources.map((resource) => ({ externalId: resource.id, provider: resource.provider as Observation["resources"][number]["provider"], service: resource.service, name: resource.name })),
-        complete: data.complete === true,
-      },
-    };
+    return parseStatus(result.data, now);
   }
 }
 
+
+/** Maps authenticated `projects status` data to an observation; unknown shapes are unknown, never empty. */
+export function parseStatus(input: unknown, now: Date): ObservationResult {
+  const parsed = statusSchema.safeParse(input);
+  if (!parsed.success) return { status: "unknown", reason: "status data did not match the expected schema" };
+  const data = parsed.data;
+  const known = new Set(["neon", "cloudflare", "resend"]);
+  // Services in the active environment; plans are listed separately and are not resources.
+  const services = data.services.filter((service) => service.environments.includes(data.active_environment));
+  const unknownProviders = services.filter((service) => !known.has(service.provider.toLowerCase()));
+  return {
+    status: "ok",
+    observation: {
+      observedAt: now.toISOString(), stripeAccountId: data.project.merchant_id, projectsProjectId: data.project.id, projectsEnvironment: data.active_environment,
+      resources: services.filter((service) => known.has(service.provider.toLowerCase())).map((service) => ({ externalId: service.id, provider: service.provider.toLowerCase() as Observation["resources"][number]["provider"], service: service.service_id, name: service.name })),
+      // A listing with services Trestle cannot classify, or still pending, is not proof of absence.
+      complete: unknownProviders.length === 0 && services.every((service) => service.status === "complete"),
+    },
+  };
+}
+
+/** Authenticated `projects status --json` data at plugin 0.45.0 (observed 2026-10-02). */
 const statusSchema = z.object({
-  account: z.object({ id: z.string().regex(/^acct_[A-Za-z0-9]{6,}$/u) }),
-  project: z.object({ id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u) }),
-  environment: z.object({ active: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/u) }),
-  resources: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u), name: z.string().max(200), provider: z.enum(["neon", "cloudflare", "resend"]), service: z.string().min(1) }).passthrough()),
-  complete: z.boolean().optional(),
+  project: z.object({ id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u), merchant_id: z.string().regex(/^acct_[A-Za-z0-9]{6,}$/u) }).passthrough(),
+  active_environment: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/u),
+  environments: z.record(z.string(), z.object({ output: z.string(), resources: z.array(z.string()) }).passthrough()),
+  services: z.array(z.object({
+    id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u),
+    name: z.string().max(200),
+    provider: z.string().min(1),
+    service_id: z.string().min(1),
+    status: z.string(),
+    environments: z.array(z.string()).default([]),
+  }).passthrough()),
 }).passthrough();
 
 export type MutationOutcome =
