@@ -20,7 +20,7 @@ hosted exit blocked), `blocked`.
 | P05 credential generations | complete | P05 PR | v2 envelope + CAS commit; public pull still unavailable |
 | P06 executor/fake provider | complete | P06 PR | Fake-provider crash/concurrency gates pass; real apply still gated by capability evidence |
 | P07 Neon hosted slice | complete | P07 PR | Real `trestle infra apply` created and bound Neon through Projects; RLS proven with a runtime role |
-| P08 deployment/consumers | partial | P08 PR | Consumer registry, projection, generation proof against fakes; hosted proof blocked on P07 |
+| P08 deployment/consumers | partial | P08 PR + deploy PR | Hosted: Worker deployed to the Projects-created Cloudflare account and generation marker verified; `deployCredentials` with a real Wrangler deployer not yet wired |
 | P09 rotation fault model | complete | P09–P13 PR | Simulated strategies survive the crash matrix; unsupported strategies make no issuance call |
 | P10 hosted rotation | complete | P07 PR | neon/postgres rotation qualified; Trestle rotation recovered by re-retrieval and proved retirement |
 | P11 Cloudflare | partial | Resend/Cloudflare PR | workers create hosted-verified (no deploy token issued); rotate unsupported; deployment not exercised |
@@ -450,7 +450,7 @@ hosted provider proof yet.
 | 5 | Least-privilege runtime access and forced RLS | Hosted: runtime role on the real Neon database, forced RLS, cross-tenant denial; owner URL proven BYPASSRLS | **Hosted verified** |
 | 6 | Import into environment-bound encrypted storage | Hosted: real outputs imported to an operator v2 snapshot, plaintext removed | **Hosted verified** |
 | 7 | Edit with vi and reveal without changing provider keys | `trestle secrets` unchanged; `infra-credentials` override rules | Local proof |
-| 8 | Deploy the artifact with only declared credentials | `infra-deployment` (fake host) | Hosted blocked (P08 hosted) |
+| 8 | Deploy the artifact with only declared credentials | Hosted: Worker deployed and generation marker verified on the Projects-created account; credential projection proven with fakes | Hosted (deploy + marker); real projection pending |
 | 9 | Rotate and verify every consumer | Hosted: Trestle rotation of an operator-only credential (no deployed consumers); consumer cutover proven with fakes | Hosted (operator scope); deployed consumers blocked with P08 |
 | 10 | Observe old-key rejection | Hosted: old password `28P01`, new key accepted | **Hosted verified** |
 | 11 | Recover interrupted provisioning and rotation | Crash matrix and SIGKILL locally; hosted rotation resumed by re-retrieval without re-issuing | **Hosted verified** (rotation) + local |
