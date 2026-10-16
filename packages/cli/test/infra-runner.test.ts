@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readCommittedSnapshot } from "../src/infra/credentials.js";
 import { applyPlan, bindingScope, type Boundary } from "../src/infra/runner.js";
 import { MemoryOperationStore } from "../src/infra/stores/memory.js";
+import { effectsOf } from "../src/infra/capabilities.js";
 import { createHarness, type Harness } from "./helpers/infra-harness.js";
 
 let harness: Harness;
@@ -256,7 +257,7 @@ describe("last-moment duplicate guard (Projects add is not idempotent)", () => {
       mutate: h.adapter.mutate.bind(h.adapter),
       observe: async (workspace: string, now: Date) => {
         // After the precondition observation, another writer creates the same name.
-        if (++observations === 2) await h.adapter.mutate("add", ["neon/postgres"], { name: "database" }, workspace, ["remote_link", "remote_resource_create", "remote_secret_store_write", "local_state_write", "local_vault_write", "local_plaintext_credentials", "may_charge"]);
+        if (++observations === 2) await h.adapter.mutate("add", ["neon/postgres"], { name: "database" }, workspace, effectsOf(["add"]));
         return h.adapter.observe(workspace, now);
       },
     };

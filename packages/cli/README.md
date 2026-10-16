@@ -44,6 +44,10 @@ After provisioning a database, connect it to your app and Workers:
 ```bash
 trestle --experimental infra database setup --env staging --resource appdb --yes
 trestle --experimental infra deploy --env staging --worker-target <name> --worker-url <url> --artifact-digest <sha256:…>
+trestle --experimental infra project create --env staging --application-id <stable-id> --stripe-account <acct_id> --name <name>
+trestle --experimental infra plan --env staging --observe --json
+trestle --experimental infra pages build --surface app
+trestle --experimental infra pages plan --env staging --surface app --account <cloudflare-id> --commit <sha> --repository <owner/repo>
 trestle --experimental infra database rotate-runtime --env staging --resource appdb --worker-target <name> \
   --worker-url <url> --artifact-digest <sha256:…> --accept-interruption "<reason>" --actor <you>
 ```

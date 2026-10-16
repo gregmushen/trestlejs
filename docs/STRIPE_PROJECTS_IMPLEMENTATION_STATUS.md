@@ -8,6 +8,61 @@ names the external prerequisite, owner, and next action.
 Statuses: `pending`, `in_progress`, `complete`, `partial` (local exit met,
 hosted exit blocked), `blocked`.
 
+## Production-support follow-up, October 16, 2026
+
+Branch `codex/stripe-projects-production-support`, isolated from current
+`origin/main` at `58a659a`. Earlier authentication/prerequisite statements below
+are historical. Current authenticated read discovery succeeds with the pinned
+Projects plugin; only the old empty qualification project is observed. No new
+provider resource, production migration/deployment, provider terms, paid service
+or application Stripe payment was changed in this follow-up.
+
+Local implementation adds:
+
+- Project-container bootstrap plans and signed apply, independent-store intent,
+  application/environment fencing, exact observed ID binding and crash/replay
+  recovery. The underlying manual `init` operation was observed in the October 2
+  hosted run; the new complete bootstrap wrapper has local/PG proof only.
+- Provider-link plan/execution and explicit account-creation/terms effects.
+  Existing-only selection and unqualified real grants remain blocked. A verified
+  connection request is not mislabeled as a verified provider account ID.
+- Fresh resource observation via `infra plan --observe`, without credential pull.
+- Paid-service planning/confirmation for R2, including a regression for a zero
+  dollar approval incorrectly reaching paid provisioning. R2 capability evidence
+  remains unchanged and blocked.
+- Pages Functions compilation with a scratch HOME and no provider/GitHub
+  credentials; strict config/artifact snapshots; protected host and service
+  binding enrollment; signed artifact deployment and exact-SHA staging checks;
+  marker/replay handling. The new upload adapter stays unqualified pending a real
+  hosted run. Existing generated direct Pages resource steps remain the lifecycle
+  path; Pages is not added to the Projects service catalog.
+- Private workspace checks and positional/flag confinement, including output
+  traversal, terms, paid confirmation and template-install prevention.
+
+Baseline: repository build/typecheck/unit gate passed, 472 tests; 21 integration
+tests skipped without a database. First combined disposable-PostgreSQL run:
+516 passed and 3 failed, including passing new bootstrap crash recovery. The
+failures were fixture setup: two simulated external writers omitted the newly
+disclosed account-creation effect; one fixture created public workspace parents.
+Their permission/effect setup was tightened, preserving every original denial,
+duplicate, signature and capability assertion. Final-tree verification: build
+and typecheck pass; **60 files, 527 tests pass, no skips**, with disposable
+PostgreSQL 17 and `TRESTLE_INFRA_REQUIRE_INTEGRATION=1`. Vitest ran with
+`--maxWorkers=1 --testTimeout=30000` because unrelated workloads briefly drove
+the host load above 50. The standard recovery gate now includes the new bootstrap
+integration file. Real local compilation of both a downstream customer app and
+admin Functions passes with Wrangler 4.135.0 and a scratch HOME; no upload was
+attempted. The updated `check:infra-recovery` command separately passes all 26
+checks in five files against a new disposable database. No independent
+acceptance or release/publication is claimed.
+
+Remaining external work: enroll an independent control store and approver;
+authorize scoped hosted account-link/R2/Pages conformance (including costs,
+possible account creation, terms and cleanup); prove exact desired provider
+accounts; independently review the changes; then qualify/release the supported
+path. An application deployment still requires its own configuration and release
+evidence. Local fake-provider success cannot close those gates.
+
 ## Summary
 
 | Package | Status | PR / commit | Notes |

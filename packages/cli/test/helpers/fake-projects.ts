@@ -132,15 +132,18 @@ if (name === "status") {
   return finish(0);
 }
 if (!authenticated) { out({ ok: false, command: "projects " + name, version, error: { code: "NOT_AUTHENTICATED", message: "sign in first" }, meta: { authenticated: false } }); return finish(1); }
-if (name === "init") {
+if (command[0] === "init") {
+  if (applyFault(fault("init", "before"), version, name)) return;
+  if (flag("account") && flag("account") !== data.accountId) { out({ ok: false, command: "projects init", version, error: { code: "ACCOUNT_NOT_AUTHORIZED", message: "wrong merchant" } }); return finish(1); }
   if (local) { out({ ok: false, command: "projects init", version, error: { code: "ALREADY_INITIALIZED", message: "already initialized" } }); return finish(1); }
   const projectId = "proj_fake" + String(data.nextId++).padStart(4, "0");
-  data.projects[projectId] = { name: path.basename(process.cwd()), environments: { default: { resources: [] } } };
+  data.projects[projectId] = { name: command[1] || path.basename(process.cwd()), environments: { default: { resources: [] } } };
   effect(data, "init");
   writeJson(remoteFile, data);
   fs.mkdirSync(".projects", { recursive: true });
   writeJson(".projects/state.json", { projectId, outputs: { default: ".env" } });
   writeJson(".projects/state.local.json", { active: "default" });
+  if (applyFault(fault("init", "after"), version, name)) return;
   out({ ok: true, command: "projects init", version, data: { project: { id: projectId } } });
   return finish(0);
 }

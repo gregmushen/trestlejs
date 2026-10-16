@@ -249,6 +249,7 @@ export function planInfrastructure(input: PlanInput): InfraPlan {
       }
     }
     if (cost.kind === "unknown") blockers.push(`cost of ${resource.provider}/${resource.service} is unknown and cannot be treated as free`);
+    if (cost.kind === "paid" && (!resource.costLimit || resource.costLimit.monthlyMinor <= 0)) blockers.push(`${name} needs a positive costLimit before a paid-service confirmation can be approved; zero is not consent to paid provisioning`);
     if (cost.requiresAuthorization && !resource.costLimit) blockers.push(`${name} needs a declared costLimit before a paid or account-wide change can be approved`);
     if (blockers.length > 0) classification = "blocked";
 

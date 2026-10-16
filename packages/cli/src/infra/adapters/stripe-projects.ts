@@ -142,6 +142,7 @@ export class StripeProjectsAdapter {
    */
   async read(command: string, positionals: readonly string[] = [], workspace?: string): Promise<ProjectsResult<unknown>> {
     if (!(command in COMMAND_EFFECTS) || !isRemoteReadOnly(command)) throw new ProjectsAdapterError(`${command} is not a read-only Projects command`);
+    if (positionals.some(value => !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/u.test(value))) throw new ProjectsAdapterError("unsafe Projects positional argument; flags must use the reviewed flag channel");
     const scratch = workspace ?? await mkdtemp(path.join(os.tmpdir(), "trestle-projects-"));
     const before = workspace ? new Set(await listTree(scratch)) : new Set<string>();
     try {
@@ -199,12 +200,24 @@ export class StripeProjectsAdapter {
   async mutate(command: string, positionals: readonly string[], flags: Readonly<Record<string, string | true>>, workspace: string, approvedEffects: readonly CommandEffect[]): Promise<MutationOutcome> {
     const effects = COMMAND_EFFECTS[command];
     if (!effects || isRemoteReadOnly(command)) throw new ProjectsAdapterError(`${command} is not a recorded mutating Projects command`);
+    if (positionals.some(value => !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/u.test(value))) throw new ProjectsAdapterError("unsafe Projects positional argument; flags must use the reviewed flag channel");
     const missing = effects.filter((effect) => !approvedEffects.includes(effect));
     if (missing.length) throw new ProjectsAdapterError(`projects ${command} has unapproved effects: ${missing.join(", ")}`);
-    const allowedFlags = new Set(["name", "output", "skip-skills", "skip-install", "mode", "account", "yes"]);
+    const allowedFlags = new Set(["name", "output", "skip-skills", "skip-install", "mode", "account", "yes", "accept-tos", "confirm-paid-service"]);
     const flagArgs: string[] = [];
     for (const [flag, value] of Object.entries(flags)) {
       if (!allowedFlags.has(flag)) throw new ProjectsAdapterError(`flag --${flag} is not permitted`);
+      const valid = flag === "name" ? command === "add" && typeof value === "string" && /^[a-z][a-z0-9-]{0,62}$/u.test(value)
+        : flag === "output" ? command === "env create" && typeof value === "string" && /^\.env(?:\.[a-z][a-z0-9-]{0,62})?$/u.test(value)
+        : flag === "mode" ? command === "init" && value === "manual"
+        : flag === "account" ? command === "init" && typeof value === "string" && /^acct_[A-Za-z0-9]{6,}$/u.test(value)
+        : ["skip-skills", "skip-install"].includes(flag) ? command === "init" && value === true
+        : flag === "confirm-paid-service" ? ["add", "upgrade", "downgrade"].includes(command) && value === true
+        : flag === "accept-tos" ? ["link", "add", "upgrade", "downgrade"].includes(command) && value === true
+        : value === true;
+      if (!valid) throw new ProjectsAdapterError("Projects flag value or command scope is not permitted");
+      if (flag === "accept-tos" && !approvedEffects.includes("remote_terms_acceptance")) throw new ProjectsAdapterError("provider terms acceptance is not covered by this approval");
+      if (flag === "confirm-paid-service" && !approvedEffects.includes("may_charge")) throw new ProjectsAdapterError("paid-service confirmation is not covered by this approval");
       flagArgs.push(`--${flag}`, ...(value === true ? [] : [value]));
     }
     const verb = command === "env pull" ? ["env", "--pull"] : command.split(" ");

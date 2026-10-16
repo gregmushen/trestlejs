@@ -18,8 +18,10 @@ for each provider, service and operation is in
 | Command | What it does | Remote effects |
 | --- | --- | --- |
 | `trestle infra init --backend stripe-projects` | Writes `.trestle/infrastructure.yaml`, an empty bindings file, and ignores `.trestle/infrastructure.local/` | None |
+| `trestle infra project create --env <env> --application-id <id> --stripe-account <acct_id> --name <name>` | Writes a signed-approval-ready bootstrap plan for a project container; apply journals creation before the project has an ID | None until approved apply |
+| `trestle infra link <neon\|cloudflare> --env <env>` | Writes a provider-grant plan, including possible account creation and explicit terms acceptance; currently blocked by qualification evidence | None until a qualified approved apply |
 | `trestle infra catalog [provider] [--live]` | Shows recorded evidence per service and operation; `--live` reads the current catalog in an isolated directory | Read only |
-| `trestle infra plan --env <env>` | Writes a secret-free, digest-bound plan (mode 0600) | None |
+| `trestle infra plan --env <env> [--observe]` | Writes a secret-free, digest-bound plan (mode 0600); `--observe` reads fresh identity/resources without pulling credentials | Read only with `--observe` |
 | `trestle infra status --env <env>` | Shows bindings, toolchain qualification and orphans; remote state is reported as unknown, not empty | None |
 | `trestle infra doctor --env <env>` | Read-only readiness: `pass`, `fail`, `unknown`, `not_applicable` | Read only |
 | `trestle infra open <provider>` | Prints an allowlisted dashboard URL | None |
@@ -32,9 +34,81 @@ for each provider, service and operation is in
 | `trestle infra database setup --resource <name> --yes` | Runs your Drizzle migrations and role scripts with the operator-only owner credential, then commits only the verified restricted runtime credential for Workers | Database (migrations, roles) |
 | `trestle infra deploy --worker-target <name> --worker-url <url> --artifact-digest <digest>` | Pushes the committed runtime credential and a generation marker with `wrangler secret bulk`, then verifies through `/api/health/operational?probe=database` | Worker secrets |
 | `trestle infra database rotate-runtime … --accept-interruption <reason> --actor <name>` | Rotates the runtime password, cuts Workers over, proves the old password is rejected and retires it; `--resume <operation-id>` recovers an interrupted run | Database role, Worker secrets |
+| `trestle infra pages build --surface <app\|site\|admin>` | Compiles Functions into `dist/_worker.js` without provider/GitHub credentials | None |
+| `trestle infra pages register --env <env> --surface <surface> --account <id> --project <name> [--api-worker <name>] --actor <id> --confirm-target <account/project>` | Administrator enrollment of an existing Pages host and its exact API binding; rejects a target owned by another environment | Provider reads; control-store metadata only |
+| `trestle infra pages plan --env <env> --surface <surface> --account <id> --commit <sha> --repository <owner/repo>` | Snapshots config, assets and precompiled Functions for artifact-bound approval; new host adapter remains blocked pending hosted qualification | None |
 
-`trestle infra link` and `trestle infra credentials pull` exit with status 2 and
-the gate that blocks them.
+`trestle infra credentials pull` remains unavailable. Provider-link and Pages
+plans expose their qualification blockers and cannot turn local/fake tests into
+permission for real provider mutation.
+
+### Bootstrap and account grants
+
+The application ID is a stable control-store identity, not a new name for every
+run. `project create` plans manual project initialization only, with no template,
+install, provider service, paid plan or implicit terms acceptance. Approve the
+saved plan with the normal registered Ed25519 approver, then apply it. The
+independent control database must already exist; Trestle cannot provision the
+store that governs its own bootstrap.
+
+An unresolved project ID is explicitly `pending:…` in the plan. The executor
+journals intent, serializes the application/environment, explicitly selects the
+Stripe merchant, observes the exact resulting project ID and commits its binding
+before reporting success. An ambiguous initialization is never retried. Resume
+uses the original private workspace, or leaves the operation uncertain.
+
+The pinned provider link can create an account. Existing-account-only selection
+is not proven: the default link plan stays blocked. `--allow-account-creation`
+only adds that possibility to the review; it does not grant consent or override
+missing capability evidence. `--accept-provider-terms` likewise adds a distinct
+effect to the signed review. A completed association request is not proof that
+Projects selected a particular Neon organization or Cloudflare account. Check
+that identity before provisioning into an existing organization. Linking and
+resource creation cannot hide account creation in an unreviewed argument flag.
+
+### Pages host extension
+
+Pages is not advertised as a Projects catalog service. The generated deployment
+workflows already have direct Pages provisioning/service-binding steps; this
+extension adds the separate configuration and artifact/authority handoff. It
+deploys only to an existing, administrator-enrolled host. It never creates a
+Pages project or upgrades an account plan during upload.
+
+Use a dedicated `wrangler.pages.jsonc` containing **plain JSON in the supported
+subset**: name, `pages_build_output_dir: "./dist"`, compatibility date/flags and
+service bindings. Arbitrary build hooks, variables and other configuration
+fields are rejected. The existing API Worker configuration stays separate.
+Build the frontend, then run `pages build` if Functions are present. Rebuild the
+frontend before rebuilding Functions; existing `_worker.js` output and another
+task's deploy-config redirect are never overwritten.
+
+Register the exact account/project and API Worker through a trusted control-store
+administrator, separately from deployment. A deployment cannot enroll itself or
+change that policy through repository configuration. The target cannot be shared
+across environments without a separate migration review. Review the Pages plan
+and sign it with `infra approve … --artifact-digest <digest from the plan>`.
+Apply uses only snapshotted config/assets and precompiled Functions with
+`--no-bundle`; no source compilation receives deployment credentials. It checks
+the clean commit, repository, pinned Wrangler implementation, account access and
+existing project. Production additionally requires an exact-SHA successful,
+completed `push`/`main` run of `.github/workflows/deploy.yml` in that repository.
+
+The operation marker and artifact digest must be observed at the Pages hostname.
+An upload timeout, old marker or missing receipt stays uncertain; resume verifies
+without uploading again. Artifact delivery is separate from API/database/auth,
+browser and clinical readiness. The new adapter has local tests and real local
+Functions compilation, **not hosted qualification**, so real apply remains
+blocked. No provider login or editable plan field removes that gate.
+
+### Paid R2 qualification
+
+R2 create remains unqualified at the recorded toolchain. Local tests cover its
+paid-service confirmation, exact-ID binding and response-loss recovery, but do
+not enable it. A paid-service plan now needs a positive approved cost limit;
+zero is not paid-service consent. The adapter passes `--confirm-paid-service`
+only for that reviewed paid operation. A limit is not a provider spending cap.
+Hosted qualification requires separately authorized disposable resources, terms,
+cost, account identity and cleanup scope before the capability record changes.
 
 ### What apply can do
 

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { executeCli } from "../src/index.js";
 import { ProjectsAdapterError, StripeProjectsAdapter, verifyToolchain } from "../src/infra/adapters/stripe-projects.js";
-import { SUPPORTED_TOOLCHAIN } from "../src/infra/capabilities.js";
+import { effectsOf, SUPPORTED_TOOLCHAIN } from "../src/infra/capabilities.js";
 import { validateApiEndpoint, validatePostgresEndpoint } from "../src/infra/endpoints.js";
 import { nodeProcessRunner } from "../src/infra/process.js";
 import { createFakeProjects, mutatingCalls, type FakeProjects } from "./helpers/fake-projects.js";
@@ -58,6 +58,16 @@ describe("Projects toolchain verification", () => {
 });
 
 describe("read-only Projects adapter", () => {
+  it("refuses injected flags, output traversal and unapproved terms/paid confirmation before starting a process", async () => {
+    const projects = await adapter();
+    const calls = (await fake.calls()).length;
+    await expect(projects.read("catalog", ["--debug"])).rejects.toThrow(/positional/);
+    await expect(projects.mutate("add", ["neon/postgres", "--accept-tos"], {}, fake.home, effectsOf(["add"]))).rejects.toThrow(/positional/);
+    await expect(projects.mutate("env create", ["staging"], { output: "../../.env" }, fake.home, effectsOf(["env create"]))).rejects.toThrow(/scope/);
+    await expect(projects.mutate("link", ["neon"], { "accept-tos": true }, fake.home, effectsOf(["link"]))).rejects.toThrow(/terms acceptance/);
+    await expect(projects.mutate("init", [], { mode: "guided" }, fake.home, effectsOf(["init"]))).rejects.toThrow(/scope/);
+    expect((await fake.calls()).length).toBe(calls);
+  });
   it("refuses mutating commands without starting a process", async () => {
     const projects = await adapter();
     const before = (await fake.calls()).length;

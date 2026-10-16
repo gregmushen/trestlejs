@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 
 import { projectContext } from "../context.js";
-import { environmentNameSchema } from "../manifest.js";
+import { environmentNameSchema, loadProjectManifest } from "../manifest.js";
 import { CliFailure, type CliRuntime } from "../runtime.js";
 import { structuredOutput } from "../structured-output.js";
 import { defaultToolchainLocation, StripeProjectsAdapter, verifyToolchain, type ToolchainCheck } from "./adapters/stripe-projects.js";
@@ -20,7 +20,7 @@ import { INFRA_PATHS, readInfrastructure, type InfraEnvironment } from "./schema
 import { approvalFor, generateApproverKeys, signApproval, type SignedApproval } from "./approvals.js";
 import { applyPlan, OUTCOME_EXIT, type ApplyResult } from "./runner.js";
 import { resolveMasterKey } from "../secrets.js";
-import { projectsWorkspace } from "./doctor.js";
+import { ensurePrivateProjectsWorkspace, projectsWorkspace } from "./doctor.js";
 import { planAdopt, planDestroy, planDetach, planTierChange, type LifecyclePlan } from "./lifecycle.js";
 import { planRotation } from "./rotation.js";
 import { rotationProfileFor } from "./capability-matrix.js";
@@ -31,6 +31,11 @@ import { rotateRuntimeCredential } from "./runtime-rotation.js";
 import { OperationalHealthProbe, WranglerDeployer } from "./wrangler-deployer.js";
 import { redact } from "./redaction.js";
 import { runCommand } from "../processes.js";
+import { applyBootstrap, planBootstrap, type BootstrapPlan } from "./bootstrap.js";
+import { applyProviderLink, planProviderLink, type ProviderLinkPlan } from "./provider-link.js";
+import { applyPages, planPages, readPagesArtifact, registerPagesHost, type PagesPlan } from "./pages.js";
+import { pagesWranglerDigest, WranglerPagesHost } from "./pages-host.js";
+import { buildPagesFunctions } from "./pages-build.js";
 
 /** Test seams; production uses the real process runner and clock. */
 export type InfraRuntime = Readonly<{ runner?: ProcessRunner; now?: () => Date }>;
@@ -49,11 +54,6 @@ schemaVersion: 1
 backend: stripe-projects
 environments: {}
 `;
-
-/** Mutation commands stay registered but unavailable until their gates pass. */
-const PENDING: ReadonlyArray<[name: string, args: string, description: string, gate: string]> = [
-  ["link", "<provider>", "link a provider account to the Projects project for an environment", "provider linking has no hosted evidence yet (it may create provider accounts); see docs/STRIPE_PROJECTS_CAPABILITIES.md"],
-];
 
 export function registerInfraCommands(infra: Command, runtime: CliRuntime & { infra?: InfraRuntime }): void {
   const runner = () => runtime.infra?.runner ?? nodeProcessRunner;
@@ -83,13 +83,45 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
     if (operationId && approval.payload.operationId !== operationId) throw new CliFailure(`approval is for ${approval.payload.operationId}, not ${operationId}`);
     if (plan.environment !== environment) throw new CliFailure(`plan is for ${plan.environment}, not ${environment}`);
     const { intent, bindings } = await readInfrastructure(root);
+    if ("pages" in plan) {
+      const pages = (plan as PagesPlan).pages;
+      const manifest = await loadProjectManifest(root);
+      if (!/^apps\/[a-z][a-z0-9-]*$/u.test(pages.app) || ![manifest.apps.app, manifest.apps.site, manifest.apps.admin].includes(pages.app)) throw new CliFailure("Pages plan targets an undeclared application", 2);
+      const proposal = bindings.environments[environment];
+      if (!proposal || !manifest.apps.worker) throw new CliFailure("Pages requires a reviewed environment binding and the pinned Worker toolchain", 2);
+      const store = await controlStore();
+      try {
+        const current = await store.readGeneration(`bindings:${proposal.trestleProjectId}:${environment}`);
+        const binary = path.join(root, manifest.apps.worker, "node_modules/wrangler/bin/wrangler.js");
+        const env = Object.fromEntries(["HOME", "PATH", "CLOUDFLARE_API_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"].flatMap(key => environmentOf(key) ? [[key, environmentOf(key)!]] : []));
+        return await applyPages({ plan: plan as PagesPlan, approval, intent, binding: current ? current.data.binding as typeof proposal : proposal, artifact: await readPagesArtifact(path.join(root, pages.app)) }, { store, host: new WranglerPagesHost(root, binary, env, runner()), now });
+      } finally { await store.close(); }
+    }
     const { check, adapter } = await toolchain();
     if (!adapter) throw new CliFailure(`Projects toolchain is not qualified: ${check.ok ? "" : check.reasons.join("; ")}`, 2);
-    const workspace = projectsWorkspace(root, environment);
-    if (!(await stat(path.join(workspace, ".projects")).then(() => true, () => false))) throw new CliFailure(`${environment} has no linked Projects workspace; link the environment before applying`, 2);
-    const masterKey = await resolveMasterKey(root, environment, environmentOf("TRESTLE_MASTER_KEY"));
+    const workspace = await ensurePrivateProjectsWorkspace(root, environment);
+    if (!("bootstrap" in plan) && !(await stat(path.join(workspace, ".projects")).then(() => true, () => false))) throw new CliFailure(`${environment} has no linked Projects workspace; bootstrap the environment before applying`, 2);
     const store = await controlStore();
     try {
+      if ("bootstrap" in plan) {
+        const result = await applyBootstrap({ plan: plan as BootstrapPlan, approval, intent }, { store, adapter, workspace, toolchain: check.ok ? check.toolchain : (() => { throw new CliFailure("unverified toolchain"); })(), now });
+        if (result.outcome === "succeeded") {
+          const committed = await store.readGeneration(`bindings:${(plan as BootstrapPlan).bootstrap.applicationId}:${environment}`);
+          if (!committed) throw new CliFailure("bootstrap succeeded without a committed binding", 3);
+          const file = path.join(root, INFRA_PATHS.bindings);
+          const temporary = `${file}.${randomUUID()}.tmp`;
+          await writeFile(temporary, `${JSON.stringify({ ...bindings, environments: { ...bindings.environments, [environment]: committed.data.binding } }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+          await rename(temporary, file);
+        }
+        return result;
+      }
+      if ("providerLink" in plan) {
+        const proposal = bindings.environments[environment];
+        if (!proposal) throw new CliFailure("no reviewed Projects binding", 2);
+        const committed = await store.readGeneration(`bindings:${proposal.trestleProjectId}:${environment}`);
+        return await applyProviderLink({ plan: plan as ProviderLinkPlan, approval, intent, binding: committed ? committed.data.binding as typeof proposal : proposal }, { store, adapter, workspace, toolchain: check.ok ? check.toolchain : (() => { throw new CliFailure("unverified toolchain"); })(), now });
+      }
+      const masterKey = await resolveMasterKey(root, environment, environmentOf("TRESTLE_MASTER_KEY"));
       return await applyPlan({ plan, approval, intent, bindings }, { store, adapter, workspace, projectRoot: root, masterKey, now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)), ...(confirmAbsent ? { confirmAbsent } : {}), ...(allowDuplicate ? { allowDuplicate } : {}) });
     } finally {
       await store.close();
@@ -154,17 +186,109 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
     .description("produce a secret-free, digest-bound infrastructure plan; never provisions, rotates or pulls credentials")
     .requiredOption("--env <environment>", "target environment", remoteEnvironment)
     .option("--json", "emit versioned structured output")
-    .action(async (options: { env: InfraEnvironment; json?: boolean }, command: Command) => {
+    .option("--observe", "read fresh project identity and resources from the private workspace; never pulls credentials")
+    .action(async (options: { env: InfraEnvironment; json?: boolean; observe?: boolean }, command: Command) => {
       const context = await projectContext(command, runtime);
       const { intent, bindings } = await readInfrastructure(context.root);
-      const { check } = await toolchain();
-      const plan = planInfrastructure({ intent, bindings, environment: options.env, ...(check.ok ? { toolchain: check.toolchain } : {}), now: now() });
+      const { check, adapter } = await toolchain();
+      const observed = options.observe && adapter ? await adapter.observe(projectsWorkspace(context.root, options.env), now()) : undefined;
+      if (options.observe && (!observed || observed.status !== "ok")) throw new CliFailure(`live observation unavailable: ${observed && observed.status === "unknown" ? observed.reason : "unverified toolchain"}`, 2);
+      const plan = planInfrastructure({ intent, bindings, environment: options.env, ...(observed?.status === "ok" ? { observation: observed.observation } : {}), ...(check.ok ? { toolchain: check.toolchain } : {}), now: now() });
       const plans = path.join(context.root, INFRA_PATHS.local, "plans");
       await mkdir(plans, { recursive: true, mode: 0o700 });
       const file = path.join(plans, `${plan.digest.replace("sha256:", "")}.json`);
       await writeFile(file, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
       if (options.json) runtime.stdout(`${JSON.stringify(structuredOutput({ plan, executable: planIsExecutable(plan), file: path.relative(context.root, file) }), null, 2)}\n`);
       else runtime.stdout(formatPlan(plan, path.relative(context.root, file)));
+    });
+
+  const project = infra.command("project").description("plan initial Projects project creation with the same approval and journal safeguards as apply");
+  project.command("create")
+    .description("write a project-container bootstrap plan; does not create provider accounts or services")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .requiredOption("--application-id <id>", "stable Trestle application identity for control-store bindings")
+    .requiredOption("--stripe-account <id>", "exact Stripe merchant account ID")
+    .requiredOption("--name <name>", "new Projects project name")
+    .action(async (options: { env: InfraEnvironment; applicationId: string; stripeAccount: string; name: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      const { intent, bindings } = await readInfrastructure(context.root);
+      if (bindings.environments[options.env]) throw new CliFailure(`${options.env} is already bound; do not initialize another project`, 2);
+      const { check } = await toolchain();
+      if (!check.ok) throw new CliFailure(`unverified Projects toolchain: ${check.reasons.join("; ")}`, 2);
+      const plan = planBootstrap({ intent, environment: options.env, applicationId: options.applicationId, stripeAccountId: options.stripeAccount, name: options.name, toolchain: check.toolchain, now: now() });
+      const directory = path.join(context.root, INFRA_PATHS.local, "plans");
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      const file = path.join(directory, `bootstrap-${plan.digest.slice(7)}.json`);
+      await writeFile(file, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+      runtime.stdout(`${JSON.stringify(structuredOutput({ plan, executable: planIsExecutable(plan), file: path.relative(context.root, file) }), null, 2)}\n`);
+    });
+
+  const pages = infra.command("pages").description("direct Pages host deployment extension; does not provision through Projects");
+  pages.command("register")
+    .description("control-store administrator enrollment of an existing Pages target and its approved API binding; no resource creation")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .requiredOption("--surface <surface>", "app, site or admin")
+    .requiredOption("--account <id>", "exact Cloudflare account ID")
+    .requiredOption("--project <name>", "existing Pages project")
+    .option("--api-worker <name>", "explicitly reviewed TRESTLE_API Worker; omit for a static site")
+    .requiredOption("--actor <id>", "control-store administrator recorded with enrollment")
+    .requiredOption("--confirm-target <account/project>", "confirm the exact existing account/project")
+    .action(async (options: { env: InfraEnvironment; surface: string; account: string; project: string; apiWorker?: string; actor: string; confirmTarget: string }, command: Command) => {
+      if (!["app", "site", "admin"].includes(options.surface) || options.confirmTarget !== `${options.account}/${options.project}`) throw new CliFailure("confirm the exact existing Pages target and surface", 2);
+      const context = await projectContext(command, runtime);
+      const app = context.manifest.apps[options.surface as "app" | "site" | "admin"];
+      const worker = context.manifest.apps.worker;
+      const { bindings } = await readInfrastructure(context.root);
+      const proposal = bindings.environments[options.env];
+      if (!app || !worker || !proposal) throw new CliFailure("Pages enrollment requires a declared app and environment binding", 2);
+      const artifact = await readPagesArtifact(path.join(context.root, app));
+      const services = options.apiWorker ? { TRESTLE_API: options.apiWorker } : {};
+      if (JSON.stringify(artifact.services) !== JSON.stringify(services) || artifact.project !== options.project) throw new CliFailure("Pages config does not match the explicitly reviewed project/API binding", 2);
+      const store = await controlStore();
+      try {
+        const committed = await store.readGeneration(`bindings:${proposal.trestleProjectId}:${options.env}`);
+        if (!committed) throw new CliFailure("bootstrap the protected binding before enrolling Pages", 2);
+        const env = Object.fromEntries(["HOME", "PATH", "CLOUDFLARE_API_TOKEN"].flatMap(key => environmentOf(key) ? [[key, environmentOf(key)!]] : []));
+        await new WranglerPagesHost(context.root, path.join(context.root, worker, "node_modules/wrangler/bin/wrangler.js"), env, runner()).inspectTarget(options.account, options.project);
+        await registerPagesHost({ store, applicationId: proposal.trestleProjectId, environment: options.env, app, accountId: options.account, project: options.project, services, actor: options.actor });
+        runtime.stdout("Registered existing Pages host and API binding; no provider resource was created.\n");
+      } finally { await store.close(); }
+    });
+  pages.command("build")
+    .description("compile Functions without provider credentials into dist/_worker.js; no deployment")
+    .requiredOption("--surface <surface>", "app, site or admin")
+    .action(async (options: { surface: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      if (!["app", "site", "admin"].includes(options.surface)) throw new CliFailure("Pages surface must be app, site or admin");
+      const app = context.manifest.apps[options.surface as "app" | "site" | "admin"];
+      const worker = context.manifest.apps.worker;
+      if (!app || !worker) throw new CliFailure("Pages build requires a declared surface and the pinned Worker toolchain");
+      const result = await buildPagesFunctions(path.join(context.root, app), path.join(context.root, worker, "node_modules/wrangler/bin/wrangler.js"), runner());
+      runtime.stdout(`${JSON.stringify(structuredOutput({ ...result, deployed: false }), null, 2)}\n`);
+    });
+  pages.command("plan")
+    .description("snapshot a built Pages app, its Functions and dedicated config for artifact-bound approval")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .requiredOption("--surface <surface>", "app, site or admin")
+    .requiredOption("--account <id>", "exact Cloudflare account ID")
+    .requiredOption("--commit <sha>", "exact clean Git commit to deploy")
+    .requiredOption("--repository <owner/repo>", "GitHub repository with staging deployment evidence")
+    .action(async (options: { env: InfraEnvironment; surface: string; account: string; commit: string; repository: string }, command: Command) => {
+      const context = await projectContext(command, runtime);
+      if (!["app", "site", "admin"].includes(options.surface)) throw new CliFailure("Pages surface must be app, site or admin");
+      const app = context.manifest.apps[options.surface as "app" | "site" | "admin"];
+      const worker = context.manifest.apps.worker;
+      const { intent, bindings } = await readInfrastructure(context.root);
+      const binding = bindings.environments[options.env];
+      if (!app || !worker || !binding) throw new CliFailure("Pages requires a declared surface, Worker toolchain and reviewed Projects binding", 2);
+      const artifact = await readPagesArtifact(path.join(context.root, app));
+      const plan = planPages({ intent, binding, environment: options.env, app, accountId: options.account, artifact, commit: options.commit, repository: options.repository, wranglerSha256: await pagesWranglerDigest(path.join(context.root, worker, "node_modules/wrangler/bin/wrangler.js")), now: now() });
+      const directory = path.join(context.root, INFRA_PATHS.local, "plans");
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      const file = path.join(directory, `pages-${plan.digest.slice(7)}.json`);
+      await writeFile(file, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+      runtime.stdout(`${JSON.stringify(structuredOutput({ plan, executable: planIsExecutable(plan), artifactDigest: artifact.digest, file: path.relative(context.root, file) }), null, 2)}\n`);
+      if (plan.blockers.length) throw new CliFailure(plan.blockers.join("; "), 2);
     });
 
   infra.command("status")
@@ -505,13 +629,28 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
       }
     });
 
-  for (const [name, args, description, gate] of PENDING) {
-    infra.command(name)
-      .description(`[unavailable] ${description}`)
-      .argument(args)
-      .requiredOption("--env <environment>", "target environment", remoteEnvironment)
-      .action(() => { throw new CliFailure(`trestle infra ${name} is not available yet: ${gate}`, 2); });
-  }
+  infra.command("link")
+    .description("plan a provider account grant; does not link until a qualified signed plan is applied")
+    .argument("<provider>")
+    .requiredOption("--env <environment>", "target environment", remoteEnvironment)
+    .option("--allow-account-creation", "include possible creation of a new provider account in the approval review")
+    .option("--accept-provider-terms", "include provider terms acceptance in the approval review; never implied by login")
+    .action(async (provider: string, options: { env: InfraEnvironment; allowAccountCreation?: boolean; acceptProviderTerms?: boolean }, command: Command) => {
+      if (provider !== "neon" && provider !== "cloudflare") throw new CliFailure("provider linking is currently planned only for neon or cloudflare", 2);
+      const context = await projectContext(command, runtime);
+      const { intent, bindings } = await readInfrastructure(context.root);
+      const binding = bindings.environments[options.env];
+      if (!binding) throw new CliFailure("no reviewed Projects binding; plan project creation first", 2);
+      const { check } = await toolchain();
+      if (!check.ok) throw new CliFailure("unverified Projects toolchain", 2);
+      const plan = planProviderLink({ intent, binding, environment: options.env, provider, allowAccountCreation: options.allowAccountCreation === true, acceptTerms: options.acceptProviderTerms === true, toolchain: check.toolchain, now: now() });
+      const directory = path.join(context.root, INFRA_PATHS.local, "plans");
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      const file = path.join(directory, `link-${plan.digest.slice(7)}.json`);
+      await writeFile(file, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+      runtime.stdout(`${JSON.stringify(structuredOutput({ plan, executable: planIsExecutable(plan), file: path.relative(context.root, file) }), null, 2)}\n`);
+      if (plan.blockers.length) throw new CliFailure(`provider grant blocked: ${plan.blockers.join("; ")}`, 2);
+    });
 }
 
 function formatPlan(plan: InfraPlan, file: string): string {

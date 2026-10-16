@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { lstat, mkdir, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { StripeProjectsAdapter, ToolchainCheck } from "./adapters/stripe-projects.js";
@@ -26,6 +26,22 @@ export type DoctorInput = Readonly<{
 
 export function projectsWorkspace(root: string, environment: InfraEnvironment): string {
   return path.join(root, INFRA_PATHS.local, "projects", environment);
+}
+
+/** Mutations use only caller-owned private directories; never follow a
+ * repository symlink into another checkout or secret directory. */
+export async function ensurePrivateProjectsWorkspace(root: string, environment: InfraEnvironment): Promise<string> {
+  const base = path.join(await realpath(root), ".trestle");
+  const parent = await lstat(base);
+  if (!parent.isDirectory() || parent.isSymbolicLink()) throw new Error(".trestle must be a real directory");
+  let directory = base;
+  for (const segment of ["infrastructure.local", "projects", environment]) {
+    directory = path.join(directory, segment);
+    await mkdir(directory, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; });
+    const info = await lstat(directory);
+    if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 || (process.getuid && info.uid !== process.getuid())) throw new Error("Projects workspace must be private, caller-owned and contain no symlinks");
+  }
+  return directory;
 }
 
 async function exists(target: string): Promise<boolean> {

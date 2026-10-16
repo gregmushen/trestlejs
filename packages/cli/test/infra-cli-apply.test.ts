@@ -86,7 +86,7 @@ describe("trestle infra apply", () => {
       await run(["infra", "approve", planFile, "--env", "staging", "--approver", approverId, "--key", path.join(keyDir, "alice.pem"), "--operation-id", "op-cli-2"]);
       // Link a workspace through the fake so apply reaches its capability gate.
       const workspace = path.join(root, ".trestle", "infrastructure.local", "projects", "staging");
-      await mkdir(path.join(workspace, ".projects"), { recursive: true });
+      await mkdir(path.join(workspace, ".projects"), { recursive: true, mode: 0o700 });
       await writeFile(path.join(workspace, ".projects", "state.json"), JSON.stringify({ projectId: "proj_fake0001", outputs: { staging: ".env.staging" } }));
       await writeFile(path.join(workspace, ".projects", "state.local.json"), JSON.stringify({ active: "staging" }));
       await writeFile(path.join(fake.home, "fake-projects", "remote.json"), JSON.stringify({ accountId: "acct_fake0000001", nextId: 2, projects: { proj_fake0001: { name: "x", environments: { staging: { resources: [] } } } }, effects: {} }));
