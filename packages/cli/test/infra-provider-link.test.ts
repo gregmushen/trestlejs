@@ -77,6 +77,17 @@ it("keeps pending or unrecognized authorization uncertain and never resends it o
   expect(h.adapter.mutate).toHaveBeenCalledTimes(1);
 });
 
+it("retains sanitized native grant failure diagnostics without persisting authorization links", async () => {
+  const h = await setup();
+  h.adapter.mutate.mockRejectedValueOnce(new Error("lost https://auth.example/?code=private-code sk_live_ACCIDENTAL123456789"));
+  expect((await applyProviderLink(h.input, h.deps)).outcome).toBe("outcome_unknown");
+  const events = await h.store.events("op-link");
+  expect(events.find(e => e.kind === "infra.link.result")?.data).toMatchObject({ status: "unknown", reason: expect.stringContaining("lost") });
+  expect(JSON.stringify(events)).not.toMatch(/auth\.example|private-code|sk_live_/);
+  expect((await applyProviderLink(h.input, h.deps)).outcome).toBe("outcome_unknown");
+  expect(h.adapter.mutate).toHaveBeenCalledTimes(1);
+});
+
 it("observes an existing completed association without issuing another provider grant", async () => {
   const h = await setup();
   h.adapter.read.mockResolvedValue({ status: "ok", authenticated: true, data: status([completed]) });

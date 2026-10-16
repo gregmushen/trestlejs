@@ -29,7 +29,8 @@ describe.skipIf(!url)("project bootstrap with PostgreSQL and a separate fake pro
       const check = await verifyToolchain(location, nodeProcessRunner, { ...SUPPORTED_TOOLCHAIN, pluginSha256: fake.pluginSha256 });
       if (!check.ok) throw new Error("fake toolchain rejected");
       const adapter = new StripeProjectsAdapter(check.toolchain, location, nodeProcessRunner);
-      const capability = { ...PROJECT_BOOTSTRAP_CAPABILITY, toolchain: check.toolchain };
+      // Fake provider only; never qualify native init from this subprocess fixture.
+      const capability = { ...PROJECT_BOOTSTRAP_CAPABILITY, toolchain: check.toolchain, evidence: "hosted_verified" as const, unknowns: [] };
       const now = () => new Date("2026-10-16T12:00:00Z");
       const intent = { schemaVersion: 1, backend: "stripe-projects", environments: { staging: { projectsBinding: "fixture", resources: {} } } } as const;
       const keys = generateApproverKeys();
@@ -74,7 +75,8 @@ describe.skipIf(!url)("project bootstrap with PostgreSQL and a separate fake pro
       const check = await verifyToolchain(location, nodeProcessRunner, { ...SUPPORTED_TOOLCHAIN, pluginSha256: fake.pluginSha256 });
       if (!check.ok) throw new Error("fake toolchain rejected");
       const adapter = new StripeProjectsAdapter(check.toolchain, location, nodeProcessRunner);
-      const capability = { ...PROJECT_BOOTSTRAP_CAPABILITY, toolchain: check.toolchain };
+      // Fake provider only; never qualify native init from this subprocess fixture.
+      const capability = { ...PROJECT_BOOTSTRAP_CAPABILITY, toolchain: check.toolchain, evidence: "hosted_verified" as const, unknowns: [] };
       const intent = { schemaVersion: 1, backend: "stripe-projects", environments: { staging: { projectsBinding: "fixture", resources: {} } } } as const;
       const plan = planBootstrap({ intent, environment: "staging", applicationId: "fixture", stripeAccountId: "acct_fake0000001", name: "fixture-project", toolchain: check.toolchain, now: now(), capability });
       const keys = generateApproverKeys();

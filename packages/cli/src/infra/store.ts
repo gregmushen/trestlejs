@@ -91,6 +91,7 @@ export interface OperationStore {
   /** Explicit operator reconciliation of an uncertain or orphaned reservation. */
   reconcile(scope: string, resolution: string, actor: string, now: Date): Promise<void>;
   getReservation(scope: string): Promise<Reservation | undefined>;
+  reservationsForOperation(operationId: string): Promise<Reservation[]>;
 
   readGeneration(scope: string): Promise<Generation | undefined>;
   /** Compare-and-swap: succeeds only when the current generation equals `expected` (0 = absent). */

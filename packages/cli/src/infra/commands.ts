@@ -29,7 +29,7 @@ import { setupDatabase, type ScriptRunner } from "./database-setup.js";
 import { deployCredentials } from "./deployment.js";
 import { rotateRuntimeCredential } from "./runtime-rotation.js";
 import { OperationalHealthProbe, WranglerDeployer } from "./wrangler-deployer.js";
-import { redact } from "./redaction.js";
+import { redact, sanitizedInfraValue } from "./redaction.js";
 import { runCommand } from "../processes.js";
 import { applyBootstrap, planBootstrap, type BootstrapPlan } from "./bootstrap.js";
 import { applyProviderLink, planProviderLink, type ProviderLinkPlan } from "./provider-link.js";
@@ -351,9 +351,21 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
     .argument("<id>")
     .action(async (id: string, _options: unknown, command: Command) => {
       if (!/^[A-Za-z0-9_-]{1,80}$/u.test(id)) throw new CliFailure("operation IDs are alphanumeric");
+      if (environmentOf("TRESTLE_INFRA_CONTROL_DATABASE_URL")) {
+        let store;
+        try { store = await controlStore(); }
+        catch { throw new CliFailure("durable operation store unavailable; local checkpoints are not authoritative", 3); }
+        try {
+          const record = await store.getOperation(id);
+          if (!record) throw new CliFailure(`no durable operation record ${id}`, 2);
+          const value = { operation: record, events: await store.events(id), reservations: await store.reservationsForOperation(id) };
+          runtime.stdout(`${JSON.stringify(structuredOutput(sanitizedInfraValue(value)), null, 2)}\n`);
+        } finally { await store.close(); }
+        return;
+      }
       const context = await projectContext(command, runtime);
       const record = await readFile(path.join(context.root, INFRA_PATHS.local, "operations", `${id}.json`), "utf8").catch(() => undefined);
-      if (!record) throw new CliFailure(`no operation record ${id}`);
+      if (!record) throw new CliFailure(`no local checkpoint ${id}; configure TRESTLE_INFRA_CONTROL_DATABASE_URL to inspect durable operations`);
       runtime.stdout(record.endsWith("\n") ? record : `${record}\n`);
     });
   operation.command("resume")

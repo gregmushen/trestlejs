@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { applyBootstrap, planBootstrap } from "../src/infra/bootstrap.js";
+import { applyBootstrap, planBootstrap, PROJECT_BOOTSTRAP_CAPABILITY } from "../src/infra/bootstrap.js";
 import { approvalFor, generateApproverKeys, signApproval } from "../src/infra/approvals.js";
 import { SUPPORTED_TOOLCHAIN } from "../src/infra/capabilities.js";
 import { MemoryOperationStore } from "../src/infra/stores/memory.js";
@@ -7,6 +7,8 @@ import { MemoryOperationStore } from "../src/infra/stores/memory.js";
 const clock = () => new Date("2026-10-16T12:00:00Z");
 const intent = { schemaVersion: 1, backend: "stripe-projects", environments: { production: { projectsBinding: "lohu-production", resources: {} } } } as const;
 const keys = generateApproverKeys();
+// Fake-provider proof only: real native init remains blocked.
+const capability = { ...PROJECT_BOOTSTRAP_CAPABILITY, evidence: "hosted_verified" as const, unknowns: [], observedAt: clock().toISOString() };
 const directories: string[] = [];
 afterEach(async () => { const { rm } = await import("node:fs/promises"); for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true }); });
 
@@ -16,12 +18,12 @@ async function fixture() {
   const root = await mkdtemp(`${tmpdir()}/trestle-bootstrap-`); directories.push(root);
   const store = new MemoryOperationStore();
   await store.registerApprover("greg", keys.publicKeyPem, ["production"], clock());
-  const plan = planBootstrap({ intent, environment: "production", applicationId: "lohu", stripeAccountId: "acct_example123", name: "lohu-production", toolchain: SUPPORTED_TOOLCHAIN, now: clock() });
+  const plan = planBootstrap({ intent, environment: "production", applicationId: "lohu", stripeAccountId: "acct_example123", name: "lohu-production", toolchain: SUPPORTED_TOOLCHAIN, now: clock(), capability });
   const approval = signApproval(approvalFor(plan, { operationId: "op-bootstrap", approverId: "greg", now: clock() }), keys.privateKeyPem);
   let initialized = false;
   const mutate = vi.fn(async () => { initialized = true; return { status: "ok", data: {} } as const; });
   const observe = vi.fn(async () => initialized ? { status: "ok", observation: { observedAt: clock().toISOString(), stripeAccountId: "acct_example123", projectsProjectId: "project_actual123", projectsEnvironment: "default", complete: true, resources: [] } } as const : { status: "unknown", reason: "not initialized" } as const);
-  return { root, store, plan, approval, mutate, observe, deps: { store, adapter: { mutate, observe }, workspace: root, now: clock, simulation: true, toolchain: SUPPORTED_TOOLCHAIN } };
+  return { root, store, plan, approval, mutate, observe, deps: { store, adapter: { mutate, observe }, workspace: root, now: clock, simulation: true, capability, toolchain: SUPPORTED_TOOLCHAIN } };
 }
 
 it("plans project creation without inventing an existing project identity or making provider calls", () => {
@@ -29,12 +31,30 @@ it("plans project creation without inventing an existing project identity or mak
   expect(plan.target?.projectsProjectId).toMatch(/^pending:/);
   expect(plan.operations[0]?.effects).toContain("remote_project_create");
   expect(plan.bootstrap).toMatchObject({ name: "lohu-production", applicationId: "lohu" });
+  expect(plan.operations[0]?.capability.allowed).toBe(false);
+  expect(plan.blockers.join(" ")).toMatch(/native.*retr|idempotency/i);
+});
+
+it("journals bounded sanitized unknown outcomes and observation failures without resending", async () => {
+  const h = await fixture();
+  h.mutate.mockRejectedValueOnce(new Error("native failure https://auth.example/authorize?code=private-code sk_live_ACCIDENTAL123456789\n" + "x".repeat(1000)));
+  h.observe.mockResolvedValue({ status: "unknown", reason: "lookup https://auth.example/?token=hidden napi_abcdefghijklmnop1234" } as never);
+  expect((await applyBootstrap({ plan: h.plan, approval: h.approval, intent }, h.deps)).outcome).toBe("outcome_unknown");
+  const events = await h.store.events("op-bootstrap");
+  expect(events.find(e => e.kind === "infra.bootstrap.result")?.data).toMatchObject({ status: "unknown" });
+  const reason = events.find(e => e.kind === "infra.bootstrap.result")?.data.reason;
+  expect(typeof reason).toBe("string");
+  expect(String(reason).length).toBeLessThanOrEqual(300);
+  expect(events.find(e => e.kind === "infra.bootstrap.observation_unavailable")?.data.reason).toMatch(/lookup/);
+  expect(JSON.stringify(events)).not.toMatch(/private-code|sk_live_|napi_|auth\.example|token=hidden/);
+  expect((await applyBootstrap({ plan: h.plan, approval: h.approval, intent }, h.deps)).outcome).toBe("outcome_unknown");
+  expect(h.mutate).toHaveBeenCalledTimes(1);
 });
 
 it("rejects credential-shaped application IDs without echoing them into a plan or diagnostic", () => {
   const secret = "sk_live_ACCIDENTAL123456789";
   try {
-    planBootstrap({ intent, environment: "production", applicationId: secret, stripeAccountId: "acct_example123", name: "lohu-production", toolchain: SUPPORTED_TOOLCHAIN, now: clock() });
+    planBootstrap({ intent, environment: "production", applicationId: secret, stripeAccountId: "acct_example123", name: "lohu-production", toolchain: SUPPORTED_TOOLCHAIN, now: clock(), capability });
     throw new Error("credential was accepted");
   } catch (error) {
     expect(String(error)).toMatch(/must not contain credential/);
@@ -102,7 +122,7 @@ it("serializes initialization of one application even when two plans choose diff
   h.mutate.mockImplementationOnce(async () => { await pending; return { status: "ok", data: {} }; });
   const first = applyBootstrap({ plan: h.plan, approval: h.approval, intent }, h.deps);
   await vi.waitFor(() => expect(h.mutate).toHaveBeenCalledTimes(1));
-  const other = planBootstrap({ intent, environment: "production", applicationId: "lohu", stripeAccountId: "acct_example123", name: "another-name", toolchain: SUPPORTED_TOOLCHAIN, now: clock() });
+  const other = planBootstrap({ intent, environment: "production", applicationId: "lohu", stripeAccountId: "acct_example123", name: "another-name", toolchain: SUPPORTED_TOOLCHAIN, now: clock(), capability });
   const approval = signApproval(approvalFor(other, { operationId: "op-other-name", approverId: "greg", now: clock() }), keys.privateKeyPem);
   let second;
   try { second = await applyBootstrap({ plan: other, approval, intent }, h.deps); } finally { release(); await first; }
@@ -125,7 +145,7 @@ it("rechecks the binding after a delayed reservation in a separate workspace", a
   const { mkdtemp } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const otherRoot = await mkdtemp(`${tmpdir()}/trestle-bootstrap-late-`); directories.push(otherRoot);
-  const otherPlan = planBootstrap({ intent, environment: "production", applicationId: "lohu", stripeAccountId: "acct_example123", name: "another-name", toolchain: SUPPORTED_TOOLCHAIN, now: clock() });
+  const otherPlan = planBootstrap({ intent, environment: "production", applicationId: "lohu", stripeAccountId: "acct_example123", name: "another-name", toolchain: SUPPORTED_TOOLCHAIN, now: clock(), capability });
   const otherApproval = signApproval(approvalFor(otherPlan, { operationId: "op-delayed", approverId: "greg", now: clock() }), keys.privateKeyPem);
   let release!: () => void;
   let reached!: () => void;

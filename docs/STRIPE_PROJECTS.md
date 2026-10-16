@@ -18,7 +18,7 @@ for each provider, service and operation is in
 | Command | What it does | Remote effects |
 | --- | --- | --- |
 | `trestle infra init --backend stripe-projects` | Writes `.trestle/infrastructure.yaml`, an empty bindings file, and ignores `.trestle/infrastructure.local/` | None |
-| `trestle infra project create --env <env> --application-id <id> --stripe-account <acct_id> --name <name>` | Writes a signed-approval-ready bootstrap plan for a project container; apply journals creation before the project has an ID | None until approved apply |
+| `trestle infra project create --env <env> --application-id <id> --stripe-account <acct_id> --name <name>` | Writes a bootstrap plan; real creation is blocked by the pinned native retry/idempotency gap | None until approved apply |
 | `trestle infra link <neon\|cloudflare> --env <env>` | Writes a provider-grant plan, including possible account creation and explicit terms acceptance; currently blocked by qualification evidence | None until a qualified approved apply |
 | `trestle infra catalog [provider] [--live]` | Shows recorded evidence per service and operation; `--live` reads the current catalog in an isolated directory | Read only |
 | `trestle infra plan --env <env> [--observe]` | Writes a secret-free, digest-bound plan (mode 0600); `--observe` reads fresh identity/resources without pulling credentials | Read only with `--observe` |
@@ -28,7 +28,7 @@ for each provider, service and operation is in
 | `trestle infra approver keygen` / `approver register` | Creates an Ed25519 approver key outside the project; registers its public key in the control store | Control store only |
 | `trestle infra approve <plan-file>` | Signs an approval bound to one plan, operation, target, effect set and expiry | None |
 | `trestle infra apply <plan-file> --approval <file>` | Executes an approved plan with fresh preconditions | Provider, only for qualified operations |
-| `trestle infra operation show <id>` / `operation resume <id>` | Inspects or resumes an operation from its journal | Provider, only for qualified operations |
+| `trestle infra operation show <id>` / `operation resume <id>` | Shows the canonical control-store operation, events and reservations with sanitized diagnostics; resumes only qualified operations | Provider, only for qualified operations |
 | `trestle infra adopt`, `upgrade`, `detach`, `destroy` | Write exact-ID lifecycle plans with their safeguards | None |
 | `trestle infra rotate <credential-binding>` | Writes a rotation plan for the provider's real rotation unit and consumers | None |
 | `trestle infra database setup --resource <name> --yes` | Runs your Drizzle migrations and role scripts with the operator-only owner credential, then commits only the verified restricted runtime credential for Workers | Database (migrations, roles) |
@@ -43,6 +43,12 @@ plans expose their qualification blockers and cannot turn local/fake tests into
 permission for real provider mutation.
 
 ### Bootstrap and account grants
+
+Real project creation is currently blocked: pinned native `init` retries its
+create POST without a proven shared idempotency key across attempts. The
+[hosted qualification record](STRIPE_PROJECTS_HOSTED_QUALIFICATION_20261016.md)
+explains this boundary and the retained uncertain attempt. A single wrapper
+invocation is not proof of a single native create.
 
 The application ID is a stable control-store identity, not a new name for every
 run. `project create` plans manual project initialization only, with no template,
@@ -96,9 +102,11 @@ completed `push`/`main` run of `.github/workflows/deploy.yml` in that repository
 The operation marker and artifact digest must be observed at the Pages hostname.
 An upload timeout, old marker or missing receipt stays uncertain; resume verifies
 without uploading again. Artifact delivery is separate from API/database/auth,
-browser and clinical readiness. The new adapter has local tests and real local
-Functions compilation, **not hosted qualification**, so real apply remains
-blocked. No provider login or editable plan field removes that gate.
+browser and clinical readiness. A standalone hosted native-adapter probe now
+verifies the real upload receipt,
+release marker, asset delivery and Pages-to-Worker binding. The full signed
+apply path remains unverified while the project binding is unresolved, so real
+apply remains blocked. No provider login or editable plan field removes that gate.
 
 ### Paid R2 qualification
 
@@ -176,7 +184,7 @@ preconditions with the reason.
 
 ## Recovery
 
-1. `trestle infra operation show <id>` shows the journal with no secret values.
+1. With `TRESTLE_INFRA_CONTROL_DATABASE_URL` configured, `trestle infra operation show <id>` shows the canonical operation, events and related uncertainty reservations with sanitized diagnostics. It never substitutes a local checkpoint for the durable record. Without that URL, legacy local checkpoint inspection remains available but cannot prove durable operation state.
 2. `trestle infra operation resume <id> --env <env> --plan <file> --approval <file>`
    re-checks approver authority, approval expiry, target identity and drift, then
    continues from the last committed step. An expired approval needs a renewal

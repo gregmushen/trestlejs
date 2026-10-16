@@ -42,3 +42,33 @@ Reviewed the uncommitted diff from `a9f3cf3f5dceda2a3136064a9e4fd09e4678757c`: `
 Independently reran both focused files: **21 tests passed**, no skips. Reran both original reproduction scripts against the updated build: the bootstrap race now makes exactly one initialization and returns a controlled `blocked` result for the loser; the mixed provider status now returns `outcome_unknown` and retains its uncertain reservation/in-flight effect. No implementation files were changed by the reviewer.
 
 The author's full disposable-PostgreSQL run is separate evidence and was still in progress at the time of this re-review. I did not independently rerun that integration suite. CI and actual hosted account/resource/Pages qualification remain separate gates; this re-review approves the two local fixes, not production deployment or release.
+
+## Read-only review of local hosted qualification preparation
+
+Reviewed `/Users/gregmushen/.codex/qualifications/trestle-prod-qual-20261016`, especially `operator/control-bootstrap.mjs`, against the owner's approved synthetic scope. No remote execution was performed by this reviewer.
+
+One execution blocker was found and fixed during review: the installed Neon CLI emits an unquoted connection URI even when `--output json` is set; the helper's unconditional JSON parse would therefore fail after creating the control project. The script now uses `connection-string --extended` and reads `connection.connection_string`. I checked that behavior against the installed handler at `.../neon/dist/commands/connection_string.js:128–141`, and the modified operator script passes `node --check`.
+
+No remaining blocker was established in the preparation inspected. The control bootstrap explicitly selects the Scribbl profile/organization, checks its free plan, refuses reuse by name, creates only the authorized independent control project, and uses an exclusive pre-effect journal so timeout/lost response cannot silently trigger another create. Create/list output excludes credentials; the connection response stays in process memory and is saved through the existing encrypted-secrets helper. The journal and success/error logs contain identifiers/status only. The qualification root and operator directory are private; master keys are ignored by the supplied ignore rules. The synthetic Worker returns only the test probe, and the Pages binding names that Worker under the intended account-specific Worker config. State remains `prepared_local_only` with no resources recorded.
+
+This is a read-only preparation review, not proof of remote identities, provider free-plan enforcement, hosted behavior, usage charges, CI completion or deployment. The reviewer did not run the operator script, read real credentials or provision anything.
+
+## First hosted bootstrap: follow-up static triage
+
+A subsequent hosted attempt returned an unresolved bootstrap outcome. Static/local investigation is recorded in the [hosted triage and qualification record](STRIPE_PROJECTS_HOSTED_QUALIFICATION_20261016.md). It establishes a new native-plugin retry safety blocker, confirms that requested-account manual mode itself is valid, and identifies missing durable inspection/outcome diagnostics. It does not establish the original call's root cause or justify retrying it. No provider calls or credential reads were made by the reviewer during this triage.
+
+## Re-review of bootstrap gate, diagnostics and durable inspection
+
+Reviewed the uncommitted framework diff from `812aa3b7b083761cbb1a40def4deea23e719d271`. The real bootstrap capability now correctly stays blocked for the native retry/idempotency uncertainty. Test-only simulation evidence is explicit and not wired into the real CLI. Durable operation inspection correctly prefers the PostgreSQL record/events/reservations and does not silently fall back to local checkpoints when a control database is configured. The added reservation lookup is scoped by a parameterized operation ID. Diagnostic events preserve the uncertainty/no-resend behavior.
+
+One remaining finding (P2) in `redaction.ts:safeInfraDiagnostic` / `sanitizedInfraValue`: ordinary opaque credentials are not redacted. A synthetic direct call with `Authorization: Bearer cfsyntheticopaquetoken01234567890123456789` returns that header unchanged; a synthetic nested record containing `CLOUDFLARE_API_TOKEN` and `password` members also prints their values. The existing content recognizers do not identify arbitrary Cloudflare-style tokens or passwords. The new diagnostic persistence and durable inspector should additionally redact auth headers/common secret assignments and credential-named object fields, while retaining content scanning for credentials hidden under innocent keys. Add synthetic regressions for these cases. No real credential was used in this reproduction.
+
+Independently ran bootstrap, provider-link, Pages and redaction files: **37 tests passed**, four files, no skips. Did not run another PostgreSQL suite concurrently with the author's full run. No provider calls or credential reads occurred. Pending the sanitizer correction, the local re-review remains changes requested; the native bootstrap remains intentionally unqualified, not fixed by these diagnostics changes.
+
+## Final local re-review after the sanitizer correction
+
+Rechecked the complete uncommitted diff from `812aa3b7b083761cbb1a40def4deea23e719d271`, including the narrow sanitizer follow-up. The opaque-credential finding is resolved for the demonstrated Bearer/Basic headers, credential-labeled assignments and nested credential-named fields. Content-based scanning is retained for values under unrelated keys, and nonsecret fencing/public-key/operation metadata is preserved. The added synthetic regression covers the original counterexamples.
+
+Independently reran the four focused files: **38 tests passed**, no skips; `git diff --check` passes. No remaining actionable blocker was established in this local diff. The real bootstrap gate is still closed; fake-provider tests do not reopen it. The canonical durable inspector and bounded diagnostic changes are acceptable for this scope. This is approval of these local changes, not a claim that arbitrary unlabelled free-form text can always be identified as secret.
+
+The full serial PostgreSQL/build/typecheck run remains the author's separate verification. I did not run a competing database suite. No remote actions or credential reads occurred during re-review. The existing native bootstrap attempt remains uncertain/fenced, and its native duplicate-create behavior remains unqualified. Hosted Pages adapter evidence is separate from normal signed-apply qualification and does not itself change the gate.

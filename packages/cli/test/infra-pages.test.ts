@@ -69,6 +69,17 @@ it("never resends an uncertain upload or counts an old marker as verification", 
   expect(h.host.upload).toHaveBeenCalledTimes(1);
 });
 
+it("journals sanitized upload failures while preserving the no-resend fence", async () => {
+  const h = await fixture();
+  h.host.upload = vi.fn(async () => { throw new Error("lost https://auth.example/?code=private-code sk_live_ACCIDENTAL123456789"); });
+  expect((await applyPages(h.input, h.deps)).outcome).toBe("outcome_unknown");
+  const events = await h.store.events("op-pages");
+  expect(events.find(e => e.kind === "infra.pages.result")?.data).toMatchObject({ status: "unknown", reason: expect.stringContaining("lost") });
+  expect(JSON.stringify(events)).not.toMatch(/auth\.example|private-code|sk_live_/);
+  expect((await applyPages(h.input, h.deps)).outcome).toBe("outcome_unknown");
+  expect(h.host.upload).toHaveBeenCalledTimes(1);
+});
+
 it("rejects forged approval, changed binding/artifact and a failed promotion preflight before upload", async () => {
   const h = await fixture();
   expect((await applyPages({ ...h.input, approval: { ...h.approval, signature: "forged" } }, h.deps)).outcome).toBe("blocked");

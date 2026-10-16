@@ -13,16 +13,18 @@ hosted exit blocked), `blocked`.
 Branch `codex/stripe-projects-production-support`, isolated from current
 `origin/main` at `58a659a`. Earlier authentication/prerequisite statements below
 are historical. Current authenticated read discovery succeeds with the pinned
-Projects plugin; only the old empty qualification project is observed. No new
-provider resource, production migration/deployment, provider terms, paid service
-or application Stripe payment was changed in this follow-up.
+Projects plugin; only the old empty Projects project is observed. The separately
+authorized synthetic hosted run created an independent free control database,
+a tiny API Worker and a Pages host; no production migration/deployment, paid-plan
+or payment-method change, or application Stripe payment occurred.
 
 Local implementation adds:
 
 - Project-container bootstrap plans and signed apply, independent-store intent,
   application/environment fencing, exact observed ID binding and crash/replay
-  recovery. The underlying manual `init` operation was observed in the October 2
-  hosted run; the new complete bootstrap wrapper has local/PG proof only.
+  recovery. The underlying manual `init` was observed previously, but October 16
+  inspection found an internal retry/idempotency gap. Real bootstrap creation is now blocked;
+  the first hosted wrapper attempt remains uncertain and was never retried.
 - Provider-link plan/execution and explicit account-creation/terms effects.
   Existing-only selection and unqualified real grants remain blocked. A verified
   connection request is not mislabeled as a verified provider account ID.
@@ -38,9 +40,10 @@ Local implementation adds:
 - Pages Functions compilation with a scratch HOME and no provider/GitHub
   credentials; strict config/artifact snapshots; protected host and service
   binding enrollment; signed artifact deployment and exact-SHA staging checks;
-  marker/replay handling. The new upload adapter stays unqualified pending a real
-  hosted run. Existing generated direct Pages resource steps remain the lifecycle
-  path; Pages is not added to the Projects service catalog.
+  marker/replay handling. The native host adapter passed real receipt, release
+  marker, static asset and service-binding probes; the full signed path remains
+  gated and unverified. Existing generated direct Pages resource steps remain the
+  lifecycle path; Pages is not added to the Projects service catalog.
 - Private workspace checks and positional/flag confinement, including output
   traversal, terms, paid confirmation and template-install prevention.
 
@@ -51,14 +54,16 @@ failures were fixture setup: two simulated external writers omitted the newly
 disclosed account-creation effect; one fixture created public workspace parents.
 Their permission/effect setup was tightened, preserving every original denial,
 duplicate, signature and capability assertion. Final-tree verification: build
-and typecheck pass; **60 files, 535 tests pass, no skips**, with disposable
+and typecheck pass; **60 files, 540 tests pass, no skips**, with disposable
 PostgreSQL 17 and `TRESTLE_INFRA_REQUIRE_INTEGRATION=1`. Vitest ran with
 `--maxWorkers=1 --testTimeout=30000` because unrelated workloads briefly drove
 the host load above 50. The standard recovery gate now includes the new bootstrap
 integration file. Real local compilation of both a downstream customer app and
-admin Functions passes with Wrangler 4.135.0 and a scratch HOME; no upload was
-attempted. The updated `check:infra-recovery` command separately passes all 26
-checks in five files against a new disposable database. No independent
+admin Functions passes with Wrangler 4.135.0 and a scratch HOME; no Lohu upload
+was attempted. The updated `check:infra-recovery` command separately passes all 26
+checks in five files against a new disposable database before the later
+regressions were added; the full final suite executes all current database
+regressions. Independent engineering review is recorded below; no full hosted
 acceptance or release/publication is claimed.
 
 An [independent review](STRIPE_PROJECTS_PRODUCTION_SUPPORT_REVIEW.md) found
@@ -76,12 +81,22 @@ Worker, with a US$1 usage ceiling, approved test-provider terms/possible account
 creation, no recurring paid-plan or payment-method changes, and initial resource
 retention. Actual target identities and detailed authorization remain in the
 downstream private deployment record, not this public framework repository.
-No hosted mutations have run yet.
+The native host probes passed, but project bootstrap is blocked on the
+pinned plugin retry/idempotency gap. The first bootstrap remains uncertain; no
+provider grants or R2 creates ran. See the
+[hosted qualification and triage record](STRIPE_PROJECTS_HOSTED_QUALIFICATION_20261016.md).
+Durable operation inspection and sanitized diagnostics now cover these new paths.
 
-Remaining external work: CI on the reviewed fixes, independent control-store
-enrollment and approved hosted conformance, exact provider-identity proof, then
-qualification/release of the supported path. An application deployment still requires its own configuration and release
-evidence. Local fake-provider success cannot close those gates.
+The final independent re-review passed 38 focused tests with no remaining local
+blockers. Initial CI passed at `812aa3b`; CI on the post-hosted safeguards is
+pending. The final local run passes 540 tests, including the canonical
+PostgreSQL-backed inspector and credential diagnostic regressions.
+
+Remaining external work: CI of the post-hosted safeguards,
+a supported native bootstrap path with proven stable create idempotency,
+reconciliation of the existing uncertain operation, provider grant/R2
+qualification and exact identity proof, then release of the supported path. An
+application deployment still requires its own configuration and release evidence. Local fake-provider success cannot close those gates.
 
 ## Summary
 

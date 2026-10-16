@@ -9,7 +9,7 @@ import { verifyPlanDigest, type InfraPlan } from "./planner.js";
 import type { ApplyResult, Outcome } from "./runner.js";
 import type { EnvironmentBinding, InfraEnvironment, InfrastructureIntent } from "./schema.js";
 import type { OperationStore } from "./store.js";
-import { findCredentialLeaves } from "./redaction.js";
+import { findCredentialLeaves, safeInfraDiagnostic } from "./redaction.js";
 
 export type ProviderLinkPlan = InfraPlan & { providerLink: { provider: "neon" | "cloudflare"; allowAccountCreation: boolean; acceptTerms: boolean } };
 
@@ -85,7 +85,10 @@ export async function applyProviderLink(input: { plan: ProviderLinkPlan; approva
     }
     await deps.store.beginEffect(scope, reserved.reservation.fencingToken, `${id}:link`, deps.now());
     await deps.store.appendEvent(id, "infra.link.intent", { provider, allowAccountCreation: true, acceptTerms: plan.providerLink.acceptTerms }, deps.now());
-    try { await deps.adapter.mutate("link", [provider], { yes: true, ...(plan.providerLink.acceptTerms ? { "accept-tos": true as const } : {}) }, deps.workspace, approval.payload.allowedEffects); } catch { /* No response is not proof of no grant. */ }
+    let answer;
+    try { answer = await deps.adapter.mutate("link", [provider], { yes: true, ...(plan.providerLink.acceptTerms ? { "accept-tos": true as const } : {}) }, deps.workspace, approval.payload.allowedEffects); }
+    catch (error) { answer = { status: "unknown" as const, reason: safeInfraDiagnostic(error) }; }
+    await deps.store.appendEvent(id, "infra.link.result", { status: answer.status, ...(answer.status === "rejected" ? { code: safeInfraDiagnostic(answer.code) } : answer.status === "unknown" ? { reason: safeInfraDiagnostic(answer.reason) } : {}) }, deps.now());
     await deps.store.markUncertain(scope, reserved.reservation.fencingToken, deps.now());
   }
   const found = await readAssociations();

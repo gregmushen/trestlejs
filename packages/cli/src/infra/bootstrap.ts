@@ -10,15 +10,15 @@ import { verifyPlanDigest, type InfraPlan } from "./planner.js";
 import type { ApplyResult, Outcome } from "./runner.js";
 import { externalIdSchema, logicalIdSchema, type EnvironmentBinding, type InfraEnvironment, type InfrastructureIntent } from "./schema.js";
 import type { OperationStore } from "./store.js";
-import { findCredentialLeaves } from "./redaction.js";
+import { findCredentialLeaves, safeInfraDiagnostic } from "./redaction.js";
 
-/** Project creation was observed in the October 2 hosted qualification run.
- * This qualifies manual project initialization only, never a provider link,
- * account creation, resource creation, terms acceptance or payment method. */
+/** Manual creation was observed, but October 16 inspection found a native
+ * retry loop without a stable idempotency key across create attempts. A single
+ * wrapper invocation cannot yet guarantee one project. Keep real init blocked. */
 export const PROJECT_BOOTSTRAP_CAPABILITY: CapabilityRow = {
-  provider: "stripe", service: "project", operation: "create", evidence: "hosted_verified",
-  toolchain: SUPPORTED_TOOLCHAIN, commands: ["init"], unknowns: [],
-  observedAt: "2026-10-02T02:29:04.095Z", maxAgeDays: 30,
+  provider: "stripe", service: "project", operation: "create", evidence: "documented",
+  toolchain: SUPPORTED_TOOLCHAIN, commands: ["init"], unknowns: ["native init retries project creation without a shared idempotency key; stable single-create behavior is not qualified"],
+  observedAt: "2026-10-16T20:55:00.000Z", maxAgeDays: 30,
   limitations: ["manual mode only; no template/import/install; no provider account or resource is provisioned", "lost response is reconciled from this operation's private workspace or remains uncertain; init is never retried"],
 };
 
@@ -101,7 +101,8 @@ export async function applyBootstrap(input: { plan: BootstrapPlan; approval: Sig
     await deps.store.appendEvent(id, "infra.bootstrap.intent", { workspace: path.resolve(deps.workspace), stripeAccountId: plan.target.stripeAccountId, name: plan.bootstrap.name }, deps.now());
     let answer;
     try { answer = await deps.adapter.mutate("init", [plan.bootstrap.name], { account: plan.target.stripeAccountId, mode: "manual", "skip-skills": true, "skip-install": true, yes: true }, deps.workspace, approval.payload.allowedEffects); }
-    catch { answer = { status: "unknown" as const }; }
+    catch (error) { answer = { status: "unknown" as const, reason: safeInfraDiagnostic(error) }; }
+    await deps.store.appendEvent(id, "infra.bootstrap.result", { status: answer.status, ...(answer.status === "rejected" ? { code: safeInfraDiagnostic(answer.code) } : answer.status === "unknown" ? { reason: safeInfraDiagnostic(answer.reason) } : {}) }, deps.now());
     if (answer.status === "rejected") {
       await deps.store.completeEffect(scope, reserved.reservation.fencingToken, effect, deps.now());
       await deps.store.release(scope, reserved.reservation.fencingToken);
@@ -117,6 +118,7 @@ export async function applyBootstrap(input: { plan: BootstrapPlan; approval: Sig
   }
   const observed = await deps.adapter.observe(deps.workspace, deps.now());
   if (observed.status !== "ok") {
+    await deps.store.appendEvent(id, "infra.bootstrap.observation_unavailable", { reason: safeInfraDiagnostic(observed.reason) }, deps.now());
     await deps.store.setOperationState(id, "outcome_unknown", deps.now());
     return result("outcome_unknown", "initialization may have completed; recover the original workspace and observe it, never repeat init");
   }

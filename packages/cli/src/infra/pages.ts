@@ -9,7 +9,7 @@ import { verifyPlanDigest, type InfraPlan } from "./planner.js";
 import type { ApplyResult, Outcome } from "./runner.js";
 import type { EnvironmentBinding, InfraEnvironment, InfrastructureIntent } from "./schema.js";
 import type { OperationStore } from "./store.js";
-import { findCredentialLeaves } from "./redaction.js";
+import { findCredentialLeaves, safeInfraDiagnostic } from "./redaction.js";
 
 /** Pages is a direct host-deployment extension: never pretend it is a
  * Projects catalog service or transfer its lifecycle during a Projects outage. */
@@ -152,7 +152,9 @@ export async function applyPages(input: { plan: PagesPlan; approval: SignedAppro
       try {
         const receipt = await deps.host.upload(directory, plan);
         if (receipt) await deps.store.appendEvent(id, "infra.pages.receipt", receipt, deps.now());
-      } catch { /* Verify even when the upload response was lost. */ }
+      } catch (error) {
+        await deps.store.appendEvent(id, "infra.pages.result", { status: "unknown", reason: safeInfraDiagnostic(error) }, deps.now());
+      }
       await deps.store.markUncertain(scope, reserved.reservation.fencingToken, deps.now());
     } finally { await rm(directory, { recursive: true, force: true }); }
   }

@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { executeCli } from "../src/index.js";
 import { createFakeProjects, mutatingCalls, type FakeProjects } from "./helpers/fake-projects.js";
+import { PostgresOperationStore } from "../src/infra/stores/postgres.js";
 
 const url = process.env.TRESTLE_INFRA_CONTROL_TEST_DATABASE_URL;
 let fake: FakeProjects;
@@ -70,6 +71,36 @@ describe("trestle infra apply", () => {
       await sql.unsafe("drop schema if exists trestle_infra cascade");
       await sql.end();
       void schemas;
+    });
+
+    it("inspects the durable operation, events and uncertainty without requiring or trusting a local checkpoint", async () => {
+      const root = await project();
+      const id = `op-inspect-${randomBytes(4).toString("hex")}`;
+      const store = await PostgresOperationStore.connect(url!);
+      try {
+        await store.createOperation({ id, environment: "staging", planDigest: `sha256:${"a".repeat(64)}`, approvalId: null, state: "outcome_unknown" }, new Date());
+        await store.appendEvent(id, "infra.bootstrap.intent", { name: "synthetic", reason: "https://auth.example/?code=private-code sk_live_ACCIDENTAL123456789" }, new Date());
+        const reserved = await store.reserve(`bootstrap:${id}`, id, "fixture", 600000, new Date());
+        if (reserved.status !== "acquired") throw new Error("fixture reservation unavailable");
+        await store.beginEffect(`bootstrap:${id}`, reserved.reservation.fencingToken, `${id}:init`, new Date());
+        await store.markUncertain(`bootstrap:${id}`, reserved.reservation.fencingToken, new Date());
+      } finally { await store.close(); }
+      const { run, output } = cli(root, { TRESTLE_INFRA_CONTROL_DATABASE_URL: url! });
+      expect(await run(["infra", "operation", "show", id])).toBe(0);
+      const found = JSON.parse(output.stdout).data;
+      expect(found.operation).toMatchObject({ id, state: "outcome_unknown" });
+      expect(found.events[0]).toMatchObject({ kind: "infra.bootstrap.intent" });
+      expect(found.reservations).toMatchObject([{ operationId: id, state: "uncertain", inflightEffect: `${id}:init` }]);
+      expect(output.stdout).not.toMatch(/private-code|sk_live_|auth\.example/);
+      const local = path.join(root, ".trestle/infrastructure.local/operations");
+      await mkdir(local, { recursive: true });
+      await writeFile(path.join(local, `${id}.json`), '{"state":"stale-local-succeeded"}');
+      output.stdout = "";
+      expect(await run(["infra", "operation", "show", id])).toBe(0);
+      expect(output.stdout).not.toContain("stale-local-succeeded");
+      output.stdout = "";
+      expect(await run(["infra", "operation", "show", "op-missing-record"])).not.toBe(0);
+      expect(output.stderr).toMatch(/no durable operation record/);
     });
 
     it("stays blocked by real capability evidence even with a valid signed approval", async () => {
