@@ -88,8 +88,8 @@ export async function applyProviderLink(input: { plan: ProviderLinkPlan; approva
     try { await deps.adapter.mutate("link", [provider], { yes: true, ...(plan.providerLink.acceptTerms ? { "accept-tos": true as const } : {}) }, deps.workspace, approval.payload.allowedEffects); } catch { /* No response is not proof of no grant. */ }
     await deps.store.markUncertain(scope, reserved.reservation.fencingToken, deps.now());
   }
-  const found = (await readAssociations())?.filter(row => row.status === "complete") ?? [];
-  if (found.length !== 1) {
+  const found = await readAssociations();
+  if (found === null || found.length !== 1 || found[0]!.status !== "complete") {
     await deps.store.setOperationState(id, "outcome_unknown", deps.now());
     return result("outcome_unknown", "provider authorization is pending or unrecognized; complete it with the account owner, then resume; no grant will be reissued");
   }

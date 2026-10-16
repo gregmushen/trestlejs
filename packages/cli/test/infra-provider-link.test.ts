@@ -84,6 +84,23 @@ it("observes an existing completed association without issuing another provider 
   expect(h.adapter.mutate).not.toHaveBeenCalled();
 });
 
+it.each(["pending", "unrecognized", "complete"])("keeps a complete plus %s association uncertain across resume without another grant", async secondStatus => {
+  const h = await setup();
+  h.adapter.mutate.mockImplementationOnce(async () => {
+    h.adapter.read.mockResolvedValue({ status: "ok", authenticated: true, data: status([completed, { ...completed, account_request_id: "facctrq_second", status: secondStatus }]) });
+    return { status: "ok", data: {} };
+  });
+  expect((await applyProviderLink(h.input, h.deps)).outcome).toBe("outcome_unknown");
+  expect((await applyProviderLink(h.input, h.deps)).outcome).toBe("outcome_unknown");
+  expect(await h.store.getReservation(`provider-link:${binding.stripeAccountId}:neon`)).toMatchObject({ state: "uncertain" });
+  expect((await h.store.events("op-link")).some(event => event.kind === "infra.link.verified")).toBe(false);
+  const otherApproval = signApproval(approvalFor(h.plan, { operationId: "op-other-grant", approverId: "greg", now: now() }), h.keys.privateKeyPem);
+  expect((await applyProviderLink({ ...h.input, approval: otherApproval }, h.deps)).outcome).toBe("outcome_unknown");
+  h.adapter.read.mockResolvedValue({ status: "ok", authenticated: true, data: status([completed]) });
+  expect((await applyProviderLink(h.input, h.deps)).outcome).toBe("succeeded");
+  expect(h.adapter.mutate).toHaveBeenCalledTimes(1);
+});
+
 it("refuses a provider-status document from another project before linking", async () => {
   const h = await setup();
   h.adapter.read.mockResolvedValue({ status: "ok", authenticated: true, data: { ...status([]), project: { id: "project_other", merchant_id: binding.stripeAccountId } } });

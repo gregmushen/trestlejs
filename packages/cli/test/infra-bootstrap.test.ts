@@ -120,6 +120,32 @@ it("recovers an observed project after response loss without issuing init again"
   expect(h.mutate).toHaveBeenCalledTimes(1);
 });
 
+it("rechecks the binding after a delayed reservation in a separate workspace", async () => {
+  const h = await fixture();
+  const { mkdtemp } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const otherRoot = await mkdtemp(`${tmpdir()}/trestle-bootstrap-late-`); directories.push(otherRoot);
+  const otherPlan = planBootstrap({ intent, environment: "production", applicationId: "lohu", stripeAccountId: "acct_example123", name: "another-name", toolchain: SUPPORTED_TOOLCHAIN, now: clock() });
+  const otherApproval = signApproval(approvalFor(otherPlan, { operationId: "op-delayed", approverId: "greg", now: clock() }), keys.privateKeyPem);
+  let release!: () => void;
+  let reached!: () => void;
+  const paused = new Promise<void>(resolve => { release = resolve; });
+  const arrived = new Promise<void>(resolve => { reached = resolve; });
+  const reserve = h.store.reserve.bind(h.store);
+  vi.spyOn(h.store, "reserve").mockImplementation(async (...args) => {
+    if (args[1] === "op-delayed") { reached(); await paused; }
+    return reserve(...args);
+  });
+  const late = applyBootstrap({ plan: otherPlan, approval: otherApproval, intent }, { ...h.deps, workspace: otherRoot });
+  await arrived;
+  try { expect((await applyBootstrap({ plan: h.plan, approval: h.approval, intent }, h.deps)).outcome).toBe("succeeded"); }
+  finally { release(); }
+  await expect(late).resolves.toMatchObject({ outcome: "blocked" });
+  expect(h.mutate).toHaveBeenCalledTimes(1);
+  expect((await h.store.readGeneration("bindings:lohu:production"))?.data.bootstrapOperation).toBe("op-bootstrap");
+  expect(await h.store.getReservation("projects-bootstrap:lohu:production")).toBeUndefined();
+});
+
 it("never retries a definitive rejection and rechecks revocation even after success", async () => {
   const h = await fixture();
   h.mutate.mockResolvedValueOnce({ status: "rejected", code: "DENIED", message: "denied" } as never);

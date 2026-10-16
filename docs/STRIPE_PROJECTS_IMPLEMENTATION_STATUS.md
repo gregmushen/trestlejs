@@ -51,7 +51,7 @@ failures were fixture setup: two simulated external writers omitted the newly
 disclosed account-creation effect; one fixture created public workspace parents.
 Their permission/effect setup was tightened, preserving every original denial,
 duplicate, signature and capability assertion. Final-tree verification: build
-and typecheck pass; **60 files, 530 tests pass, no skips**, with disposable
+and typecheck pass; **60 files, 535 tests pass, no skips**, with disposable
 PostgreSQL 17 and `TRESTLE_INFRA_REQUIRE_INTEGRATION=1`. Vitest ran with
 `--maxWorkers=1 --testTimeout=30000` because unrelated workloads briefly drove
 the host load above 50. The standard recovery gate now includes the new bootstrap
@@ -61,11 +61,26 @@ attempted. The updated `check:infra-recovery` command separately passes all 26
 checks in five files against a new disposable database. No independent
 acceptance or release/publication is claimed.
 
-Remaining external work: enroll an independent control store and approver;
-authorize scoped hosted account-link/R2/Pages conformance (including costs,
-possible account creation, terms and cleanup); prove exact desired provider
-accounts; independently review the changes; then qualify/release the supported
-path. An application deployment still requires its own configuration and release
+An [independent review](STRIPE_PROJECTS_PRODUCTION_SUPPORT_REVIEW.md) found
+two issues: bootstrap state read before reservation acquisition could permit a
+second project creation; mixed completed/pending provider associations could
+clear an uncertainty fence. Both were reproduced before fixing. The reviewer
+re-ran 21 focused tests and both original reproductions and found no remaining
+blockers. New regressions include two PostgreSQL connections, distinct private
+workspaces and a separate fake-provider subprocess.
+
+The owner separately authorized synthetic hosted qualification after independent
+review and CI pass: one free independent Neon control project, one disposable
+Projects project, up to two empty R2 buckets, one Pages host and one tiny API
+Worker, with a US$1 usage ceiling, approved test-provider terms/possible account
+creation, no recurring paid-plan or payment-method changes, and initial resource
+retention. Actual target identities and detailed authorization remain in the
+downstream private deployment record, not this public framework repository.
+No hosted mutations have run yet.
+
+Remaining external work: CI on the reviewed fixes, independent control-store
+enrollment and approved hosted conformance, exact provider-identity proof, then
+qualification/release of the supported path. An application deployment still requires its own configuration and release
 evidence. Local fake-provider success cannot close those gates.
 
 ## Summary

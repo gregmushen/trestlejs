@@ -68,17 +68,26 @@ export async function applyBootstrap(input: { plan: BootstrapPlan; approval: Sig
   if (existing?.state === "failed_terminal") return result("failed_terminal", "the earlier initialization was rejected; review before creating a new operation");
   if (!existing) await deps.store.createOperation({ id, environment: plan.environment, planDigest: plan.digest, approvalId: approval.payload.approvalId, state: "running" }, deps.now());
   const bindingScope = `bindings:${plan.bootstrap.applicationId}:${plan.environment}`;
-  const current = await deps.store.readGeneration(bindingScope);
-  const events = await deps.store.events(id);
-  const started = events.find((event) => event.kind === "infra.bootstrap.intent");
-  if (started && started.data.workspace !== path.resolve(deps.workspace)) return result("blocked", "resume must use the original private Projects workspace");
-  if (current && current.data.bootstrapOperation !== id) return result("blocked", "this application/environment is already bound; do not create another project");
   // Serialize the application binding, not its mutable display name. Two
   // plans with different names/accounts must not create two projects for it.
   const scope = `projects-bootstrap:${plan.bootstrap.applicationId}:${plan.environment}`;
   const reserved = await deps.store.reserve(scope, id, `bootstrap-${randomUUID()}`, 600_000, deps.now());
   if (reserved.status === "busy") return result("failed_retryable", "another bootstrap holds this application/environment");
   if (reserved.status === "uncertain" && reserved.reservation.operationId !== id) return result("outcome_unknown", "another project's initialization is uncertain; reconcile it first");
+
+  // Another process may have completed while this caller was acquiring the
+  // reservation. Only state read inside this boundary can authorize init.
+  const current = await deps.store.readGeneration(bindingScope);
+  const events = await deps.store.events(id);
+  const started = events.find((event) => event.kind === "infra.bootstrap.intent");
+  const blocked = started && started.data.workspace !== path.resolve(deps.workspace)
+    ? "resume must use the original private Projects workspace"
+    : current && current.data.bootstrapOperation !== id
+      ? "this application/environment is already bound; do not create another project" : null;
+  if (blocked) {
+    if (reserved.status === "acquired") await deps.store.release(scope, reserved.reservation.fencingToken);
+    return result("blocked", blocked);
+  }
 
   if (!started) {
     const hasState = await stat(path.join(deps.workspace, ".projects")).then(() => true, () => false);
