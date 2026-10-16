@@ -103,6 +103,10 @@ export class PostgresOperationStore implements OperationStore {
     return new PostgresOperationStore(sql, schema);
   }
 
+  async reservationsForOperation(operationId: string): Promise<Reservation[]> {
+    return (await this.sql.unsafe(`select * from ${this.table("reservations")} where operation_id = $1 order by scope`, [operationId])).map(reservationFrom);
+  }
+
   close(): Promise<void> { return this.sql.end({ timeout: 5 }); }
 
   private table(name: string): string { return `${this.schema}.${name}`; }

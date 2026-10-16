@@ -14,6 +14,9 @@ export type ProcessSpec = Readonly<{
   env: Readonly<Record<string, string>>;
   timeoutMs: number;
   maxOutputBytes: number;
+  /** Flat, schema-validated service configuration serialized as exactly one
+   * argv value. Raw arguments retain the strict shell-syntax rejection. */
+  jsonArgument?: Readonly<{ index: number; value: Readonly<Record<string, string>> }>;
 }>;
 
 export type ProcessResult = Readonly<{
@@ -49,8 +52,15 @@ export const nodeProcessRunner: ProcessRunner = {
   async run(spec) {
     if (!spec.executable.startsWith("/")) throw new ProcessSpecError("executables must be absolute paths; PATH lookup is not used");
     assertSafeArguments(spec.args);
+    const args = [...spec.args];
+    if (spec.jsonArgument) {
+      const { index, value } = spec.jsonArgument;
+      const entries = Object.entries(value);
+      if (!Number.isInteger(index) || args[index] !== "TRESTLE_JSON_CONFIG" || args[index - 1] !== "--config" || entries.length === 0 || entries.length > 16 || entries.some(([key, member]) => !/^[a-z][a-z_]{0,63}$/u.test(key) || typeof member !== "string" || !/^[a-z0-9][a-z0-9-]{0,127}$/u.test(member))) throw new ProcessSpecError("invalid structured configuration argument");
+      args[index] = JSON.stringify(Object.fromEntries(entries));
+    }
     return await new Promise((resolve, reject) => {
-      const child = spawn(spec.executable, [...spec.args], { cwd: spec.cwd, env: { ...spec.env }, shell: false, stdio: ["ignore", "pipe", "pipe"], detached: true });
+      const child = spawn(spec.executable, args, { cwd: spec.cwd, env: { ...spec.env }, shell: false, stdio: ["ignore", "pipe", "pipe"], detached: true });
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let bytes = 0;

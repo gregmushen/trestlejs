@@ -10,11 +10,11 @@ export type EvidenceStatus = "documented" | "locally_tested" | "hosted_verified"
 
 export type InfraOperation =
   | "discover" | "link" | "create" | "adopt" | "inspect" | "delete" | "detach"
-  | "credentials_pull" | "rotate" | "tier_change" | "environment_membership";
+  | "credentials_pull" | "rotate" | "tier_change" | "environment_membership" | "deploy";
 
 /** Every effect a plugin command can have, local as well as remote. */
 export type CommandEffect =
-  | "remote_read" | "remote_link" | "remote_project_create" | "remote_resource_create" | "remote_resource_delete"
+  | "remote_read" | "remote_link" | "remote_project_create" | "remote_account_create" | "remote_terms_acceptance" | "remote_host_deploy" | "remote_resource_create" | "remote_resource_delete"
   | "remote_tier_change" | "remote_credential_issue" | "remote_secret_store_write" | "remote_membership_change"
   | "local_cache_write" | "local_gitignore_write" | "local_state_write" | "local_plaintext_credentials"
   | "local_vault_write" | "local_agent_skills" | "local_install_command" | "browser_launch" | "may_charge";
@@ -41,8 +41,8 @@ export const COMMAND_EFFECTS: Readonly<Record<string, readonly CommandEffect[]>>
   "env list": ["remote_read", "local_cache_write"],
   "env show": ["remote_read", "local_cache_write"],
   "init": ["remote_project_create", "local_state_write", "local_gitignore_write", "local_agent_skills", "local_install_command"],
-  "link": ["remote_link", "local_state_write"],
-  "add": ["remote_link", "remote_resource_create", "remote_secret_store_write", "local_state_write", "local_vault_write", "local_plaintext_credentials", "may_charge"],
+  "link": ["remote_link", "remote_account_create", "local_state_write"],
+  "add": ["remote_link", "remote_account_create", "remote_resource_create", "remote_secret_store_write", "local_state_write", "local_vault_write", "local_plaintext_credentials", "may_charge"],
   "rotate": ["remote_credential_issue", "remote_secret_store_write", "local_vault_write", "local_plaintext_credentials"],
   "upgrade": ["remote_tier_change", "local_vault_write", "local_plaintext_credentials", "may_charge"],
   "downgrade": ["remote_tier_change", "local_vault_write", "local_plaintext_credentials", "may_charge"],
@@ -94,7 +94,7 @@ export type ResolvedCapability = Readonly<{
   reasons: readonly string[];
 }>;
 
-export const MUTATING: ReadonlySet<InfraOperation> = new Set(["link", "create", "adopt", "delete", "detach", "rotate", "tier_change", "environment_membership", "credentials_pull"]);
+export const MUTATING: ReadonlySet<InfraOperation> = new Set(["link", "create", "adopt", "delete", "detach", "rotate", "tier_change", "environment_membership", "credentials_pull", "deploy"]);
 
 export function effectsOf(commands: readonly string[]): CommandEffect[] {
   const effects = new Set<CommandEffect>();

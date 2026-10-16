@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { environmentNameSchema } from "../manifest.js";
 import { findCredentialLeaves, redact } from "./redaction.js";
+import { serviceConfiguration } from "./configuration.js";
 
 /**
  * Infrastructure intent, bindings and observations (spec §9–§10, plan P02).
@@ -52,6 +53,7 @@ export const desiredResourceSchema = z.object({
   service: z.string().min(1),
   /** Exact catalog plan service_id, when the provider sells plans. */
   plan: z.string().min(1).optional(),
+  configuration: z.record(z.string(), z.string()).optional(),
   lifecycleOwner: z.enum(["stripe-projects", "direct", "external"]).default("stripe-projects"),
   disposition: z.enum(["create", "adopt"]).default("create"),
   /** Required for adopt: the exact external resource identity, never a display name. */
@@ -66,6 +68,10 @@ export const desiredResourceSchema = z.object({
   directWriterDisabled: z.boolean().default(false),
   timeoutSeconds: z.number().int().min(10).max(3600).default(300),
 }).strict().superRefine((resource, context) => {
+  if (resource.configuration) {
+    try { serviceConfiguration(resource.provider, resource.service, resource.configuration); }
+    catch { context.addIssue({ code: "custom", path: ["configuration"], message: "configuration does not match the supported provider/service contract" }); }
+  }
   if (resource.disposition === "adopt" && !resource.externalId) context.addIssue({ code: "custom", path: ["externalId"], message: "adoption requires an exact externalId" });
   if (resource.disposition === "create" && resource.externalId) context.addIssue({ code: "custom", path: ["externalId"], message: "externalId is only accepted for adoption; created resources are bound from the operation journal" });
   const outputs = Object.values(resource.credentialBindings).map((binding) => binding.as ?? binding.output);
@@ -103,6 +109,8 @@ export const resourceBindingSchema = z.object({
   providerAccountId: externalIdSchema.optional(),
   lifecycleOwner: z.enum(["stripe-projects", "direct", "external"]),
   boundBy: z.string().min(1),
+  /** Reviewed request, not a substitute for current provider observation. */
+  configuration: z.record(z.string(), z.string()).optional(),
 }).strict();
 
 export const environmentBindingSchema = z.object({

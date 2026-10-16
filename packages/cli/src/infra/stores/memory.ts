@@ -73,6 +73,10 @@ export class MemoryOperationStore implements OperationStore {
 
   async events(operationId: string): Promise<OperationEvent[]> { return this.eventLog.filter((event) => event.operationId === operationId); }
 
+  async reservationsForOperation(operationId: string): Promise<Reservation[]> {
+    return [...this.reservations.values()].filter(row => row.operationId === operationId).map(row => structuredClone(row));
+  }
+
   async reserve(scope: string, operationId: string, holder: string, leaseMs: number, now: Date): Promise<ReserveResult> {
     const existing = this.reservations.get(scope);
     const decision = decideReserve(existing, operationId, holder, now);

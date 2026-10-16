@@ -1,0 +1,18 @@
+{
+  "observedDate": "2026-10-16",
+  "pluginVersion": "0.45.0",
+  "envelopeVersion": "0.1",
+  "provider": "cloudflare",
+  "service_id": "r2:bucket",
+  "configuration_schema": {
+    "required": ["name"],
+    "type": "object",
+    "properties": {
+      "name": { "type": "string", "description": "Bucket name. Must be 3-63 characters of lowercase letters, numbers, and hyphens." },
+      "location_hint": { "type": "string", "enum": ["wnam", "enam", "weur", "eeur", "apac", "oc"], "description": "Optional R2 bucket region hint." }
+    },
+    "additionalProperties": false
+  },
+  "pricingType": "paid",
+  "evidence": "authenticated read only; no resource provisioned"
+}

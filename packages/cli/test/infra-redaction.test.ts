@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { findCredentialLeaves, looksLikeCredential, redact } from "../src/infra/redaction.js";
+import { findCredentialLeaves, looksLikeCredential, redact, safeInfraDiagnostic, sanitizedInfraValue } from "../src/infra/redaction.js";
 
 describe("infrastructure redaction", () => {
   it("recognizes credentials by content rather than key name", () => {
@@ -18,5 +18,15 @@ describe("infrastructure redaction", () => {
     const result = redact(text, ["opaque-value-1234"]);
     expect(result).not.toMatch(/sk_live_|opaque-value-1234/u);
     expect(result.match(/\[redacted\]/gu)).toHaveLength(3);
+  });
+
+  it("withholds opaque authorization and named secrets while preserving nonsecret fencing metadata", () => {
+    const opaque = "cfsyntheticopaquetoken01234567890123456789";
+    for (const text of [`Authorization: Bearer ${opaque}`, `Basic ${opaque}`, `CLOUDFLARE_API_TOKEN=${opaque}`, 'password="synthetic-password-value"', `X-API-Key: ${opaque}`, `Cookie: session=${opaque}; other=private-cookie`]) {
+      expect(safeInfraDiagnostic(text)).not.toMatch(/cfsynthetic|synthetic-password-value|private-cookie/);
+    }
+    const result = sanitizedInfraValue({ CLOUDFLARE_API_TOKEN: opaque, password: "synthetic-password-value", accessToken: opaque, nested: [{ privateKeyPem: "synthetic-private-key", note: `Bearer ${opaque}`, unusual: "sk_live_ACCIDENTAL123456789" }], fencingToken: 17, publicKeyPem: "public-nonsecret", operationId: "op-example" });
+    expect(JSON.stringify(result)).not.toMatch(/cfsynthetic|synthetic-password-value|synthetic-private-key|sk_live_/);
+    expect(result).toMatchObject({ fencingToken: 17, publicKeyPem: "public-nonsecret", operationId: "op-example" });
   });
 });

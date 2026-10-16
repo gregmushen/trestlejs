@@ -178,6 +178,14 @@ Every generated project also contains
 same manifest, plan, Doctor checks, and source-derived inspection commands as
 a human operator.
 
+Experimental [Stripe Projects infrastructure](docs/STRIPE_PROJECTS.md) is a
+separate, signed remote-operation path. It includes project bootstrap, fresh
+resource observation and provider/Pages plans with explicit qualification gates.
+The [implementation record](docs/STRIPE_PROJECTS_IMPLEMENTATION_STATUS.md) keeps
+local tests, hosted evidence and remaining release approval distinct. This does
+not enable customer Stripe billing or turn source-only setup plans into remote
+provisioning authority.
+
 ## Secrets you can actually inspect
 
 Trestle credentials behave like Rails encrypted credentials: ciphertext can

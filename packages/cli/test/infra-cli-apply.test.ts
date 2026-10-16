@@ -8,6 +8,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { executeCli } from "../src/index.js";
 import { createFakeProjects, mutatingCalls, type FakeProjects } from "./helpers/fake-projects.js";
+import { PostgresOperationStore } from "../src/infra/stores/postgres.js";
+import { planBootstrap } from "../src/infra/bootstrap.js";
+import { SUPPORTED_TOOLCHAIN } from "../src/infra/capabilities.js";
+import { projectsWorkspace } from "../src/infra/doctor.js";
 
 const url = process.env.TRESTLE_INFRA_CONTROL_TEST_DATABASE_URL;
 let fake: FakeProjects;
@@ -72,6 +76,65 @@ describe("trestle infra apply", () => {
       void schemas;
     });
 
+    it("inspects an expired blocked bootstrap through the CLI without altering its fence or invoking any mutation", async () => {
+      const root = await project();
+      const id = `op-bootstrap-inspect-${randomBytes(4).toString("hex")}`;
+      const at = new Date("2026-10-01T00:00:00Z");
+      const intent = { schemaVersion: 1, backend: "stripe-projects", environments: { staging: { projectsBinding: "staging-infra", resources: {} } } } as const;
+      const plan = planBootstrap({ intent, environment: "staging", applicationId: id, stripeAccountId: "acct_fake0000001", name: "synthetic", toolchain: SUPPORTED_TOOLCHAIN, now: at });
+      expect(plan.blockers.length).toBeGreaterThan(0);
+      await writeFile(path.join(root, "bootstrap.json"), JSON.stringify(plan));
+      const workspace = projectsWorkspace(root, "staging");
+      await mkdir(workspace, { recursive: true, mode: 0o700 });
+      const store = await PostgresOperationStore.connect(url!);
+      try {
+        await store.createOperation({ id, environment: "staging", planDigest: plan.digest, approvalId: null, state: "outcome_unknown" }, at);
+        await store.appendEvent(id, "infra.bootstrap.intent", { name: "synthetic", workspace, stripeAccountId: "acct_fake0000001" }, at);
+        const scope = `projects-bootstrap:${id}:staging`;
+        const reserved = await store.reserve(scope, id, "fixture", 600000, at);
+        if (reserved.status !== "acquired") throw new Error("fixture reservation unavailable");
+        await store.beginEffect(scope, reserved.reservation.fencingToken, `${id}:project-init`, at);
+        await store.markUncertain(scope, reserved.reservation.fencingToken, at);
+        const before = await store.exportState();
+        const { run, output } = cli(root, { TRESTLE_INFRA_CONTROL_DATABASE_URL: url! });
+        expect(await run(["infra", "project", "inspect", id, "--env", "staging", "--plan", "bootstrap.json"])).toBe(3);
+        expect(JSON.parse(output.stdout).data).toMatchObject({ operationId: id, status: "unresolved", observationOnly: true });
+        expect(await store.exportState()).toEqual(before);
+        expect(mutatingCalls(await fake.calls())).toEqual([]);
+        expect((await fake.calls()).some(call => call.args[1] === "status")).toBe(true);
+      } finally { await store.close(); }
+    });
+
+    it("inspects the durable operation, events and uncertainty without requiring or trusting a local checkpoint", async () => {
+      const root = await project();
+      const id = `op-inspect-${randomBytes(4).toString("hex")}`;
+      const store = await PostgresOperationStore.connect(url!);
+      try {
+        await store.createOperation({ id, environment: "staging", planDigest: `sha256:${"a".repeat(64)}`, approvalId: null, state: "outcome_unknown" }, new Date());
+        await store.appendEvent(id, "infra.bootstrap.intent", { name: "synthetic", reason: "https://auth.example/?code=private-code sk_live_ACCIDENTAL123456789" }, new Date());
+        const reserved = await store.reserve(`bootstrap:${id}`, id, "fixture", 600000, new Date());
+        if (reserved.status !== "acquired") throw new Error("fixture reservation unavailable");
+        await store.beginEffect(`bootstrap:${id}`, reserved.reservation.fencingToken, `${id}:init`, new Date());
+        await store.markUncertain(`bootstrap:${id}`, reserved.reservation.fencingToken, new Date());
+      } finally { await store.close(); }
+      const { run, output } = cli(root, { TRESTLE_INFRA_CONTROL_DATABASE_URL: url! });
+      expect(await run(["infra", "operation", "show", id])).toBe(0);
+      const found = JSON.parse(output.stdout).data;
+      expect(found.operation).toMatchObject({ id, state: "outcome_unknown" });
+      expect(found.events[0]).toMatchObject({ kind: "infra.bootstrap.intent" });
+      expect(found.reservations).toMatchObject([{ operationId: id, state: "uncertain", inflightEffect: `${id}:init` }]);
+      expect(output.stdout).not.toMatch(/private-code|sk_live_|auth\.example/);
+      const local = path.join(root, ".trestle/infrastructure.local/operations");
+      await mkdir(local, { recursive: true });
+      await writeFile(path.join(local, `${id}.json`), '{"state":"stale-local-succeeded"}');
+      output.stdout = "";
+      expect(await run(["infra", "operation", "show", id])).toBe(0);
+      expect(output.stdout).not.toContain("stale-local-succeeded");
+      output.stdout = "";
+      expect(await run(["infra", "operation", "show", "op-missing-record"])).not.toBe(0);
+      expect(output.stderr).toMatch(/no durable operation record/);
+    });
+
     it("stays blocked by real capability evidence even with a valid signed approval", async () => {
       const root = await project();
       const { run, output } = cli(root, { TRESTLE_INFRA_CONTROL_DATABASE_URL: url! });
@@ -86,7 +149,7 @@ describe("trestle infra apply", () => {
       await run(["infra", "approve", planFile, "--env", "staging", "--approver", approverId, "--key", path.join(keyDir, "alice.pem"), "--operation-id", "op-cli-2"]);
       // Link a workspace through the fake so apply reaches its capability gate.
       const workspace = path.join(root, ".trestle", "infrastructure.local", "projects", "staging");
-      await mkdir(path.join(workspace, ".projects"), { recursive: true });
+      await mkdir(path.join(workspace, ".projects"), { recursive: true, mode: 0o700 });
       await writeFile(path.join(workspace, ".projects", "state.json"), JSON.stringify({ projectId: "proj_fake0001", outputs: { staging: ".env.staging" } }));
       await writeFile(path.join(workspace, ".projects", "state.local.json"), JSON.stringify({ active: "staging" }));
       await writeFile(path.join(fake.home, "fake-projects", "remote.json"), JSON.stringify({ accountId: "acct_fake0000001", nextId: 2, projects: { proj_fake0001: { name: "x", environments: { staging: { resources: [] } } } }, effects: {} }));

@@ -557,6 +557,14 @@ approval. No scheduled rotation is enabled as part of this release.
 
 ## 23. Test commands and test layers
 
+October 16 follow-up: `check:infra` and `check:infra-recovery` are implemented;
+the latter includes bootstrap crash/reconnection tests as well as the existing
+store, runner, CLI and database tests. The new bootstrap/provider-link/Pages/R2
+local implementation and its separate hosted gates are recorded in the
+[implementation status](STRIPE_PROJECTS_IMPLEMENTATION_STATUS.md#production-support-follow-up-october-16-2026).
+`check:infra-hosted` is still a proposal, not an authorization bypass or a
+qualified provider test. The historical package exits above remain separate.
+
 Existing root commands confirmed in the inspected mainline:
 
 ```sh

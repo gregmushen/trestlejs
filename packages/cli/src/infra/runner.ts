@@ -85,7 +85,7 @@ function mutationScope(binding: EnvironmentBinding): string {
 
 /** Material content of a plan for drift comparison: ignores observation time, expiry and digest. */
 function materialOperations(plan: InfraPlan): string {
-  return canonicalDigest(plan.operations.map((operation) => ({ resource: operation.resource, classification: operation.classification, provider: operation.provider, service: operation.service, plan: operation.plan ?? null, effects: operation.effects, cost: operation.cost, credentialOutputs: operation.credentialOutputs, dependsOn: operation.dependsOn })));
+  return canonicalDigest(plan.operations.map((operation) => ({ resource: operation.resource, classification: operation.classification, provider: operation.provider, service: operation.service, plan: operation.plan ?? null, configuration: operation.configuration ?? null, effects: operation.effects, cost: operation.cost, credentialOutputs: operation.credentialOutputs, dependsOn: operation.dependsOn })));
 }
 
 export async function applyPlan(input: ApplyInput, deps: RunnerDeps): Promise<ApplyResult> {
@@ -198,6 +198,7 @@ async function executeCreate(operation: PlanOperation, deps: RunnerDeps & { hold
   const messages: string[] = [];
   const hook = async (boundary: Boundary) => deps.hooks?.at?.(boundary, { resource: operation.resource });
   const resource = context.intent.environments[context.environment]!.resources[operation.resource]!;
+  const paidFlags: Readonly<Record<string, true>> = operation.cost.kind === "paid" && (operation.cost.limit?.monthlyMinor ?? 0) > 0 ? { "confirm-paid-service": true } : {};
   // Longer than the adapter's 300s mutation timeout, so a slow call cannot outlive its lease unnoticed.
   const leaseMs = deps.leaseMs ?? 600_000;
 
@@ -263,7 +264,7 @@ async function executeCreate(operation: PlanOperation, deps: RunnerDeps & { hold
       const planEffect = `${context.operationId}:${operation.resource}:plan:${attempt}`;
       await deps.store.appendEvent(context.operationId, "infra.effect.intent", { resource: operation.resource, effectId: planEffect, command: "add", plan: resource.plan }, deps.now());
       await deps.store.beginEffect(context.reservationScope, reservation.fencingToken, planEffect, deps.now());
-      const planOutcome = await deps.adapter.mutate("add", [`${resource.provider}/${resource.plan}`], {}, deps.workspace, [...new Set(operation.effects)]);
+      const planOutcome = await deps.adapter.mutate("add", [`${resource.provider}/${resource.plan}`], paidFlags, deps.workspace, [...new Set(operation.effects)]);
       if (planOutcome.status === "unknown") {
         await deps.store.markUncertain(context.reservationScope, reservation.fencingToken, deps.now()).catch(() => undefined);
         await deps.store.appendEvent(context.operationId, "infra.effect.outcome_unknown", { resource: operation.resource, effectId: planEffect, reason: planOutcome.reason }, deps.now());
@@ -286,7 +287,7 @@ async function executeCreate(operation: PlanOperation, deps: RunnerDeps & { hold
     await hook("after_intent");
     await deps.store.beginEffect(context.reservationScope, reservation.fencingToken, effectId, deps.now());
     await hook("after_begin");
-    const outcome = await deps.adapter.mutate("add", [`${resource.provider}/${resource.service}`], { name: operation.resource }, deps.workspace, [...new Set(operation.effects)]);
+    const outcome = await deps.adapter.mutate("add", [`${resource.provider}/${resource.service}`], { name: operation.resource, ...paidFlags, ...(resource.configuration ? { config: resource.configuration } : {}) }, deps.workspace, [...new Set(operation.effects)]);
     await hook("after_effect");
     if (outcome.status === "unknown") {
       // Leave the effect in flight: the reservation stays fenced and uncertain.
@@ -344,7 +345,7 @@ async function finishCreate(operation: PlanOperation, externalId: string, reserv
   if (existing) {
     binding = base;
   } else {
-    binding = { ...base, generation: base.generation + 1, resources: { ...base.resources, [operation.resource]: { provider: resource.provider, service: resource.service, ...(resource.plan ? { plan: resource.plan } : {}), externalId, lifecycleOwner: "stripe-projects", boundBy: context.operationId } } };
+    binding = { ...base, generation: base.generation + 1, resources: { ...base.resources, [operation.resource]: { provider: resource.provider, service: resource.service, ...(resource.plan ? { plan: resource.plan } : {}), ...(resource.configuration ? { configuration: resource.configuration } : {}), externalId, lifecycleOwner: "stripe-projects", boundBy: context.operationId } } };
     generation = (await deps.store.commitGeneration(scope, generation, canonicalDigest(binding), { binding })).generation;
   }
   await hook("after_binding_commit");

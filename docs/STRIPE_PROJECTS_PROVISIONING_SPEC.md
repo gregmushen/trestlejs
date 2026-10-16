@@ -365,8 +365,9 @@ All commands in this table are proposed additions.
 | Command | Contract |
 | --- | --- |
 | `trestle infra init --backend stripe-projects` | Write local configuration; no remote resources or purchases |
+| `trestle infra project create … --env <env>` | Plan project-container bootstrap with a stable application identity and exact merchant; normal signed apply, independent journal and no retry of uncertain initialization |
 | `trestle infra catalog [provider]` | Inspect sanitized service capabilities and evidence |
-| `trestle infra link <provider> --env <env>` | Explicit account authorization/linking; no implicit account or service creation |
+| `trestle infra link <provider> --env <env>` | Plan explicit account authorization/linking; account creation and terms are separate disclosed effects, and unsupported existing-account-only selection remains blocked |
 | `trestle infra adopt <resource> --env <env>` | Plan association with an existing exact resource identity |
 | `trestle infra plan --env <env>` | Produce an immutable, secret-free operation plan |
 | `trestle infra apply <plan-id> --env <env>` | Execute the approved plan with fresh preconditions |
@@ -380,6 +381,9 @@ All commands in this table are proposed additions.
 | `trestle infra operation show <id>` | Show sanitized checkpoints and recovery requirements |
 | `trestle infra operation resume <id> --env <env>` | Resume verified unfinished steps, not repeat blindly |
 | `trestle infra open <resource> --env <env>` | Open an allowlisted provider dashboard URL |
+| `trestle infra pages build --surface <surface>` | Compile Functions without provider credentials before artifact review |
+| `trestle infra pages register … --env <env>` | Trusted control-store administrator enrollment of an existing host and exact API binding; not deployment self-enrollment or resource creation |
+| `trestle infra pages plan … --env <env>` | Plan the direct Pages host extension with immutable artifact/host/repository identities; normal signed apply remains blocked until adapter qualification |
 
 Adopt/detach are distinct contracts; they must not call a provider command that
 deletes resources. Unsupported detach/adopt returns an explicit limitation.
