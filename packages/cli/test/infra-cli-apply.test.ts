@@ -9,6 +9,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeCli } from "../src/index.js";
 import { createFakeProjects, mutatingCalls, type FakeProjects } from "./helpers/fake-projects.js";
 import { PostgresOperationStore } from "../src/infra/stores/postgres.js";
+import { planBootstrap } from "../src/infra/bootstrap.js";
+import { SUPPORTED_TOOLCHAIN } from "../src/infra/capabilities.js";
+import { projectsWorkspace } from "../src/infra/doctor.js";
 
 const url = process.env.TRESTLE_INFRA_CONTROL_TEST_DATABASE_URL;
 let fake: FakeProjects;
@@ -71,6 +74,35 @@ describe("trestle infra apply", () => {
       await sql.unsafe("drop schema if exists trestle_infra cascade");
       await sql.end();
       void schemas;
+    });
+
+    it("inspects an expired blocked bootstrap through the CLI without altering its fence or invoking any mutation", async () => {
+      const root = await project();
+      const id = `op-bootstrap-inspect-${randomBytes(4).toString("hex")}`;
+      const at = new Date("2026-10-01T00:00:00Z");
+      const intent = { schemaVersion: 1, backend: "stripe-projects", environments: { staging: { projectsBinding: "staging-infra", resources: {} } } } as const;
+      const plan = planBootstrap({ intent, environment: "staging", applicationId: id, stripeAccountId: "acct_fake0000001", name: "synthetic", toolchain: SUPPORTED_TOOLCHAIN, now: at });
+      expect(plan.blockers.length).toBeGreaterThan(0);
+      await writeFile(path.join(root, "bootstrap.json"), JSON.stringify(plan));
+      const workspace = projectsWorkspace(root, "staging");
+      await mkdir(workspace, { recursive: true, mode: 0o700 });
+      const store = await PostgresOperationStore.connect(url!);
+      try {
+        await store.createOperation({ id, environment: "staging", planDigest: plan.digest, approvalId: null, state: "outcome_unknown" }, at);
+        await store.appendEvent(id, "infra.bootstrap.intent", { name: "synthetic", workspace, stripeAccountId: "acct_fake0000001" }, at);
+        const scope = `projects-bootstrap:${id}:staging`;
+        const reserved = await store.reserve(scope, id, "fixture", 600000, at);
+        if (reserved.status !== "acquired") throw new Error("fixture reservation unavailable");
+        await store.beginEffect(scope, reserved.reservation.fencingToken, `${id}:project-init`, at);
+        await store.markUncertain(scope, reserved.reservation.fencingToken, at);
+        const before = await store.exportState();
+        const { run, output } = cli(root, { TRESTLE_INFRA_CONTROL_DATABASE_URL: url! });
+        expect(await run(["infra", "project", "inspect", id, "--env", "staging", "--plan", "bootstrap.json"])).toBe(3);
+        expect(JSON.parse(output.stdout).data).toMatchObject({ operationId: id, status: "unresolved", observationOnly: true });
+        expect(await store.exportState()).toEqual(before);
+        expect(mutatingCalls(await fake.calls())).toEqual([]);
+        expect((await fake.calls()).some(call => call.args[1] === "status")).toBe(true);
+      } finally { await store.close(); }
     });
 
     it("inspects the durable operation, events and uncertainty without requiring or trusting a local checkpoint", async () => {

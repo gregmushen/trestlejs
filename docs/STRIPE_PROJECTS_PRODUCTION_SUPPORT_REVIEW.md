@@ -72,3 +72,45 @@ Rechecked the complete uncommitted diff from `812aa3b7b083761cbb1a40def4deea23e7
 Independently reran the four focused files: **38 tests passed**, no skips; `git diff --check` passes. No remaining actionable blocker was established in this local diff. The real bootstrap gate is still closed; fake-provider tests do not reopen it. The canonical durable inspector and bounded diagnostic changes are acceptable for this scope. This is approval of these local changes, not a claim that arbitrary unlabelled free-form text can always be identified as secret.
 
 The full serial PostgreSQL/build/typecheck run remains the author's separate verification. I did not run a competing database suite. No remote actions or credential reads occurred during re-review. The existing native bootstrap attempt remains uncertain/fenced, and its native duplicate-create behavior remains unqualified. Hosted Pages adapter evidence is separate from normal signed-apply qualification and does not itself change the gate.
+
+## Independent review of observe-only bootstrap inspection
+
+Reviewer: Codex independent reviewer `/root/trestle_246_independent_review`.
+Date: October 16, 2026. Reviewed the uncommitted inspection diff based on
+`a1c703741b09cafda5c2270668e3de1cf1a87a01`.
+
+Decision: **accepted for observation only; no actionable blocker found in this
+change**. This acceptance does not qualify native project creation, approve
+binding reconciliation, or resolve the existing unknown attempt.
+
+`inspectBootstrap` exposes only operation/event/reservation/generation reads and
+an adapter with `observe`; it has no creation, binding or fence-clearing method.
+It checks the stored operation's exact plan digest/environment, original intent
+and workspace, reservation/binding ownership, observed account/environment and
+empty-project identity, and any recorded creation receipt. Expired creation
+approval and the closed creation capability no longer prevent these reads.
+Missing or inconclusive provider state stays unresolved. Even a matching
+observation explicitly reports `observationOnly: true` and leaves the store
+unchanged. The CLI invokes this separate boundary rather than resuming apply,
+sanitizes its output, and returns a nonzero outcome when unresolved.
+
+Independent verification: bootstrap, provider-link, Pages and redaction suites
+pass **42 tests in four files**, no skips; `git diff --check` passes. The new unit
+cases cover expired/blocked creation authority, missing configuration,
+plan/operation/workspace mismatch, account/receipt mismatch, sanitized output
+and unchanged durable state. The CLI/PostgreSQL regression was reviewed in
+source but was not rerun by this reviewer while the author's serial database
+suite was active. No provider commands, live credential reads, remote changes
+or implementation edits occurred during this review.
+
+Additional denial cases worth adding as follow-up coverage are foreign
+reservation ownership or effect IDs, foreign/conflicting committed bindings,
+missing/duplicate bootstrap intent events, incomplete or nonempty observations,
+wrong observed environment, pending/malformed project IDs and an observation
+exception. Their corresponding checks are present in the reviewed code; these
+are coverage recommendations, not established implementation defects.
+
+The original empty-workspace attempt remains unknown and fenced. Current
+absence from a listing cannot justify another initialization. A future binding
+or fence change requires its separately reviewed reconciliation contract and
+fresh signed authority for the exact original operation and project identity.

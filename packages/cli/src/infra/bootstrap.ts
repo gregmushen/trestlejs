@@ -24,6 +24,51 @@ export const PROJECT_BOOTSTRAP_CAPABILITY: CapabilityRow = {
 
 export type BootstrapPlan = InfraPlan & Readonly<{ bootstrap: { applicationId: string; name: string } }>;
 
+export type BootstrapInspection = Readonly<{
+  operationId: string;
+  observationOnly: true;
+  status: "blocked" | "unresolved" | "observed";
+  observedAt: string;
+  projectId?: string;
+  reason: string;
+  nextStep: string;
+}>;
+
+/** Inspect an already-journaled attempt even after its creation authority has
+ * expired or been withdrawn. This boundary has no mutation adapter or store
+ * write methods: observations cannot bind a project, clear a fence, assert
+ * absence, pull credentials, or authorize another init. */
+export async function inspectBootstrap(input: { plan: BootstrapPlan; operationId: string }, deps: {
+  store: Pick<OperationStore, "getOperation" | "events" | "getReservation" | "readGeneration">;
+  adapter: Pick<MutatingAdapter, "observe">;
+  workspace: string;
+  now: () => Date;
+}): Promise<BootstrapInspection> {
+  const { plan, operationId } = input;
+  const result = (status: BootstrapInspection["status"], reason: string, projectId?: string): BootstrapInspection => ({ operationId, observationOnly: true, status, observedAt: deps.now().toISOString(), ...(projectId ? { projectId } : {}), reason, nextStep: "Do not repeat init or use pull as observation. Preserve the original fence; obtain authoritative outcome evidence and fresh signed reconciliation authority before changing a binding or reservation." });
+  if (!verifyPlanDigest(plan) || !plan.target || !externalIdSchema.safeParse(plan.bootstrap?.applicationId).success || !logicalIdSchema.safeParse(plan.bootstrap?.name).success) return result("blocked", "the original bootstrap plan is invalid");
+  const operation = await deps.store.getOperation(operationId);
+  if (!operation || operation.planDigest !== plan.digest || operation.environment !== plan.environment) return result("blocked", "the original plan does not match the durable operation");
+  const events = await deps.store.events(operationId);
+  const starts = events.filter(event => event.kind === "infra.bootstrap.intent");
+  const started = starts[0];
+  if (starts.length !== 1 || started?.data.workspace !== path.resolve(deps.workspace) || started.data.stripeAccountId !== plan.target.stripeAccountId || started.data.name !== plan.bootstrap.name) return result("blocked", "inspection requires the exact original journaled workspace and target");
+  const reservation = await deps.store.getReservation(`projects-bootstrap:${plan.bootstrap.applicationId}:${plan.environment}`);
+  if (reservation && (reservation.operationId !== operationId || reservation.inflightEffect !== `${operationId}:project-init`)) return result("blocked", "bootstrap reservation ownership differs; operator investigation required");
+  const generation = await deps.store.readGeneration(`bindings:${plan.bootstrap.applicationId}:${plan.environment}`);
+  if (generation && generation.data.bootstrapOperation !== operationId) return result("blocked", "another operation owns the application binding");
+  let answer;
+  try { answer = await deps.adapter.observe(deps.workspace, deps.now()); }
+  catch (error) { return result("unresolved", safeInfraDiagnostic(error)); }
+  if (answer.status !== "ok") return result("unresolved", safeInfraDiagnostic(answer.reason));
+  const found = answer.observation;
+  const receipts = events.filter(event => event.kind === "infra.bootstrap.created");
+  if (found.stripeAccountId !== plan.target.stripeAccountId || found.projectsEnvironment !== "default" || !found.complete || found.resources.length !== 0 || !externalIdSchema.safeParse(found.projectsProjectId).success || found.projectsProjectId.startsWith("pending:") || receipts.some(receipt => receipt.data.projectId !== found.projectsProjectId)) return result("blocked", "observation differs from the original empty manual project target or receipt");
+  const binding = generation?.data.binding as EnvironmentBinding | undefined;
+  if (generation && (!binding || binding.stripeAccountId !== found.stripeAccountId || binding.projectsProjectId !== found.projectsProjectId || binding.projectsEnvironment !== found.projectsEnvironment)) return result("blocked", "observation differs from the committed binding");
+  return result("observed", "identity observed only; binding and fence remain unchanged; reconciliation requires fresh signed authority for this operation and exact project identity", found.projectsProjectId);
+}
+
 export function planBootstrap(input: { intent: InfrastructureIntent; environment: InfraEnvironment; applicationId: string; stripeAccountId: string; name: string; toolchain: Toolchain; now: Date; capability?: CapabilityRow }): BootstrapPlan {
   const applicationId = externalIdSchema.parse(input.applicationId);
   const name = logicalIdSchema.parse(input.name);

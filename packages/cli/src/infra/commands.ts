@@ -31,7 +31,7 @@ import { rotateRuntimeCredential } from "./runtime-rotation.js";
 import { OperationalHealthProbe, WranglerDeployer } from "./wrangler-deployer.js";
 import { redact, sanitizedInfraValue } from "./redaction.js";
 import { runCommand } from "../processes.js";
-import { applyBootstrap, planBootstrap, type BootstrapPlan } from "./bootstrap.js";
+import { applyBootstrap, inspectBootstrap, planBootstrap, type BootstrapPlan } from "./bootstrap.js";
 import { applyProviderLink, planProviderLink, type ProviderLinkPlan } from "./provider-link.js";
 import { applyPages, planPages, readPagesArtifact, registerPagesHost, type PagesPlan } from "./pages.js";
 import { pagesWranglerDigest, WranglerPagesHost } from "./pages-host.js";
@@ -202,7 +202,26 @@ export function registerInfraCommands(infra: Command, runtime: CliRuntime & { in
       else runtime.stdout(formatPlan(plan, path.relative(context.root, file)));
     });
 
-  const project = infra.command("project").description("plan initial Projects project creation with the same approval and journal safeguards as apply");
+  const project = infra.command("project").description("plan Projects bootstrap and inspect existing attempts without repeating initialization");
+  project.command("inspect")
+    .description("observe an existing bootstrap from its original workspace; never creates, pulls credentials, binds or clears uncertainty")
+    .argument("<id>")
+    .requiredOption("--env <environment>", "original environment", remoteEnvironment)
+    .requiredOption("--plan <file>", "original journaled bootstrap plan, even if expired")
+    .action(async (id: string, options: { env: InfraEnvironment; plan: string }, command: Command) => {
+      if (!/^[A-Za-z0-9_-]{1,80}$/u.test(id)) throw new CliFailure("operation IDs are alphanumeric");
+      const context = await projectContext(command, runtime);
+      const plan = JSON.parse(await readFile(path.resolve(context.root, options.plan), "utf8")) as BootstrapPlan;
+      if (!plan || !("bootstrap" in plan) || plan.environment !== options.env) throw new CliFailure("provide the original bootstrap plan for this environment", 2);
+      const { check, adapter } = await toolchain();
+      if (!adapter) throw new CliFailure(`Projects read toolchain unavailable: ${check.ok ? "" : check.reasons.join("; ")}`, 2);
+      const store = await controlStore();
+      try {
+        const answer = await inspectBootstrap({ plan, operationId: id }, { store, adapter: { observe: adapter.observe.bind(adapter) }, workspace: projectsWorkspace(context.root, options.env), now });
+        runtime.stdout(`${JSON.stringify(structuredOutput(sanitizedInfraValue(answer)), null, 2)}\n`);
+        if (answer.status !== "observed") throw new CliFailure("bootstrap remains unresolved; no binding, fence or provider state was changed", 3);
+      } finally { await store.close(); }
+    });
   project.command("create")
     .description("write a project-container bootstrap plan; does not create provider accounts or services")
     .requiredOption("--env <environment>", "target environment", remoteEnvironment)

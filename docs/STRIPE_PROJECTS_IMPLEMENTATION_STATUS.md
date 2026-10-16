@@ -86,11 +86,26 @@ pinned plugin retry/idempotency gap. The first bootstrap remains uncertain; no
 provider grants or R2 creates ran. See the
 [hosted qualification and triage record](STRIPE_PROJECTS_HOSTED_QUALIFICATION_20261016.md).
 Durable operation inspection and sanitized diagnostics now cover these new paths.
+The subsequent recovery investigation also adds observation-only
+`infra project inspect`, which works with an expired original plan without
+reopening create authority. It never binds or clears uncertainty. The isolated
+`0.50.0` candidate retains the same native retry gap; the active pinned plugin
+is unchanged. Original-attempt resolution still requires authoritative outcome
+evidence; current empty listings/workspace state do not provide it.
 
 The final independent re-review passed 38 focused tests with no remaining local
 blockers. Initial CI passed at `812aa3b`; CI on the post-hosted safeguards is
 pending. The final local run passes 540 tests, including the canonical
 PostgreSQL-backed inspector and credential diagnostic regressions.
+
+The later observation-only recovery change passes build/typecheck and a full
+serial disposable-PostgreSQL run: **545 tests in 60 files, no skips**. Its four
+unit regressions were observed failing before implementation; the fifth new
+test exercises the CLI with a durable PostgreSQL journal and the separate fake
+provider. Independent re-review passes 42 focused tests with no actionable
+blocker. Actual inspection of the original hosted attempt still reports
+`unresolved`; the original operation, events and reservation remain unchanged.
+These results do not qualify create or complete reconciliation.
 
 Remaining external work: CI of the post-hosted safeguards,
 a supported native bootstrap path with proven stable create idempotency,

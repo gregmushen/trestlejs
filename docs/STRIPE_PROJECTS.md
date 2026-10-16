@@ -19,6 +19,7 @@ for each provider, service and operation is in
 | --- | --- | --- |
 | `trestle infra init --backend stripe-projects` | Writes `.trestle/infrastructure.yaml`, an empty bindings file, and ignores `.trestle/infrastructure.local/` | None |
 | `trestle infra project create --env <env> --application-id <id> --stripe-account <acct_id> --name <name>` | Writes a bootstrap plan; real creation is blocked by the pinned native retry/idempotency gap | None until approved apply |
+| `trestle infra project inspect <operation-id> --env <env> --plan <original-file>` | Observes the exact journaled bootstrap workspace, including expired plans; never changes binding or uncertainty | Read-only Projects status |
 | `trestle infra link <neon\|cloudflare> --env <env>` | Writes a provider-grant plan, including possible account creation and explicit terms acceptance; currently blocked by qualification evidence | None until a qualified approved apply |
 | `trestle infra catalog [provider] [--live]` | Shows recorded evidence per service and operation; `--live` reads the current catalog in an isolated directory | Read only |
 | `trestle infra plan --env <env> [--observe]` | Writes a secret-free, digest-bound plan (mode 0600); `--observe` reads fresh identity/resources without pulling credentials | Read only with `--observe` |
@@ -189,6 +190,18 @@ preconditions with the reason.
    re-checks approver authority, approval expiry, target identity and drift, then
    continues from the last committed step. An expired approval needs a renewal
    for the same operation; committed effects are not repeated.
+
+For a bootstrap whose create capability was withdrawn or whose plan expired,
+use `trestle infra project inspect <id> --env <env> --plan <original-file>`.
+It validates the original durable operation, plan digest, workspace and target,
+then calls only `status`. It does not require renewed create authority, invoke
+`init` or `pull`, write a binding, or clear a reservation. Exit 3 means unresolved
+or blocked; exit 0 means an identity was observed, **not** that reconciliation
+or deployment succeeded. Binding/fence reconciliation remains a separate action
+requiring fresh signed authority and the exact confirmed project identity.
+Missing workspace state or an empty current project list never proves absence.
+Native `projects pull` is unsuitable for observation: it pulls environment
+credentials and can rotate expiring credentials.
 
 ## Existing applications and leaving Projects
 

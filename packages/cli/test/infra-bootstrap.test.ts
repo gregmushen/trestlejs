@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { applyBootstrap, planBootstrap, PROJECT_BOOTSTRAP_CAPABILITY } from "../src/infra/bootstrap.js";
+import { applyBootstrap, inspectBootstrap, planBootstrap, PROJECT_BOOTSTRAP_CAPABILITY } from "../src/infra/bootstrap.js";
 import { approvalFor, generateApproverKeys, signApproval } from "../src/infra/approvals.js";
 import { SUPPORTED_TOOLCHAIN } from "../src/infra/capabilities.js";
 import { MemoryOperationStore } from "../src/infra/stores/memory.js";
@@ -25,6 +25,55 @@ async function fixture() {
   const observe = vi.fn(async () => initialized ? { status: "ok", observation: { observedAt: clock().toISOString(), stripeAccountId: "acct_example123", projectsProjectId: "project_actual123", projectsEnvironment: "default", complete: true, resources: [] } } as const : { status: "unknown", reason: "not initialized" } as const);
   return { root, store, plan, approval, mutate, observe, deps: { store, adapter: { mutate, observe }, workspace: root, now: clock, simulation: true, capability, toolchain: SUPPORTED_TOOLCHAIN } };
 }
+
+it("observes an expired bootstrap despite the closed create gate without changing durable state", async () => {
+  const h = await fixture();
+  h.mutate.mockResolvedValueOnce({ status: "unknown", reason: "lost response" } as never);
+  await applyBootstrap({ plan: h.plan, approval: h.approval, intent }, h.deps);
+  const before = await h.store.exportState();
+  h.observe.mockResolvedValue({ status: "ok", observation: { observedAt: clock().toISOString(), stripeAccountId: "acct_example123", projectsProjectId: "project_recovered", projectsEnvironment: "default", complete: true, resources: [] } });
+  const answer = await inspectBootstrap({ plan: h.plan, operationId: "op-bootstrap" }, { store: h.store, workspace: h.root, adapter: { observe: h.observe }, now: () => new Date("2026-10-18T12:00:00Z") });
+  expect(answer).toMatchObject({ status: "observed", observationOnly: true, projectId: "project_recovered" });
+  expect(await h.store.exportState()).toEqual(before);
+  expect(h.mutate).toHaveBeenCalledTimes(1);
+});
+
+it("leaves a missing bootstrap workspace unresolved and fenced, with sanitized diagnostics", async () => {
+  const h = await fixture();
+  h.mutate.mockResolvedValueOnce({ status: "unknown", reason: "lost response" } as never);
+  await applyBootstrap({ plan: h.plan, approval: h.approval, intent }, h.deps);
+  const before = await h.store.exportState();
+  h.observe.mockResolvedValue({ status: "unknown", reason: "NO_PROJECT_CONFIG https://auth.example/?token=hidden password=opaque123" } as never);
+  const answer = await inspectBootstrap({ plan: h.plan, operationId: "op-bootstrap" }, { store: h.store, workspace: h.root, adapter: { observe: h.observe }, now: clock });
+  expect(answer).toMatchObject({ status: "unresolved", observationOnly: true });
+  expect(JSON.stringify(answer)).not.toMatch(/auth\.example|opaque123/);
+  expect(await h.store.exportState()).toEqual(before);
+});
+
+it("refuses bootstrap inspection with another plan, operation, or workspace before calling the provider", async () => {
+  const h = await fixture();
+  h.mutate.mockResolvedValueOnce({ status: "unknown", reason: "lost response" } as never);
+  await applyBootstrap({ plan: h.plan, approval: h.approval, intent }, h.deps);
+  h.observe.mockClear();
+  const deps = { store: h.store, workspace: h.root, adapter: { observe: h.observe }, now: clock };
+  expect((await inspectBootstrap({ plan: { ...h.plan, bootstrap: { ...h.plan.bootstrap, name: "tampered" } }, operationId: "op-bootstrap" }, deps)).status).toBe("blocked");
+  expect((await inspectBootstrap({ plan: h.plan, operationId: "op-other" }, deps)).status).toBe("blocked");
+  expect((await inspectBootstrap({ plan: h.plan, operationId: "op-bootstrap" }, { ...deps, workspace: `${h.root}/other` })).status).toBe("blocked");
+  expect(h.observe).not.toHaveBeenCalled();
+});
+
+it("does not accept a different account or a conflicting create receipt as recovered identity", async () => {
+  const h = await fixture();
+  h.mutate.mockResolvedValueOnce({ status: "unknown", reason: "lost response" } as never);
+  await applyBootstrap({ plan: h.plan, approval: h.approval, intent }, h.deps);
+  const deps = { store: h.store, workspace: h.root, adapter: { observe: h.observe }, now: clock };
+  h.observe.mockResolvedValue({ status: "ok", observation: { observedAt: clock().toISOString(), stripeAccountId: "acct_other123", projectsProjectId: "project_recovered", projectsEnvironment: "default", complete: true, resources: [] } });
+  expect((await inspectBootstrap({ plan: h.plan, operationId: "op-bootstrap" }, deps)).status).toBe("blocked");
+  await h.store.appendEvent("op-bootstrap", "infra.bootstrap.created", { projectId: "project_original" }, clock());
+  h.observe.mockResolvedValue({ status: "ok", observation: { observedAt: clock().toISOString(), stripeAccountId: "acct_example123", projectsProjectId: "project_recovered", projectsEnvironment: "default", complete: true, resources: [] } });
+  expect((await inspectBootstrap({ plan: h.plan, operationId: "op-bootstrap" }, deps)).status).toBe("blocked");
+  expect(await h.store.readGeneration("bindings:lohu:production")).toBeUndefined();
+});
 
 it("plans project creation without inventing an existing project identity or making provider calls", () => {
   const plan = planBootstrap({ intent, environment: "production", applicationId: "lohu", stripeAccountId: "acct_example123", name: "lohu-production", toolchain: SUPPORTED_TOOLCHAIN, now: clock() });

@@ -62,3 +62,52 @@ Wrangler's new-project creation path initially tried to delegate Pages creation 
 Follow-up changes block real bootstrap creation on the native retry/idempotency unknown; expose durable operation/events/reservations through `infra operation show`; and retain bounded, credential/URL/header-redacted native outcome diagnostics. Fake bootstrap fixtures explicitly opt into qualified simulation evidence and cannot enable CLI mutation. New safety and diagnostic regressions failed before their corresponding fixes. Opaque token/password/header redaction also received a separate failing regression after independent re-review.
 
 Further project bootstrap, provider grant and R2 qualification requires a supported path with proven stable create idempotency, plus reconciliation of the existing uncertain operation. Do not silently upgrade the plugin, patch the vendor binary, bypass the evidence gate or treat a current empty listing as permission to retry. Full signed Pages apply remains unverified while the project binding is unresolved. Retain the synthetic resources and the independent journal.
+
+## Bootstrap recovery investigation
+
+The owner subsequently asked to resolve the blocker and reconcile the original
+attempt while leaving application payments alone. Plugin `0.50.0` was downloaded
+through the official installer into a separate credential-free local directory;
+the active `0.45.0` installation was not upgraded. Candidate SHA-256:
+`a06ef1e255e98c24da711cccb5832896ad3cca9505786910115696b3b4a20ab9`.
+Its embedded manual-init implementation retains the same two-attempt create
+loop and does not supply a shared idempotency key. This source inspection is
+not a hosted probe or proof that a duplicate occurred. Upgrading alone does
+not resolve the blocker. The official Tools operation search returned no
+Projects creation or historical request-log operation; no feedback was sent.
+
+Read-only inspection again found only the earlier framework test project.
+The original attempt's private workspace still returns `NO_PROJECT_CONFIG`.
+Dashboard request-history inspection requires the owner's sign-in; no
+credentials were entered or authentication attempted on the owner's behalf.
+The original request's outcome and cause remain unproven.
+
+An independently identified local recovery gap is addressed by
+`infra project inspect`: creation expiry and the withdrawn create capability
+previously prevented apply from reaching observation at all. The separate
+inspection function receives only store read methods and an `observe` adapter.
+It validates the original operation/digest/workspace/target, checks reservation
+ownership and conflicting receipts/bindings, and reports a sanitized observation.
+It has no binding write, reservation write, credential pull or initialization
+path. It accepts an expired original plan for observation only. Inspection of
+the retained real attempt returns `unresolved`; no fence was removed.
+
+Resolution needs two separate pieces of evidence:
+
+1. Original-attempt evidence: a terminal provider/request record identifying
+   every created project, or authoritative confirmation that the request did
+   not create a project and cannot still complete. Preserve the original
+   account, UTC time, operation ID and plan digest in the private operator
+   record. A current name search or elapsed time is insufficient. An observed
+   identity alone does not authorize binding/fence changes; those require fresh
+   signed reconciliation authority for the original operation and exact identity.
+2. Future-create support: a supported native implementation exposing a durable
+   per-operation idempotency key across all retries, or a proven single-attempt
+   create path without an application-level resend. Qualify response loss and
+   recovery against that exact implementation before reopening the gate.
+
+Do not use native `pull` as an observation shortcut. Static independent review
+found it unconditionally fetches environment credentials, writes local env/vault
+state and can rotate expiring credentials; no metadata-only flag is exposed in
+the inspected code. An undocumented private-API replacement, vendor-binary
+patch or repeated `init` is not adopted by this investigation.
