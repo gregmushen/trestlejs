@@ -9,6 +9,7 @@ import type { Observation } from "../schema.js";
 import { sha256 } from "../canonical.js";
 import type { ProcessRunner } from "../process.js";
 import { redact } from "../redaction.js";
+import { serviceConfiguration } from "../configuration.js";
 
 /**
  * Versioned translation to the Stripe Projects CLI (plan P03). The plugin is a
@@ -197,7 +198,7 @@ export class StripeProjectsAdapter {
    * Outcomes distinguish a definitive provider answer from an unknown one: a
    * timeout, crash or lost response never counts as "did not happen".
    */
-  async mutate(command: string, positionals: readonly string[], flags: Readonly<Record<string, string | true>>, workspace: string, approvedEffects: readonly CommandEffect[]): Promise<MutationOutcome> {
+  async mutate(command: string, positionals: readonly string[], flags: Readonly<Record<string, string | true | Readonly<Record<string, string>>>>, workspace: string, approvedEffects: readonly CommandEffect[]): Promise<MutationOutcome> {
     const effects = COMMAND_EFFECTS[command];
     if (!effects || isRemoteReadOnly(command)) throw new ProjectsAdapterError(`${command} is not a recorded mutating Projects command`);
     if (positionals.some(value => !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/u.test(value))) throw new ProjectsAdapterError("unsafe Projects positional argument; flags must use the reviewed flag channel");
@@ -205,7 +206,17 @@ export class StripeProjectsAdapter {
     if (missing.length) throw new ProjectsAdapterError(`projects ${command} has unapproved effects: ${missing.join(", ")}`);
     const allowedFlags = new Set(["name", "output", "skip-skills", "skip-install", "mode", "account", "yes", "accept-tos", "confirm-paid-service"]);
     const flagArgs: string[] = [];
+    let configuration: { offset: number; value: Readonly<Record<string, string>> } | undefined;
     for (const [flag, value] of Object.entries(flags)) {
+      if (flag === "config") {
+        if (command !== "add" || positionals.length !== 1 || positionals[0] !== "cloudflare/r2:bucket") throw new ProjectsAdapterError("configuration is unsupported for this command/service");
+        const parsed = serviceConfiguration("cloudflare", "r2:bucket", value);
+        flagArgs.push("--config");
+        configuration = { offset: flagArgs.length, value: parsed };
+        flagArgs.push("TRESTLE_JSON_CONFIG");
+        continue;
+      }
+      if (typeof value !== "string" && value !== true) throw new ProjectsAdapterError("structured values are permitted only in the configuration channel");
       if (!allowedFlags.has(flag)) throw new ProjectsAdapterError(`flag --${flag} is not permitted`);
       const valid = flag === "name" ? command === "add" && typeof value === "string" && /^[a-z][a-z0-9-]{0,62}$/u.test(value)
         : flag === "output" ? command === "env create" && typeof value === "string" && /^\.env(?:\.[a-z][a-z0-9-]{0,62})?$/u.test(value)
@@ -221,9 +232,11 @@ export class StripeProjectsAdapter {
       flagArgs.push(`--${flag}`, ...(value === true ? [] : [value]));
     }
     const verb = command === "env pull" ? ["env", "--pull"] : command.split(" ");
+    const prefix = ["projects", ...verb, ...positionals];
     const result = await this.runner.run({
       executable: this.toolchain.stripePath,
-      args: ["projects", ...verb, ...positionals, ...flagArgs, "--json", "--non-interactive"],
+      args: [...prefix, ...flagArgs, "--json", "--non-interactive"],
+      ...(configuration ? { jsonArgument: { index: prefix.length + configuration.offset, value: configuration.value } } : {}),
       cwd: workspace, env: minimalEnvironment(this.location), timeoutMs: 300_000, maxOutputBytes: this.maxOutputBytes,
     });
     if (result.timedOut) return { status: "unknown", reason: `projects ${command} timed out; the provider may still complete it` };

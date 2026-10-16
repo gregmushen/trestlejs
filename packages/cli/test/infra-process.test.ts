@@ -21,6 +21,15 @@ async function script(body: string): Promise<{ executable: string; cwd: string }
 const spec = (executable: string, cwd: string, args: string[] = []) => ({ executable, args, cwd, env: { PATH: "/usr/bin:/bin" }, timeoutMs: 5000, maxOutputBytes: 10_000 });
 
 describe("trusted process runner", () => {
+  it("serializes validated flat configuration as one argv value without relaxing raw argument rejection", async () => {
+    const { executable, cwd } = await script("process.stdout.write(JSON.stringify(process.argv.slice(2)))");
+    expect(() => assertSafeArguments(['{"name":"bucket"}'])).toThrow(ProcessSpecError);
+    const input = { ...spec(executable, cwd, ["--config", "TRESTLE_JSON_CONFIG"]), jsonArgument: { index: 1, value: { name: "fixture-bucket", location_hint: "wnam" } } };
+    const result = await nodeProcessRunner.run(input);
+    expect(JSON.parse(result.stdout)).toEqual(["--config", '{"name":"fixture-bucket","location_hint":"wnam"}']);
+    await expect(nodeProcessRunner.run({ ...input, jsonArgument: { index: 1, value: { name: "$(id)" } } })).rejects.toThrow(ProcessSpecError);
+    await expect(nodeProcessRunner.run({ ...input, args: ["--debug", "TRESTLE_JSON_CONFIG"] })).rejects.toThrow(ProcessSpecError);
+  });
   it("rejects shell syntax, whitespace and control characters before spawning", async () => {
     const { executable, cwd } = await script("require('fs').writeFileSync('spawned', '1')");
     for (const hostile of ["db; rm -rf /", "$(id)", "`id`", "a b", "line\nbreak", "x|y", "a&b", "", "quote'd", "dollar$HOME"]) {

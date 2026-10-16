@@ -94,7 +94,7 @@ main();
 function main() {
 if (args[0] !== "projects") { process.stderr.write("unknown command"); return finish(1); }
 if (args.includes("--version")) { process.stdout.write("Stripe Projects v" + (behavior.version || "0.45.0") + "\n"); return finish(0); }
-const command = args.slice(1).filter((a, index, all) => !a.startsWith("--") && !(all[index - 1] || "").match(/^--(name|output|account|mode)$/));
+const command = args.slice(1).filter((a, index, all) => !a.startsWith("--") && !(all[index - 1] || "").match(/^--(name|output|account|mode|config)$/));
 const mode = behavior.mode || "ok";
 if (mode === "hang") { setTimeout(() => {}, 1e9); return; }
 if (mode === "malformed") { process.stdout.write("Neon  free  plan\n"); return finish(0); }

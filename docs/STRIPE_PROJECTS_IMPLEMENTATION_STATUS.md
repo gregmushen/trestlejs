@@ -30,6 +30,11 @@ Local implementation adds:
 - Paid-service planning/confirmation for R2, including a regression for a zero
   dollar approval incorrectly reaching paid provisioning. R2 capability evidence
   remains unchanged and blocked.
+- A fresh catalog read found R2 needs explicit bucket configuration, separate
+  from its logical resource alias. The supported schema is captured in the
+  toolchain fixtures; validated configuration now reaches the provider as one
+  JSON argument and participates in drift/binding checks. Existing raw-argument
+  injection tests remain strict. This was read discovery, not hosted mutation.
 - Pages Functions compilation with a scratch HOME and no provider/GitHub
   credentials; strict config/artifact snapshots; protected host and service
   binding enrollment; signed artifact deployment and exact-SHA staging checks;
@@ -46,7 +51,7 @@ failures were fixture setup: two simulated external writers omitted the newly
 disclosed account-creation effect; one fixture created public workspace parents.
 Their permission/effect setup was tightened, preserving every original denial,
 duplicate, signature and capability assertion. Final-tree verification: build
-and typecheck pass; **60 files, 527 tests pass, no skips**, with disposable
+and typecheck pass; **60 files, 530 tests pass, no skips**, with disposable
 PostgreSQL 17 and `TRESTLE_INFRA_REQUIRE_INTEGRATION=1`. Vitest ran with
 `--maxWorkers=1 --testTimeout=30000` because unrelated workloads briefly drove
 the host load above 50. The standard recovery gate now includes the new bootstrap

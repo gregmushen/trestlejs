@@ -107,6 +107,12 @@ paid-service confirmation, exact-ID binding and response-loss recovery, but do
 not enable it. A paid-service plan now needs a positive approved cost limit;
 zero is not paid-service consent. The adapter passes `--confirm-paid-service`
 only for that reviewed paid operation. A limit is not a provider spending cap.
+R2 also requires explicit `configuration: { name: <bucket-name> }` and optionally
+`location_hint` from the recorded catalog enum. The logical resource name is
+only an alias, not the bucket name. Configuration is included in plan review,
+source/material drift and the committed binding; changing it requires separate
+resource/migration review. Only this service's validated flat configuration may
+use the single-argument JSON channel; raw flags/shell syntax remain rejected.
 Hosted qualification requires separately authorized disposable resources, terms,
 cost, account identity and cleanup scope before the capability record changes.
 

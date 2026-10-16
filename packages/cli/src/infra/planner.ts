@@ -27,6 +27,7 @@ export type PlanOperation = Readonly<{
   provider: string;
   service: string;
   plan?: string;
+  configuration?: Readonly<Record<string, string>>;
   /** Exact bound identity, or `pending:<operation id>` until the create is journaled. */
   target: string;
   dependsOn: readonly string[];
@@ -199,6 +200,7 @@ export function planInfrastructure(input: PlanInput): InfraPlan {
     } else if (bound) {
       target = bound.externalId;
       operation = "inspect";
+      if (canonicalDigest(resource.configuration ?? null) !== canonicalDigest(bound.configuration ?? null)) blockers.push(`${name} requested configuration changed; create or review migration of the resource instead of editing its binding`);
       if (bound.lifecycleOwner !== resource.lifecycleOwner) blockers.push(`${name} is bound to lifecycle owner ${bound.lifecycleOwner}, intent declares ${resource.lifecycleOwner}; an explicit ownership handoff is required`);
       if (bound.provider !== resource.provider || bound.service !== resource.service) blockers.push(`${name} is bound to ${bound.provider}/${bound.service}; changing service identity requires a new resource, not an in-place edit`);
       if (resource.disposition === "adopt" && resource.externalId !== bound.externalId) blockers.push(`${name} intent names ${resource.externalId} but the binding is ${bound.externalId}; bindings are immutable`);
@@ -249,12 +251,13 @@ export function planInfrastructure(input: PlanInput): InfraPlan {
       }
     }
     if (cost.kind === "unknown") blockers.push(`cost of ${resource.provider}/${resource.service} is unknown and cannot be treated as free`);
+    if (classification === "create" && resource.provider === "cloudflare" && resource.service === "r2:bucket" && !resource.configuration) blockers.push(`${name} requires configuration.name; a logical resource name is not the R2 bucket name`);
     if (cost.kind === "paid" && (!resource.costLimit || resource.costLimit.monthlyMinor <= 0)) blockers.push(`${name} needs a positive costLimit before a paid-service confirmation can be approved; zero is not consent to paid provisioning`);
     if (cost.requiresAuthorization && !resource.costLimit) blockers.push(`${name} needs a declared costLimit before a paid or account-wide change can be approved`);
     if (blockers.length > 0) classification = "blocked";
 
     return {
-      id, resource: name, classification, provider: resource.provider, service: resource.service, ...(resource.plan ? { plan: resource.plan } : {}),
+      id, resource: name, classification, provider: resource.provider, service: resource.service, ...(resource.plan ? { plan: resource.plan } : {}), ...(resource.configuration ? { configuration: resource.configuration } : {}),
       target, dependsOn: resource.dependsOn.map((dependency) => `op-${input.environment}-${dependency}`),
       effects: resolved?.effects ?? [],
       capability: { operation, evidence: resolved?.evidence ?? "unknown", allowed: resolved?.allowed ?? false, reasons: resolved?.reasons ?? ["no capability row"] },
